@@ -117,6 +117,7 @@ impl CommandPalette {
         let mut executed_command = None;
 
         let search_id = egui::Id::unique("command_palette_search");
+        let focus_search = std::mem::take(&mut self.focus_search);
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         // Handle keyboard navigation
         let (move_up, move_down, execute, close) = ctx.input(|i| {
@@ -161,6 +162,9 @@ impl CommandPalette {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
                     );
+                    if focus_search {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
                     let response = ui.add(
                         TextEdit::singleline(&mut self.search_query)
                             .id(search_id)
@@ -169,7 +173,8 @@ impl CommandPalette {
                             .desired_width(ui.available_width())
                             .font(egui::FontId::proportional(14.0)),
                     );
-                    if std::mem::take(&mut self.focus_search) {
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
                         response.request_focus();
                     }
                     if response.changed() {
@@ -365,7 +370,11 @@ impl CommandPaletteHandler {
             self.open();
         }
 
-        // Show the palette if open
+        self.show(ctx)
+    }
+
+    /// Show the palette when a host dispatcher owns its opening shortcut.
+    pub fn show(&mut self, ctx: &Context) -> Option<String> {
         self.palette.show(ctx, &mut self.open)
     }
 }

@@ -124,7 +124,9 @@ pub mod builder;
 mod crosshair;
 mod feed;
 mod frame;
+mod history;
 pub(crate) mod interaction;
+pub mod keyboard;
 pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
@@ -139,6 +141,7 @@ use feed::FeedLink;
 pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
 
+pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// Interactive financial chart widget for egui.
@@ -191,6 +194,12 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 ///
 /// # Architecture
 ///
+/// User drawing interactions and shortcuts share [`Chart::undo`] / [`Chart::redo`] with
+/// host toolbar, menu and dialog edits wrapped in [`Chart::user_action`]. Direct programmatic
+/// setters and feed/data updates do not enter this history. Use [`Chart::can_undo`] and
+/// [`Chart::can_redo`] for toolbar availability, and [`Chart::take_history_changed`] to
+/// synchronize host controls and data after restoring an interval or settings.
+///
 /// `Chart` owns a [`ChartState`] (data + coordinate systems) and a
 /// [`ChartConfig`] (visual styling). Rendering is delegated to specialized
 /// modules in `crate::chart::rendering`, while interaction logic lives in
@@ -204,6 +213,8 @@ pub struct Chart {
     pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
+    pub(crate) keyboard: keyboard::KeyboardState,
+    history: history::ChartHistory,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -489,9 +500,23 @@ impl Chart {
 
     /// Sets the right margin in bars and moves to that margin when it changes.
     pub fn set_right_margin(&mut self, bars: f32) {
-        if bars.is_finite() && bars >= 0.0 && self.chart_options.time_scale.right_offset != bars {
-            self.chart_options.time_scale.right_offset = bars;
-            self.state.time_scale_mut().set_right_offset(bars);
+        let options = &mut self.chart_options.time_scale;
+        if bars.is_finite()
+            && bars >= 0.0
+            && (options.right_offset != bars || options.right_offset_pixels.is_some())
+        {
+            options.right_offset = bars;
+            options.right_offset_pixels = None;
+            let scale = self.state.time_scale_mut();
+            scale.apply_options(
+                scale.bar_spacing(),
+                options.min_bar_spacing,
+                options.max_bar_spacing,
+                options.fix_left_edge,
+                options.fix_right_edge,
+                bars,
+                None,
+            );
         }
     }
 
@@ -594,6 +619,13 @@ impl Chart {
         self.zoom_mode_active = active;
     }
 
+    /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    pub fn zoom_back(&mut self) -> bool {
+        self.pending_scroll_time = None;
+        self.tracking_mode_active = false;
+        self.state.pop_zoom_state()
+    }
+
     /// Returns `true` if a box-zoom was completed in the most recent frame.
     ///
     /// Use this to auto-deactivate zoom mode in your toolbar after the user
@@ -632,6 +664,8 @@ impl Chart {
         self.config.bullish_wick_color = settings.bullish_wick_color;
         self.config.bearish_wick_color = settings.bearish_wick_color;
         self.config.price_source = settings.price_source;
+        self.config.show_price_line = settings.show_price_line;
+        self.config.show_prev_close_line = settings.show_prev_close_line;
         self.set_chart_type_params(settings.chart_type_params.clone());
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
@@ -656,6 +690,8 @@ impl Chart {
             bullish_wick_color: self.config.bullish_wick_color,
             bearish_wick_color: self.config.bearish_wick_color,
             price_source: self.config.price_source,
+            show_price_line: self.config.show_price_line,
+            show_prev_close_line: self.config.show_prev_close_line,
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()
@@ -684,7 +720,8 @@ impl Chart {
     ///
     /// Use this to apply settings produced by a dialog in place, e.g.
     /// `settings.apply_to_config(chart.config_mut())`, without rebuilding the
-    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
+    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame. Wrap a host UI
+    /// submission in [`Self::user_action`] to include it in chart history.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
     }
@@ -724,7 +761,8 @@ impl Chart {
     }
 
     /// The chart's drawings and drawing tools, to set the active tool or to save and load the
-    /// drawings.
+    /// drawings. Direct host edits do not enter chart history; wrap UI-originated edits in
+    /// [`Self::user_action`]. The manager's own history is for standalone drawing use.
     pub fn drawings_mut(&mut self) -> &mut DrawingManager {
         &mut self.drawings
     }

@@ -78,6 +78,7 @@ impl Chart {
                 Sense::click_and_drag(),
             );
             if response.clicked() {
+                self.begin_user_action();
                 self.tracking_mode_active = false;
                 self.kinetic_scroll = super::state::KineticScrollState::new();
                 match index {
@@ -137,6 +138,7 @@ impl Chart {
                     }
                     _ => unreachable!(),
                 }
+                self.end_user_action();
                 ui.ctx().request_repaint();
             }
             response

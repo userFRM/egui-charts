@@ -52,7 +52,10 @@ mod timescale;
 pub mod tpo;
 mod trading;
 
-pub use alert::{Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus};
+pub use alert::{
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
+    AlertStatus,
+};
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;

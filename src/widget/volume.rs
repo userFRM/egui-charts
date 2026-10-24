@@ -187,6 +187,25 @@ mod tests {
             .find(|(_, study)| study.name() == "Volume")
             .expect("volume setting adds the study")
             .0;
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("period", InputValue::Length(2))
+                .unwrap();
+        });
+        for (time, redo, period) in [(1.01, false, 9), (1.02, true, 2), (1.03, false, 9)] {
+            assert!(if redo { chart.redo() } else { chart.undo() });
+            shapes(&ctx, &mut chart, time, vec![]);
+            assert!(
+                chart.config().show_volume,
+                "history must retain the volume switch"
+            );
+            assert_eq!(
+                chart.indicator_mut(id).unwrap().inputs()[0].value,
+                InputValue::Length(period)
+            );
+        }
         assert_eq!(chart.get_chart_mapping().price.range().min, price_range.min);
         assert_eq!(chart.get_chart_mapping().price.range().max, price_range.max);
         let volume = chart.last_rendered_volume_rect;
@@ -238,10 +257,17 @@ mod tests {
         assert_eq!(chart.get_rendered_indicator_panes().len(), 1);
         assert!(chart.get_rendered_indicator_panes()[0].y_max >= 1_000_000.0);
         assert!(chart.get_chart_mapping().price.range().max < 200.0);
-        chart.config_mut().show_volume = false;
+        chart.user_action(|chart| chart.config_mut().show_volume = false);
         shapes(&ctx, &mut chart, 3.0, vec![]);
         assert!(!chart.indicators().any(|(study, _)| study == id));
         assert!(chart.get_rendered_indicator_panes().is_empty());
+        assert!(chart.undo());
+        shapes(&ctx, &mut chart, 3.1, vec![]);
+        assert!(chart.indicators().any(|(study, _)| study == id));
+        assert_eq!(chart.get_rendered_indicator_panes().len(), 1);
+        assert!(chart.redo());
+        shapes(&ctx, &mut chart, 3.2, vec![]);
+        assert!(!chart.indicators().any(|(study, _)| study == id));
         chart.config_mut().show_volume = true;
         shapes(&ctx, &mut chart, 4.0, vec![]);
         let next = chart

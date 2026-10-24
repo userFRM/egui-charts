@@ -44,7 +44,7 @@ impl std::fmt::Display for TooltipMode {
 }
 
 /// Tooltip configuration options
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TooltipOptions {
     /// Whether the hover readout is drawn at all.
     ///

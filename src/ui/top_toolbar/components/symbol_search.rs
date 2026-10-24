@@ -225,6 +225,12 @@ impl SymbolSearchDialog {
         self.filtered_symbols.clear();
     }
 
+    /// Open symbol search with text supplied by the host's keyboard dispatcher.
+    pub fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.search_query = query;
+    }
+
     /// Closes the symbol search dialog
     pub fn close(&mut self) {
         self.is_open = false;
@@ -281,6 +287,7 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
         let search_id = egui::Id::unique("symbol_search_input");
+        let focus_search = std::mem::take(&mut self.focus_search);
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         let (up, down) = ctx.input(|input| {
             (
@@ -302,9 +309,8 @@ impl SymbolSearchDialog {
         let mut open = true;
         Modal::new("symbol_search", "")
             .width(840.0)
-            .height(680.0)
-            .rounding(20.0)
-            .dim_background(false)
+            .height(480.0)
+            .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
             .show(ctx, &mut open, |ui| {
                 ui.horizontal(|ui| {
                     let theme = ui.active_theme();
@@ -312,6 +318,10 @@ impl SymbolSearchDialog {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
                     );
+                    let search_id = egui::Id::unique("symbol_search_input");
+                    if focus_search {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .id(search_id)
@@ -327,12 +337,13 @@ impl SymbolSearchDialog {
                     {
                         should_close = true;
                     }
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
+                        response.request_focus();
+                    }
                     if response.changed() {
                         self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
-                    }
-                    if std::mem::take(&mut self.focus_search) {
-                        response.request_focus();
                     }
                 });
                 ui.add_space(16.0);
@@ -362,7 +373,8 @@ impl SymbolSearchDialog {
                 // Results list
                 egui::ScrollArea::vertical()
                     .id_salt("symbol_results")
-                    .max_height(ui.available_height())
+                    .auto_shrink([false, false])
+                    .max_height((ui.available_height() - 36.0).max(0.0))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         if self.filtered_symbols.is_empty() {
@@ -403,6 +415,18 @@ impl SymbolSearchDialog {
                             }
                         }
                     });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (key, action) in
+                        [("↑ ↓", "Navigate"), ("Enter", "Select"), ("Esc", "Close")]
+                    {
+                        ui.label(RichText::new(key).monospace().size(11.0));
+                        ui.label(RichText::new(action).size(11.0).weak());
+                        ui.add_space(12.0);
+                    }
+                });
 
                 // Keyboard navigation
                 ui.input(|i| {
@@ -461,7 +485,7 @@ impl SymbolSearchDialog {
     fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
         let theme = ui.active_theme();
         let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
@@ -469,76 +493,107 @@ impl SymbolSearchDialog {
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
-        let center = Pos2::new(rect.left() + 22.0, rect.center().y);
-        ui.painter()
-            .circle_filled(center, 18.0, theme.ui.btn_bg_hover);
-        ui.painter().text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            symbol.name.chars().next().unwrap_or('?'),
-            egui::FontId::proportional(16.0),
-            theme.ui.text,
-        );
-        ui.painter().text(
-            Pos2::new(rect.left() + 48.0, rect.center().y - 10.0),
-            egui::Align2::LEFT_CENTER,
-            &symbol.name,
-            egui::FontId::proportional(16.0),
-            theme.ui.text,
-        );
-        let exchange = if self.config.show_exchange {
-            &symbol.exchange
-        } else {
-            ""
-        };
-        let exchange_galley = ui.painter().layout_no_wrap(
-            exchange.to_owned(),
-            egui::FontId::proportional(12.0),
-            theme.ui.text_secondary,
-        );
-        let right = rect.right() - exchange_galley.size().x - 12.0;
-        ui.painter().galley(
-            Pos2::new(right, rect.center().y - exchange_galley.size().y / 2.0),
-            exchange_galley,
-            theme.ui.text_secondary,
-        );
+        let right = rect.right() - 8.0;
         let kind = symbol
             .symbol_type
-            .map(|kind| kind.to_string().to_uppercase())
+            .map(|kind| kind.to_string())
             .unwrap_or_default();
-        let badge =
-            ui.painter()
-                .layout_no_wrap(kind, egui::FontId::proportional(9.0), theme.ui.text);
-        let x = rect.left() + 48.0;
-        let desc = if self.config.show_description {
-            &symbol.display_name
+        let exchange = if self.config.show_exchange {
+            symbol.exchange.as_str()
         } else {
             ""
         };
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            desc.to_owned(),
-            egui::FontId::proportional(12.0),
-            theme.ui.text_secondary,
-        );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(
-            (right - x - badge.size().x - 24.0).max(0.0),
-        );
-        let desc = ui.painter().layout_job(job);
-        let badge_x = x + desc.size().x + 8.0;
-        ui.painter().galley(
-            Pos2::new(x, rect.center().y + 4.0),
-            desc,
-            theme.ui.text_secondary,
-        );
-        if symbol.symbol_type.is_some() {
-            let badge_rect = egui::Rect::from_min_size(
-                Pos2::new(badge_x, rect.center().y + 5.0),
-                badge.size() + Vec2::new(8.0, 2.0),
+        let column_width = |kind_column: bool| {
+            self.filtered_symbols
+                .iter()
+                .map(|symbol| {
+                    let text = if kind_column {
+                        symbol
+                            .symbol_type
+                            .map(|kind| kind.to_string())
+                            .unwrap_or_default()
+                    } else if self.config.show_exchange {
+                        symbol.exchange.clone()
+                    } else {
+                        String::new()
+                    };
+                    ui.painter()
+                        .layout_no_wrap(
+                            text,
+                            egui::FontId::proportional(11.0),
+                            theme.ui.text_secondary,
+                        )
+                        .size()
+                        .x
+                })
+                .fold(0.0_f32, f32::max)
+                .min(rect.width() * 0.2)
+        };
+        let kind_width = column_width(true);
+        let exchange_width = column_width(false);
+        let exchange_right = right - kind_width - 16.0;
+        for (text, edge, width) in [
+            (kind.as_str(), right, kind_width),
+            (exchange, exchange_right, exchange_width),
+        ] {
+            let galley = egui::WidgetText::from(
+                RichText::new(text)
+                    .size(11.0)
+                    .color(theme.ui.text_secondary),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
             );
-            ui.painter()
-                .rect_filled(badge_rect, 2.0, theme.ui.btn_bg_hover);
-            ui.painter()
-                .galley(badge_rect.min + Vec2::new(4.0, 1.0), badge, theme.ui.text);
+            ui.painter().galley(
+                Pos2::new(
+                    edge - galley.size().x,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
+                galley,
+                theme.ui.text_secondary,
+            );
+        }
+        let left = rect.left() + 8.0;
+        let width = (exchange_right - exchange_width - 16.0 - left).max(0.0);
+        let name = egui::WidgetText::from(
+            RichText::new(&symbol.name)
+                .size(13.0)
+                .strong()
+                .color(theme.ui.text),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            width,
+            egui::TextStyle::Body,
+        );
+        let top = if self.config.show_description {
+            rect.top() + 1.0
+        } else {
+            rect.center().y - name.size().y / 2.0
+        };
+        ui.painter()
+            .galley(Pos2::new(left, top), name, theme.ui.text);
+        if self.config.show_description {
+            let description = egui::WidgetText::from(
+                RichText::new(&symbol.display_name)
+                    .size(11.0)
+                    .color(theme.ui.text_secondary),
+            )
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
+            );
+            ui.painter().galley(
+                Pos2::new(left, rect.bottom() - description.size().y - 1.0),
+                description,
+                theme.ui.text_secondary,
+            );
         }
 
         response
@@ -684,14 +739,11 @@ pub struct CompareSymbolsDialog {
     pub is_open: bool,
     /// Search query
     search_query: String,
-    /// Currently compared symbols
+    /// Current comparison series on the host's chart. Update after accepting an intent,
+    /// including changes made outside this dialog.
     pub compared_symbols: Vec<CompareSymbol>,
     /// Configuration
     config: CompareSymbolsConfig,
-    /// Color palette for new symbols
-    color_palette: Vec<Color32>,
-    /// Next color index
-    next_color_idx: usize,
 }
 
 impl Default for CompareSymbolsDialog {
@@ -708,17 +760,6 @@ impl CompareSymbolsDialog {
             search_query: String::new(),
             compared_symbols: Vec::new(),
             config: CompareSymbolsConfig::default(),
-            color_palette: vec![
-                DESIGN_TOKENS.semantic.extended.warning,       // Orange
-                DESIGN_TOKENS.semantic.extended.info,          // Blue
-                DESIGN_TOKENS.semantic.extended.success,       // Green
-                DESIGN_TOKENS.semantic.extended.purple,        // Purple
-                DESIGN_TOKENS.semantic.extended.error,         // Red
-                DESIGN_TOKENS.semantic.extended.cyan,          // Cyan
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Yellow
-                DESIGN_TOKENS.semantic.extended.brown,         // Brown
-            ],
-            next_color_idx: 0,
         }
     }
 
@@ -739,13 +780,6 @@ impl CompareSymbolsDialog {
         self.is_open = false;
     }
 
-    /// Get next color from palette
-    fn next_color(&mut self) -> Color32 {
-        let color = self.color_palette[self.next_color_idx % self.color_palette.len()];
-        self.next_color_idx += 1;
-        color
-    }
-
     /// Show the dialog, suggesting `symbols`: the symbols the host's data source offers
     pub fn show(&mut self, ctx: &egui::Context, symbols: &[Symbol]) -> CompareAction {
         let mut action = CompareAction::None;
@@ -759,9 +793,7 @@ impl CompareSymbolsDialog {
         Modal::new("compare_symbols", "")
             .width(config.width)
             .height(config.height)
-            .rounding(20.0)
             .fill(config.bg_color)
-            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 action = self.draw_content(ui, symbols, &config);
             });
@@ -806,35 +838,39 @@ impl CompareSymbolsDialog {
             ui.label(RichText::new("Currently comparing:").color(config.muted_color));
             ui.space_sm();
 
-            for symbol in &self.compared_symbols {
-                ui.horizontal(|ui| {
-                    // Color indicator
-                    let (rect, _) = ui.allocate_exact_size(
-                        Vec2::splat(DESIGN_TOKENS.sizing.icon_xs),
-                        Sense::hover(),
-                    );
-                    ui.painter().circle_filled(rect.center(), 5.0, symbol.color);
+            egui::ScrollArea::vertical()
+                .id_salt("current_comparisons")
+                .max_height(ui.available_height() * 0.4)
+                .show(ui, |ui| {
+                    for symbol in &self.compared_symbols {
+                        ui.horizontal(|ui| {
+                            // Color indicator
+                            let (rect, _) = ui.allocate_exact_size(
+                                Vec2::splat(DESIGN_TOKENS.sizing.icon_xs),
+                                Sense::hover(),
+                            );
+                            ui.painter().circle_filled(rect.center(), 5.0, symbol.color);
 
-                    ui.label(&symbol.symbol);
-                    ui.label(
-                        RichText::new(&symbol.name)
-                            .color(config.muted_color)
-                            .size(typography::SM),
-                    );
+                            ui.label(&symbol.symbol);
+                            ui.label(
+                                RichText::new(&symbol.name)
+                                    .color(config.muted_color)
+                                    .size(typography::SM),
+                            );
 
-                    ui.right_aligned(|ui| {
-                        if ui.small_button("X").clicked() {
-                            action = CompareAction::RemoveSymbol(symbol.symbol.clone());
-                        }
+                            ui.right_aligned(|ui| {
+                                if ui.small_button("X").clicked() {
+                                    action = CompareAction::RemoveSymbol(symbol.symbol.clone());
+                                }
 
-                        let eye_label = if symbol.visible { "Hide" } else { "Show" };
-                        if ui.small_button(eye_label).clicked() {
-                            action = CompareAction::ToggleVisibility(symbol.symbol.clone());
-                        }
-                    });
+                                let eye_label = if symbol.visible { "Hide" } else { "Show" };
+                                if ui.small_button(eye_label).clicked() {
+                                    action = CompareAction::ToggleVisibility(symbol.symbol.clone());
+                                }
+                            });
+                        });
+                    }
                 });
-            }
-
             ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
         }
 
@@ -847,6 +883,7 @@ impl CompareSymbolsDialog {
         }
 
         egui::ScrollArea::vertical()
+            .id_salt("comparison_suggestions")
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 let query = self.search_query.to_lowercase();
@@ -859,31 +896,6 @@ impl CompareSymbolsDialog {
                     }
                 }
             });
-
-        // Handle add action
-        if let CompareAction::AddSymbol(ref sym) = action
-            && !self.compared_symbols.iter().any(|s| s.symbol == *sym)
-        {
-            let color = self.next_color();
-            let name = symbols
-                .iter()
-                .find(|s| s.name == *sym)
-                .map_or("", |s| s.display_name.as_str());
-            self.compared_symbols
-                .push(CompareSymbol::new(sym.clone(), name, "", color));
-        }
-
-        // Handle remove action
-        if let CompareAction::RemoveSymbol(ref sym) = action {
-            self.compared_symbols.retain(|s| s.symbol != *sym);
-        }
-
-        // Handle toggle visibility
-        if let CompareAction::ToggleVisibility(ref sym) = action
-            && let Some(s) = self.compared_symbols.iter_mut().find(|s| s.symbol == *sym)
-        {
-            s.visible = !s.visible;
-        }
 
         action
     }
@@ -1049,6 +1061,11 @@ mod tests {
                 .map(|i| Symbol::new(format!("S{i}"), "Sample"))
                 .collect();
             let mut dialog = SymbolSearchDialog::new();
+            ctx.run_ui(Default::default(), |ui| {
+                let response = dialog.render_symbol_item(ui, &symbols[0], false);
+                assert_eq!(response.rect.height(), 32.0);
+            })
+            .drop_without_applying_deltas();
             dialog.open();
             let mut frame = |events| {
                 let mut picked = None;
@@ -1246,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_dialog_open_close() {
+    fn comparison_actions_wait_for_host_acceptance() {
         let mut dialog = CompareSymbolsDialog::new();
         assert!(!dialog.is_open);
 
@@ -1255,5 +1272,65 @@ mod tests {
 
         dialog.close();
         assert!(!dialog.is_open);
+        let symbols = create_test_symbols();
+        for (label, expected, populated) in [
+            ("AAPL", CompareAction::AddSymbol("AAPL".into()), false),
+            ("X", CompareAction::RemoveSymbol("AAPL".into()), true),
+            ("Hide", CompareAction::ToggleVisibility("AAPL".into()), true),
+        ] {
+            let ctx = Context::default();
+            let mut dialog = CompareSymbolsDialog::new();
+            if populated {
+                dialog.compared_symbols.push(CompareSymbol::new(
+                    "AAPL",
+                    "Apple",
+                    "Test",
+                    Color32::GOLD,
+                ));
+            }
+            let config = dialog.config.resolved(&ctx.global_style().visuals);
+            let mut frame = |events| {
+                let mut action = CompareAction::None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        action = dialog.draw_content(ui, &symbols, &config);
+                    },
+                );
+                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                (action, pos)
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).1.unwrap();
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(vec![button(true)]);
+            assert_eq!(frame(vec![button(false)]).0, expected);
+            assert_eq!(
+                dialog.compared_symbols.len(),
+                usize::from(populated),
+                "only the host updates chart membership"
+            );
+            if populated {
+                assert!(
+                    dialog.compared_symbols[0].visible,
+                    "only the host updates chart visibility"
+                );
+            }
+        }
     }
 }

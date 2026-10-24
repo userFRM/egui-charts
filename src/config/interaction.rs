@@ -20,7 +20,7 @@ pub enum TrackingModeExitMode {
 
 /// Tracking mode options
 /// Controls automatic price following behavior
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TrackingModeOptions {
     /// How to exit tracking mode
     /// Default: OnNextTap
@@ -30,7 +30,7 @@ pub struct TrackingModeOptions {
 /// Handle Scroll Options
 /// Controls how scrolling/panning interactions work
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HandleScrollOptions {
     /// Scroll with mouse wheel (horizontal)
     /// Default: true
@@ -61,7 +61,7 @@ impl Default for HandleScrollOptions {
 }
 
 /// Axis-specific pressed mouse move options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AxisPressedMouseMoveOptions {
     /// Drag along time axis (bottom)
     /// Default: true
@@ -82,7 +82,7 @@ impl Default for AxisPressedMouseMoveOptions {
 }
 
 /// Axis-specific double-click reset options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AxisDoubleClickResetOptions {
     /// Double-click time axis to reset
     /// Default: true
@@ -105,7 +105,7 @@ impl Default for AxisDoubleClickResetOptions {
 /// Handle Scale Options
 /// Controls how zoom/scale interactions work
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HandleScaleOptions {
     /// Zoom with mouse wheel (vertical scroll)
     /// Default: true

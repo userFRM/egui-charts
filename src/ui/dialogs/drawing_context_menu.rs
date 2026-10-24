@@ -105,7 +105,10 @@ impl DrawingContextMenu {
     }
 
     /// Build menu items for the drawing context menu
-    fn build_menu_items(&self) -> Vec<MenuEntry<DrawingContextMenuAction>> {
+    fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
         vec![
             // Edit section
             MenuEntry::Item(
@@ -153,7 +156,7 @@ impl DrawingContextMenu {
             MenuEntry::Item(
                 MenuItem::new("Delete", DrawingContextMenuAction::Delete)
                     .with_icon(&embedded_icons::TRASH)
-                    .with_shortcut(KeyboardAction::DeleteSelectedDrawing.shortcut())
+                    .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
                     .danger(),
             ),
         ]
@@ -161,10 +164,20 @@ impl DrawingContextMenu {
 
     /// Show the context menu
     pub fn show(&mut self, ctx: &Context, theme: &Theme) {
+        self.show_with_shortcuts(ctx, theme, &crate::widget::ShortcutMap::default());
+    }
+
+    /// Show menu hints from the same bindings used by chart input.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        theme: &Theme,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items();
+        let entries = self.build_menu_items(shortcuts);
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("drawing_context_menu");
         if let Some(action) = show_menu(

@@ -53,14 +53,14 @@ impl Chart {
         let Some(id) = self.study_ids.get(index).copied() else {
             return;
         };
-        match action {
-            StudyAction::Settings(_) => self.indicator_settings_request = Some(id),
+        self.user_action(|chart| match action {
+            StudyAction::Settings(_) => chart.indicator_settings_request = Some(id),
             StudyAction::ToggleVisibility(_) => {
-                self.set_indicator_visible(id, !self.studies.indicators()[index].is_visible());
+                chart.set_indicator_visible(id, !chart.studies.indicators()[index].is_visible());
             }
             StudyAction::Remove(_) => {
-                self.remove_series(id);
+                chart.remove_series(id);
             }
-        }
+        });
     }
 }

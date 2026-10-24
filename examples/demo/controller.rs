@@ -6,26 +6,32 @@
 //! actions. Indicator templates live in host memory. Controls that need a trading
 //! account show a notice, and the context menu entries it does not model do nothing.
 
+#[path = "commands.rs"]
+mod commands;
+#[path = "interval.rs"]
+mod interval;
 #[path = "layouts.rs"]
 mod layouts;
 use egui_charts::widget::ChartLayout;
 use layouts::{DemoChart, LayoutTab};
 
+#[path = "comparison.rs"]
+mod comparison;
 #[path = "live.rs"]
 mod live;
 
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
+use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
 use egui_charts::ui::dialogs::{
-    AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction,
-    SeriesSettingsAction, SeriesSettingsDialog,
+    AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
+    DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction,
+    SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
@@ -41,6 +47,7 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
+use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
@@ -158,12 +165,17 @@ pub struct DemoApp {
     settings_dialog: SettingsDialog,
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
+    compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
+    comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     indicator_templates: Vec<SavedIndicators>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
     series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    interval_entry: Option<String>,
+    interval_focus: bool,
+    copied_drawing: Option<(String, egui_charts::drawings::Drawing)>,
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
@@ -174,6 +186,7 @@ pub struct DemoApp {
 
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
+    alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -284,28 +297,26 @@ impl DemoApp {
             settings_dialog: SettingsDialog::new(),
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
+            compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
+            comparisons: Vec::new(),
             indicator_templates: Vec::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
-                [
-                    ("symbols", "Symbol search"),
-                    ("indicators", "Indicators"),
-                    ("settings", "Chart settings"),
-                    ("export", "Export chart"),
-                ]
-                .into_iter()
-                .map(|(id, label)| egui_charts::ui_kit::command_palette::Command::new(id, label))
-                .collect(),
+                commands::quick_search_commands(),
             ),
             alert_dialog: AlertDialog::new(),
             series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            interval_entry: None,
+            interval_focus: false,
+            copied_drawing: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
             open_panel: None,
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
+            alert_host: Arc::default(),
             replay: None,
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -313,9 +324,10 @@ impl DemoApp {
             screenshots: mpsc::channel(),
             toasts: Toasts::new(),
         };
-        app.alerts
-            .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
+        app.alerts.set_service(app.alert_host.clone());
+        app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
+        app.settings_state = ChartSettingsState::from_chart(&app.chart);
         app
     }
 
@@ -324,9 +336,35 @@ impl DemoApp {
         self.toasts.info(msg);
     }
 
+    pub(super) fn user_action<R>(&mut self, edit: impl FnOnce(&mut Self) -> R) -> R {
+        self.chart.begin_user_action();
+        let result = edit(self);
+        self.chart.end_user_action();
+        result
+    }
+
+    fn sync_chart_history(&mut self) {
+        if !self.chart.take_history_changed() {
+            return;
+        }
+        self.state.chart_type = self.chart.chart_type();
+        let timezone = &self.chart.chart_options().time_scale.timezone;
+        let name = timezone
+            .to_tz()
+            .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
+        let clock_changed = self.timeframe_toolbar.state.timezone != name;
+        self.timeframe_toolbar.set_timezone(name);
+        if let Some(tf) = self.chart.timeframe()
+            && (tf != self.state.timeframe || clock_changed)
+        {
+            self.switch_timeframe(tf);
+        }
+    }
+
     // --- data helpers ------------------------------------------------------
 
     fn switch_timeframe(&mut self, tf: Timeframe) {
+        self.copied_drawing = None;
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
         self.regenerate_bars();
@@ -340,6 +378,7 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
+        self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
@@ -361,6 +400,80 @@ impl DemoApp {
         self.regenerate_bars();
         // A symbol change invalidates an in-flight replay.
         self.stop_replay();
+    }
+
+    fn sync_comparisons(&mut self) {
+        self.comparisons
+            .retain(|(_, id, _)| self.chart.indicators().any(|(current, _)| current == *id));
+        self.compare_dialog.compared_symbols = self
+            .comparisons
+            .iter()
+            .filter_map(|(symbol, id, _)| {
+                let (_, study) = self.chart.indicators().find(|(current, _)| current == id)?;
+                let spec = DemoSymbol::find(symbol);
+                let mut entry =
+                    CompareSymbol::new(symbol, spec.company_name, spec.exchange, study.colors()[0]);
+                entry.visible = study.is_visible();
+                Some(entry)
+            })
+            .collect();
+    }
+
+    fn handle_comparison(&mut self, action: CompareAction) {
+        match action {
+            CompareAction::AddSymbol(symbol) => {
+                if self
+                    .comparisons
+                    .iter()
+                    .any(|(current, _, _)| *current == symbol)
+                    || !DemoSymbol::catalog()
+                        .iter()
+                        .any(|spec| spec.symbol == symbol)
+                {
+                    return;
+                }
+                let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
+                let colors = [
+                    self.theme.ui.info,
+                    self.theme.ui.warning,
+                    self.theme.ui.success,
+                ];
+                let color = colors[self.comparisons.len() % colors.len()];
+                let id = self
+                    .chart
+                    .add_indicator(Box::new(comparison::Comparison::new(
+                        symbol.clone(),
+                        feed.clone(),
+                        color,
+                    )));
+                self.comparisons.push((symbol, id, feed));
+            }
+            CompareAction::RemoveSymbol(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    self.chart.remove_series(*id);
+                }
+            }
+            CompareAction::ToggleVisibility(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    let visible = self
+                        .chart
+                        .indicators()
+                        .find(|(current, _)| current == id)
+                        .is_some_and(|(_, study)| study.is_visible());
+                    self.chart.set_indicator_visible(*id, !visible);
+                }
+            }
+            CompareAction::None | CompareAction::Close => {}
+        }
+        self.sync_comparisons();
     }
 
     fn regenerate_bars(&mut self) {
@@ -469,95 +582,65 @@ impl DemoApp {
 
     // --- alerts ------------------------------------------------------------
 
-    fn add_price_alert(&mut self, data: AlertData) {
-        if let AlertData::Price {
-            symbol,
-            price,
-            condition,
-            message,
-            repeating,
-        } = data
-        {
-            let mut alert = Alert::new(symbol, condition_from_label(&condition, price));
-            alert.message = message;
-            alert.frequency = if repeating {
-                AlertFrequency::EveryTime
-            } else {
-                AlertFrequency::Once
-            };
-            self.alerts.save(alert);
-        } else {
-            self.notify(
-                "This session store accepts price alerts; other conditions need a host evaluator",
-            );
-        }
+    fn open_alert(&mut self, price: Option<f64>) {
+        use egui_charts::model::AlertSource;
+        self.alert_dialog.sources = self
+            .chart
+            .indicators()
+            .flat_map(|(id, study)| {
+                study
+                    .line_names()
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(output, name)| {
+                        (
+                            AlertSource::Study {
+                                id: id.0.to_string(),
+                                output,
+                            },
+                            format!("{}: {name}", study.name()),
+                        )
+                    })
+            })
+            .chain(
+                self.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| {
+                        use egui_charts::drawings::DrawingToolType::*;
+                        d.completed
+                            && matches!(
+                                d.tool_type,
+                                HorizontalLine | HorizontalRay | TrendLine | Ray | ExtendedLine
+                            )
+                    })
+                    .map(|d| {
+                        (
+                            AlertSource::Drawing(d.id.to_string()),
+                            format!("Drawing {}", d.id),
+                        )
+                    }),
+            )
+            .collect();
+        let price = price
+            .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
+            .unwrap_or(0.0);
+        self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
         self.alerts
-            .save(Alert::new(symbol, AlertCondition::CrossingUp(price)));
+            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
     }
 
     // --- selection / context helpers --------------------------------------
 
     fn open_chart_settings_dialog(&mut self) {
-        let config = self.chart.config();
-        let settings = &mut self.settings_state;
-        settings.timezone = self.timeframe_toolbar.state.timezone.clone();
-        settings.candle_colors.body_up = config.bullish_color;
-        settings.candle_colors.body_down = config.bearish_color;
-        settings.candle_colors.border_up =
-            config.bullish_border_color.unwrap_or(config.bullish_color);
-        settings.candle_colors.border_down =
-            config.bearish_border_color.unwrap_or(config.bearish_color);
-        settings.candle_colors.wick_up = config
-            .bullish_wick_color
-            .unwrap_or(settings.candle_colors.border_up);
-        settings.candle_colors.wick_down = config
-            .bearish_wick_color
-            .unwrap_or(settings.candle_colors.border_down);
-        settings.chart_basic_styles.background_color = config.background_color;
-        settings.grid_lines.horizontal_color = config.grid_color;
-        settings.grid_lines.vertical_color = config.grid_color;
-        settings.status_line.show_symbol = config.show_symbol_labels;
-        settings.status_line.title_as_description = config.title_as_description;
-        settings.status_line.show_quote_boxes = config.show_quote_boxes;
-        settings.status_line.show_ohlc = config.show_ohlc_info;
-        settings.status_line.show_change = config.show_ohlc_change;
-        settings.status_line.show_change_percent = config.show_ohlc_change_percent;
-        settings.status_line.show_volume = config.show_legend_volume;
-        settings.status_line.show_indicator_titles = config.show_indicator_labels;
-        settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
-        settings.status_line.show_indicator_values = config.show_indicator_last_val;
-        settings.scales_and_lines.price_scale_left =
-            !config.show_right_axis && config.show_left_axis;
-        settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
-        settings.scales_and_lines.show_price_line = config.show_price_line;
-        settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
-        settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
-        settings.scales_and_lines.show_countdown = config.show_countdown;
-        settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
-        settings.scales_and_lines.show_high_low = config.show_high_low;
-        settings.margins.top_percent =
-            (self.chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
-        settings.margins.bottom_percent = (self
-            .chart
-            .state()
-            .price_scale()
-            .options()
-            .scale_margins
-            .bottom
-            * 100.0) as f32;
-        settings.margins.right_bars =
-            self.chart.chart_options().time_scale.right_offset.max(0.0) as u32;
-        let scale = self.chart.state().price_scale();
-        settings.scales_and_lines.auto_scale = !scale.is_manual();
-        settings.scales_and_lines.log_scale =
-            scale.options().mode == egui_charts::scales::PriceScaleMode::Logarithmic;
-        settings.scales_and_lines.percentage_scale =
-            scale.options().mode == egui_charts::scales::PriceScaleMode::Percentage;
-        settings.scales_and_lines.invert_scale = scale.options().invert_scale;
-        self.settings_dialog.open(settings.clone());
+        let alerts = self.settings_state.alerts.clone();
+        self.settings_state = ChartSettingsState::from_chart(&self.chart);
+        self.settings_state.alerts = alerts;
+        self.settings_dialog.open(self.settings_state.clone());
     }
 
     fn open_series_settings_dialog(&mut self) {
@@ -611,26 +694,22 @@ impl DemoApp {
     // --- dialog wiring -----------------------------------------------------
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.quick_search.update(ctx) {
-            let action = match id.as_str() {
-                "symbols" => TopToolbarAction::OpenSymbolSearch,
-                "indicators" => TopToolbarAction::OpenIndicators,
-                "settings" => TopToolbarAction::OpenSettings,
-                "export" => TopToolbarAction::Save,
-                _ => TopToolbarAction::None,
-            };
-            self.handle_top_toolbar(ctx, action);
+        if let Some(id) = self.quick_search.show(ctx) {
+            self.execute_search_command(ctx, &id);
         }
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)
         {
+            self.chart.begin_user_action();
             let inputs = self.indicator_dialog.input_summary(study.name());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
+            self.chart.end_user_action();
         }
 
         if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+            self.chart.begin_user_action();
             let result = self
                 .chart
                 .indicator_mut(edit.id)
@@ -668,36 +747,20 @@ impl DemoApp {
                 }
                 Err(error) => self.notify(error),
             }
+            self.chart.end_user_action();
         }
 
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
-            SettingsAction::Apply(state) => {
-                self.settings_state = state.clone();
-                apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
-                let scale = self.chart.price_scale_mut();
-                let mode = if state.scales_and_lines.log_scale {
-                    egui_charts::scales::PriceScaleMode::Logarithmic
-                } else if state.scales_and_lines.percentage_scale {
-                    egui_charts::scales::PriceScaleMode::Percentage
-                } else {
-                    egui_charts::scales::PriceScaleMode::Normal
-                };
-                scale.options_mut().mode = mode;
-                scale.options_mut().invert_scale = state.scales_and_lines.invert_scale;
-                if state.scales_and_lines.auto_scale {
-                    scale.reset();
-                } else {
-                    let range = scale.range();
-                    scale.set_range(range.min, range.max);
-                }
-            }
+            SettingsAction::Apply(state) => self.apply_chart_settings(state),
             SettingsAction::Cancel => {}
             _ => {}
         }
 
-        // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
+        self.sync_comparisons();
+        let action = self.compare_dialog.show(ctx, &symbols);
+        self.handle_comparison(action);
         self.symbol_search
             .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
@@ -706,14 +769,15 @@ impl DemoApp {
 
         // Alert creation.
         match self.alert_dialog.show(ctx) {
-            AlertDialogAction::Create(data) => self.add_price_alert(data),
+            AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
         }
 
         // Series settings.
         match self.series_settings.show(ctx) {
             SeriesSettingsAction::Apply(_id, settings) => {
-                self.chart.apply_series_settings(&settings);
+                self.chart
+                    .user_action(|chart| chart.apply_series_settings(&settings));
             }
             SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
         }
@@ -722,14 +786,18 @@ impl DemoApp {
         match self.drawing_props.show(ctx) {
             DrawingPropertiesAction::Apply(id, props) => self.apply_drawing_props(id, props),
             DrawingPropertiesAction::Delete(id) => {
-                self.chart.drawings_mut().delete_drawing(id.0);
+                self.chart
+                    .user_action(|chart| chart.drawings_mut().delete_drawing(id.0));
             }
             DrawingPropertiesAction::Clone(id) => self.clone_drawing(id.0),
             DrawingPropertiesAction::Cancel | DrawingPropertiesAction::None => {}
         }
 
         // Keyboard shortcuts help.
-        let _ = self.keyboard_shortcuts.show(ctx);
+        let _ = self
+            .keyboard_shortcuts
+            .show_with_shortcuts(ctx, self.chart.shortcuts());
+        self.show_interval_entry(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -745,15 +813,30 @@ impl DemoApp {
         }
     }
 
+    fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        self.chart.begin_user_action();
+        self.settings_state = state.clone();
+        apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
+        self.chart.end_user_action();
+    }
+
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
-        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+        let ids: Vec<SeriesId> = chart
+            .indicators()
+            .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
+            .map(|(id, _)| id)
+            .collect();
         for id in ids {
             chart.remove_series(id);
         }
     }
 
     fn apply_drawing_props(&mut self, id: DrawingId, props: DrawingProps) {
+        self.user_action(|app| app.apply_drawing_props_edit(id, props));
+    }
+
+    fn apply_drawing_props_edit(&mut self, id: DrawingId, props: DrawingProps) {
         self.chart.drawings_mut().edit_drawing(id.0, |drawing| {
             drawing.color = props.color.to_srgba_unmultiplied();
             drawing.stroke_width = props.line_width;
@@ -774,7 +857,8 @@ impl DemoApp {
     }
 
     fn clone_drawing(&mut self, id: usize) {
-        self.chart.drawings_mut().duplicate_drawing(id);
+        self.chart
+            .user_action(|chart| chart.drawings_mut().duplicate_drawing(id));
     }
 
     fn set_date_range(&mut self, start: chrono::NaiveDate, end: chrono::NaiveDate) {
@@ -885,6 +969,16 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
+        // Sync the transport from the controller, then route its actions back.
+        if let Some(replay) = self.replay.as_ref() {
+            self.replay_control.sync_from(
+                replay.state.is_active(),
+                replay.state.is_playing(),
+                replay.state.speed.multiplier(),
+                replay.state.curr_bar,
+                replay.state.total_bars,
+            );
+        }
         if self.replay.is_none() {
             let delay = self.live.advance(chrono::Utc::now());
             if !self.live.paused() {
@@ -892,9 +986,18 @@ impl eframe::App for DemoApp {
             }
         }
 
+        for (_, _, feed) in &self.comparisons {
+            feed.set_paused(self.live.paused() || self.replay.is_some());
+            feed.advance(chrono::Utc::now());
+        }
+
         for extra in &mut self.extra_charts {
             extra.live.set_symbol(extra.chart.symbol());
             let delay = extra.live.advance(chrono::Utc::now());
+            for (_, _, feed) in &extra.comparisons {
+                feed.set_paused(extra.live.paused());
+                feed.advance(chrono::Utc::now());
+            }
             if !extra.live.paused() {
                 ctx.request_repaint_after(delay);
             }
@@ -903,13 +1006,23 @@ impl eframe::App for DemoApp {
         // A colour picker drag ends, as one edit, when the pointer is released.
         if self.colour_drag && !ctx.input(|i| i.pointer.any_down()) {
             self.colour_drag = false;
-            self.chart.drawings_mut().end_drag_handle();
+            self.chart
+                .user_action(|chart| chart.drawings_mut().end_drag_handle());
         }
 
         let panel_bg = ui.style().visuals.panel_fill;
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
+        // Dialogs consume their keys before chart commands and the replay transport.
+        if !self.keyboard_dialog_open() {
+            let action = self.replay_control.shortcut(&ctx);
+            self.handle_replay_control(action);
+            self.handle_keyboard(&ctx);
+        }
+        if self.keyboard_dialog_open() {
+            self.chart.suppress_shortcuts(&ctx);
+        }
         self.show_layout_tabs(ui);
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
@@ -919,15 +1032,8 @@ impl eframe::App for DemoApp {
         self.show_side_panel(ui);
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
-
-        // Floating replay transport, on top of the chart.
         self.show_replay_control(&ctx);
-
-        // All modal dialogs.
         self.show_dialogs(&ctx);
-
-        // Global keyboard shortcuts (e.g. the shortcuts help itself).
-        self.handle_keyboard(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -950,9 +1056,8 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
-        let drawings = self.chart.drawings();
-        self.top_toolbar.state.can_undo = drawings.can_undo();
-        self.top_toolbar.state.can_redo = drawings.can_redo();
+        self.top_toolbar.state.can_undo = self.chart.can_undo();
+        self.top_toolbar.state.can_redo = self.chart.can_redo();
         egui::Panel::top("toolbar")
             .exact_size(44.0)
             .show_separator_line(false)
@@ -978,7 +1083,7 @@ impl DemoApp {
                             ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
                                 .on_hover_text("Pause the feed to inspect the footprint sample");
                             for (label, action) in [
-                                ("Quick search", TopToolbarAction::OpenSymbolSearch),
+                                ("Quick search", TopToolbarAction::OpenQuickSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
                             ] {
                                 if ui.button(label).clicked() {
@@ -1037,10 +1142,9 @@ impl DemoApp {
                                 .icon_scale(24.0 / 28.0)
                                 .show(ui),
                             "Quick search",
-                            Some(egui::KeyboardShortcut::new(
-                                egui::Modifiers::COMMAND,
-                                egui::Key::K,
-                            )),
+                            self.chart
+                                .shortcuts()
+                                .shortcut(egui_charts::config::KeyboardAction::OpenQuickSearch),
                         )
                         .clicked();
                     },
@@ -1082,17 +1186,39 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::Layout(action) => {
+                self.handle_layout_action(action);
+                return;
+            }
+            TopToolbarAction::Undo => {
+                self.chart.undo();
+                self.sync_chart_history();
+                return;
+            }
+            TopToolbarAction::Redo => {
+                self.chart.redo();
+                self.sync_chart_history();
+                return;
+            }
+            _ => {}
+        }
+
+        self.user_action(|app| app.handle_top_toolbar_edit(ctx, action));
+    }
+
+    fn handle_top_toolbar_edit(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
+        match action {
             TopToolbarAction::ChartStyleSelected(ct) => {
                 self.state.chart_type = ct;
                 self.chart.set_chart_type(ct);
                 self.size_price_based_charts();
             }
             TopToolbarAction::IntervalSelected(tf) => self.switch_timeframe(tf),
-            TopToolbarAction::OpenSymbolSearch | TopToolbarAction::OpenCompare => {
-                self.symbol_search.open();
-            }
+            TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
+            TopToolbarAction::OpenCompare => self.compare_dialog.open(),
+            TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
-            TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            TopToolbarAction::CreateAlert => self.open_alert(None),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
@@ -1107,22 +1233,19 @@ impl DemoApp {
                 let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
-            TopToolbarAction::Undo => {
-                self.chart.drawings_mut().undo();
-            }
-            TopToolbarAction::Redo => {
-                self.chart.drawings_mut().redo();
-            }
+            TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::SaveIndicatorTemplate => {
                 let name = format!("Study set {}", self.indicator_templates.len() + 1);
                 let studies = self
                     .chart
                     .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
                     .map(|(_, study)| study.clone_box())
                     .collect();
                 let inputs = self
                     .chart
                     .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
                     .map(|(id, _)| {
                         self.chart
                             .indicator_inputs(id)
@@ -1164,6 +1287,10 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if self.chart.zoom_was_applied() {
+            self.drawing_toolbar.state.zoom_mode_active = false;
+        }
+        self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         use egui_charts::config::CrosshairStyle;
         use egui_charts::ui::drawing_toolbar::{
             DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
@@ -1217,6 +1344,22 @@ impl DemoApp {
     }
 
     pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
+        match action {
+            DrawingToolbarAction::ZoomIn => {
+                self.chart
+                    .set_zoom_mode(self.drawing_toolbar.state.zoom_mode_active);
+                return;
+            }
+            DrawingToolbarAction::ZoomOut => {
+                self.chart.zoom_back();
+                return;
+            }
+            _ => {}
+        }
+        self.user_action(|app| app.handle_drawing_toolbar_edit(action));
+    }
+
+    fn handle_drawing_toolbar_edit(&mut self, action: DrawingToolbarAction) {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
@@ -1226,7 +1369,11 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllIndicators => {
                 let chart = &mut self.chart;
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.set_indicator_visible(id, false);
                 }
@@ -1306,12 +1453,6 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllDrawings => dm.toggle_visibility_all(),
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
-            DrawingToolbarAction::ZoomIn => {
-                let _ = dm.redo();
-            }
-            DrawingToolbarAction::ZoomOut => {
-                let _ = dm.undo();
-            }
             DrawingToolbarAction::InsertEmoji { icon_name } => {
                 dm.start_icon_insertion(icon_name.to_string())
             }
@@ -1439,6 +1580,10 @@ impl DemoApp {
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
+        self.user_action(|app| app.handle_object_tree_edit(action, sources));
+    }
+
+    fn handle_object_tree_edit(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
         if self
             .object_tree
             .apply_to_chart(&mut self.chart, &action, sources)
@@ -1474,7 +1619,11 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         match self.alerts.show(ui) {
-            AlertPanelAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            AlertPanelAction::CreateAlert => self.open_alert(None),
+            AlertPanelAction::EditAlert(alert) => {
+                self.open_alert(None);
+                self.alert_dialog.edit(*alert);
+            }
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join("alerts.csv");
@@ -1583,7 +1732,9 @@ impl DemoApp {
                             .selectable_label(self.timeframe_toolbar.state.timezone == label, label)
                             .clicked()
                         {
-                            apply_timezone(&mut self.chart, &mut self.timeframe_toolbar, label);
+                            self.user_action(|app| {
+                                apply_timezone(&mut app.chart, &mut app.timeframe_toolbar, label)
+                            });
                             self.timeframe_toolbar.state.timezone_menu_open = false;
                         }
                     }
@@ -1650,6 +1801,20 @@ impl DemoApp {
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
+                if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
+                let mapping = self.chart.get_chart_mapping();
+                if self.settings_state.alerts.show_alerts {
+                    let decimals = self.chart.instrument().and_then(egui_charts::scales::instrument_price_precision).map(usize::from).unwrap_or(2);
+                    let currency = self.chart.instrument().and_then(|i| i.currency.as_deref()).unwrap_or("");
+                    if let Some(alert) = egui_charts::chart::render_alert_levels(
+                        ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
+                        self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        |price| format!("{price:.decimals$} {currency}"),
+                    ) { self.alerts.save(alert); }
+                }
+                if !self.keyboard_dialog_open() {
+                    self.handle_keyboard(ui.ctx());
+                }
                 if let Some(id) = self.chart.take_indicator_settings_request() {
                     self.open_indicator_settings(id);
                 }
@@ -1681,6 +1846,10 @@ impl DemoApp {
     }
 
     fn handle_chart_context(&mut self, action: ContextMenuAction) {
+        self.user_action(|app| app.handle_chart_context_edit(action));
+    }
+
+    fn handle_chart_context_edit(&mut self, action: ContextMenuAction) {
         match action {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
@@ -1706,12 +1875,16 @@ impl DemoApp {
         match action {
             SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => self.indicator_dialog.open(),
-            SeriesContextMenuAction::AddAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            SeriesContextMenuAction::AddAlert => self.open_alert(None),
             _ => {}
         }
     }
 
     fn handle_drawing_context(&mut self, action: DrawingContextMenuAction) {
+        self.user_action(|app| app.handle_drawing_context_edit(action));
+    }
+
+    fn handle_drawing_context_edit(&mut self, action: DrawingContextMenuAction) {
         // The library selects the right-clicked drawing, so the selected id is
         // the menu's target.
         let Some(id) = self.chart.drawings().sel_drawing() else {
@@ -1733,16 +1906,6 @@ impl DemoApp {
     fn show_replay_control(&mut self, ctx: &egui::Context) {
         if self.replay.is_none() {
             return;
-        }
-        // Sync the transport from the controller, then route its actions back.
-        if let Some(replay) = self.replay.as_ref() {
-            self.replay_control.sync_from(
-                replay.state.is_active(),
-                replay.state.is_playing(),
-                replay.state.speed.multiplier(),
-                replay.state.curr_bar,
-                replay.state.total_bars,
-            );
         }
         let action = self.replay_control.show(ctx);
         self.handle_replay_control(action);
@@ -1790,14 +1953,131 @@ impl DemoApp {
         }
     }
 
+    fn keyboard_dialog_open(&self) -> bool {
+        self.keyboard_shortcuts.is_open
+            || self.quick_search.is_open()
+            || self.symbol_search.is_open()
+            || self.compare_dialog.is_open
+            || self.indicator_dialog.is_open()
+            || self.settings_dialog.is_open
+            || self.drawing_props.is_open
+            || self.export_dialog.is_open()
+            || self.alert_dialog.is_open
+            || self.series_settings.is_open
+            || self.indicator_settings.is_open()
+            || self.interval_entry.is_some()
+            || self.date_picker.is_open
+    }
+
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        // F1 / "?" opens the keyboard shortcuts help.
-        let help = ctx.input(|i| {
-            i.key_pressed(egui::Key::F1)
-                || (i.modifiers.shift && i.key_pressed(egui::Key::Questionmark))
-        });
-        if help {
-            self.keyboard_shortcuts.toggle();
+        use egui_charts::config::KeyboardAction as A;
+        use egui_charts::widget::ShortcutRequest;
+        self.chart.dispatch_shortcuts(ctx);
+        self.sync_chart_history();
+        for request in self.chart.take_shortcut_requests() {
+            match request {
+                ShortcutRequest::PasteDrawing(text) => {
+                    if self
+                        .copied_drawing
+                        .as_ref()
+                        .is_some_and(|(copied, _)| *copied == text)
+                    {
+                        self.paste_drawing();
+                    }
+                }
+                ShortcutRequest::SymbolSearch(text) => {
+                    self.symbol_search.open_with_query(text);
+                }
+                ShortcutRequest::IntervalEntry(text) => {
+                    self.interval_entry = Some(text);
+                    self.interval_focus = true;
+                }
+                ShortcutRequest::Action(action) => match action {
+                    A::OpenQuickSearch => self.quick_search.open(),
+                    A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
+                    A::OpenIndicatorSearch => self.indicator_dialog.open(),
+                    A::OpenSymbolSearch => self.symbol_search.open(),
+                    A::OpenIntervalSearch => {
+                        self.interval_entry = Some(String::new());
+                        self.interval_focus = true;
+                    }
+                    A::GoToDate => self.date_picker.open(),
+                    A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+                    A::CreateAlert => {
+                        let mapping = self.chart.get_chart_mapping();
+                        if let Some(pos) = ctx
+                            .pointer_hover_pos()
+                            .filter(|pos| mapping.rect.contains(*pos))
+                        {
+                            if ctx
+                                .layer_id_at(pos)
+                                .is_some_and(|layer| layer.order == egui::Order::Background)
+                            {
+                                let price = mapping.y_to_price(pos.y);
+                                if price.is_finite() {
+                                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                                }
+                            }
+                        } else {
+                            self.open_alert(None);
+                        }
+                    }
+                    A::MaximizeChart => {
+                        self.handle_top_toolbar(ctx, TopToolbarAction::ToggleFullscreen)
+                    }
+                    A::CopyDrawing => {
+                        self.copied_drawing = self
+                            .chart
+                            .drawings()
+                            .sel_drawing()
+                            .and_then(|id| {
+                                self.chart
+                                    .drawings()
+                                    .drawings
+                                    .iter()
+                                    .find(|drawing| drawing.id == id)
+                                    .cloned()
+                            })
+                            .map(|drawing| {
+                                let text = format!("Drawing clipboard\n{drawing:#?}");
+                                ctx.copy_text(text.clone());
+                                (text, drawing)
+                            });
+                    }
+                    A::PasteDrawing => self.paste_drawing(),
+                    A::CycleChartFocus | A::CycleChartFocusBack => {
+                        let count = self
+                            .layout
+                            .mode
+                            .chart_count()
+                            .min(self.extra_charts.len() + 1);
+                        let delta = if action == A::CycleChartFocus {
+                            1
+                        } else {
+                            count - 1
+                        };
+                        self.activate_chart_slot((self.layout_slot + delta) % count);
+                        self.layout.set_active(self.layout_slot);
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+
+    // The demo keeps a session clipboard; hosts can decode their persistent drawing format instead.
+    fn paste_drawing(&mut self) {
+        self.user_action(|app| app.paste_drawing_edit());
+    }
+
+    fn paste_drawing_edit(&mut self) {
+        if let Some((_, mut drawing)) = self.copied_drawing.clone() {
+            drawing.stored_id = None;
+            drawing.created_at = None;
+            for point in &mut drawing.chart_points {
+                point.bar_idx += 3.0;
+            }
+            self.chart.drawings_mut().add_synced_drawing(drawing);
         }
     }
 
@@ -1907,16 +2187,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::ZERO)
 }
 
-fn condition_from_label(label: &str, price: f64) -> AlertCondition {
-    match label {
-        "Crossing" => AlertCondition::Crossing(price),
-        "Crossing Up" => AlertCondition::CrossingUp(price),
-        "Crossing Down" => AlertCondition::CrossingDown(price),
-        "Less Than" => AlertCondition::Below(price),
-        _ => AlertCondition::Above(price),
-    }
-}
-
 fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::LineStyle {
     use egui_charts::drawings::LineStyle;
     match style {
@@ -1953,63 +2223,8 @@ fn apply_settings_state(
     chart: &mut Chart,
     toolbar: &mut TimeframeToolbar,
 ) {
-    use egui_charts::config::NavigationButtons;
-    use egui_charts::ui::top_toolbar::components::settings_menu::types::{
-        ButtonVisibility, GridLinesMode,
-    };
-    apply_timezone(chart, toolbar, &state.timezone);
-    let config = chart.config_mut();
-
-    config.bullish_color = state.candle_colors.body_up;
-    config.bearish_color = state.candle_colors.body_down;
-    config.bullish_border_color = Some(state.candle_colors.border_up);
-    config.bearish_border_color = Some(state.candle_colors.border_down);
-    config.bullish_wick_color = Some(state.candle_colors.wick_up);
-    config.bearish_wick_color = Some(state.candle_colors.wick_down);
-
-    config.background_color = state.chart_basic_styles.background_color;
-    config.grid_color = state.grid_lines.horizontal_color;
-
-    let (h, v) = match state.grid_lines.mode {
-        GridLinesMode::None => (false, false),
-        GridLinesMode::Horizontal => (true, false),
-        GridLinesMode::Vertical => (false, true),
-        GridLinesMode::Both => (true, true),
-    };
-    config.show_horizontal_grid = h;
-    config.show_vertical_grid = v;
-    config.show_grid = h || v;
-
-    config.navigation_buttons = match state.btns.navigation {
-        ButtonVisibility::AlwaysVisible => NavigationButtons::Always,
-        ButtonVisibility::VisibleOnMouseOver => NavigationButtons::OnHover,
-        ButtonVisibility::Hidden => NavigationButtons::Never,
-    };
-    config.show_ohlc_info = state.status_line.show_ohlc;
-    config.show_symbol_labels = state.status_line.show_symbol;
-    config.title_as_description = state.status_line.title_as_description;
-    config.show_quote_boxes = state.status_line.show_quote_boxes;
-    config.show_ohlc_change = state.status_line.show_change;
-    config.show_ohlc_change_percent = state.status_line.show_change_percent;
-    config.show_legend_volume = state.status_line.show_volume;
-    config.show_indicator_labels = state.status_line.show_indicator_titles;
-    config.show_indicator_inputs = state.status_line.show_indicator_inputs;
-    config.show_indicator_last_val = state.status_line.show_indicator_values;
-    config.show_right_axis = !state.scales_and_lines.price_scale_left;
-    config.show_left_axis = state.scales_and_lines.price_scale_left;
-    config.show_symbol_last_val = state.scales_and_lines.show_last_price_label;
-    config.show_price_line = state.scales_and_lines.show_price_line;
-    config.show_symbol_prev_close = state.scales_and_lines.show_prev_close_label;
-    config.show_prev_close_line = state.scales_and_lines.show_prev_close;
-    config.show_countdown = state.scales_and_lines.show_countdown;
-    config.show_bid_ask = state.scales_and_lines.show_bid_ask;
-    config.show_high_low = state.scales_and_lines.show_high_low;
-    chart.price_scale_mut().options_mut().scale_margins = egui_charts::scales::PriceScaleMargins {
-        top: f64::from(state.margins.top_percent.clamp(0.0, 100.0)) / 100.0,
-        bottom: f64::from(state.margins.bottom_percent.clamp(0.0, 100.0)) / 100.0,
-    };
-    if state.margins.right_bars != chart.chart_options().time_scale.right_offset.max(0.0) as u32 {
-        chart.set_right_margin(state.margins.right_bars as f32);
+    if state.apply_to_chart(chart).is_ok() {
+        toolbar.set_timezone(state.timezone.clone());
     }
 }
 
@@ -2017,6 +2232,753 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// Native integrations send clipboard events instead of key events. Only our session
+    /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.
+    #[test]
+    fn native_drawing_clipboard_pastes_once_and_undoes_the_copy() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(10.0, 100.0), ChartPoint::new(20.0, 120.0)];
+        drawing.completed = true;
+        app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().select(7);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Copy],
+                ..Default::default()
+            },
+            |ui| app.handle_keyboard(ui.ctx()),
+        );
+        let text = output.platform_output.commands.iter().find_map(|command| {
+            if let egui::OutputCommand::CopyText(text) = command {
+                Some(text.clone())
+            } else {
+                None
+            }
+        });
+        output.drop_without_applying_deltas();
+        let text = text.expect("copy must provide system clipboard text");
+        for (event, count) in [
+            (egui::Event::Paste("unrelated clipboard text".into()), 1),
+            (egui::Event::Paste(text), 2),
+            (
+                egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+                1,
+            ),
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![event],
+                    ..Default::default()
+                },
+                |ui| app.handle_keyboard(ui.ctx()),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(app.chart.drawings().drawings.len(), count);
+        }
+        assert_eq!(
+            app.chart.drawings().drawings[0].chart_points[0],
+            ChartPoint::new(10.0, 100.0)
+        );
+    }
+
+    /// Typed search owns subsequent editing keys, including in the opening frame.
+    #[test]
+    fn typed_symbol_search_keeps_queued_editing_keys() {
+        use eframe::App;
+        use egui_charts::drawings::{Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart
+            .drawings_mut()
+            .drawings
+            .push(Drawing::new(7, DrawingToolType::TrendLine));
+        app.chart.drawings_mut().select(7);
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![
+                egui::Event::Text("SAMX".into()),
+                key(egui::Key::Backspace),
+                egui::Event::Text("PLE".into()),
+            ],
+            vec![key(egui::Key::Enter)],
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(
+            !app.symbol_search.is_open(),
+            "Enter selects the edited SAMPLE query"
+        );
+        assert_eq!(
+            app.chart.drawings().drawings.len(),
+            1,
+            "search editing must not delete drawings"
+        );
+    }
+
+    /// A bare number enters minutes and Enter applies it through the normal host path.
+    #[test]
+    fn typed_interval_entry_applies_minutes() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        for events in [
+            vec![egui::Event::Text("15".into())],
+            vec![],
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(app.state.timeframe, Timeframe::Min15);
+        assert_eq!(app.state.timeframe.duration_ms(), 900_000);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
+        let original = app.chart.config().background_color;
+        let mut settings = app.settings_state.clone();
+        settings.chart_basic_styles.background_color = egui::Color32::RED;
+        settings.scales_and_lines.invert_scale = true;
+        settings.timezone = "America/New_York".into();
+        app.apply_chart_settings(settings.clone());
+        app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Hour1));
+        settings.chart_basic_styles.background_color = egui::Color32::BLUE;
+        app.apply_chart_settings(settings);
+        for (action, timeframe, color, inverted, timezone) in [
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Hour1,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min15,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min15,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Undo,
+                Timeframe::Min1,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Min15,
+                original,
+                false,
+                "UTC",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Min15,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Hour1,
+                egui::Color32::RED,
+                true,
+                "America/New_York",
+            ),
+            (
+                TopToolbarAction::Redo,
+                Timeframe::Hour1,
+                egui::Color32::BLUE,
+                true,
+                "America/New_York",
+            ),
+        ] {
+            app.handle_top_toolbar(&ctx, action);
+            assert_eq!(app.state.timeframe, timeframe);
+            assert_eq!(app.chart.timeframe(), Some(timeframe));
+            assert_eq!(app.timeframe_toolbar.state.timeframe, timeframe);
+            assert_eq!(app.chart.config().background_color, color);
+            assert_eq!(
+                app.chart.state().price_scale().options().invert_scale,
+                inverted
+            );
+            assert_eq!(app.timeframe_toolbar.state.timezone, timezone);
+            let bars = app.chart.bars(SeriesId::MAIN);
+            assert_eq!(
+                (bars[bars.len() - 1].time - bars[bars.len() - 2].time).num_milliseconds(),
+                timeframe.duration_ms()
+            );
+        }
+    }
+
+    /// Quick search executes catalogue entries as well as opening settings.
+    #[test]
+    fn quick_search_executes_studies_tools_and_settings() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers, RawInput};
+        for (query, same_frame, toolbar) in ["RSI", "Trend Line", "Chart settings"]
+            .into_iter()
+            .flat_map(|query| {
+                [
+                    (query, false, false),
+                    (query, true, false),
+                    (query, true, true),
+                ]
+            })
+        {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            if query == "RSI" {
+                app.chart.user_action(|chart| {
+                    let dm = chart.drawings_mut();
+                    let tool = egui_charts::drawings::DrawingToolType::TrendLine;
+                    dm.start_drawing_with_coords(tool, egui::pos2(10.0, 100.0), |x| x, f64::from);
+                    dm.add_point_with_coords(egui::pos2(20.0, 120.0), |x| x, f64::from);
+                });
+            }
+            if toolbar {
+                app.handle_top_toolbar(&ctx, TopToolbarAction::OpenQuickSearch);
+                assert!(!app.symbol_search.is_open());
+            }
+            let key = |key, modifiers| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            for (modifiers, events) in [
+                (
+                    Modifiers::CTRL.plus(Modifiers::COMMAND),
+                    if same_frame {
+                        vec![
+                            if toolbar {
+                                Event::ModifiersChanged(Modifiers::NONE)
+                            } else {
+                                key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))
+                            },
+                            Event::Text(query.into()),
+                        ]
+                    } else {
+                        vec![key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))]
+                    },
+                ),
+                (
+                    Modifiers::NONE,
+                    if same_frame {
+                        vec![]
+                    } else {
+                        vec![Event::Text(query.into())]
+                    },
+                ),
+                (Modifiers::NONE, vec![key(Key::Enter, Modifiers::NONE)]),
+            ] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events: std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                )
+                .drop_without_applying_deltas();
+            }
+            match query {
+                "RSI" => {
+                    let id = app
+                        .chart
+                        .indicators()
+                        .find(|(_, study)| study.name() == "RSI")
+                        .expect("palette adds RSI")
+                        .0;
+                    for (action, studies, drawings, can_undo, can_redo) in [
+                        (TopToolbarAction::Undo, 0, 1, true, true),
+                        (TopToolbarAction::Redo, 1, 1, true, false),
+                        (TopToolbarAction::Undo, 0, 1, true, true),
+                        (TopToolbarAction::Undo, 0, 0, false, true),
+                        (TopToolbarAction::Redo, 0, 1, true, true),
+                        (TopToolbarAction::Redo, 1, 1, true, false),
+                    ] {
+                        app.handle_top_toolbar(&ctx, action);
+                        assert_eq!(app.chart.indicators().count(), studies);
+                        assert_eq!(app.chart.drawings().drawings.len(), drawings);
+                        if studies == 1 {
+                            assert_eq!(app.chart.indicators().next().unwrap().0, id);
+                        }
+                        ctx.run_ui(RawInput::default(), |ui| {
+                            app.show_top_toolbar(ui, egui::Color32::BLACK)
+                        })
+                        .drop_without_applying_deltas();
+                        assert_eq!(app.top_toolbar.state.can_undo, can_undo);
+                        assert_eq!(app.top_toolbar.state.can_redo, can_redo);
+                    }
+                }
+                "Trend Line" => assert_eq!(
+                    app.chart.drawings().active_tool,
+                    Some(egui_charts::drawings::DrawingToolType::TrendLine)
+                ),
+                _ => assert!(app.settings_dialog.is_open),
+            }
+        }
+    }
+
+    /// The dialog gets Escape before the chart or replay transport.
+    #[test]
+    fn dialogs_keep_drawing_and_replay_keys_with_their_owner() {
+        use eframe::App;
+        use egui_charts::drawings::{Drawing, DrawingToolType};
+        for replay in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            if replay {
+                app.start_replay();
+                app.replay
+                    .as_mut()
+                    .unwrap()
+                    .handle_action(ReplayAction::Pause);
+            }
+            app.chart
+                .drawings_mut()
+                .drawings
+                .push(Drawing::new(7, DrawingToolType::TrendLine));
+            app.chart.drawings_mut().select(7);
+            app.chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::TrendLine));
+            app.keyboard_shortcuts.open();
+            let before = app.replay.as_ref().map(|replay| replay.state.curr_bar);
+            for pass in 0..4 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events: if pass >= 2 {
+                            vec![egui::Event::Key {
+                                key: if pass == 2 {
+                                    egui::Key::Escape
+                                } else {
+                                    egui::Key::ArrowRight
+                                },
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            }]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(!app.keyboard_shortcuts.is_open);
+            assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
+            assert_eq!(
+                app.chart.drawings().active_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(app.replay.is_some(), replay);
+            assert_eq!(app.replay_control.is_visible(), replay);
+            if let Some(before) = before {
+                assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn comparison_dialog_adds_hides_and_removes_chart_series() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let main_symbol = app.chart.symbol().to_owned();
+        let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        app.handle_top_toolbar(&ctx, TopToolbarAction::OpenCompare);
+        for (label, count, visible) in [
+            ("AAPL", 1, true),
+            ("Hide", 1, false),
+            ("Show", 1, true),
+            ("X", 0, false),
+        ] {
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.show_dialogs(ui.ctx()),
+                );
+                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                pos
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).expect("comparison action is visible");
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            let comparisons: Vec<_> = app
+                .chart
+                .indicators()
+                .filter(|(_, study)| study.name() == "AAPL")
+                .collect();
+            assert_eq!(
+                comparisons.len(),
+                count,
+                "{label} must change actual chart membership"
+            );
+            if let Some((_, study)) = comparisons.first() {
+                assert_eq!(study.is_visible(), visible);
+                assert!(study.values().line(0).iter().any(|value| value.is_finite()));
+            }
+            if label == "AAPL" {
+                let colour = comparisons[0].1.colors()[0];
+                let mut painted = false;
+                for _ in 0..3 {
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        app.show_chart(ui, app.theme.chart.bg)
+                    });
+                    painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == colour));
+                    output.drop_without_applying_deltas();
+                }
+                assert!(painted, "comparison prices must be painted");
+                app.handle_top_toolbar(&ctx, TopToolbarAction::SaveIndicatorTemplate);
+                assert!(app.indicator_templates.last().unwrap().studies.is_empty());
+                app.handle_top_toolbar(
+                    &ctx,
+                    TopToolbarAction::ApplyIndicatorTemplate("Study set 1".into()),
+                );
+                assert!(
+                    app.chart
+                        .indicators()
+                        .any(|(_, study)| study.name() == "AAPL")
+                );
+            }
+            assert_eq!(app.compare_dialog.compared_symbols.len(), count);
+            assert_eq!(app.chart.symbol(), main_symbol);
+            assert!(
+                app.chart.bars(SeriesId::MAIN) == main_bars,
+                "comparison actions must preserve the main data"
+            );
+        }
+    }
+
+    #[test]
+    fn display_settings_apply_styles_and_read_back() {
+        use egui_charts::config::{BackgroundStyle, CrosshairLineStyle};
+        use egui_charts::ui::top_toolbar::components::settings_menu::{
+            BackgroundType, PrecisionMode, WatermarkMode,
+        };
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut state = app.settings_state.clone();
+        state.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
+        state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
+        state.chart_basic_styles.background_gradient_bottom = egui::Color32::BLUE;
+        state.crosshair.line_width = 3.0;
+        state.crosshair.line_style =
+            egui_charts::ui::top_toolbar::components::settings_menu::LineStyle::Solid;
+        state.crosshair.color = egui::Color32::GREEN;
+        state.precision = PrecisionMode::Decimals5;
+        state.watermark.mode = WatermarkMode::Symbol;
+        state.grid_lines.horizontal_color = egui::Color32::RED;
+        state.grid_lines.vertical_color = egui::Color32::BLUE;
+        state.margins.top_percent = 12.5;
+        state.margins.bottom_percent = 7.5;
+        state.margins.right_bars = 17;
+        apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
+        assert_eq!(
+            app.chart.config().background_style,
+            BackgroundStyle::VerticalGradient {
+                top_color: egui::Color32::RED,
+                bottom_color: egui::Color32::BLUE,
+            }
+        );
+        assert_eq!(
+            app.chart.chart_options().crosshair.line_style,
+            CrosshairLineStyle::Solid
+        );
+        assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
+        assert_eq!(
+            app.chart.chart_options().crosshair.vert_line_color,
+            egui::Color32::GREEN
+        );
+        assert!(app.chart.config().show_watermark);
+        let scale = app.chart.state().price_scale();
+        assert_eq!(
+            scale.map(Default::default(), 0.0, 1.0).price_precision(),
+            Some(5)
+        );
+        assert_eq!(scale.options().scale_margins.top, 0.125);
+        assert_eq!(scale.options().scale_margins.bottom, 0.075);
+        state.alerts.show_alerts = false;
+        state.alerts.show_alert_labels = false;
+        state.alerts.alert_color = egui::Color32::YELLOW;
+        app.settings_state.alerts = state.alerts.clone();
+        app.open_chart_settings_dialog();
+        assert_eq!(app.settings_state.alerts, state.alerts);
+        assert_eq!(app.settings_dialog.settings().alerts, state.alerts);
+        assert_eq!(app.settings_state.grid_lines, state.grid_lines);
+        assert_eq!(app.settings_state.crosshair, state.crosshair);
+        assert_eq!(app.settings_state.precision, state.precision);
+        assert_eq!(app.settings_state.margins, state.margins);
+        assert_eq!(app.settings_state.watermark, state.watermark);
+        let mut next = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+        next.time += chrono::TimeDelta::minutes(1);
+        app.chart.update(SeriesId::MAIN, next);
+        assert_eq!(
+            app.chart.get_time_scale_state().1,
+            17.0,
+            "live bars retain the chosen right margin"
+        );
+        let before = app.settings_state.clone();
+        for (timezone, top, bottom, width) in [
+            ("Unknown", 10.0, 10.0, 1.0),
+            ("UTC", f32::NAN, 10.0, 1.0),
+            ("UTC", 60.0, 40.0, 1.0),
+            ("UTC", -1.0, 10.0, 1.0),
+            ("UTC", 10.0, 10.0, 0.0),
+        ] {
+            let mut invalid = state.clone();
+            invalid.timezone = timezone.into();
+            invalid.margins.top_percent = top;
+            invalid.margins.bottom_percent = bottom;
+            invalid.crosshair.line_width = width;
+            invalid.candle_colors.body_up = egui::Color32::YELLOW;
+            apply_settings_state(&invalid, &mut app.chart, &mut app.timeframe_toolbar);
+            app.open_chart_settings_dialog();
+            assert_eq!(app.settings_state, before);
+        }
+    }
+
+    #[test]
+    fn alt_a_creates_a_host_alert_at_the_hovered_price_and_dragging_submits_its_new_level() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let frame = |app: &mut DemoApp, events: Vec<egui::Event>, covered: bool| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_chart(ui, egui::Color32::BLACK);
+                    if covered {
+                        egui::Window::new("Settings overlay")
+                            .fixed_pos(
+                                app.chart.get_chart_mapping().rect.center()
+                                    - egui::vec2(50.0, 50.0),
+                            )
+                            .show(ui.ctx(), |ui| {
+                                ui.label("Settings");
+                            });
+                    }
+                },
+            )
+            .drop_without_applying_deltas();
+            app.alerts.poll(&ctx, &mut app.toasts);
+        };
+        frame(&mut app, vec![], false);
+        frame(&mut app, vec![], false);
+        let map = app.chart.get_chart_mapping();
+        let point = egui::pos2(map.rect.center().x, map.rect.center().y);
+        let range = map.price.range();
+        let expected = (range.min + range.max) / 2.0;
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                },
+            ],
+            false,
+        );
+        assert_eq!(app.alerts.alerts().len(), 1);
+        assert_eq!(
+            app.alerts.alerts()[0].condition,
+            AlertCondition::Crossing(expected)
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            false,
+        );
+        let target = point + egui::vec2(0.0, 45.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let scale = app.chart.get_time_scale_state();
+        frame(&mut app, vec![button(point, true)], false);
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 5.0))],
+            false,
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(target)], false);
+        frame(&mut app, vec![button(target, false)], false);
+        let AlertCondition::Crossing(level) = app.alerts.alerts()[0].condition else {
+            panic!("expected crossing");
+        };
+        let expected_drag =
+            expected - 45.0 / f64::from(map.rect.height()) * (range.max - range.min);
+        assert!(
+            (level - expected_drag).abs() < 1e-6,
+            "{level} expected {expected_drag}"
+        );
+        assert_eq!(
+            app.chart.get_time_scale_state(),
+            scale,
+            "dragging an alert must not pan the chart"
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(point)], true);
+        frame(&mut app, vec![], true);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::ALT,
+            }],
+            true,
+        );
+        assert_eq!(
+            app.alerts.alerts().len(),
+            1,
+            "a covering window owns the hovered point"
+        );
+        assert!(!app.alert_dialog.is_open);
+        use egui_charts::config::KeyboardAction;
+        app.chart
+            .shortcuts_mut()
+            .bindings
+            .retain(|(_, action)| *action != KeyboardAction::CreateAlert);
+        app.chart.shortcuts_mut().bindings.insert(
+            0,
+            (
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::B),
+                KeyboardAction::CreateAlert,
+            ),
+        );
+        frame(&mut app, vec![], false);
+        frame(&mut app, vec![], false);
+        for (key, expected) in [(egui::Key::A, 1), (egui::Key::B, 2)] {
+            frame(
+                &mut app,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                }],
+                false,
+            );
+            assert_eq!(
+                app.alerts.alerts().len(),
+                expected,
+                "alert creation follows the chart map"
+            );
+        }
+    }
 
     /// External chart modes and completed drawings are reflected before the toolbar is painted.
     #[test]
@@ -2200,6 +3162,48 @@ mod tests {
     }
 
     #[test]
+    fn zoom_controls_leave_drawing_history_untouched() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.user_action(|chart| {
+            chart
+                .drawings_mut()
+                .add_synced_drawing(egui_charts::drawings::Drawing::new(
+                    0,
+                    egui_charts::drawings::DrawingToolType::TrendLine,
+                ));
+        });
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        app.drawing_toolbar.state.zoom_mode_active = true;
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomIn);
+        assert!(app.chart.drawings().drawings.is_empty());
+        assert!(app.chart.can_redo());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let before = app.chart.get_time_scale_state();
+        let rect = app.chart.get_rendered_price_rect();
+        assert!(app.chart.execute_box_zoom(
+            rect.min + rect.size() * 0.2,
+            rect.max - rect.size() * 0.2,
+            rect,
+            rect.width()
+        ));
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK);
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.has_zoom_history);
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomOut);
+        assert_eq!(app.chart.get_time_scale_state(), before);
+        assert!(!app.chart.state().has_zoom_history());
+        assert!(app.chart.drawings().drawings.is_empty());
+        assert!(app.chart.can_redo());
+    }
+
+    #[test]
     fn object_tree_applies_layer_bulk_and_focus_actions() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
         let ctx = egui::Context::default();
@@ -2221,6 +3225,10 @@ mod tests {
             sources.len()
         );
         app.handle_object_tree(ObjectTreeAction::ToggleVisibility(MAIN_SERIES_ID), &sources);
+        assert!(!app.chart.is_main_series_visible());
+        assert!(app.chart.undo());
+        assert!(app.chart.is_main_series_visible());
+        assert!(app.chart.redo());
         assert!(!app.chart.is_main_series_visible());
         assert!(!app.build_source_items()[0].visible);
         assert!(app.chart.drawings().drawings[0].visible);
@@ -2264,7 +3272,7 @@ mod tests {
                 .iter()
                 .map(|d| d.z_order)
                 .collect();
-            assert!(app.chart.drawings_mut().undo());
+            assert!(app.chart.undo());
             assert_eq!(
                 app.chart
                     .drawings()
@@ -2274,7 +3282,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 before
             );
-            assert!(app.chart.drawings_mut().redo());
+            assert!(app.chart.redo());
             assert_eq!(
                 app.chart
                     .drawings()
@@ -2303,16 +3311,16 @@ mod tests {
             app.chart.drawings().drawings[0].label.as_deref(),
             Some("Support")
         );
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         assert_eq!(app.chart.drawings().drawings[0].label, None);
-        assert!(app.chart.drawings_mut().redo());
+        assert!(app.chart.redo());
         app.handle_object_tree(ObjectTreeAction::Duplicate(ids[0]), &sources);
         assert_eq!(app.chart.drawings().drawings.len(), 4);
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         assert_eq!(app.chart.drawings().drawings.len(), 3);
-        assert!(app.chart.drawings_mut().redo());
+        assert!(app.chart.redo());
         assert_eq!(app.chart.drawings().drawings.len(), 4);
-        assert!(app.chart.drawings_mut().undo());
+        assert!(app.chart.undo());
         app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
         // Prices 100..200 with ten percent on either side give 90..210.
         assert_eq!(app.chart.state().price_scale().range().min, 90.0);

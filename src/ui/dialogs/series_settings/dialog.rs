@@ -5,13 +5,11 @@ use egui::{Context, Ui, Vec2};
 
 use super::actions::SeriesSettingsAction;
 use super::config::SeriesSettingsConfig;
-use super::tabs::{
-    AlertsTab, CanvasTab, EventsTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab,
-    TradingTab,
-};
+use super::tabs::{CanvasTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab};
 use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{DialogFooter, DialogFrame, dialog_header};
+use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::modal::Modal;
 use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
 
 /// Series settings dialog with sidebar layout
@@ -71,12 +69,23 @@ impl SeriesSettingsDialog {
 
         let mut action = SeriesSettingsAction::None;
 
-        DialogFrame::new("Settings", Vec2::new(self.config.width, self.config.height)).show(
-            ctx,
-            |ui| {
+        let object = if self.series_id == Some(SeriesId::MAIN) {
+            "Main series".to_owned()
+        } else {
+            format!("Series {:?}", self.series_id)
+        };
+        let title = format!("{object} · {}", self.settings.chart_type.name());
+        let mut open = true;
+        Modal::new("series_settings", title)
+            .width(self.config.width + 32.0)
+            .height(self.config.height + 32.0)
+            .show(ctx, &mut open, |ui| {
                 action = self.render_contents(ui);
-            },
-        );
+            });
+        if !open {
+            self.is_open = false;
+            action = SeriesSettingsAction::Cancel;
+        }
 
         action
     }
@@ -84,14 +93,12 @@ impl SeriesSettingsDialog {
     fn render_contents(&mut self, ui: &mut Ui) -> SeriesSettingsAction {
         let mut action = SeriesSettingsAction::None;
 
-        // Title bar
-        if dialog_header(ui, "Settings") {
-            action = SeriesSettingsAction::Cancel;
-            self.is_open = false;
-        }
-
         // Main content: sidebar + content area
         let sidebar_width = DESIGN_TOKENS.sizing.dialog.series_sidebar_width;
+        let seam_top = ui.cursor().top();
+        let seam_x = ui.cursor().left()
+            + sidebar_width.min(ui.available_width() * 0.4)
+            + ui.spacing().item_spacing.x;
         let active_tab = self.active_tab;
         let active_tab_mut = &mut self.active_tab;
         let settings = &mut self.settings;
@@ -102,11 +109,13 @@ impl SeriesSettingsDialog {
             SidebarLayout::new(sidebar_width.min(ui.available_width() * 0.4)).show(
                 ui,
                 |ui| {
-                    egui::ScrollArea::both()
+                    egui::ScrollArea::vertical()
                         .id_salt("series_tabs")
                         .show(ui, |ui| {
                             ui.space_sm();
-                            for tab in SeriesSettingsTab::all() {
+                            for tab in
+                                [SeriesSettingsTab::Symbol, SeriesSettingsTab::ScalesAndLines]
+                            {
                                 if SidebarTab::new(tab.label(), *active_tab_mut == tab)
                                     .icon(tab.icon())
                                     .show(ui)
@@ -126,15 +135,17 @@ impl SeriesSettingsDialog {
                                 SeriesSettingsTab::StatusLine => StatusLineTab::show(ui, settings),
                                 SeriesSettingsTab::ScalesAndLines => ScalesTab::show(ui, settings),
                                 SeriesSettingsTab::Canvas => CanvasTab::show(ui, settings),
-                                SeriesSettingsTab::Trading => TradingTab::show(ui, settings),
-                                SeriesSettingsTab::Alerts => AlertsTab::show(ui, settings),
-                                SeriesSettingsTab::Events => EventsTab::show(ui, settings),
                             }
                         });
                 },
             );
         });
 
+        ui.painter().vline(
+            seam_x,
+            seam_top..=ui.cursor().top() + 8.0,
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
         // Footer
         let (ok, cancel) = DialogFooter::new("Ok").secondary("Cancel").show(ui);
         if ok && let Some(id) = self.series_id {
@@ -200,10 +211,12 @@ mod tests {
                         let inert_colour_controls = output.shapes.iter().any(|shape| {
                             matches!(
                                 &shape.shape, egui::Shape::Text(text)
-                                if matches!(text.galley.text(), "Border (up)" | "Wick (up)")
+                                if matches!(text.galley.text(), "Border" | "Wick")
                             )
                         });
+                        let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Alerts" | "Events" | "Coming soon")));
                         output.drop_without_applying_deltas();
+                        assert!(!inactive, "placeholder settings must not be offered");
                         if frame > 0 {
                             if kind == ChartType::Renko {
                                 assert!(

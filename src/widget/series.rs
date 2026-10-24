@@ -43,8 +43,7 @@ impl Chart {
             .filter(|first| bars.binary_search_by_key(first, |bar| bar.time).is_ok())
             .map_or(0, |first| bars.partition_point(|bar| bar.time < first));
         let first_changed = self.state.set_data(BarData::from_bars(bars));
-        self.drawings
-            .shift_bar_indices(f32::NEG_INFINITY, prepended as f32);
+        self.shift_drawing_history(f32::NEG_INFINITY, prepended as f32);
         self.bars_changed(before, first_changed);
     }
 
@@ -123,7 +122,7 @@ impl Chart {
             } else {
                 run[0] as f32
             };
-            self.drawings.shift_bar_indices(from, run.len() as f32);
+            self.shift_drawing_history(from, run.len() as f32);
         }
         if !self.bars_changed(before, merged.first_changed)
             && !self.state.shows_elements()
@@ -156,6 +155,7 @@ impl Chart {
         indicator.calculate(&self.state.data().bars);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
+        self.record_study(id);
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.study_autoscale.push(true);
@@ -170,6 +170,7 @@ impl Chart {
         let Some(index) = self.study_ids.iter().position(|candidate| *candidate == id) else {
             return false;
         };
+        self.record_study(id);
         self.study_inputs[index] = inputs.into();
         true
     }
@@ -188,6 +189,7 @@ impl Chart {
         let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
             return false;
         };
+        self.record_study(id);
         #[cfg(feature = "studies")]
         if self.volume_study == Some(id) {
             self.volume_study = None;
@@ -212,6 +214,7 @@ impl Chart {
         let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
             return false;
         };
+        self.record_study(id);
         self.studies.indicators_mut()[at].set_visible(visible);
         true
     }
@@ -242,6 +245,7 @@ impl Chart {
         let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
             return false;
         };
+        self.record_study(id);
         self.study_autoscale[at] = autoscale;
         true
     }
@@ -261,6 +265,7 @@ impl Chart {
     /// [`show`](Self::show); the next one recomputes it in full.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         Some(self.studies.indicators_mut()[at].as_mut())
