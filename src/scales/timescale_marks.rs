@@ -102,6 +102,9 @@ pub struct TickMark {
 
     /// Index in the data series
     pub index: usize,
+
+    /// Whether the label is drawn bold where the time scale options allow bold labels
+    pub bold: bool,
 }
 
 /// Configuration for tick mark generation
@@ -270,6 +273,10 @@ impl TickMarkGenerator {
 
         for mark in &mut marks {
             mark.label = self.format_time_label(mark.time, mark.mark_type);
+            mark.bold = matches!(
+                mark.mark_type,
+                TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
+            );
         }
         marks
     }
@@ -328,6 +335,7 @@ impl TickMarkGenerator {
                     weight,
                     label: String::new(),
                     index,
+                    bold: false,
                 });
             }
             previous = Some(local);
@@ -471,6 +479,7 @@ impl TickMarkGenerator {
                         weight: TickMarkWeight::YEAR,
                         label: String::new(),
                         index: 0, // Will be set later
+                        bold: false,
                     });
                 }
                 current = time.checked_add_months(Months::new(12 * years as u32));
@@ -493,6 +502,7 @@ impl TickMarkGenerator {
                         weight,
                         label: String::new(),
                         index: 0,
+                        bold: false,
                     });
                 }
                 current = time.checked_add_months(Months::new(months));
@@ -510,6 +520,7 @@ impl TickMarkGenerator {
                 weight,
                 label: String::new(),
                 index: 0, // Will be set later
+                bold: false,
             });
 
             let Some(next) = current.checked_add_signed(interval) else {

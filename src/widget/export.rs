@@ -254,6 +254,7 @@ impl Chart {
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
         chart.session_provider = self.session_provider.clone();
+        chart.horizontal_scale = self.horizontal_scale.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
         chart.drawings.drawings = self.drawings.drawings.clone();

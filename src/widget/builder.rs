@@ -148,6 +148,7 @@ impl Chart {
             indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
+            horizontal_scale: None,
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,

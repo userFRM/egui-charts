@@ -3,8 +3,7 @@ use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::config::TimeScaleOptions;
 use crate::model::Bar;
 use crate::scales::{
-    PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkGenerator,
-    TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
+    HorizontalScale, PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkLayout,
 };
 use crate::theme::ThemeExt;
 use chrono::Duration;
@@ -114,11 +113,14 @@ fn min_time_label_spacing(options: &TimeScaleOptions) -> f32 {
     }
 }
 
-fn generate_time_marks(
+/// The tick marks of the time axis from `scale`, and the keys they are placed by: the bars in
+/// view with their logical indices, extended into the whitespace on either side by keys
+/// extrapolated at the median step. [`render_time_labels`] paints them.
+pub(crate) fn time_axis_marks(
     context: &RenderContext,
     visible_data: &[Bar],
     coords: &ChartMapping,
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     options: &TimeScaleOptions,
 ) -> (Vec<TickMark>, Vec<(chrono::DateTime<chrono::Utc>, usize)>) {
     if visible_data.is_empty() {
@@ -139,21 +141,6 @@ fn generate_time_marks(
         deltas_ms.sort_unstable();
         deltas_ms[deltas_ms.len() / 2]
     };
-
-    let zoom_factor = (coords.bar_spacing / 8.0).clamp(0.5, 2.5);
-    let min_spacing = min_time_label_spacing(options);
-    let max_marks = ((context.rect.width() / min_spacing).ceil() as usize + 2).clamp(6, 24);
-
-    let config = TickMarkGeneratorConfig {
-        min_spacing,
-        max_marks,
-        show_subseconds: bar_duration_ms < 1000,
-        use_24_hour: true,
-        target_density: (1.0 * zoom_factor).clamp(0.6, 2.5),
-    };
-
-    let generator = TickMarkGenerator::with_formatter(config, formatter.clone_box())
-        .with_uniform_distribution(options.uniform_distribution);
 
     let bar_duration_ms = bar_duration_ms.max(1);
     // Safe: guarded by is_empty() check above
@@ -196,10 +183,13 @@ fn generate_time_marks(
         let time = last_visible_time.checked_add_signed(step(i))?;
         Some((time, last_visible_idx.saturating_add(i as usize)))
     }));
-    let (start_time, end_time) = (bars[0].0, bars[bars.len() - 1].0);
-
-    let marks = generator.generate_marks(start_time, end_time, context.rect.width(), &bars);
-    (marks, bars)
+    let layout = TickMarkLayout {
+        width: context.rect.width(),
+        bar_spacing: coords.bar_spacing,
+        min_spacing: min_time_label_spacing(options),
+        uniform_distribution: options.uniform_distribution,
+    };
+    (scale.tick_marks(&bars, &layout), bars)
 }
 
 fn time_to_idx(
@@ -245,15 +235,13 @@ fn time_to_idx(
 /// Paints time grid lines from the same calendar marks as the axis labels.
 pub(crate) fn render_time_grid(
     context: &RenderContext,
-    visible_data: &[Bar],
+    marks: &[TickMark],
+    points: &[(chrono::DateTime<chrono::Utc>, usize)],
     coords: &ChartMapping,
-    formatter: &dyn TimeFormatter,
-    options: &TimeScaleOptions,
     color: Color32,
 ) {
-    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter, options);
     for mark in marks {
-        let index = time_to_idx(mark.time, &bars);
+        let index = time_to_idx(mark.time, points);
         let delta = coords.base_idx as f32 + coords.right_offset - index;
         let x = context.rect.right() - (delta + 0.5) * coords.bar_spacing - 1.0;
         if x >= context.rect.left() && x <= context.rect.right() {
@@ -267,19 +255,19 @@ pub(crate) fn render_time_grid(
     }
 }
 
-/// Paints the time labels below `context.rect` into `slot`, spaced to prevent overlap, with the
-/// label spacing, tick marks, bold labels and border of the time scale `options`.
+/// Paints the time labels of `marks`, placed by the keys of `points` as [`time_axis_marks`]
+/// returns them, below `context.rect` into `slot`, spaced to prevent overlap, with the label
+/// spacing, tick marks, bold labels and border of the time scale `options`.
 pub fn render_time_labels(
     context: &RenderContext,
-    visible_data: &[Bar],
+    marks: Vec<TickMark>,
+    points: &[(chrono::DateTime<chrono::Utc>, usize)],
     coords: &ChartMapping,
     colors: &StyleColors,
-    formatter: &dyn TimeFormatter,
     tags: &[Option<Rect>],
     options: &TimeScaleOptions,
     slot: ShapeIdx,
 ) {
-    let (marks, bars) = generate_time_marks(context, visible_data, coords, formatter, options);
     let font = axis_font(context.painter.ctx());
     let theme = context.painter.ctx().active_theme();
     let text_color = if colors.text == theme.chart.axis_text {
@@ -303,7 +291,7 @@ pub fn render_time_labels(
 
     for mark in marks {
         // Use fractional index for smooth label movement during pan
-        let index = time_to_idx(mark.time, &bars);
+        let index = time_to_idx(mark.time, points);
         // Calculate x using same formula as candle rendering
         let delta_from_right = coords.base_idx as f32 + coords.right_offset - index;
         let x = context.rect.min.x + context.rect.width()
@@ -322,11 +310,7 @@ pub fn render_time_labels(
         }
 
         let y = context.rect.max.y + TIME_LABEL_GAP;
-        let galley = if options.allow_bold_labels
-            && matches!(
-                mark.mark_type,
-                TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
-            ) {
+        let galley = if options.allow_bold_labels && mark.bold {
             context
                 .painter
                 .layout_job(egui::text::LayoutJob::single_section(

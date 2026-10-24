@@ -99,6 +99,20 @@ impl Chart {
         super::sync::index_at(self.state.shown(), time)
     }
 
+    /// Gives the horizontal axis a meaning other than time, such as option strikes or bond
+    /// maturities. The [`time`](crate::model::Bar::time) of each bar, marker and drawing then
+    /// holds a key of `scale`, which labels the axis and the crosshair; everything placed by
+    /// time is placed by key. `None` restores the time scale.
+    ///
+    /// Session breaks and extended-hours shading are periods of time, drawn on the time scale
+    /// only.
+    pub fn set_horizontal_scale(
+        &mut self,
+        scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
+    ) {
+        self.horizontal_scale = scale;
+    }
+
     /// The screen x of a logical index in the last frame, at the centre of its bar.
     ///
     /// `None` before the chart is shown or for a non-finite index.
@@ -204,8 +218,9 @@ impl Chart {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::LogicalRange;
-    use crate::widget::test_frames::{chart, frame};
+    use crate::model::{Bar, BarData, LogicalRange};
+    use crate::scales::{PriceHorizontalScale, key_time};
+    use crate::widget::test_frames::{chart, frame, shapes};
     use crate::widget::{Chart, ChartEvent, SeriesId};
     use chrono::Duration;
 
@@ -333,5 +348,45 @@ mod tests {
             99.0 + 60.0 / chart.get_time_scale_state().0,
             "fit with pixels",
         );
+    }
+
+    /// Strikes 4400 to 4600 in steps of 25 across the plot are about 80 points apart, so the
+    /// axis labels every other one, the multiples of 50, by the scale's weights; the crosshair
+    /// on 4475 reads it, and no time is formatted anywhere.
+    #[test]
+    fn a_horizontal_scale_labels_the_axis_and_the_crosshair_by_key() {
+        let bars = (0..=8)
+            .map(|i| Bar::from_value(key_time(4400.0 + 25.0 * f64::from(i)).unwrap(), 20.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_horizontal_scale(Some(std::sync::Arc::new(PriceHorizontalScale {
+            precision: 0,
+        })));
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 8.0)));
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let hover = egui::pos2(chart.index_to_x(3.0).unwrap(), plot.center().y);
+        let texts = |painted: Vec<egui::Shape>| -> Vec<String> {
+            painted
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.pos.y >= plot.bottom() => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let axis = texts(shapes(&ctx, &mut chart, 0.2, vec![]));
+        assert_eq!(axis, ["4400", "4450", "4500", "4550", "4600"]);
+        let hovered = texts(shapes(
+            &ctx,
+            &mut chart,
+            0.3,
+            vec![egui::Event::PointerMoved(hover)],
+        ));
+        assert!(hovered.contains(&"4475".to_owned()), "{hovered:?}");
     }
 }

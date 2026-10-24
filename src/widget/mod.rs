@@ -319,6 +319,7 @@ pub struct Chart {
     indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
+    horizontal_scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
