@@ -781,7 +781,7 @@ mod tests {
         use egui::Vec2;
 
         for (_, theme) in crate::theme::presets() {
-            for width in [160.0, 300.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
+            for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
                 let ctx = Context::default();
                 #[cfg(feature = "icons")]
                 egui_extras::install_image_loaders(&ctx);
@@ -856,6 +856,20 @@ mod tests {
                         "{width}: {} at {bounds:?}",
                         field.galley.text()
                     );
+                }
+                for shape in &output.shapes {
+                    if let Shape::Rect(rect) = &shape.shape
+                        && rect.fill == theme.chart.bg
+                        && rect.rect.height() >= 22.0
+                    {
+                        assert!(
+                            text.iter().any(|field| rect
+                                .rect
+                                .intersects(Rect::from_min_size(field.pos, field.galley.size()))),
+                            "{width}: empty legend row at {:?}",
+                            rect.rect
+                        );
+                    }
                 }
                 for (index, field) in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
                     .into_iter()

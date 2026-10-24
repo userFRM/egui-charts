@@ -222,7 +222,19 @@ impl<'a> Legend<'a> {
         // Values follow the title directly; the controls take the space after them on hover.
         #[cfg(feature = "icons")]
         if self.show_title {
-            let controls = layout.reserve(Vec2::new(48.0, 20.0));
+            let size = Vec2::new(48.0, 20.0);
+            // On a full row the controls cover its end instead of opening an empty row.
+            let controls = if layout.pos.x + size.x > bounds.right() {
+                Rect::from_min_size(
+                    Pos2::new(
+                        bounds.right() - size.x,
+                        layout.pos.y + (layout.height - size.y) / 2.0,
+                    ),
+                    size,
+                )
+            } else {
+                layout.reserve(size)
+            };
             let row_right = if layout.pos.y > title_start.y {
                 bounds.right()
             } else {
@@ -248,6 +260,7 @@ impl<'a> Legend<'a> {
                     Stroke::new(1.0, theme.ui.border_control),
                     egui::StrokeKind::Inside,
                 );
+                painter.rect_filled(controls, 0.0, theme.chart.bg);
                 let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
                 crate::icons::icons::FLAG_MARK
                     .as_image_tinted(
