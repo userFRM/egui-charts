@@ -388,7 +388,7 @@ impl WatchlistPanel {
         let small = TextStyle::Small.resolve(ui.style());
         let columns = |rect: egui::Rect| {
             let right = rect.right() - 8.0;
-            let number = ((rect.width() - 18.0).max(0.0) * 0.22).min(96.0);
+            let number = ((rect.width() - 18.0).max(0.0) * 0.24).min(96.0);
             let edges = [
                 rect.left() + 10.0,
                 right - 3.0 * number,
@@ -405,7 +405,7 @@ impl WatchlistPanel {
         };
 
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-        let x = columns(header);
+        let cells = columns(header);
         for (index, (column, label)) in [
             (WatchlistColumn::Symbol, "Symbol"),
             (WatchlistColumn::Last, "Last"),
@@ -423,9 +423,9 @@ impl WatchlistPanel {
             let text = ui.painter().text(
                 egui::pos2(
                     if index == 0 {
-                        x[index].left()
+                        cells[index].left()
                     } else {
-                        x[index].right()
+                        cells[index].right()
                     },
                     header.center().y,
                 ),
@@ -525,19 +525,22 @@ impl WatchlistPanel {
                     {
                         moved = Some((from.1, index));
                     }
-                    let x = columns(rect);
+                    let cells = columns(rect);
                     let painter = ui.painter().clone();
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
-                            ui.put(
-                                rect.shrink2(vec2(10.0, 0.0)),
+                            ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(rect.shrink2(vec2(10.0, 0.0)))
+                                    .layout(Layout::left_to_right(Align::Center)),
+                            )
+                            .add(
                                 Label::new(
                                     RichText::new(title.to_uppercase())
                                         .font(small.clone())
                                         .color(theme.ui.text_secondary),
                                 )
                                 .truncate()
-                                .halign(Align::LEFT)
                                 .selectable(false),
                             );
                             response.context_menu(|ui| {
@@ -563,15 +566,18 @@ impl WatchlistPanel {
                                     egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
                                 painter.rect_filled(bar, 0.0, flag.color());
                             }
-                            ui.put(
-                                x[0],
+                            ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(cells[0])
+                                    .layout(Layout::left_to_right(Align::Center)),
+                            )
+                            .add(
                                 Label::new(
                                     RichText::new(symbol.as_str())
                                         .font(font.clone())
                                         .color(theme.ui.text),
                                 )
                                 .truncate()
-                                .halign(Align::LEFT)
                                 .selectable(false),
                             );
                             if let Some(quote) = quotes.get(symbol.as_str()) {
@@ -591,13 +597,16 @@ impl WatchlistPanel {
                                     (2, signed(change, usize::from(decimals)), color),
                                     (3, format!("{}%", signed(quote.change_percent(), 2)), color),
                                 ] {
-                                    ui.put(
-                                        x[column],
+                                    ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(cells[column])
+                                            .layout(Layout::right_to_left(Align::Center)),
+                                    )
+                                    .add(
                                         Label::new(
                                             RichText::new(text).font(font.clone()).color(color),
                                         )
                                         .truncate()
-                                        .halign(Align::RIGHT)
                                         .selectable(false),
                                     );
                                 }

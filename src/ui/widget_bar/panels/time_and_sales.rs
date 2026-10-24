@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use chrono_tz::Tz;
-use egui::{Align, Align2, Label, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
+use egui::{Align, Align2, Label, Layout, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::format_price;
@@ -164,14 +164,14 @@ impl TimeAndSalesPanel {
             })
         };
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-        let x = columns(header);
+        let cells = columns(header);
         for (index, label) in ["Time", "Price", "Size"].into_iter().enumerate() {
             ui.painter().text(
                 egui::pos2(
                     if index == 0 {
-                        x[index].left()
+                        cells[index].left()
                     } else {
-                        x[index].right()
+                        cells[index].right()
                     },
                     header.center().y,
                 ),
@@ -210,7 +210,7 @@ impl TimeAndSalesPanel {
                         vec2(ui.available_width(), ROW_HEIGHT),
                         Sense::hover(),
                     );
-                    let x = columns(rect);
+                    let cells = columns(rect);
                     let color = match trade.side {
                         Some(TradeSide::Buy) => theme.chart.candle_up,
                         Some(TradeSide::Sell) => theme.chart.candle_down,
@@ -235,15 +235,16 @@ impl TimeAndSalesPanel {
                             color,
                         ),
                     ] {
-                        ui.put(
-                            x[column],
+                        ui.new_child(egui::UiBuilder::new().max_rect(cells[column]).layout(
+                            if column == 0 {
+                                Layout::left_to_right(Align::Center)
+                            } else {
+                                Layout::right_to_left(Align::Center)
+                            },
+                        ))
+                        .add(
                             Label::new(RichText::new(text).font(font.clone()).color(color))
                                 .truncate()
-                                .halign(if column == 0 {
-                                    Align::LEFT
-                                } else {
-                                    Align::RIGHT
-                                })
                                 .selectable(false),
                         );
                     }

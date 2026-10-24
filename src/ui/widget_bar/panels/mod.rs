@@ -28,7 +28,7 @@ mod tests {
                     let symbol = "EXCHANGE:LONG_SYMBOL_NAME";
                     let mut watchlist = WatchlistPanel::new(vec![Watchlist::from_text(
                         "A long watchlist name that must leave room for its menu",
-                        symbol,
+                        &format!("{symbol},A"),
                     )]);
                     watchlist.set_quote(
                         symbol,
@@ -38,7 +38,22 @@ mod tests {
                             price_decimals: Some(3),
                         },
                     );
+                    watchlist.set_quote(
+                        "A",
+                        WatchlistQuote {
+                            last: 10.0,
+                            prev_close: 10.0,
+                            price_decimals: Some(2),
+                        },
+                    );
                     let mut trades = TimeAndSalesPanel::default();
+                    trades.config.price_decimals = Some(2);
+                    trades.push(Tick::new(
+                        "2026-10-23T12:34:55Z".parse().unwrap(),
+                        2.0,
+                        3.0,
+                        None,
+                    ));
                     trades.push(Tick::new(
                         "2026-10-23T12:34:56Z".parse().unwrap(),
                         123456789.12,
@@ -90,7 +105,7 @@ mod tests {
                         .iter()
                         .filter(|(text, _)| {
                             if tape {
-                                matches!(text.as_str(), "12:34:56" | "123456789" | "123.46K")
+                                matches!(text.as_str(), "12:34:56" | "123456789.12" | "123.46K")
                             } else {
                                 [symbol, "123456.789", "+23456.789", "+23.46%"]
                                     .contains(&text.as_str())
@@ -98,6 +113,20 @@ mod tests {
                         })
                         .collect();
                     assert_eq!(row.len(), if tape { 3 } else { 4 }, "{texts:?}");
+                    let bounds =
+                        |label: &str| texts.iter().find(|(text, _)| text == label).unwrap().1;
+                    if !tape {
+                        assert!((bounds("A").left() - 10.0).abs() < 2.0, "{texts:?}");
+                    }
+                    let (value, heading) = if tape {
+                        ("2.00", "Price")
+                    } else {
+                        ("10.00", "Last")
+                    };
+                    assert!(
+                        (bounds(value).right() - bounds(heading).right()).abs() < 2.0,
+                        "{texts:?}"
+                    );
                     for (i, (_, rect)) in row.iter().enumerate() {
                         assert!(rect.left() >= 0.0 && rect.right() <= width, "{row:?}");
                         for (_, other) in &row[i + 1..] {
