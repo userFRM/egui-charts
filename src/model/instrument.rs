@@ -1,5 +1,6 @@
 //! Instrument metadata reported by a feed or a search service.
 
+use super::Timeframe;
 use chrono::{NaiveDate, NaiveTime, Weekday};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,9 @@ pub struct Instrument {
     pub time_zone: Option<TimezoneId>,
     /// Regular trading hours, in exchange time.
     pub session: Option<Session>,
+    /// OHLCV intervals supplied without aggregation. `None` means unspecified; an empty list
+    /// means no native bar history. Derived intervals remain available through host resampling.
+    pub native_timeframes: Option<Vec<Timeframe>>,
 }
 
 impl Instrument {
@@ -94,6 +98,7 @@ impl Instrument {
             currency: None,
             time_zone: None,
             session: None,
+            native_timeframes: None,
         }
     }
 
@@ -156,6 +161,15 @@ impl Instrument {
         self.session = Some(session);
         self
     }
+
+    /// Sets [`native_timeframes`](Self::native_timeframes), reported by [`Datafeed::resolve`](crate::data::Datafeed::resolve).
+    pub fn with_native_timeframes(
+        mut self,
+        timeframes: impl IntoIterator<Item = Timeframe>,
+    ) -> Self {
+        self.native_timeframes = Some(timeframes.into_iter().collect());
+        self
+    }
 }
 
 /// A time zone.
@@ -184,7 +198,7 @@ impl TimezoneId {
 }
 
 /// Trading hours: the windows in which an instrument trades.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Session {
     /// Regular windows. With no regular or extended windows, the session is always open.
@@ -222,7 +236,7 @@ impl Session {
 }
 
 /// One trading window, repeated on each of `days`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SessionWindow {
     /// Trading days, named by the day on which the window closes.

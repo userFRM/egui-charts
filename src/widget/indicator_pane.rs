@@ -763,6 +763,15 @@ impl IndicatorPane {
             }
         }
 
+        for candle in indicator.candles().iter().filter(|candle| {
+            candle.bars.end > visible_range.start
+                && candle.bars.start < visible_range.end
+                && indicator.plot_style(candle.plot).visible
+        }) {
+            min_val = min_val.min(candle.bar.low);
+            max_val = max_val.max(candle.bar.high);
+        }
+
         if min_val != f64::MAX
             && (0..indicator.line_cnt()).any(|line| {
                 let plot = indicator.plot_style(line);
@@ -1332,6 +1341,38 @@ impl IndicatorPane {
 mod tests {
     use super::*;
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    #[test]
+    fn candle_panes_fit_the_visible_period_extremes() {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(
+            crate::studies::HigherIntervalCandles::default(),
+        ));
+        study.set_timeframe(crate::model::Timeframe::Hour1);
+        study.set_overlay(false);
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-11T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..3)
+            .map(|i| {
+                Bar::new(
+                    start + chrono::TimeDelta::hours(i),
+                    10.0,
+                    20.0,
+                    1.0,
+                    15.0,
+                    1.0,
+                )
+            })
+            .collect();
+        study.calculate(&bars);
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
+        for range in [0..1, 1..2, 2..3] {
+            let (low, high) = pane.calculate_y_range(&study, &range);
+            assert!(low <= 1.0 && high >= 20.0, "{range:?}: {low}..{high}");
+        }
+        let mut settings = study.settings();
+        settings.plots[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(pane.calculate_y_range(&study, &(0..3)), (0.0, 100.0));
+    }
 
     #[test]
     fn rsi_default_paints_only_the_middle_band_and_two_guides() {

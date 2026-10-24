@@ -52,6 +52,9 @@ pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studie
 mod trade_delta;
 pub use trade_delta::{TradeDeltaValue, trade_delta};
 
+mod higher_interval_candles;
+pub use higher_interval_candles::HigherIntervalCandles;
+
 mod bollinger_bands;
 mod ema;
 mod macd;

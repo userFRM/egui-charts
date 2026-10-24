@@ -182,27 +182,23 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
 
 /// Format price with decimals chosen by its magnitude, so a negative price
 /// keeps the decimals of the positive price of the same size
-fn format_price(price: f64, decimals: Option<u8>) -> String {
+pub(crate) fn format_price(price: f64, decimals: Option<u8>) -> String {
     if !price.is_finite() {
         return "\u{2014}".to_owned();
     }
-    if let Some(decimals) = decimals {
-        return format!("{:.*}", usize::from(decimals), price);
-    }
+    let decimals = decimals.unwrap_or_else(|| price_decimals(price));
+    format!("{:.*}", usize::from(decimals), price)
+}
 
-    let magnitude = price.abs();
-    if magnitude >= 10000.0 {
-        format!("{price:.0}")
-    } else if magnitude >= 1000.0 {
-        format!("{price:.1}")
-    } else if magnitude >= 10.0 {
-        format!("{price:.2}")
-    } else if magnitude >= 1.0 {
-        format!("{price:.4}")
-    } else if magnitude >= 0.001 {
-        format!("{price:.6}")
-    } else {
-        format!("{price:.8}")
+/// Decimals of a price label without instrument precision, chosen by the price's magnitude
+pub(crate) fn price_decimals(price: f64) -> u8 {
+    match price.abs() {
+        m if m >= 10000.0 => 0,
+        m if m >= 1000.0 => 1,
+        m if m >= 10.0 => 2,
+        m if m >= 1.0 => 4,
+        m if m >= 0.001 => 6,
+        _ => 8,
     }
 }
 

@@ -217,6 +217,7 @@ impl IndicatorFactory {
                 AccumulationSwingIndex,
             ],
             "Price" => [
+                HigherIntervalCandles,
                 TypicalPrice,
                 MedianPrice,
                 WeightedClose,
@@ -537,6 +538,7 @@ mod tests {
             Box::new(RankCorrelationIndex::new(l(0))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
+            Box::new(HigherIntervalCandles::default()),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
             Box::new(WeightedClose::new()),

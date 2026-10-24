@@ -81,6 +81,23 @@ where
     F: Fn(f64) -> f32,
 {
     let mut plot = indicator.plot_style(line_idx);
+    if !indicator.candles().is_empty() {
+        return indicator
+            .candles()
+            .iter()
+            .filter(|candle| candle.plot == line_idx)
+            .find_map(|candle| {
+                let (body, wick) = candle.geometry(coords, &value_to_y)?;
+                (body.expand(HIT_TOLERANCE).contains(click_pos)
+                    || point_to_segment_distance(click_pos, wick[0], wick[1])
+                        <= HIT_TOLERANCE + plot.width * 0.5)
+                    .then_some(
+                        coords
+                            .x_to_idx(click_pos.x)
+                            .clamp(candle.bars.start, candle.bars.end - 1),
+                    )
+            });
+    }
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
@@ -259,6 +276,49 @@ mod tests {
                 );
                 if let Some(found) = found {
                     assert_eq!(found.indicator_idx, 3);
+                }
+            }
+            #[cfg(feature = "studies")]
+            {
+                let mut study = ConfiguredStudy::new(Box::new(
+                    crate::studies::HigherIntervalCandles::default(),
+                ));
+                study.set_timeframe(crate::model::Timeframe::Hour1);
+                study.set_overlay(overlay);
+                let start: chrono::DateTime<chrono::Utc> = "2024-03-11T00:00:00Z".parse().unwrap();
+                study.calculate(&[
+                    crate::model::Bar::new(start, 30.0, 80.0, 10.0, 50.0, 1.0),
+                    crate::model::Bar::new(
+                        start + chrono::TimeDelta::hours(1),
+                        50.0,
+                        60.0,
+                        40.0,
+                        50.0,
+                        1.0,
+                    ),
+                ]);
+                for visible in [true, false] {
+                    let mut settings = study.settings();
+                    settings.plots[0].visible = visible;
+                    study.apply_settings(&[], settings).unwrap();
+                    for (point, expected) in [
+                        (Pos2::new(99.0, 60.0), true),
+                        (Pos2::new(99.0, 20.0), true),
+                        (Pos2::new(49.0, 20.0), false),
+                    ] {
+                        let found = if overlay {
+                            hit_test_indicator(point, &study, 3, 0..2, &coords, |v| {
+                                100.0 - v as f32
+                            })
+                        } else {
+                            hit_test_pane_indicator(point, &study, 3, 0..2, rect, &coords)
+                        };
+                        assert_eq!(
+                            found.is_some(),
+                            expected && visible,
+                            "candle, overlay {overlay}, {point:?}"
+                        );
+                    }
                 }
             }
         }

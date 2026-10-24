@@ -17,6 +17,10 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "export.rs"]
+mod export;
+#[path = "marks.rs"]
+mod marks;
 #[path = "replay.rs"]
 mod replay;
 #[path = "templates.rs"]
@@ -64,6 +68,10 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
+use egui_charts::ui::widget_bar::{
+    TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel, WidgetBarSection,
+    WidgetBarWidget,
+};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
@@ -113,6 +121,31 @@ enum SidePanel {
     ObjectTree,
     Alerts,
     DataWindow,
+    Watchlist,
+    TimeAndSales,
+}
+
+impl SidePanel {
+    /// Panels the demo renders behind a host rail entry, with the entry's id.
+    const HOSTED: [(SidePanel, u64); 3] = [
+        (SidePanel::DataWindow, 1),
+        (SidePanel::Watchlist, 3),
+        (SidePanel::TimeAndSales, 4),
+    ];
+
+    fn widget(self) -> Option<u64> {
+        Self::HOSTED
+            .iter()
+            .find(|(panel, _)| *panel == self)
+            .map(|(_, id)| *id)
+    }
+
+    fn from_widget(id: u64) -> Option<Self> {
+        Self::HOSTED
+            .iter()
+            .find(|(_, widget)| *widget == id)
+            .map(|(panel, _)| *panel)
+    }
 }
 
 /// Export formats the demo can perform, with browser downloads on the web.
@@ -122,14 +155,14 @@ const EXPORT_FORMATS: &[ExportFormat] = &[
     ExportFormat::Clipboard,
 ];
 
-/// Where an export screenshot goes once egui delivers it.
+/// Where a rendered chart image is delivered.
 enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
 }
 
 /// A captured screenshot and where it goes.
-type Screenshot = (Arc<egui::ColorImage>, ScreenshotTarget);
+type Screenshot = (Result<Arc<egui::ColorImage>, String>, ScreenshotTarget, u64);
 
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
@@ -217,6 +250,11 @@ pub struct DemoApp {
     // Session-only paper account, traded through the library's order ticket.
     trading: egui_charts::ui::trading::Trading,
     paper: Arc<paper::PaperAccount>,
+    // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
+    watchlist: WatchlistPanel,
+    // Text pasted for a watchlist import, while its window is open.
+    watchlist_import: Option<String>,
+    time_and_sales: TimeAndSalesPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -228,9 +266,17 @@ pub struct DemoApp {
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
 
-    // A pending screenshot request the egui backend fulfils next frame.
-    screenshot_requested: Option<ScreenshotTarget>,
-    // egui's capture callback sends each screenshot here; the next frame delivers it.
+    // Pending offscreen image options and delivery destination.
+    screenshot_requested: Option<(
+        ScreenshotTarget,
+        egui_charts::widget::export::ImageExportOptions,
+        u64,
+    )>,
+    // Reopening the dialog must not adopt an earlier readback result.
+    export_generation: u64,
+    export_renderer: Option<eframe::egui_wgpu::RenderState>,
+    image_jobs: usize,
+    // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
     saved_drawings: std::collections::HashMap<String, String>,
@@ -299,14 +345,22 @@ impl DemoApp {
         );
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        widget_bar
-            .widgets
-            .push(egui_charts::ui::widget_bar::WidgetBarWidget {
-                id: 1,
-                icon: egui_charts::icons::icons::WATCHLIST,
-                tooltip: "Data Window".into(),
-                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+        for (id, icon, tooltip) in [
+            (1, egui_charts::icons::icons::DATABASE, "Data Window"),
+            (3, egui_charts::icons::icons::WATCHLIST, "Watchlist"),
+            (
+                4,
+                egui_charts::icons::icons::SETTINGS_EVENTS,
+                "Time and sales",
+            ),
+        ] {
+            widget_bar.widgets.push(WidgetBarWidget {
+                id,
+                icon,
+                tooltip: tooltip.into(),
+                section: WidgetBarSection::Top,
             });
+        }
         let mut notes = String::new();
         widget_bar.register_panel(
             egui_charts::ui::widget_bar::WidgetBarWidget {
@@ -395,6 +449,19 @@ impl DemoApp {
             alert_host: Arc::default(),
             trading: Default::default(),
             paper: Arc::default(),
+            watchlist: WatchlistPanel::new(
+                cc.storage
+                    .and_then(|storage| eframe::get_value(storage, "watchlists"))
+                    .unwrap_or_else(|| {
+                        vec![Watchlist::from_text(
+                            "Watchlist",
+                            "###Crypto,BTCUSD,ETHUSD,###Stocks,AAPL,MSFT,NVDA,TSLA,\
+                             ###Indices and forex,SPX,EURUSD,SAMPLE",
+                        )]
+                    }),
+            ),
+            watchlist_import: None,
+            time_and_sales: TimeAndSalesPanel::default(),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -407,6 +474,9 @@ impl DemoApp {
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
+            export_generation: 0,
+            export_renderer: cc.wgpu_render_state.clone(),
+            image_jobs: 0,
             screenshots: mpsc::channel(),
             saved_drawings: cc
                 .storage
@@ -427,6 +497,7 @@ impl DemoApp {
             .set_storage(app.template_storage.clone());
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
+        app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
         app.restore_drawings();
@@ -521,6 +592,8 @@ impl DemoApp {
         self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
+        self.time_and_sales.clear();
+        self.watchlist.set_selected(spec.symbol);
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
         self.chart.set_symbol(spec.symbol);
@@ -586,6 +659,8 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
+        self.chart
+            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
     }
 
     // --- alerts ------------------------------------------------------------
@@ -832,34 +907,27 @@ impl DemoApp {
         config: egui_charts::ui::export::ExportConfig,
         save_path: Option<std::path::PathBuf>,
     ) {
-        // Image exports go through egui's screenshot request, which hands the
-        // captured image to `target`.
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        // Capture the next frame after the dialog and any previous notice are gone.
-        self.export_dialog.close();
-        self.toasts.clear();
-        self.screenshot_requested = Some(target);
+        self.screenshot_requested = Some((target, config.image, self.export_generation));
         ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
         let from_dialog = save_path.is_some();
-        let mut out = String::from("time,open,high,low,close,volume\n");
-        for b in &self.bars {
-            out.push_str(&format!(
-                "{},{},{},{},{},{}\n",
-                b.time.to_rfc3339(),
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume
-            ));
-        }
+        let out = match self.chart.export_csv() {
+            Ok(csv) => csv,
+            Err(error) => {
+                if from_dialog {
+                    self.export_dialog.mark_error(error.to_string());
+                }
+                self.notify(format!("Export failed: {error}"));
+                return;
+            }
+        };
         let path = save_path.unwrap_or_else(|| {
             let filename = format!("{}_export.csv", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
@@ -902,6 +970,7 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "dark_theme", &self.theme.dark);
+        eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         eframe::set_value(
@@ -935,6 +1004,7 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
+        self.feed_market_panels();
 
         for (_, _, feed) in &self.comparisons {
             feed.set_paused(self.live.paused() || self.replay.is_some());
@@ -986,6 +1056,7 @@ impl eframe::App for DemoApp {
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
         self.show_dialogs(&ctx);
+        self.show_watchlist_import(&ctx);
 
         // Transient status notice.
         self.show_notice(&ctx);
@@ -1055,6 +1126,8 @@ impl DemoApp {
                                     ("Object Tree", SidePanel::ObjectTree),
                                     ("Alerts", SidePanel::Alerts),
                                     ("Data Window", SidePanel::DataWindow),
+                                    ("Watchlist", SidePanel::Watchlist),
+                                    ("Time and sales", SidePanel::TimeAndSales),
                                 ] {
                                     if ui.button(label).clicked() {
                                         panel_action = Some(panel);
@@ -1062,7 +1135,9 @@ impl DemoApp {
                                     }
                                 }
                                 for widget in &self.widget_bar.widgets {
-                                    if widget.id != 1 && ui.button(&widget.tooltip).clicked() {
+                                    if SidePanel::from_widget(widget.id).is_none()
+                                        && ui.button(&widget.tooltip).clicked()
+                                    {
                                         widget_action = Some(widget.id);
                                         ui.close();
                                     }
@@ -1189,7 +1264,11 @@ impl DemoApp {
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                self.screenshot_requested = Some(ScreenshotTarget::File(None));
+                self.screenshot_requested = Some((
+                    ScreenshotTarget::File(None),
+                    Default::default(),
+                    self.export_generation,
+                ));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -1431,9 +1510,14 @@ impl DemoApp {
             Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
             _ => None,
         };
-        if self.open_panel == Some(SidePanel::DataWindow) {
-            self.widget_bar.active_widget = Some(1);
-        } else if self.open_panel.is_some() || self.widget_bar.active_widget == Some(1) {
+        if let Some(id) = self.open_panel.and_then(SidePanel::widget) {
+            self.widget_bar.active_widget = Some(id);
+        } else if self.open_panel.is_some()
+            || self
+                .widget_bar
+                .active_widget
+                .is_some_and(|id| SidePanel::from_widget(id).is_some())
+        {
             self.widget_bar.active_widget = None;
         }
         egui::Panel::right("widget_bar")
@@ -1448,14 +1532,10 @@ impl DemoApp {
                 let action = self.widget_bar.show(ui);
                 match action {
                     WidgetBarAction::Clicked(icon) => self.toggle_panel(icon),
-                    WidgetBarAction::WidgetClicked(1) => {
-                        self.open_panel = if self.open_panel == Some(SidePanel::DataWindow) {
-                            None
-                        } else {
-                            Some(SidePanel::DataWindow)
-                        };
+                    WidgetBarAction::WidgetClicked(id) => {
+                        let panel = SidePanel::from_widget(id);
+                        self.open_panel = panel.filter(|panel| self.open_panel != Some(*panel));
                     }
-                    WidgetBarAction::WidgetClicked(_) => self.open_panel = None,
                     _ => {}
                 }
             });
@@ -1491,6 +1571,8 @@ impl DemoApp {
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
+                SidePanel::Watchlist => self.show_watchlist(ui),
+                SidePanel::TimeAndSales => self.time_and_sales.show(ui),
                 SidePanel::DataWindow => {
                     self.data_window_expanded =
                         egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
@@ -1581,6 +1663,106 @@ impl DemoApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Feeds the watchlist its synthetic quotes, the chart symbol's from the live feed, and time
+    /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows as
+    /// a notification.
+    fn feed_market_panels(&mut self) {
+        let now = chrono::Utc::now();
+        let symbols: Vec<String> = self.watchlist.symbols().map(str::to_owned).collect();
+        for symbol in symbols {
+            if let Some(mut quote) = live::watchlist_quote(&symbol, now) {
+                if symbol.eq_ignore_ascii_case(self.chart.symbol())
+                    && let Some((last, prev_close)) = self.live.day_change()
+                {
+                    self.watchlist.set_selected(&symbol);
+                    quote.last = last;
+                    quote.prev_close = prev_close;
+                }
+                self.watchlist.set_quote(&symbol, quote);
+            }
+        }
+        let instrument = self.chart.instrument();
+        let mut alert = None;
+        for trade in self.live.drain_tape() {
+            if self.time_and_sales.push(trade.clone()).is_some() {
+                alert = Some(trade);
+            }
+        }
+        if let Some(trade) = alert {
+            let decimals = instrument.and_then(|i| i.price_decimals).unwrap_or(2);
+            self.toasts.info(format!(
+                "Large trade: {} at {:.*}",
+                trade.size,
+                usize::from(decimals),
+                trade.price
+            ));
+        }
+        let config = &mut self.time_and_sales.config;
+        config.price_decimals = instrument.and_then(|instrument| instrument.price_decimals);
+        config.size_decimals = instrument.and_then(|instrument| instrument.volume_decimals);
+        config.timezone = self
+            .timeframe_toolbar
+            .state
+            .timezone
+            .parse()
+            .unwrap_or_default();
+    }
+
+    fn show_watchlist(&mut self, ui: &mut egui::Ui) {
+        match self.watchlist.show(ui) {
+            WatchlistAction::SelectSymbol(symbol) => {
+                if DemoSymbol::catalog()
+                    .iter()
+                    .any(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
+                {
+                    self.switch_symbol(&symbol);
+                } else {
+                    self.notify(format!("{symbol} has no synthetic data in this demo"));
+                }
+            }
+            WatchlistAction::Import => self.watchlist_import = Some(String::new()),
+            WatchlistAction::Export { text, .. } => {
+                let file = "watchlist.txt";
+                #[cfg(not(target_arch = "wasm32"))]
+                let path = std::env::temp_dir().join(file);
+                #[cfg(target_arch = "wasm32")]
+                let path = std::path::PathBuf::from(file);
+                #[cfg(not(target_arch = "wasm32"))]
+                let result = std::fs::write(&path, text).map_err(|e| e.to_string());
+                #[cfg(target_arch = "wasm32")]
+                let result = browser_download(text.as_bytes(), &path);
+                self.notify(match result {
+                    Ok(()) => format!("Export successful: {}", path.display()),
+                    Err(error) => format!("Export failed: {error}"),
+                });
+            }
+            WatchlistAction::None => {}
+        }
+    }
+
+    /// The demo has no file picker for imports: the user pastes the exported text instead.
+    fn show_watchlist_import(&mut self, ctx: &egui::Context) {
+        let Some(text) = &mut self.watchlist_import else {
+            return;
+        };
+        let mut open = true;
+        let mut import = false;
+        egui::Window::new("Import watchlist")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label("Paste symbols separated by commas; ###Title starts a section.");
+                ui.add(egui::TextEdit::multiline(text).desired_rows(6));
+                import = ui.button("Import").clicked();
+            });
+        if import {
+            self.watchlist.import("Imported", text);
+        }
+        if import || !open {
+            self.watchlist_import = None;
         }
     }
 
@@ -2094,31 +2276,55 @@ impl DemoApp {
         }
     }
 
-    fn request_screenshot(&self, ctx: &egui::Context, target: ScreenshotTarget) {
-        let (sender, repaint) = (self.screenshots.0.clone(), ctx.clone());
-        ctx.request_screenshot(move |image| {
-            // The receiver lives as long as the app, so this fails only during shutdown.
-            let _ = sender.send((image, target));
-            // egui does not repaint when the capture arrives.
-            repaint.request_repaint();
-        });
-    }
-
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if let Some(target) = self.screenshot_requested.take() {
-            self.toasts.clear();
-            self.request_screenshot(ctx, target);
+        if let Some((target, options, generation)) = self.screenshot_requested.take() {
+            let result = self
+                .export_renderer
+                .as_ref()
+                .ok_or_else(|| "Image export requires the GPU renderer".to_owned())
+                .and_then(|renderer| {
+                    let frame = self.chart.export_image(ctx, &options)?;
+                    export::render_image(
+                        renderer,
+                        frame,
+                        target,
+                        generation,
+                        self.screenshots.0.clone(),
+                        ctx.clone(),
+                    )
+                });
+            match result {
+                Ok(()) => self.image_jobs += 1,
+                Err(error) => {
+                    if generation == self.export_generation && self.export_dialog.is_open() {
+                        self.export_dialog.mark_error(error.clone());
+                    }
+                    self.notify(format!("Export failed: {error}"));
+                }
+            }
         }
-
-        // Deliver the screenshots captured since the last frame.
-        while let Ok((image, target)) = self.screenshots.1.try_recv() {
-            match target {
+        if self.image_jobs > 0 {
+            if let Some(renderer) = &self.export_renderer {
+                let _ = renderer.device.poll(eframe::wgpu::PollType::Poll);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        while let Ok((image, target, generation)) = self.screenshots.1.try_recv() {
+            self.image_jobs = self.image_jobs.saturating_sub(1);
+            let result = image.and_then(|image| match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
-                    self.notify("Image sent to clipboard");
+                    Ok("Image sent to clipboard".to_owned())
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
+            });
+            if generation == self.export_generation && self.export_dialog.is_open() {
+                match &result {
+                    Ok(_) => self.export_dialog.mark_success(),
+                    Err(error) => self.export_dialog.mark_error(error.clone()),
+                }
             }
+            self.notify(result.unwrap_or_else(|error| format!("Export failed: {error}")));
         }
     }
 
@@ -2128,7 +2334,11 @@ impl DemoApp {
             .show_with_toasts(ctx, &mut self.toasts);
     }
 
-    fn save_screenshot(&mut self, image: &egui::ColorImage, path: Option<std::path::PathBuf>) {
+    fn save_screenshot(
+        &self,
+        image: &egui::ColorImage,
+        path: Option<std::path::PathBuf>,
+    ) -> Result<String, String> {
         let path = path.unwrap_or_else(|| {
             let filename = format!("{}_chart.png", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
@@ -2139,7 +2349,7 @@ impl DemoApp {
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
-            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+            rgba.extend_from_slice(&px.to_srgba_unmultiplied());
         }
         let result = image::RgbaImage::from_raw(w, h, rgba)
             .ok_or_else(|| "Screenshot buffer size mismatch".to_string())
@@ -2156,14 +2366,7 @@ impl DemoApp {
                     browser_download(png.get_ref(), &path)
                 }
             });
-        match result {
-            Ok(()) => {
-                self.notify(format!("Export successful: {}", path.display()));
-            }
-            Err(error) => {
-                self.notify(format!("Export failed: {error}"));
-            }
-        }
+        result.map(|()| format!("Export successful: {}", path.display()))
     }
 }
 
@@ -3042,6 +3245,54 @@ mod tests {
             assert_eq!(app.replay_control.is_visible(), replay);
             if let Some(before) = before {
                 assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn image_results_only_update_the_requesting_dialog() {
+        use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+        for reopen in [false, true] {
+            for fail in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.handle_layout_action(LayoutAction::DownloadImage);
+                let generation = app.export_generation;
+                if reopen {
+                    app.export_dialog.close();
+                    app.execute_search_command(&ctx, "export");
+                }
+                let image = if fail {
+                    Err("Readback failed".to_owned())
+                } else {
+                    Ok(Arc::new(egui::ColorImage::filled(
+                        [1, 1],
+                        egui::Color32::WHITE,
+                    )))
+                };
+                assert!(
+                    app.screenshots
+                        .0
+                        .send((image, ScreenshotTarget::Clipboard, generation))
+                        .is_ok()
+                );
+                app.handle_screenshot(&ctx);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        let _ = app.export_dialog.show(ui.ctx());
+                    })
+                    .drop_without_applying_deltas();
+                }
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    let _ = app.export_dialog.show(ui.ctx());
+                });
+                let has_status = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text().starts_with("Export successful") || text.galley.text().contains("Readback failed"))
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(has_status, !reopen, "reopen={reopen}, fail={fail}");
+                assert_eq!(app.toasts.toasts().len(), 1);
             }
         }
     }

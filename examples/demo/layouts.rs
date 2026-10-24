@@ -102,6 +102,10 @@ impl DemoApp {
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
+        chart.set_event_visibility(source.event_visibility().clone());
+        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks(
+            chart.bars(SeriesId::MAIN).to_vec(),
+        ))));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {
@@ -175,6 +179,8 @@ impl DemoApp {
 
     fn refresh_active_chart(&mut self) {
         self.last_chart_click = None;
+        self.time_and_sales.clear();
+        self.watchlist.set_selected(self.chart.symbol());
         self.state.symbol = self.chart.symbol().to_owned();
         self.state.timeframe = self.chart.timeframe().unwrap_or(Timeframe::Min1);
         self.state.chart_type = self.chart.chart_type();
@@ -390,7 +396,10 @@ impl DemoApp {
                 }
             }
             LayoutAction::Save => self.new_layout(Some("Saved layout".into())),
-            LayoutAction::DownloadImage => self.export_dialog.open(),
+            LayoutAction::DownloadImage => {
+                self.export_generation += 1;
+                self.export_dialog.open();
+            }
             LayoutAction::None => {}
         }
     }
@@ -498,6 +507,11 @@ mod tests {
                     ("Object Tree", Some(super::super::SidePanel::ObjectTree)),
                     ("Alerts", Some(super::super::SidePanel::Alerts)),
                     ("Data Window", Some(super::super::SidePanel::DataWindow)),
+                    ("Watchlist", Some(super::super::SidePanel::Watchlist)),
+                    (
+                        "Time and sales",
+                        Some(super::super::SidePanel::TimeAndSales),
+                    ),
                     ("Session notes", None),
                     ("Keyboard shortcuts", None),
                 ] {
@@ -541,8 +555,9 @@ mod tests {
         app.extra_charts[0].live.set_paused(true);
         app.layout.sync.sync_time_axis = false;
         app.layout.set_active(0);
+        app.open_panel = Some(super::super::SidePanel::TimeAndSales);
         let frame = |app: &mut DemoApp, events| {
-            ctx.run_ui(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -552,8 +567,16 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-            )
-            .drop_without_applying_deltas();
+            );
+            let has_old_trade = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == "987.65")
+            });
+            output.drop_without_applying_deltas();
+            assert!(
+                !has_old_trade,
+                "switching charts must clear the previous tape"
+            );
         };
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
@@ -565,6 +588,12 @@ mod tests {
             modifiers,
         };
         for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+            app.time_and_sales.push(egui_charts::model::Tick::new(
+                chrono::Utc::now(),
+                987.65,
+                1.0,
+                None,
+            ));
             frame(
                 &mut app,
                 vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
@@ -611,9 +640,28 @@ mod tests {
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
         app.chart.set_main_series_visible(false);
+        app.chart
+            .set_event_visibility(egui_charts::model::EventVisibility {
+                show_earnings: true,
+                show_economic_events: true,
+                ..Default::default()
+            });
         app.handle_comparison(super::super::CompareAction::AddSymbol("AAPL".into()));
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
+        for copy in &mut app.extra_charts {
+            assert_eq!(copy.chart.event_visibility(), app.chart.event_visibility());
+            copy.chart.set_visible_bars(200);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                copy.chart.show(ui);
+            });
+            let has_event = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if matches!(text.galley.text(), "D" | "S" | "E" | "Ec" | "N"))
+            });
+            output.drop_without_applying_deltas();
+            assert!(has_event, "copied charts retain their event source");
+        }
         let frame = |app: &mut DemoApp| {
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 app.show_chart(ui, app.theme.chart.bg)

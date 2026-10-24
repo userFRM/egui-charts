@@ -274,6 +274,10 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
+        if !indicator.candles().is_empty() {
+            crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
+            return;
+        }
         let values = indicator.values();
         let painter = context.painter.with_clip_rect(context.rect);
         let display_start = coords
