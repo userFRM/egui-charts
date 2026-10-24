@@ -129,6 +129,7 @@ pub(crate) struct Updates {
     pub(crate) quote: Option<Level1Quote>,
     /// The book lost its snapshot: call `Datafeed::request_depth_snapshot`.
     pub(crate) resnapshot: bool,
+    pub(crate) symbols_changed: bool,
     pub(crate) status: Option<FeedStatus>,
     pub(crate) error: Option<FeedError>,
     /// Trades older than the forming bar, dropped.
@@ -150,6 +151,7 @@ impl Updates {
             depth: None,
             quote: None,
             resnapshot: false,
+            symbols_changed: false,
             status: None,
             error: None,
             late_ticks: 0,
@@ -618,6 +620,12 @@ impl Sink {
     /// An error of the live stream. The latest one wins.
     pub fn report_error(&self, error: FeedError) {
         self.update(|live| live.updates.error = Some(error));
+    }
+
+    /// Notifies the host that its symbol search catalog should be refreshed. Coalesces within
+    /// a frame; the chart exposes arrivals through `FeedState::symbol_catalog_revision`.
+    pub fn symbols_changed(&self) {
+        self.update(|live| live.updates.symbols_changed = true);
     }
 
     /// False once the subscription ended. Pushes are ignored from then on.

@@ -508,8 +508,7 @@ impl DemoApp {
             self.timeframe_toolbar.state.session_type,
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
-        self.chart.set_symbol("");
-        self.chart.set_symbol(&self.state.symbol);
+        self.chart.reload_feed();
         self.chart
             .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
         let tf = self.state.timeframe;
