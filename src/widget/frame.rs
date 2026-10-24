@@ -428,6 +428,65 @@ impl Chart {
     /// consecutive timestamps and snapping it to the nearest preset, so session
     /// breaks work even when the host never set a timeframe. Falls back to the
     /// default (1-minute) when there are too few bars to measure.
+    /// Pulses at the last price of a line-based chart as its `last_price_animation` asks, and
+    /// keeps repainting while a visible pulse runs.
+    fn paint_last_price_pulse(
+        &self,
+        ui: &Ui,
+        painter: &egui::Painter,
+        price_rect: Rect,
+        coords: &ChartMapping,
+    ) {
+        use crate::model::LastPriceAnimation;
+        let styles = &self.chart_type_params.styles;
+        let animation = styles.last_price_animation;
+        let Some(last) = self.state.shown().last() else {
+            return;
+        };
+        let price = self
+            .config
+            .price_source
+            .compute(last.open, last.high, last.low, last.close);
+        let Some(color) = rendering::candles::line_color_at(
+            self.chart_type,
+            styles,
+            self.chart_type_params.baseline,
+            &coords.price,
+            price_rect,
+            price,
+        )
+        .filter(|_| animation != LastPriceAnimation::Disabled)
+        else {
+            return;
+        };
+        let now = ui.input(|input| input.time);
+        let started = match self.last_price_pulse.get() {
+            Some((time, seen, started)) if time == last.time && seen.total_cmp(&price).is_eq() => {
+                started
+            }
+            previous => {
+                // The first price seen is the loaded history, not an update.
+                let started = previous.map_or(f64::NEG_INFINITY, |_| now);
+                self.last_price_pulse
+                    .set(Some((last.time, price, started)));
+                started
+            }
+        };
+        let period = rendering::candles::LAST_PRICE_PULSE_SECONDS;
+        let phase = match animation {
+            LastPriceAnimation::Continuous => (now / period).fract(),
+            _ => (now - started) / period,
+        };
+        let point = Pos2::new(
+            coords.idx_to_x(self.state.shown().len() - 1),
+            coords.price.price_to_y(price),
+        );
+        if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
+            rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn resolve_session_timeframe(
         &self,
         visible_data: &[crate::model::Bar],
@@ -1007,6 +1066,7 @@ impl Chart {
                     &render_params,
                     idx_to_coord,
                 );
+                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
             }
         }
 
@@ -1793,6 +1853,32 @@ impl Chart {
                     formatter.as_ref(),
                     bar_seconds,
                 );
+                if let Some(index) = index
+                    .filter(|_| crosshair_options.style != crate::config::CrosshairStyle::Hidden)
+                    .filter(|_| self.main_series_visible)
+                {
+                    let bar = &self.state.shown()[index];
+                    let value = self
+                        .config
+                        .price_source
+                        .compute(bar.open, bar.high, bar.low, bar.close);
+                    if let Some(color) = rendering::candles::line_color_at(
+                        self.chart_type,
+                        &self.chart_type_params.styles,
+                        self.chart_type_params.baseline,
+                        &price_map,
+                        price_rect,
+                        value,
+                    ) {
+                        rendering::candles::render_crosshair_marker(
+                            &painter.with_clip_rect(price_rect),
+                            Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
+                            self.chart_type_params.styles.crosshair_marker_radius,
+                            color,
+                            self.config.background_color,
+                        );
+                    }
+                }
 
                 if volume_rect.contains(hover_pos)
                     && let Some(map) = volume_map
@@ -2520,6 +2606,55 @@ mod tests {
         assert!(
             top < y1000 && y10 < bottom,
             "{y10}..{y1000} outside {top}..{bottom}"
+        );
+    }
+
+    /// An update starts one last price pulse, loading does not, and a continuous pulse always
+    /// runs; the crosshair marker sits on the line at the hovered bar's close.
+    #[test]
+    fn line_pulse_and_crosshair_marker_follow_their_bars() {
+        use crate::model::{ChartType, LastPriceAnimation};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.set_chart_type(ChartType::Line);
+        let mut params = chart.chart_type_params().clone();
+        params.styles.last_price_animation = LastPriceAnimation::OnDataUpdate;
+        params.styles.crosshair_marker_radius = 5.0;
+        chart.set_chart_type_params(params.clone());
+        let color = params.styles.line.color;
+        let circles = |shapes: Vec<Shape>, radius: f32| {
+            shapes
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Circle(circle) if circle.radius == radius && circle.fill == color => {
+                        Some(circle.center)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(circles(shapes(&ctx, &mut chart, 0.0, vec![]), 3.0).is_empty());
+        let mut last = chart.bars(crate::widget::SeriesId::MAIN)[99].clone();
+        last.close = 105.0;
+        chart.update(crate::widget::SeriesId::MAIN, last);
+        let map = chart.get_chart_mapping();
+        assert_eq!(
+            circles(shapes(&ctx, &mut chart, 1.0, vec![]), 3.0),
+            vec![Pos2::new(map.idx_to_x(99), map.price_to_y(105.0))]
+        );
+        assert!(circles(shapes(&ctx, &mut chart, 3.7, vec![]), 3.0).is_empty());
+        params.styles.last_price_animation = LastPriceAnimation::Continuous;
+        chart.set_chart_type_params(params);
+        assert_eq!(circles(shapes(&ctx, &mut chart, 5.0, vec![]), 3.0).len(), 1);
+
+        let map = chart.get_chart_mapping();
+        let hover = Pos2::new(map.idx_to_x(70), chart.last_rendered_price_rect.center().y);
+        assert_eq!(
+            circles(
+                shapes(&ctx, &mut chart, 5.1, vec![Event::PointerMoved(hover)]),
+                5.0
+            ),
+            vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
         );
     }
 

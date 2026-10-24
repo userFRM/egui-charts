@@ -6,7 +6,7 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::line::draw_styled_line;
+use super::line::{draw_styled_line, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{AreaStyle, Bar, BaselineLevel, BaselineStyle, PriceSource};
@@ -39,6 +39,7 @@ pub(super) fn render_area(
     );
 
     if line_points.len() > 1 {
+        let line_points = with_line_type(line_points, style.line.line_type);
         draw_area_fill(
             painter,
             &line_points,
@@ -293,17 +294,20 @@ fn draw_baseline_segments(
     style: &BaselineStyle,
     price_source: PriceSource,
 ) {
-    let point = |i: usize| {
-        let bar = &data[i];
-        let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
-        Pos2::new(
-            idx_to_coord(start_idx + i, chart_rect_min_x),
-            coords.price_to_y(value),
-        )
-    };
+    let points = with_line_type(
+        collect_price_points(
+            data,
+            start_idx,
+            coords,
+            chart_rect_min_x,
+            idx_to_coord,
+            price_source,
+        ),
+        style.above.line_type,
+    );
     let mut distance = 0.0;
-    for i in 1..data.len() {
-        let (prev, curr) = (point(i - 1), point(i));
+    for pair in points.windows(2) {
+        let (prev, curr) = (pair[0], pair[1]);
         // A segment that crosses the base line is split there, in screen space, where the
         // line is straight on every price scale.
         let crossing = (prev.y < baseline_y && curr.y > baseline_y)

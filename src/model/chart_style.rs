@@ -5,6 +5,29 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
+/// How a series line connects its points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LineType {
+    /// Straight segments between points.
+    #[default]
+    Simple,
+    /// A smooth curve through every point, a Catmull-Rom spline drawn as cubic Bezier segments.
+    Curved,
+}
+
+/// When the Line, Step line, Line with markers, Area and Baseline charts pulse a circle at the
+/// last price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LastPriceAnimation {
+    /// No animation.
+    #[default]
+    Disabled,
+    /// Pulse continuously.
+    Continuous,
+    /// Pulse once each time the last bar's time or price changes.
+    OnDataUpdate,
+}
+
 /// A series line, with width in logical points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,6 +38,9 @@ pub struct LinePlotStyle {
     pub width: f32,
     /// Solid, dashed or dotted.
     pub style: LineStyle,
+    /// Straight or curved. The Step line chart ignores it; the Baseline chart follows its
+    /// `above` line on both sides.
+    pub line_type: LineType,
 }
 
 impl Default for LinePlotStyle {
@@ -23,6 +49,7 @@ impl Default for LinePlotStyle {
             color: DESIGN_TOKENS.semantic.brand.accent,
             width: DESIGN_TOKENS.stroke.thick,
             style: LineStyle::Solid,
+            line_type: LineType::Simple,
         }
     }
 }
@@ -122,6 +149,12 @@ pub struct ChartTypeStyles {
     pub baseline: BaselineStyle,
     /// Bars chart.
     pub bars: BarsStyle,
+    /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
+    /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
+    /// radii hide it, the default.
+    pub crosshair_marker_radius: f32,
+    /// Pulse at the last price of the line-based charts.
+    pub last_price_animation: LastPriceAnimation,
 }
 
 impl Default for ChartTypeStyles {
@@ -134,6 +167,8 @@ impl Default for ChartTypeStyles {
             area: AreaStyle::default(),
             baseline: BaselineStyle::default(),
             bars: BarsStyle::default(),
+            crosshair_marker_radius: 0.0,
+            last_price_animation: LastPriceAnimation::Disabled,
         }
     }
 }
