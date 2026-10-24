@@ -774,15 +774,17 @@ mod tests {
         }
     }
 
-    /// A narrow legend wraps whole fields before the plot's axis inset.
+    /// Legend fields stay inside the plot and keep their positions during hover.
     #[test]
     fn legend_fields_stay_inside_the_plot() {
         use crate::theme::apply_to_egui;
         use egui::Vec2;
 
         for (_, theme) in crate::theme::presets() {
-            for width in [300.0, 400.0, 1200.0] {
+            for width in [160.0, 300.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
                 let ctx = Context::default();
+                #[cfg(feature = "icons")]
+                egui_extras::install_image_loaders(&ctx);
                 apply_to_egui(&ctx, &theme);
                 let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
                 let badge = ctx.load_texture(
@@ -803,16 +805,25 @@ mod tests {
                     750.74,
                     275_540.0,
                 );
-                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
-                    legend.previous_close = Some(749.42);
-                    legend.badge = Some(egui::ImageSource::Texture(
-                        (badge.id(), Vec2::splat(18.0)).into(),
-                    ));
-                    legend.statuses = &statuses;
-                    legend.show_volume = false;
-                    legend.show(ui, plot);
-                });
+                let frame = |events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut legend = super::Legend::new("Sample equity fund", "1h", &bar);
+                            legend.previous_close = Some(749.42);
+                            legend.badge = Some(egui::ImageSource::Texture(
+                                (badge.id(), Vec2::splat(18.0)).into(),
+                            ));
+                            legend.statuses = &statuses;
+                            legend.show_volume = false;
+                            legend.show(ui, plot);
+                        },
+                    )
+                };
+                let mut output = frame(vec![Event::PointerGone]);
                 output.textures_delta.clear();
                 let text: Vec<_> = output
                     .shapes
@@ -830,33 +841,43 @@ mod tests {
                         assert!(plot.shrink(8.0).contains_rect(shape.clip_rect));
                     }
                 }
-                for text in &text {
-                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                for (index, field) in text.iter().enumerate() {
+                    let bounds = Rect::from_min_size(field.pos, field.galley.size());
+                    for other in &text[index + 1..] {
+                        assert!(
+                            !bounds.intersects(Rect::from_min_size(other.pos, other.galley.size()))
+                        );
+                    }
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                             Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.height() >= 22.0 && rect.rect.contains_rect(bounds)
-                        )), "missing row backdrop for {}", text.galley.text());
+                        )), "missing row backdrop for {}", field.galley.text());
                     assert!(
                         bounds.right() <= plot.right() - 8.0 + 0.1,
                         "{width}: {} at {bounds:?}",
-                        text.galley.text()
+                        field.galley.text()
                     );
                 }
-                for field in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
+                for (index, field) in ["O 749.37", "H 751.09", "L 749.13", "C 750.74"]
                     .into_iter()
-                    .skip(if width < 600.0 { 3 } else { 0 })
+                    .enumerate()
                 {
-                    assert!(
+                    assert_eq!(
                         text.iter().any(|text| text.galley.text() == field),
-                        "{width}: missing whole field {field}"
+                        width >= 600.0 || index == 3,
+                        "{width}: field visibility for {field}"
                     );
                 }
+                assert!(
+                    text.iter()
+                        .any(|text| text.galley.text() == "+1.32 (+0.18%)")
+                );
                 let centres: Vec<_> = text
                     .iter()
                     .map(|text| text.pos.y + text.galley.size().y / 2.0)
                     .collect();
-                if width == 1200.0 {
+                if width >= 1200.0 {
                     assert!(centres.iter().all(|y| (*y - centres[0]).abs() < 0.1));
-                } else {
+                } else if width <= 400.0 {
                     assert!(centres.iter().any(|y| *y > centres[0]));
                 }
                 for field in text
@@ -867,7 +888,24 @@ mod tests {
                     assert_eq!(sections[0].format.color, theme.ui.text_secondary);
                     assert_eq!(sections[1].format.color, theme.chart.candle_up);
                 }
+                let idle: Vec<_> = text
+                    .iter()
+                    .map(|text| (text.galley.text().to_owned(), text.pos, text.galley.size()))
+                    .collect();
+                let hovered = frame(vec![Event::PointerMoved(plot.min + Vec2::new(60.0, 20.0))]);
+                let hovered_text: Vec<_> = hovered
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => {
+                            Some((text.galley.text().to_owned(), text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                hovered.drop_without_applying_deltas();
                 output.drop_without_applying_deltas();
+                assert_eq!(idle, hovered_text, "hover moved readout at {width}");
             }
         }
     }

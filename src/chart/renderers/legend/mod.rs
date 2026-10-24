@@ -549,6 +549,8 @@ pub(crate) fn study_controls(
         touch
     });
     let row_response = ui.interact(row, id.with("row"), Sense::click());
+    row_response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Study controls"));
     let clicked_elsewhere = row_response.clicked_elsewhere();
     let clicked = row_response.clicked();
     let selected = ui.ctx().data_mut(|data| {
@@ -561,8 +563,10 @@ pub(crate) fn study_controls(
         data.insert_temp(id, selected);
         selected
     });
+    // Keep controls focusable while Tab transfers focus from their row.
     let focused = row_response.has_focus()
-        || (0..3).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+        || row_response.lost_focus()
+        || (0..3_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -866,68 +870,6 @@ mod tests {
     use egui::{Context, Event, Key, PointerButton, Shape};
 
     #[test]
-    fn compact_readout_and_hover_controls_keep_separate_space() {
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for width in [160.0, 300.0, 599.0, 600.0, 1440.0] {
-                let ctx = Context::default();
-                #[cfg(feature = "icons")]
-                egui_extras::install_image_loaders(&ctx);
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let bar = Bar::new(
-                    Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-                    100.0,
-                    110.0,
-                    90.0,
-                    105.0,
-                    1000.0,
-                );
-                let frame = |events| {
-                    let output = ctx.run_ui(
-                        egui::RawInput {
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let mut legend = Legend::new("SAMPLE", "1h", &bar);
-                            legend.previous_close = Some(100.0);
-                            legend
-                                .show(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 400.0)));
-                        },
-                    );
-                    let text = output
-                        .shapes
-                        .iter()
-                        .filter_map(|s| match &s.shape {
-                            Shape::Text(t) => {
-                                Some((t.galley.text().to_owned(), t.pos, t.galley.size()))
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    output.drop_without_applying_deltas();
-                    text
-                };
-                let idle = frame(vec![Event::PointerGone]);
-                let hovered = frame(vec![Event::PointerMoved(Pos2::new(20.0, 20.0))]);
-                assert_eq!(idle, hovered, "hover moved readout at {width}");
-                assert!(idle.iter().any(|(s, _, _)| s == "+5.00 (+5.00%)"));
-                assert_eq!(idle.iter().any(|(s, _, _)| s == "O 100.00"), width >= 600.0);
-                assert!(idle.iter().any(|(s, _, _)| s == "C 105.00"));
-                for (i, (_, pos, size)) in idle.iter().enumerate() {
-                    let a = Rect::from_min_size(*pos, *size);
-                    assert!(a.right() <= width - 7.0, "clipped text at {width}: {a:?}");
-                    for (_, pos, size) in &idle[i + 1..] {
-                        assert!(
-                            !a.intersects(Rect::from_min_size(*pos, *size)),
-                            "overlap at {width}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn study_controls_reveal_on_touch_and_dismiss_outside() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = Context::default();
@@ -951,8 +893,15 @@ mod tests {
                     Shape::Rect(r) => r.rect == row,
                     _ => false,
                 });
+                let focused_label = output.platform_output.events.iter().find_map(|event| {
+                    if let egui::output::OutputEvent::FocusGained(info) = event {
+                        info.label.clone()
+                    } else {
+                        None
+                    }
+                });
                 output.drop_without_applying_deltas();
-                (painted, clicked)
+                (painted, clicked, focused_label)
             };
             let touch = |pos, phase| Event::Touch {
                 device_id: egui::TouchDeviceId(0),
@@ -1001,6 +950,37 @@ mod tests {
                 "mouse hover reveals controls"
             );
             assert!(!frame(vec![Event::PointerGone]).0);
+            for (index, label) in [
+                "Study controls",
+                "Hide study",
+                "Study settings",
+                "Remove study",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let focused = frame(vec![Event::Key {
+                    key: Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]);
+                assert!(focused.0, "keyboard focus must reveal {label}");
+                assert_eq!(focused.2.as_deref(), Some(label));
+                assert!(frame(vec![]).0, "focused controls must stay visible");
+                let activated = frame(vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]);
+                assert_eq!(
+                    activated.1,
+                    std::array::from_fn(|button| index == button + 1)
+                );
+            }
 
             // A wrapped row is selectable over its text, even when the controls wrap below it.
             let ctx = Context::default();
