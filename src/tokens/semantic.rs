@@ -27,7 +27,7 @@ pub struct SemanticTokens {
     pub footprint: FootprintSemanticTokens,
     pub indicators: IndicatorSemanticTokens,
     pub drawings: DrawingSemanticTokens,
-    /// Button variant colors (rerun-inspired)
+    /// Button variant colors.
     pub buttons: ButtonSemanticTokens,
     /// Extended flat-access colors - replaces old theme::ui, theme::chart modules
     pub extended: ExtendedSemanticTokens,
@@ -41,10 +41,10 @@ pub struct SemanticTokens {
     pub tpo: TpoSemanticTokens,
 }
 
-/// UI chrome color tokens with light and dark mode variants.
+/// UI chrome colors for component defaults and fallbacks.
 ///
-/// Contains panel backgrounds, text colors, button states, icon colors,
-/// borders, and accent colors for both light and dark UI modes.
+/// Theme presets own their complete palettes; these tokens retain only the
+/// panel, text, button, icon, border and accent values read by components.
 #[derive(Clone, Debug)]
 pub struct UiSemanticTokens {
     pub panel_bg_light: Color32,
@@ -188,10 +188,9 @@ pub struct DrawingSemanticTokens {
     pub fib_100: Color32,
 }
 
-/// Button variant colors for primary, secondary, outlined, and danger buttons.
+/// Button variant colors for primary, secondary and danger buttons.
 ///
-/// Follows the rerun-inspired variant system where each button type has
-/// background, hover, active, and foreground colors.
+/// Background and foreground defaults, with hover and active colors for danger buttons.
 #[derive(Clone, Debug)]
 pub struct ButtonSemanticTokens {
     /// Primary button background (high emphasis, accent-colored).
