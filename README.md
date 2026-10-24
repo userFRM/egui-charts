@@ -129,7 +129,7 @@ The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the 
 
 ## Studies
 
-A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 125 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
+A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 126 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
 
 | Group | Examples |
 |---|---|
@@ -161,7 +161,7 @@ Magnet snapping is not applied yet. `drawings::persistence` saves drawings to JS
 
 ## Order flow
 
-The Market Profile (TPO) chart type, fixed range and anchored volume profiles, and cumulative volume delta, estimated from each bar's prices. A `Datafeed` can already push trades and order book depth; a footprint chart ([#231](https://github.com/userFRM/egui-charts/issues/231)) and a liquidity heatmap of the order book ([#235](https://github.com/userFRM/egui-charts/issues/235)) are planned.
+The Market Profile (TPO) chart type and study, fixed range and anchored volume profiles, and cumulative volume delta, estimated from each bar's prices. A `Datafeed` can already push trades and order book depth; a footprint chart ([#231](https://github.com/userFRM/egui-charts/issues/231)) and a liquidity heatmap of the order book ([#235](https://github.com/userFRM/egui-charts/issues/235)) are planned.
 
 ## Themes
 

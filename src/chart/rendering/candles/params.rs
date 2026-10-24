@@ -27,6 +27,10 @@ pub struct CandleDataContext<'a> {
     pub revision: u64,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
+    /// Interval and calendar of the bars, whose sessions the TPO profiles follow.
+    pub clock: &'a crate::model::BarClock,
+    /// The instrument's minimum price increment, if known.
+    pub tick_size: Option<f64>,
 }
 
 /// Bar/candle rendering dimensions

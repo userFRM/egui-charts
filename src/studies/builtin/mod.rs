@@ -55,6 +55,9 @@ pub use trade_delta::{TradeDeltaValue, trade_delta};
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
 
+mod time_price_opportunity;
+pub use time_price_opportunity::TimePriceOpportunity;
+
 mod bollinger_bands;
 mod ema;
 mod macd;

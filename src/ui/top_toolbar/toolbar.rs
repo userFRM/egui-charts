@@ -1,9 +1,9 @@
 //! Top Toolbar Widget
 //!
-//! Symbol search, interval, chart type, indicators, undo and redo on the left;
-//! save, quick search, settings, fullscreen and screenshot on the right. Layouts,
-//! alerts and replay keep their order in a horizontally scrolling strip after
-//! the fixed main menu.
+//! Symbol search, interval, chart type, indicators, alert, replay, undo and redo
+//! on the left; the chart layout, layout name, save, quick search, settings,
+//! fullscreen and screenshot on the right, in a horizontally scrolling strip
+//! after the fixed main menu.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -58,14 +58,14 @@ const LEFT: &[&[Slot]] = &[
     &[S::Symbol, S::Compare],
     &[S::Interval],
     &[S::ChartType],
-    &[S::Indicators, S::Templates, S::Layouts],
+    &[S::Indicators, S::Templates],
     &[S::Alert, S::Replay],
     &[S::Undo, S::Redo],
 ];
 
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
-    &[S::LayoutName, S::Save],
+    &[S::Layouts, S::LayoutName, S::Save],
     &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
 ];
 
@@ -557,7 +557,9 @@ impl TopToolbar {
                     "Nothing to redo"
                 })
             }
-            S::Indicators => IconTextButton::new(icon, label, &self.config).show(ui),
+            S::Indicators | S::Alert | S::Replay => {
+                IconTextButton::new(icon, label, &self.config).show(ui)
+            }
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
@@ -953,11 +955,11 @@ mod tests {
                         "Candles",
                         "Indicators",
                         "Indicator templates",
-                        "Chart layout",
                         "Alert",
                         "Replay",
                         "Undo",
                         "Redo",
+                        "Chart layout",
                         "Named layouts",
                         "Save chart",
                         "Quick Search",

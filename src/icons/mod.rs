@@ -10,7 +10,8 @@
 //! Every icon is drawn on a 24 px grid with a 1.5 px round stroke in `currentColor`, and the
 //! root element sets `color="#fff"`. The SVG loader resolves `currentColor` against that white,
 //! so the tint passed to `as_image_tinted` (or a button's text colour) gives the final colour in
-//! every theme. Icons are crispest at 24 px and its multiples.
+//! every theme. The chart installs an icon loader that draws the 1.5 px stroke one logical pixel
+//! wide at any icon size, with horizontal and vertical segments on the pixel grid.
 //!
 //! # Usage
 //!
@@ -29,8 +30,10 @@
 //! ```
 
 mod icon;
+mod loader;
 
 pub use icon::Icon;
+pub(crate) use loader::install as install_loader;
 
 /// Macro to embed an SVG icon at compile time.
 ///
