@@ -11,6 +11,7 @@
 
 use chrono::{TimeZone, Utc};
 use egui_charts::model::{Bar, BarData};
+use egui_charts::theme::Theme;
 use egui_charts::widget::{Chart, SeriesId};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,6 +85,11 @@ impl BareChart {
 
     /// One frame: a sample tick moves the forming bar, and every 60th tick opens a new one.
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.ticks == 0 {
+            // The theme installs the one font the app bundles.
+            egui_charts::theme::apply_to_egui(ui.ctx(), &Theme::dark());
+            ui.set_style(ui.ctx().global_style());
+        }
         self.ticks += 1;
         let n = self.chart.bars(SeriesId::MAIN).len();
         let bar = if self.ticks.is_multiple_of(60) {
