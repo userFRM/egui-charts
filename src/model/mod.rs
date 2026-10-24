@@ -70,13 +70,16 @@ pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{Instrument, Session, SessionWindow, SymbolType, TimezoneId};
+pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType, TimezoneId};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
     detect_signal as detect_line_break_signal, to_line_break_lines,
 };
-pub use markers::{LineStyle, Marker, MarkerPos, MarkerShape, PriceLine};
+pub use markers::{
+    ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
+    PriceLine,
+};
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;
 pub use quote::{

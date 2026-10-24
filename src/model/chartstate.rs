@@ -330,14 +330,16 @@ impl ChartState {
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
     ) -> PriceTransform {
-        self.fit_price_scale_with_series(indicators, true, std::iter::empty())
+        self.fit_price_scale_with_series(indicators, true, std::iter::empty(), std::iter::empty())
     }
 
-    /// Fits visible series and studies together; additional values are already in scale units.
+    /// Fits visible series and studies together. `prices` are further prices to fit, such as
+    /// those of markers; `series_values` are already in scale units.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_visible: bool,
+        prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
@@ -414,6 +416,7 @@ impl ChartState {
             .filter(|_| main_visible)
             .flat_map(|bar| [bar.low, bar.high])
             .chain(study_values)
+            .chain(prices)
             .map(|value| transform.to_scale(value))
             .chain(series_values)
             .filter(|value| value.is_finite())

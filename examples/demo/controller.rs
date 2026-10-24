@@ -69,8 +69,8 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui::widget_bar::{
-    TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel, WidgetBarSection,
-    WidgetBarWidget,
+    SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel,
+    WidgetBarSection, WidgetBarWidget,
 };
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
@@ -206,6 +206,8 @@ pub struct DemoApp {
     feed_before_footprint: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
+    /// The latest crosshair payload of the active chart, from which the data window reads.
+    crosshair: Option<egui_charts::widget::ChartPointer>,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
@@ -255,6 +257,8 @@ pub struct DemoApp {
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     time_and_sales: TimeAndSalesPanel,
+    // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
+    symbol_details: SymbolDetailsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -281,6 +285,8 @@ pub struct DemoApp {
 
     saved_drawings: std::collections::HashMap<String, String>,
     toasts: Toasts,
+    /// Handle of the demo's price line, moved and removed from the chart menu.
+    demo_level: Option<egui_charts::widget::PriceLineId>,
 }
 
 impl DemoApp {
@@ -333,26 +339,40 @@ impl DemoApp {
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
         let mut menus = ChartMenus::default();
-        menus.host_entries.push(
+        menus.host_entries.extend([
             HostMenuEntry::new("research", "Open in research")
                 .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
-        );
+            HostMenuEntry::new("demo-level", "Move demo level here"),
+            HostMenuEntry::new("demo-level-remove", "Remove demo level"),
+        ]);
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        for (id, icon, tooltip) in [
-            (1, egui_charts::icons::icons::DATABASE, "Data Window"),
-            (3, egui_charts::icons::icons::WATCHLIST, "Watchlist"),
+        // The watchlist leads the built-in entries; the demo's other panels sit in the lower group.
+        for (id, icon, tooltip, section) in [
+            (
+                3,
+                egui_charts::icons::icons::WATCHLIST,
+                "Watchlist",
+                WidgetBarSection::Top,
+            ),
+            (
+                1,
+                egui_charts::icons::icons::DATABASE,
+                "Data Window",
+                WidgetBarSection::Bottom,
+            ),
             (
                 4,
                 egui_charts::icons::icons::SETTINGS_EVENTS,
                 "Time and sales",
+                WidgetBarSection::Bottom,
             ),
         ] {
             widget_bar.widgets.push(WidgetBarWidget {
                 id,
                 icon,
                 tooltip: tooltip.into(),
-                section: WidgetBarSection::Top,
+                section,
             });
         }
         let mut notes = String::new();
@@ -361,7 +381,7 @@ impl DemoApp {
                 id: 2,
                 icon: egui_charts::icons::icons::TEXT,
                 tooltip: "Session notes".into(),
-                section: egui_charts::ui::widget_bar::WidgetBarSection::Top,
+                section: egui_charts::ui::widget_bar::WidgetBarSection::Bottom,
             },
             move |ui| {
                 ui.label("Host panel · notes stay in this session");
@@ -398,6 +418,7 @@ impl DemoApp {
             feed_before_footprint: false,
             menus,
             last_chart_click: None,
+            crosshair: None,
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -437,7 +458,7 @@ impl DemoApp {
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
-            open_panel: None,
+            open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
@@ -456,6 +477,7 @@ impl DemoApp {
             ),
             watchlist_import: None,
             time_and_sales: TimeAndSalesPanel::default(),
+            symbol_details: SymbolDetailsPanel::new(),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -477,6 +499,7 @@ impl DemoApp {
                 .and_then(|storage| eframe::get_value(storage, "drawings"))
                 .unwrap_or_default(),
             toasts: Toasts::new(),
+            demo_level: None,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -493,6 +516,8 @@ impl DemoApp {
         app.trading.set_service(app.paper.clone());
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
+        app.symbol_details.set_feed(app.live.clone());
+        app.symbol_details.set_storage(app.template_storage.clone());
         app.apply_session();
         app.restore_drawings();
         app.chart.drawings_mut().tool_defaults = cc
@@ -655,6 +680,7 @@ impl DemoApp {
         self.chart.set_events(Vec::new());
         self.chart
             .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
+        self.annotate();
     }
 
     // --- alerts ------------------------------------------------------------
@@ -988,7 +1014,13 @@ impl eframe::App for DemoApp {
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
+        self.symbol_details.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
+        // The watchlist opens beside the chart by default, but a compact window starts with the
+        // chart alone.
+        if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {
+            self.open_panel = None;
+        }
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -1117,10 +1149,10 @@ impl DemoApp {
                             if ui.ctx().content_rect().width() < 600.0 {
                                 ui.separator();
                                 for (label, panel) in [
-                                    ("Object Tree", SidePanel::ObjectTree),
-                                    ("Alerts", SidePanel::Alerts),
-                                    ("Data Window", SidePanel::DataWindow),
                                     ("Watchlist", SidePanel::Watchlist),
+                                    ("Alerts", SidePanel::Alerts),
+                                    ("Object Tree", SidePanel::ObjectTree),
+                                    ("Data Window", SidePanel::DataWindow),
                                     ("Time and sales", SidePanel::TimeAndSales),
                                 ] {
                                     if ui.button(label).clicked() {
@@ -1202,7 +1234,7 @@ impl DemoApp {
                     ctx.copy_text(self.chart.symbol().to_string());
                 }
                 if id == "research" {
-                    if let Some(click) = self.last_chart_click {
+                    if let Some(click) = &self.last_chart_click {
                         self.toasts.info(format!(
                             "Host action: {id}, last chart click: {}, price: {:.4}",
                             click.time.to_rfc3339(),
@@ -1564,12 +1596,20 @@ impl DemoApp {
         };
         egui::Panel::right("detail_panel")
             .resizable(true)
-            .default_size(280.0)
+            .default_size(300.0)
             .min_size(220.0)
             .show(ui, |ui| match which {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
-                SidePanel::Watchlist => self.show_watchlist(ui),
+                SidePanel::Watchlist => {
+                    egui::Panel::bottom("symbol_details")
+                        .resizable(true)
+                        .default_size(ui.available_height() / 2.0)
+                        .min_size(120.0)
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| self.symbol_details.show(ui));
+                    self.show_watchlist(ui);
+                }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
                 SidePanel::DataWindow => {
                     self.data_window_expanded =
@@ -1622,8 +1662,31 @@ impl DemoApp {
         items
     }
 
+    /// Reads the hovered values from the crosshair payload alone; off the bars, the chart's
+    /// own readout shows the latest bar.
     fn build_data_window(&self) -> DataWindowInfo {
-        DataWindowInfo::from_chart(&self.chart)
+        let Some((pointer, bar)) = self
+            .crosshair
+            .as_ref()
+            .and_then(|pointer| Some((pointer, pointer.bar.as_ref()?)))
+        else {
+            return DataWindowInfo::from_chart(&self.chart);
+        };
+        let mut info = DataWindowInfo::new(self.chart.symbol()).with_timeframe(
+            self.chart
+                .timeframe()
+                .map(|tf| tf.as_str())
+                .unwrap_or_default(),
+        );
+        if let Some(instrument) = self.chart.instrument() {
+            info = info.with_instrument(instrument);
+        }
+        info = info
+            .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
+            .with_timestamp(self.chart.format_time(bar.time))
+            .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
+        info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
+        info
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -1664,23 +1727,40 @@ impl DemoApp {
         }
     }
 
-    /// Feeds the watchlist its synthetic quotes, the chart symbol's from the live feed, and time
-    /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows as
-    /// a notification.
+    /// Feeds the watchlist its synthetic quotes, the chart symbol's from the live feed, the
+    /// details panel the chart symbol, and time and sales the executions of the live feed. The demo
+    /// has no audio: a filter's sound shows as a notification.
     fn feed_market_panels(&mut self) {
         let now = chrono::Utc::now();
+        let chart_symbol = self.chart.symbol().to_owned();
+        let chart_quote = live::watchlist_quote(&chart_symbol, now).map(|mut quote| {
+            if let Some((last, prev_close)) = self.live.day_change() {
+                quote.last = last;
+                quote.prev_close = prev_close;
+            }
+            quote
+        });
         let symbols: Vec<String> = self.watchlist.symbols().map(str::to_owned).collect();
         for symbol in symbols {
-            if let Some(mut quote) = live::watchlist_quote(&symbol, now) {
-                if symbol.eq_ignore_ascii_case(self.chart.symbol())
-                    && let Some((last, prev_close)) = self.live.day_change()
-                {
-                    self.watchlist.set_selected(&symbol);
-                    quote.last = last;
-                    quote.prev_close = prev_close;
-                }
+            let quote = if symbol.eq_ignore_ascii_case(&chart_symbol) {
+                self.watchlist.set_selected(&symbol);
+                chart_quote
+            } else {
+                live::watchlist_quote(&symbol, now)
+            };
+            if let Some(quote) = quote {
                 self.watchlist.set_quote(&symbol, quote);
             }
+        }
+        self.symbol_details.set_instrument(
+            &self
+                .chart
+                .instrument()
+                .cloned()
+                .unwrap_or_else(|| egui_charts::model::Instrument::new(chart_symbol)),
+        );
+        if let Some(quote) = chart_quote {
+            self.symbol_details.set_quote(quote);
         }
         let instrument = self.chart.instrument();
         let mut alert = None;
@@ -1991,25 +2071,7 @@ impl DemoApp {
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
-        let mut replay_click = None;
-        for event in self.chart.drain_events() {
-            match event {
-                egui_charts::widget::ChartEvent::Click { position, button } => {
-                    self.last_chart_click = Some(position);
-                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
-                        replay_click.get_or_insert(position.time);
-                    }
-                }
-                egui_charts::widget::ChartEvent::SymbolChanged(_)
-                | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
-                    self.last_chart_click = None;
-                }
-                _ => {}
-            }
-        }
-        if let Some(time) = replay_click {
-            self.handle_replay_bar_click(ui.ctx(), time);
-        }
+        self.drain_chart_events(ui.ctx());
         // Right-click context actions resolve after the chart is shown. Order entries rest with
         // the rest of trading during replay.
         self.menus
@@ -2021,8 +2083,41 @@ impl DemoApp {
         }
     }
 
+    fn drain_chart_events(&mut self, ctx: &egui::Context) {
+        let mut replay_click = None;
+        for event in self.chart.drain_events() {
+            match event {
+                egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
+                    self.crosshair = pointer;
+                    // The data window was drawn before the chart; show the new values now.
+                    ctx.request_repaint();
+                }
+                egui_charts::widget::ChartEvent::Click { position, button } => {
+                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
+                        replay_click.get_or_insert(position.time);
+                    }
+                    self.last_chart_click = Some(position);
+                }
+                egui_charts::widget::ChartEvent::SymbolChanged(_)
+                | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
+                    self.last_chart_click = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(time) = replay_click {
+            self.handle_replay_bar_click(ctx, time);
+        }
+    }
+
     fn handle_context_action(&mut self, action: ChartContextAction) {
         match action {
+            ChartContextAction::Host { id, .. } if id == "demo-level-remove" => {
+                self.remove_demo_level();
+            }
+            ChartContextAction::Host { id, context } if id == "demo-level" => {
+                self.set_demo_level(context.price);
+            }
             ChartContextAction::Host { id, context } => {
                 self.toasts.info(format!(
                     "Host action: {id}, time: {}, price: {:.4}, target: {:?}",
@@ -2507,7 +2602,7 @@ mod tests {
         let replay = app.replay.as_ref().unwrap();
         assert_eq!(replay.state.curr_bar, index);
         assert!(!replay.state.is_playing());
-        assert_eq!(app.last_chart_click.unwrap().time, time);
+        assert_eq!(app.last_chart_click.as_ref().unwrap().time, time);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         let message = &app.toasts.toasts().last().unwrap().message;
         assert!(message.contains(&time.to_rfc3339()), "{message}");
@@ -4685,6 +4780,7 @@ mod tests {
                     },
                     |ui| {
                         app.chart.show(ui);
+                        app.drain_chart_events(ui.ctx());
                     },
                 )
                 .drop_without_applying_deltas();

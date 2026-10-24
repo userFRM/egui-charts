@@ -337,12 +337,10 @@ impl super::Chart {
                     _ => -step * 3.0,
                 };
                 let rect = chart_rect;
-                self.state.time_scale_mut().zoom(
-                    delta,
-                    rect.width() / 2.0,
-                    rect.left(),
-                    rect.width(),
-                );
+                let anchor = self.zoom_anchor(rect.width() / 2.0, rect.width());
+                self.state
+                    .time_scale_mut()
+                    .zoom(delta, anchor, rect.left(), rect.width());
             }
             A::ScrollToRealTime => {
                 self.pending_scroll_time = None;
