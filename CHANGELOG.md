@@ -149,6 +149,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The study refresh regression checks one full recompute per frame without assuming measured update costs preserve registration order. Unequal refresh deadlines exercise that order independently of timer precision. ([#747](https://github.com/userFRM/egui-charts/issues/747))
+
 - Pane legends identify each visible output with its plot colour. Values below 4.5:1 contrast use a coloured swatch and normal text, retaining the study name and legend controls. ([#580](https://github.com/userFRM/egui-charts/issues/580))
 - RSI defaults to a two-pixel blue line, a 20% fill between its two grey 4/4 dashed guides and a 138 px pane when space permits. Other pane presets retain their zone fills. Migration: `IndicatorPaneConfig` literals add `fill_between_zones` or use `..Default::default()`. ([#726](https://github.com/userFRM/egui-charts/issues/726))
 - The top toolbar uses a 38 px strip followed by a 4 px gap, measured menu, settings and screenshot glyphs and a leading symbol-search icon. Its dark strip and separators use #0f0f0f and #4a4a4a. Save, quick search, settings, fullscreen and screenshot form the right group; alerts, replay and layouts remain reachable through overflow. Overflow preserves disabled Undo and Redo and the selected Replay state, including when playback stops outside the menu. The demo feed toggle moves into its menu and unsupported Publish and Trade buttons are hidden. ([#287](https://github.com/userFRM/egui-charts/issues/287))
