@@ -17,9 +17,10 @@
 //! bars against their open for the Advance/Decline Ratio of bars; the detrended price oscillator
 //! of the conventional definition, aligned and centred; Swenlin for the Price Momentum Oscillator; Pring
 //! for the Special K; Spearman for the RCI Ribbon; Dorsey for the Relative Volatility Index; Blau for the SMI Ergodic lines; Lambert's CCI of
-//! the close for Woodies CCI) on the same fixture, and rounded to 12 significant digits. The Special K
-//! needs 725 bars, so its row uses a 1000-bar series of its own. Volume signs use exact integer comparisons; the
-//! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
+//! the close for Woodies CCI; Bill Williams for the Alligator; Chande and Kroll 1994 for the Chande Kroll
+//! Stop; Wilder's volatility system for the Volatility Stop) on the same fixture, and rounded to 12 significant
+//! digits. The Special K needs 725 bars, so its row uses a 1000-bar series of its own. Volume signs use exact
+//! integer comparisons; the volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
@@ -38,7 +39,10 @@
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
 //! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
 //! second bar, the first with a previous close. A window of the Advance/Decline Ratio of bars without a
-//! down bar has no value, and a bar with its close equal to its open counts as neither up nor down.
+//! down bar has no value, and a bar with its close equal to its open counts as neither up nor down. The Median takes the nearest-rank median (the lower middle
+//! value for an even length) and seeds its EMA with the mean of the first medians, the Chop Zone seeds its EMA
+//! with the mean of the first 34 closes, and the Volatility Stop starts at the first close in an uptrend and
+//! uses the bar's true range as its band until its ATR has a full length.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -57,6 +61,9 @@ use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
     BullBearPower, ChaikinOscillator, DetrendedPriceOscillator, KnowSureThing,
     RankCorrelationIndex, RelativeVigorIndex, StochasticRSI, UlcerIndex,
+};
+use crate::studies::{
+    BollingerBars, ChandeKrollStop, ChopZone, Median, VolatilityStop, WilliamsAlligator,
 };
 use crate::studies::{
     PriceMomentumOscillator, PringsSpecialK, RciRibbon, RelativeVolatilityIndex,
@@ -182,6 +189,44 @@ fn fixture() -> Vec<Bar> {
         .collect()
 }
 
+/// The colour bands of the Chop Zone (0 steepest rise to 8 steepest fall) and the trend of the
+/// Volatility Stop on the fixture, computed independently from the same definitions as the
+/// expected rows, one character per bar, `-` where the bar has no colour.
+#[test]
+fn chop_zone_and_volatility_stop_colour_bars_by_their_definitions() {
+    let bars = fixture();
+    let cases: [(Box<dyn Indicator>, &str, &str); 3] = [
+        (
+            Box::new(ChopZone::default()),
+            "012345678",
+            "----------------------------------00000000000000000000000000000000000000000000000003088888888682036888888754888888888888888888888888888888888888888888",
+        ),
+        (
+            Box::new(VolatilityStop::default()),
+            "ud",
+            "uuuuuddddduuuuuuuuuudddddddddddddduuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuudddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
+        (
+            Box::new(VolatilityStop::new(3, 1.0)),
+            "ud",
+            "uuuuuddddduuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuddduuuuuuuuuuuuuuuuuudddddddddddddddduuuuuuuddddduuudddddduuddddddddddddddddddddddddduuuuddddd",
+        ),
+    ];
+    for (mut study, symbols, expected) in cases {
+        study.calculate(&bars);
+        let colors = study.colors();
+        let actual: String = (0..bars.len())
+            .map(|bar| {
+                study.plot_color(0, bar).map_or('-', |color| {
+                    let band = colors.iter().position(|c| *c == color).unwrap();
+                    symbols.as_bytes()[band] as char
+                })
+            })
+            .collect();
+        assert_eq!(actual, expected, "{}", study.name());
+    }
+}
+
 /// Line `line` of a study value, `None` when the bar has no value or the line is NaN.
 fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
     match value {
@@ -276,6 +321,14 @@ fn staple_studies_match_published_definitions() {
         ("CMO(14)", Box::new(ChandeMomentumOscillator::default())),
         ("Coppock(14,11,10)", Box::new(CoppockCurve::default())),
         ("Ichimoku(9,26,52)", Box::new(IchimokuCloud::default())),
+        ("Alligator(13,8,5)", Box::new(WilliamsAlligator::default())),
+        ("ChandeKroll(10,1,9)", Box::new(ChandeKrollStop::default())),
+        ("Median(3,14,2)", Box::new(Median::default())),
+        ("Median(4,14,2)", Box::new(Median::new(4, 14, 2.0))),
+        ("VStop(20,2)", Box::new(VolatilityStop::default())),
+        ("VStop(3,1)", Box::new(VolatilityStop::new(3, 1.0))),
+        ("ChopZone", Box::new(ChopZone::default())),
+        ("BollingerBars", Box::new(BollingerBars::default())),
         (
             "Ichimoku(9,26,52,22)",
             Box::new(IchimokuCloud::new(9, 26, 52).with_displacement(22)),

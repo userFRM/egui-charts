@@ -171,6 +171,10 @@ impl IndicatorFactory {
                 Qstick,
                 ChoppinessIndex,
                 ElderImpulseSystem,
+                WilliamsAlligator,
+                ChopZone,
+                VolatilityStop,
+                ChandeKrollStop,
             ],
             "Volatility" => [
                 BollingerBands,
@@ -194,6 +198,7 @@ impl IndicatorFactory {
                 BBTrend,
                 UlcerIndex,
                 RelativeVolatilityIndex,
+                Median,
             ],
             "Volume" => [
                 Volume,
@@ -233,6 +238,7 @@ impl IndicatorFactory {
             ],
             "Price" => [
                 HigherIntervalCandles,
+                BollingerBars,
                 TypicalPrice,
                 MedianPrice,
                 WeightedClose,
@@ -505,6 +511,10 @@ mod tests {
             Box::new(Qstick::new(l(0))),
             Box::new(ChoppinessIndex::new(l(0))),
             Box::new(ElderImpulseSystem::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsAlligator::new(l(0), l(1), l(2))),
+            Box::new(ChopZone::new()),
+            Box::new(VolatilityStop::new(l(0), x(2.0))),
+            Box::new(ChandeKrollStop::new(l(0), x(1.0), l(1))),
             Box::new(BollingerBands::new(l(0), x(2.0))),
             Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
             Box::new(ATR::new(l(0))),
@@ -529,6 +539,7 @@ mod tests {
                     .with_margin(x(1.0))
                     .with_commission(x(1.0)),
             ),
+            Box::new(Median::new(l(0), l(1), x(2.0))),
             Box::new(Volume::new(l(0))),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
@@ -561,6 +572,7 @@ mod tests {
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
             Box::new(HigherIntervalCandles::default()),
+            Box::new(BollingerBars::new()),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
             Box::new(WeightedClose::new()),

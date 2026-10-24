@@ -27,13 +27,18 @@
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
-//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`]
+//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`],
+//! [`WilliamsAlligator`], [`ChopZone`], [`VolatilityStop`], [`ChandeKrollStop`]
 //!
 //! ## Volatility
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
 //! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
-//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`]
+//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`],
+//! [`Median`]
+//!
+//! ## Price
+//! [`BollingerBars`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
@@ -57,6 +62,20 @@ pub use trade_delta::{TradeDeltaValue, trade_delta};
 
 mod higher_interval_candles;
 pub use higher_interval_candles::HigherIntervalCandles;
+
+// Price overlays and their pane companion
+mod bollinger_bars;
+mod chande_kroll_stop;
+mod chop_zone;
+mod median;
+mod volatility_stop;
+mod williams_alligator;
+pub use bollinger_bars::BollingerBars;
+pub use chande_kroll_stop::ChandeKrollStop;
+pub use chop_zone::ChopZone;
+pub use median::Median;
+pub use volatility_stop::VolatilityStop;
+pub use williams_alligator::WilliamsAlligator;
 
 mod bollinger_bands;
 mod ema;
@@ -417,6 +436,32 @@ pub use woodies_cci::WoodiesCCI;
 /// raise a length of 0 to 1.
 fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
+}
+
+/// A recursive average `prev + alpha * (x - prev)` seeded with the mean of its first `length`
+/// values: alpha `2 / (length + 1)` gives an EMA, `1 / length` Wilder's smoothed average.
+/// Leading NaN inputs are skipped; the output is NaN until the seed.
+fn seeded_average(values: &[f64], length: usize, alpha: f64) -> Vec<f64> {
+    let (mut count, mut average) = (0, 0.0);
+    values
+        .iter()
+        .map(|&x| {
+            if count < length {
+                if x.is_nan() {
+                    return f64::NAN;
+                }
+                count += 1;
+                average += x;
+                if count < length {
+                    return f64::NAN;
+                }
+                average /= length as f64;
+            } else {
+                average += alpha * (x - average);
+            }
+            average
+        })
+        .collect()
 }
 
 /// `compute` run over the bars whose inputs `finite` accepts, the other bars given no
