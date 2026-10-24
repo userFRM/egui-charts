@@ -321,6 +321,7 @@ impl Chart {
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
+        self.sync_stored_drawings(ui.ctx());
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -421,6 +422,8 @@ impl Chart {
             ui.ctx().request_discard("Chart measured its axis labels");
         }
         self.record_host_events(ui);
+        // Within the frame of the edit, in case it is the last.
+        self.save_stored_drawings();
         response
     }
 

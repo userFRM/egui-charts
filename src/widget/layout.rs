@@ -9,7 +9,9 @@ mod drawings;
 use drawings::DrawingLinks;
 
 /// Multi-chart arrangement. Changing presets retains the host's hidden charts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum ChartLayoutMode {
     /// One chart.
     #[default]

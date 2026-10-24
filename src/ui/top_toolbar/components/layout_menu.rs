@@ -1,8 +1,16 @@
-//! Host-owned named layout actions. No storage or account service is assumed.
+//! Named layouts, kept in the host's storage when it supplies one.
 
+use crate::config::KeyboardAction;
+use crate::data::FeedError;
+use crate::data::inbox::Inbox;
+use crate::services::{Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::SavedLayout;
 use egui::Ui;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Configuration for layout menu
 #[derive(Debug, Clone)]
@@ -22,25 +30,57 @@ pub enum LayoutAction {
     None,
     /// Select a tiled or tabbed chart arrangement.
     SelectGrid(crate::widget::ChartLayoutMode),
+    /// Save the current layout under its name (Save layout, Ctrl+S).
     Save,
+    /// Save the current layout under a new name, which becomes current (Save layout as, Make a
+    /// copy).
     SaveAs(String),
     DownloadImage,
     CreateNew,
+    /// Open the named layout.
     Open(String),
+    /// Delete the named layout.
     Delete(String),
+    /// Rename the current layout from the first name to the second.
     Rename(String, String),
 }
 
-/// Named layout menu. The host supplies the available layouts and handles returned intents.
+enum Request {
+    List,
+    Open(String),
+    Save(String),
+    /// Saving under the second name, then deleting the first.
+    Rename(String, String),
+    Delete(String),
+}
+
+/// Named layout menu. The host handles the returned intents, capturing a [`SavedLayout`] for
+/// each save. With [`set_storage`](Self::set_storage) the menu lists the layouts of
+/// [`StoreKind::Layouts`] and [`save`](Self::save), [`open`](Self::open),
+/// [`rename`](Self::rename) and [`delete`](Self::delete) keep them there; without it the host
+/// supplies `layouts` and keeps them itself.
 pub struct LayoutMenu {
     /// Name of the current layout.
     pub curr_layout: Option<String>,
-    /// Host-owned layouts available to open.
+    /// The layouts available to open, sorted by name when read from storage.
     pub layouts: Vec<String>,
     /// Menu sizing.
     pub config: LayoutMenuConfig,
+    /// Whether the current layout is saved after each change; see
+    /// [`autosave_due`](Self::autosave_due).
+    pub autosave: bool,
     editing: Option<bool>,
     new_name: String,
+    storage: Option<Arc<dyn Storage>>,
+    inbox: Arc<Inbox>,
+    requests: HashMap<u64, Request>,
+    next: u64,
+    /// The edit count given to `autosave_due` last, and the one saved or opened.
+    edits: u64,
+    saved_edits: Option<u64>,
+    /// A changed edit count with the input time it was first seen.
+    changed: Option<(u64, f64)>,
+    error: Option<String>,
 }
 
 impl Default for LayoutMenu {
@@ -56,9 +96,212 @@ impl LayoutMenu {
             curr_layout: Some("Unnamed".into()),
             layouts: Vec::new(),
             config: LayoutMenuConfig::default(),
+            autosave: false,
             editing: None,
             new_name: String::new(),
+            storage: None,
+            inbox: Arc::default(),
+            requests: HashMap::new(),
+            next: 0,
+            edits: 0,
+            saved_edits: None,
+            changed: None,
+            error: None,
         }
+    }
+
+    /// How long the layout stays unchanged before [`autosave_due`](Self::autosave_due) asks
+    /// for a save.
+    pub const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+
+    /// Keep layouts in `storage` and list them from it.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.inbox = Arc::default();
+        self.requests.clear();
+        self.storage = Some(storage);
+        self.request(Request::List, |storage, reply| {
+            storage.list(StoreKind::Layouts, reply)
+        });
+    }
+
+    fn request<T: Send + 'static>(
+        &mut self,
+        request: Request,
+        send: impl FnOnce(&dyn Storage, crate::data::Reply<T>),
+    ) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        let key = self.next;
+        self.next += 1;
+        self.requests.insert(key, request);
+        send(&**storage, self.inbox.reply(key));
+    }
+
+    /// Saves `layout` as `name`, which becomes the current layout. With a layout of that name,
+    /// replaces it.
+    pub fn save(&mut self, name: &str, layout: &SavedLayout) {
+        self.curr_layout = Some(name.to_owned());
+        self.saved_edits = Some(self.edits);
+        match layout.to_json() {
+            Ok(document) => self.request(Request::Save(name.to_owned()), |storage, reply| {
+                storage.save(StoreKind::Layouts, name, document, reply)
+            }),
+            Err(error) => self.error = Some(format!("Could not save {name}: {error}")),
+        }
+    }
+
+    /// Reads the layout `name`; [`poll`](Self::poll) returns it to restore.
+    pub fn open(&mut self, name: &str) {
+        self.request(Request::Open(name.to_owned()), |storage, reply| {
+            storage.load(StoreKind::Layouts, name, reply)
+        });
+    }
+
+    /// Renames the current layout to `name` by saving `layout`, the current layout, under it
+    /// and then deleting the old one.
+    pub fn rename(&mut self, name: &str, layout: &SavedLayout) {
+        let old = self.curr_layout.clone().unwrap_or_default();
+        self.curr_layout = Some(name.to_owned());
+        self.saved_edits = Some(self.edits);
+        match layout.to_json() {
+            Ok(document) => self
+                .request(Request::Rename(old, name.to_owned()), |storage, reply| {
+                    storage.save(StoreKind::Layouts, name, document, reply)
+                }),
+            Err(error) => self.error = Some(format!("Could not rename to {name}: {error}")),
+        }
+    }
+
+    /// Deletes the layout `name`.
+    pub fn delete(&mut self, name: &str) {
+        self.request(Request::Delete(name.to_owned()), |storage, reply| {
+            storage.delete(StoreKind::Layouts, name, reply)
+        });
+    }
+
+    /// Receives storage's answers, updating the list, and wakes the UI on the next answer.
+    /// Returns a layout [`open`](Self::open) read, now the current layout, for the host to
+    /// restore before its next [`autosave_due`](Self::autosave_due).
+    pub fn poll(&mut self, ctx: &egui::Context) -> Option<(String, SavedLayout)> {
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        let mut opened = None;
+        for (key, answer) in self.inbox.drain().answers {
+            let Some(request) = self.requests.remove(&key) else {
+                continue;
+            };
+            let failed = |action: &str, error: FeedError| format!("Could not {action}: {error}");
+            match request {
+                Request::List => {
+                    match *answer
+                        .downcast::<Result<Vec<String>, FeedError>>()
+                        .expect("layout list")
+                    {
+                        Ok(mut names) => {
+                            names.sort();
+                            self.layouts = names;
+                        }
+                        Err(error) => self.error = Some(failed("list layouts", error)),
+                    }
+                }
+                Request::Open(name) => {
+                    let answer = *answer
+                        .downcast::<Result<Option<String>, FeedError>>()
+                        .expect("layout load");
+                    match answer {
+                        Ok(Some(document)) => match SavedLayout::from_json(&document) {
+                            Ok(layout) => {
+                                self.curr_layout = Some(name.clone());
+                                self.saved_edits = None;
+                                opened = Some((name, layout));
+                            }
+                            Err(error) => {
+                                self.error = Some(format!("Could not open {name}: {error}"));
+                            }
+                        },
+                        Ok(None) => {
+                            self.layouts.retain(|layout| *layout != name);
+                            self.error = Some(format!("{name} no longer exists"));
+                        }
+                        Err(error) => self.error = Some(failed(&format!("open {name}"), error)),
+                    }
+                }
+                request => {
+                    let answer = *answer
+                        .downcast::<Result<(), FeedError>>()
+                        .expect("layout write");
+                    match (request, answer) {
+                        (Request::Save(name), Ok(())) => self.insert(name),
+                        (Request::Rename(old, name), Ok(())) => {
+                            self.insert(name);
+                            self.delete(&old);
+                        }
+                        (Request::Delete(name), Ok(())) => {
+                            self.layouts.retain(|layout| *layout != name);
+                        }
+                        (Request::Save(name), Err(error)) => {
+                            self.saved_edits = None;
+                            self.error = Some(failed(&format!("save {name}"), error));
+                        }
+                        (Request::Rename(old, name), Err(error)) => {
+                            if self.curr_layout.as_ref() == Some(&name) {
+                                self.curr_layout = Some(old);
+                            }
+                            self.error = Some(failed(&format!("rename to {name}"), error));
+                        }
+                        (Request::Delete(name), Err(error)) => {
+                            self.error = Some(failed(&format!("delete {name}"), error));
+                        }
+                        (Request::List | Request::Open(_), _) => unreachable!("not a write"),
+                    }
+                }
+            }
+        }
+        opened
+    }
+
+    fn insert(&mut self, name: String) {
+        if let Err(at) = self.layouts.binary_search(&name) {
+            self.layouts.insert(at, name);
+        }
+    }
+
+    /// Call every frame with a count that changes whenever the layout does, such as the sum of
+    /// [`Chart::edit_count`](crate::widget::Chart::edit_count) over its charts. Returns `true`
+    /// when the host should save the current layout: autosave is on, the layout is stored, and
+    /// the count changed and then stayed the same for [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY).
+    pub fn autosave_due(&mut self, ctx: &egui::Context, edits: u64) -> bool {
+        self.edits = edits;
+        let saved = *self.saved_edits.get_or_insert(edits);
+        let stored = self
+            .curr_layout
+            .as_ref()
+            .is_some_and(|name| self.layouts.contains(name));
+        if !self.autosave || !stored || self.storage.is_none() || edits == saved {
+            self.changed = None;
+            return false;
+        }
+        let now = ctx.input(|i| i.time);
+        let since = match self.changed {
+            Some((changed, since)) if changed == edits => since,
+            _ => {
+                self.changed = Some((edits, now));
+                now
+            }
+        };
+        let wait = Self::AUTOSAVE_DELAY.as_secs_f64() - (now - since);
+        if wait > 0.0 {
+            ctx.request_repaint_after(Duration::from_secs_f64(wait));
+            return false;
+        }
+        self.changed = None;
+        true
+    }
+
+    /// The error of a failed storage request since the last call, to show to the user.
+    pub fn take_error(&mut self) -> Option<String> {
+        self.error.take()
     }
 
     /// Width of the named trigger.
@@ -118,8 +361,41 @@ impl LayoutMenu {
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
         ui.set_min_width(self.config.menu_width);
         let mut action = LayoutAction::None;
+        let ctx = ui.ctx().clone();
+        let shortcut = ctx
+            .data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+            })
+            .map_or_else(
+                || KeyboardAction::SaveLayout.shortcut(),
+                |map| map.shortcut(KeyboardAction::SaveLayout),
+            );
+        let save = egui::Button::new("Save layout").shortcut_text(
+            shortcut
+                .map(|s| ctx.format_shortcut(&s))
+                .unwrap_or_default(),
+        );
+        if ui.add(save).clicked() {
+            action = LayoutAction::Save;
+            ui.close();
+        }
+        let curr = self.curr_layout.clone().unwrap_or_default();
+        let rename = ui.button("Rename…").clicked();
+        let copy = ui.button("Make a copy…").clicked();
+        let save_as = ui.button("Save layout as…").clicked();
+        if rename {
+            self.editing = Some(true);
+            self.new_name = curr.clone();
+        }
+        if copy || save_as {
+            self.editing = Some(false);
+            self.new_name = if copy {
+                format!("{curr} copy")
+            } else {
+                String::new()
+            };
+        }
         for (label, value) in [
-            ("Save layout", LayoutAction::Save),
             ("New layout", LayoutAction::CreateNew),
             ("Download chart image", LayoutAction::DownloadImage),
         ] {
@@ -128,19 +404,11 @@ impl LayoutMenu {
                 ui.close();
             }
         }
-        let save_as = ui.button("Save layout as…").clicked();
-        let rename = ui.button("Rename layout…").clicked();
-        if save_as {
-            self.editing = Some(false);
-            self.new_name.clear();
-        }
-        if rename {
-            self.editing = Some(true);
-            self.new_name = self.curr_layout.clone().unwrap_or_default();
-        }
+        ui.toggle_value(&mut self.autosave, "Autosave")
+            .on_hover_text("Save the layout after each change");
         if let Some(is_rename) = self.editing {
             let response = ui.text_edit_singleline(&mut self.new_name);
-            if save_as || rename {
+            if save_as || rename || copy {
                 response.request_focus();
             }
             let name = self.new_name.trim();
@@ -159,6 +427,9 @@ impl LayoutMenu {
                 self.editing = None;
                 ui.close();
             }
+        }
+        if self.layouts.is_empty() {
+            return action;
         }
         ui.separator();
         ui.colored_label(ui.active_theme().ui.text_secondary, "Layouts");
@@ -189,5 +460,88 @@ impl LayoutMenu {
                 }
             });
         action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Reply;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Host(Mutex<BTreeMap<String, String>>);
+
+    impl Storage for Host {
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().keys().rev().cloned().collect()));
+        }
+        fn load(&self, _: StoreKind, name: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
+        }
+        fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            self.0.lock().unwrap().insert(name.into(), document);
+            reply.send(Ok(()));
+        }
+        fn delete(&self, _: StoreKind, name: &str, reply: Reply<()>) {
+            self.0.lock().unwrap().remove(name);
+            reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn layouts_save_rename_open_and_autosave_through_storage() {
+        let ctx = egui::Context::default();
+        let at = |time: f64, run: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| run(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+        };
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("B".into(), layout.to_json().unwrap());
+        let mut menu = LayoutMenu::new();
+        menu.set_storage(host.clone());
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["B"]);
+        menu.save("C", &layout);
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["B", "C"]);
+        // A rename writes the new name before it deletes the old one.
+        menu.rename("A", &layout);
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert!(host.0.lock().unwrap().contains_key("A"));
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["A", "B"]);
+        assert_eq!(
+            host.0.lock().unwrap().keys().collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        menu.open("B");
+        at(0.0, &mut |ctx| {
+            let (name, opened) = menu.poll(ctx).unwrap();
+            assert_eq!((name.as_str(), opened.mode), ("B", layout.mode));
+        });
+        assert_eq!(menu.curr_layout.as_deref(), Some("B"));
+        // Autosave waits for the layout to stay unchanged after an edit.
+        menu.autosave = true;
+        let mut due = Vec::new();
+        for (time, edits) in [(0.0, 5), (1.0, 6), (2.5, 7), (4.0, 7), (4.6, 7), (5.0, 7)] {
+            at(time, &mut |ctx| due.push(menu.autosave_due(ctx, edits)));
+            if due.last() == Some(&true) {
+                menu.save("B", &layout);
+            }
+        }
+        assert_eq!(due, [false, false, false, false, true, false]);
     }
 }

@@ -1,5 +1,7 @@
-//! Services a host supplies, each through a small trait. Charts consume `Marks` and the alerts
-//! panel consumes `Alerts`; other contracts define the host side of the assembled terminal.
+//! Services a host supplies, each through a small trait. Charts consume `Marks` and keep their
+//! drawings in `Storage`, the alerts panel consumes `Alerts`, and `SettingsStore` and the
+//! layout menu keep settings and layouts in `Storage`; other contracts define the host side of
+//! the assembled terminal.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
@@ -8,6 +10,8 @@
 
 mod alerts;
 mod broker;
+#[cfg(feature = "widget")]
+pub(crate) mod document;
 #[cfg_attr(
     not(any(test, feature = "ui")),
     expect(dead_code, reason = "only the terminal consumes the listener")
@@ -15,6 +19,8 @@ mod broker;
 mod events;
 mod marks;
 mod search;
+#[cfg(feature = "widget")]
+mod settings;
 mod signals;
 mod storage;
 
@@ -25,5 +31,7 @@ pub use events::Events;
 pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use search::{SymbolQuery, SymbolSearch};
+#[cfg(feature = "widget")]
+pub use settings::{SettingsStore, UserSettings};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};

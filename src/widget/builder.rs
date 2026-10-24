@@ -130,6 +130,8 @@ impl Chart {
             next_series: 2,
             drawings: DrawingManager::new(),
             symbol_drawings: Default::default(),
+            drawing_store: None,
+            restored_studies: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             pane_options: Default::default(),

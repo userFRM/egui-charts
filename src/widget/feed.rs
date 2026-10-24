@@ -167,6 +167,7 @@ impl Chart {
             self.host_events
                 .push(super::ChartEvent::SymbolChanged(symbol.clone()));
             self.anchor_drawing_points();
+            self.save_stored_drawings();
             self.drawings.cancel_curr_drawing();
             self.drawings.end_drag_handle();
             self.drawings.deselect();
@@ -180,7 +181,8 @@ impl Chart {
             std::mem::swap(&mut self.drawings, &mut next.0);
             std::mem::swap(&mut self.marks, &mut next.1);
             self.symbol_drawings.insert(self.symbol.clone(), next);
-            self.history = Default::default();
+            self.history.clear();
+            self.history.edits += 1;
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;

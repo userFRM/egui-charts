@@ -23,6 +23,8 @@ mod export;
 mod marks;
 #[path = "replay.rs"]
 mod replay;
+#[path = "storage.rs"]
+mod storage;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -226,7 +228,10 @@ pub struct DemoApp {
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
-    template_storage: Arc<templates::TemplateStorage>,
+    storage: Arc<storage::DemoStorage>,
+    settings: egui_charts::services::SettingsStore,
+    /// Changes of the chart arrangement, which autosave counts with the charts' edits.
+    grid_edits: u64,
     study_templates: TemplateDialog<Vec<StudyTemplate>>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
@@ -285,7 +290,6 @@ pub struct DemoApp {
     // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
-    saved_drawings: std::collections::HashMap<String, String>,
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
@@ -331,6 +335,8 @@ impl DemoApp {
         chart.config_mut().skip_background = true;
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
+        let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
+        chart.set_storage(storage.clone());
 
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
@@ -440,11 +446,9 @@ impl DemoApp {
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparisons: Vec::new(),
-            template_storage: Arc::new(templates::TemplateStorage(std::sync::Mutex::new(
-                cc.storage
-                    .and_then(|storage| eframe::get_value(storage, "templates"))
-                    .unwrap_or_default(),
-            ))),
+            settings: egui_charts::services::SettingsStore::new(storage.clone()),
+            storage,
+            grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
             drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
@@ -497,10 +501,6 @@ impl DemoApp {
             export_renderer: cc.wgpu_render_state.clone(),
             image_jobs: 0,
             screenshots: mpsc::channel(),
-            saved_drawings: cc
-                .storage
-                .and_then(|storage| eframe::get_value(storage, "drawings"))
-                .unwrap_or_default(),
             toasts: Toasts::new(),
             demo_level: None,
         };
@@ -508,62 +508,32 @@ impl DemoApp {
             .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.study_templates
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.drawing_templates
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
-        app.symbol_details.set_storage(app.template_storage.clone());
+        app.symbol_details.set_storage(app.storage.clone());
+        app.top_toolbar.layout_menu.set_storage(app.storage.clone());
         app.apply_session();
-        app.restore_drawings();
         app.chart.drawings_mut().tool_defaults = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "drawing_defaults"))
             .unwrap_or_default();
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
+        // The demo's storage answers at once, so the settings apply before the first frame.
+        let current = app.user_settings();
+        if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+            app.apply_user_settings(&cc.egui_ctx, settings);
+        }
         app
-    }
-
-    fn remember_drawings(&mut self) {
-        match self
-            .chart
-            .save_drawings()
-            .and_then(|storage| storage.to_json())
-        {
-            Ok(json) => {
-                self.saved_drawings
-                    .insert(self.chart.symbol().to_owned(), json);
-            }
-            Err(error) => {
-                self.toasts
-                    .error(format!("Could not save drawings: {error}"));
-            }
-        }
-    }
-
-    fn restore_drawings(&mut self) {
-        let Some(json) = self.saved_drawings.get(self.chart.symbol()) else {
-            return;
-        };
-        match self.chart.load_drawings(json) {
-            Ok(skipped) => {
-                if !skipped.is_empty() {
-                    self.toasts
-                        .warning(format!("Skipped {} unreadable drawings", skipped.len()));
-                }
-            }
-            Err(error) => {
-                self.toasts
-                    .error(format!("Could not load drawings: {error}"));
-            }
-        }
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -610,7 +580,6 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
-        self.remember_drawings();
         self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
@@ -619,7 +588,6 @@ impl DemoApp {
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
         self.chart.set_symbol(spec.symbol);
-        self.restore_drawings();
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -990,22 +958,17 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.remember_drawings();
-        eframe::set_value(storage, "drawings", &self.saved_drawings);
+        let current = self.user_settings();
+        self.settings.flush(&current);
         eframe::set_value(
             storage,
             "drawing_defaults",
             &self.chart.drawings().tool_defaults,
         );
-        eframe::set_value(storage, "dark_theme", &self.theme.dark);
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
-        eframe::set_value(
-            storage,
-            "templates",
-            &*self.template_storage.0.lock().unwrap(),
-        );
+        self.storage.persist(storage);
         eframe::set_value(
             storage,
             "interval_preferences",
@@ -1013,7 +976,7 @@ impl eframe::App for DemoApp {
         );
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
@@ -1024,6 +987,7 @@ impl eframe::App for DemoApp {
         self.alerts.poll(&ctx, &mut self.toasts);
         self.symbol_details.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
+        self.poll_storage(&ctx);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
         if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {
@@ -1094,6 +1058,7 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(&ctx);
+        self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
         if self
@@ -2322,6 +2287,7 @@ impl DemoApp {
                     }
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+                    A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
                     A::CreateAlert => {
                         let mapping = self.chart.get_chart_mapping();
                         if let Some(pos) = ctx
@@ -2664,11 +2630,20 @@ mod tests {
         props.line_width = 4.0;
         props.save_as_default = true;
         props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
+        // The chart writes its edited drawings to the demo's storage as it shows them.
+        let frame = |chart: &mut Chart| {
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app.chart);
         let mut storage = AppStorage::default();
         eframe::App::save(&mut app, &mut storage);
-        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
+        frame(&mut restored.chart);
         assert_eq!(restored.chart.drawings().drawings.len(), 1);
         restored.chart.set_data(SeriesId::MAIN, original_bars);
         assert_eq!(restored.chart.drawings().drawings[0].chart_points, expected);
@@ -3417,28 +3392,46 @@ mod tests {
     }
 
     #[test]
-    fn save_keeps_a_session_layout_copy_instead_of_exporting() {
+    fn saved_layouts_open_again_and_after_a_restart() {
+        use eframe::App;
+        use egui_charts::model::ChartType;
         use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.chart.config_mut().candle_width = 0.42;
+        app.user_action(|app| {
+            app.chart
+                .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+        });
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         assert!(!app.export_dialog.is_open());
-        assert_eq!(app.layout_tabs.len(), 2);
-        app.chart.config_mut().candle_width = 0.8;
+        app.poll_storage(&ctx);
+        assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
+        assert_eq!(app.layout_tabs.len(), 1);
+        // Opening the current layout again returns to it as saved.
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
-        assert_eq!(app.chart.config().candle_width, 0.42);
-        let original_type = app.chart.chart_type();
-        app.handle_top_toolbar(
-            &ctx,
-            TopToolbarAction::ChartStyleSelected(egui_charts::model::ChartType::Line),
-        );
+        app.poll_storage(&ctx);
+        let saved = |app: &DemoApp| {
+            assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert!(app.chart.indicators().any(|(_, study)| {
+                study.inputs().first().map(|input| &input.value)
+                    == Some(&egui_charts::studies::InputValue::Length(7))
+            }));
+        };
+        saved(&app);
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        drop(app);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new(&cc);
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         assert!(app.chart.can_undo());
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
-        assert_eq!(app.chart.chart_type(), original_type);
-        app.execute_search_command(&ctx, "export");
-        assert!(app.export_dialog.is_open());
-        assert_eq!(app.layout_tabs.len(), 2);
+        assert_eq!(app.chart.chart_type(), ChartType::Line);
     }
 
     #[test]

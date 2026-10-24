@@ -1010,7 +1010,7 @@ mod tests {
                 ),
                 (
                     S::LayoutName,
-                    "Rename layout…",
+                    "Rename…",
                     TopToolbarAction::Layout(LayoutAction::Rename("Unnamed".into(), "Desk".into())),
                 ),
                 (
