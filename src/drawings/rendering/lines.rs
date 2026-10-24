@@ -576,6 +576,22 @@ impl Drawing {
         }
     }
 
+    pub(super) fn render_horizontal_mark(&self, painter: &egui::Painter, direction: f32) {
+        let Some(&tip) = self.points.first() else {
+            return;
+        };
+        let size = 14.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                tip,
+                tip + egui::vec2(-direction * size, -size * 0.6),
+                tip + egui::vec2(-direction * size, size * 0.6),
+            ],
+            self.color32(),
+            Stroke::NONE,
+        ));
+    }
+
     /// Render arrow mark down - downward pointing bearish arrow
     pub(crate) fn render_arrow_mark_down(&self, painter: &egui::Painter) {
         if !self.points.is_empty() {

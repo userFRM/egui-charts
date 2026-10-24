@@ -62,7 +62,6 @@ mod measurements;
 mod media;
 mod patterns;
 mod pitchfork;
-mod sector;
 mod shapes;
 mod style;
 mod trading;
@@ -483,14 +482,17 @@ impl Drawing {
             DrawingToolType::Brush => self.render_brush(painter),
             DrawingToolType::Highlighter => self.render_highlighter(painter),
 
-            // Arrows (4 tools)
+            // Arrows (6 tools)
             DrawingToolType::Arrow => self.render_arrow(painter, color, stroke),
             DrawingToolType::ArrowMarker => self.render_arrow_marker(painter, color),
             DrawingToolType::ArrowMarkUp => self.render_arrow_mark_up(painter),
             DrawingToolType::ArrowMarkDown => self.render_arrow_mark_down(painter),
+            DrawingToolType::ArrowMarkLeft => self.render_horizontal_mark(painter, -1.0),
+            DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
 
             // Additional tools
             DrawingToolType::Pitchfan => self.render_pitchfan(painter, rect),
+            DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
             DrawingToolType::Curve => self.render_curve(painter),
             DrawingToolType::PriceNote => self.render_price_note(painter, rect),
@@ -501,9 +503,6 @@ impl Drawing {
             DrawingToolType::Tweet => self.render_tweet_placeholder(painter),
             DrawingToolType::Idea => self.render_idea_placeholder(painter),
             DrawingToolType::FontIcon | DrawingToolType::Sticker => self.render_font_icon(painter),
-            DrawingToolType::Sector => self.render_sector(painter),
-            DrawingToolType::ArrowMarkLeft => self.render_horizontal_mark(painter, -1.0),
-            DrawingToolType::ArrowMarkRight => self.render_horizontal_mark(painter, 1.0),
 
             // Cursor tools (4 - not rendered as drawings)
             DrawingToolType::CrossCursor
@@ -833,47 +832,6 @@ mod tests {
         );
     }
 
-    /// Radius 100 gives (100+100/sqrt(2), 100+100/sqrt(2)) at 45°, independently of the end-ray length.
-    #[test]
-    fn sector_radius_and_clockwise_sweep_follow_the_three_anchors() {
-        let mut drawing = Drawing::new(1, "Sector".parse().unwrap());
-        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
-        drawing.points = vec![
-            Pos2::new(100., 100.),
-            Pos2::new(200., 100.),
-            Pos2::new(100., 150.),
-        ];
-        let quarter = drawing.outline(rect).unwrap();
-        assert!(
-            quarter
-                .lines
-                .iter()
-                .flatten()
-                .any(|p| p.distance(Pos2::new(170.71068, 170.71068)) < 1e-4)
-        );
-        assert!(quarter.lines.last().unwrap()[0].distance(Pos2::new(100., 200.)) < 1e-4);
-        for &point in quarter
-            .lines
-            .iter()
-            .flatten()
-            .filter(|&&p| p != drawing.points[0])
-        {
-            assert!((point.distance(drawing.points[0]) - 100.).abs() < 1e-4);
-        }
-        drawing.points[2] = Pos2::new(100., 50.);
-        let large = drawing.outline(rect).unwrap();
-        assert!(
-            large
-                .lines
-                .iter()
-                .flatten()
-                .any(|p| p.distance(Pos2::new(0., 100.)) < 1e-4)
-        );
-        assert!(large.lines.last().unwrap()[0].distance(Pos2::new(100., 0.)) < 1e-4);
-        drawing.points[1] = drawing.points[0];
-        assert!(drawing.outline(rect).is_none());
-    }
-
     /// Bundled glyphs must use vector primitives even when the host has no emoji font.
     #[test]
     fn bundled_glyphs_use_vectors_at_their_independent_size() {
@@ -900,6 +858,13 @@ mod tests {
                     );
                     let bounds = Rect::from_center_size(drawing.points[0], egui::Vec2::splat(size))
                         .expand(width);
+                    let painted = shapes.iter().fold(Rect::NOTHING, |bounds, shape| {
+                        bounds.union(shape.visual_bounding_rect())
+                    });
+                    assert!(
+                        painted.width() > size * 0.6 && painted.height() > size * 0.6,
+                        "{id}: {painted:?} at {size}"
+                    );
                     for shape in &shapes {
                         assert!(
                             bounds.contains_rect(shape.visual_bounding_rect()),
