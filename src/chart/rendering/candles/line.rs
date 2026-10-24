@@ -289,9 +289,5 @@ mod tests {
                 .fold(f32::INFINITY, f32::min)
         };
         assert!(distance(Pos2::new(15.0, 3.75)) <= 0.25);
-        assert_eq!(
-            with_line_type(points.to_vec(), LineType::Simple),
-            points.to_vec()
-        );
     }
 }

@@ -920,8 +920,8 @@ mod tests {
 
     /// Columns of 200 and 220 over a base of 150 fit 150 to 220 with 10% margins, 143 to 227; a
     /// provider's 0 to 1,000 fits -100 to 1,100, and the main series' 50 to 60 fits 49 to 61.
-    /// The price line, the base line of a percentage
-    /// scale at the first visible close and the last value label follow the series style.
+    /// The price line, the base line of a percentage scale at the first visible close and the
+    /// last value label follow the series style.
     #[test]
     fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
         let ctx = egui::Context::default();
