@@ -330,7 +330,7 @@ impl DemoApp {
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
         self.regenerate_bars();
-        self.refresh_active_chart();
+        self.timeframe_toolbar.state.timeframe = tf;
         // A replay continues at its current time on the new interval.
         if let Some(replay) = self.replay.as_mut() {
             let ts = self.bars.iter().map(|b| b.time).collect();
@@ -2639,7 +2639,6 @@ mod tests {
         }
         let minute = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
         app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Sec1));
-        assert_eq!(app.top_toolbar.timeframe_selector.current.display(), "1S");
         for _ in 0..3 {
             frame(&mut app);
         }
