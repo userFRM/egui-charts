@@ -22,10 +22,10 @@ mod range;
 pub mod tpo;
 pub(crate) mod volume;
 
+pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
 };
-pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 
 use crate::model::{BaselineLevel, ChartType, ChartTypeStyles};
 use crate::scales::PriceMap;

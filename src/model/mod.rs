@@ -70,7 +70,6 @@ pub use chart_style::{
     LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
-pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
@@ -93,6 +92,7 @@ pub use range_bar::{
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use series_scale::SeriesScale;
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,

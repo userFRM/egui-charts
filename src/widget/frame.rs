@@ -455,8 +455,7 @@ impl Chart {
             price_rect,
             price,
         )
-        .filter(|_| animation != LastPriceAnimation::Disabled)
-        else {
+        .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
         };
         let now = ui.input(|input| input.time);
@@ -467,8 +466,7 @@ impl Chart {
             previous => {
                 // The first price seen is the loaded history, not an update.
                 let started = previous.map_or(f64::NEG_INFINITY, |_| now);
-                self.last_price_pulse
-                    .set(Some((last.time, price, started)));
+                self.last_price_pulse.set(Some((last.time, price, started)));
                 started
             }
         };
@@ -748,9 +746,7 @@ impl Chart {
                     // Dot mode - default pointer (dot is rendered on chart)
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
-                CrosshairStyle::Arrow
-                | CrosshairStyle::Demonstration
-                | CrosshairStyle::Hidden => {
+                CrosshairStyle::Arrow | CrosshairStyle::Demonstration | CrosshairStyle::Hidden => {
                     // Arrow mode - default pointer
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -1413,11 +1409,13 @@ impl Chart {
             crate::model::PriceLineSource::LastVisible => visible_data.last(),
         };
         let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
-            let color = style.price_line_color.unwrap_or(if last.close >= last.open {
-                self.config.bullish_color
-            } else {
-                self.config.bearish_color
-            });
+            let color = style
+                .price_line_color
+                .unwrap_or(if last.close >= last.open {
+                    self.config.bullish_color
+                } else {
+                    self.config.bearish_color
+                });
             let line = PriceLine::new(last.close, color)
                 .with_width(if self.config.show_price_line && style.price_line_visible {
                     style.price_line_width
@@ -1426,9 +1424,7 @@ impl Chart {
                 })
                 .with_style(style.price_line_style)
                 .with_axis_label(
-                    show_price_axis
-                        && self.config.show_symbol_last_val
-                        && style.last_value_visible,
+                    show_price_axis && self.config.show_symbol_last_val && style.last_value_visible,
                 );
             let countdown = self.current_bar_countdown();
             if countdown.is_some()

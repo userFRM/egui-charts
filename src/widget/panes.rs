@@ -1339,8 +1339,10 @@ mod tests {
             let overlay = chart.add_indicator(Box::new(CustomIndicator::new("Overlay", |bars| {
                 vec![IndicatorValue::Single(107.25); bars.len()]
             })));
-            chart.chart_options.crosshair.vert_line_style = crate::config::CrosshairLineStyle::Solid;
-            chart.chart_options.crosshair.horz_line_style = crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.vert_line_style =
+                crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.horz_line_style =
+                crate::config::CrosshairLineStyle::Solid;
             chart.chart_options.crosshair.vert_line_color = egui::Color32::RED;
             chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
             frame(&ctx, &mut chart, 0.0, vec![]);

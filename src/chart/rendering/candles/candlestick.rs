@@ -294,7 +294,16 @@ mod tests {
             false,
         );
         let bars: Vec<_> = [80.0, 20.0]
-            .map(|close| Bar::new(chrono::DateTime::UNIX_EPOCH, close, close, close, close, 0.0))
+            .map(|close| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH,
+                    close,
+                    close,
+                    close,
+                    close,
+                    0.0,
+                )
+            })
             .into();
         let colors = StyleColors {
             bullish: Color32::GREEN,
