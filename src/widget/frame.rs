@@ -2938,13 +2938,16 @@ mod tests {
             } else {
                 Timeframe::Day1
             });
+            chart.chart_options.tooltip.enabled = false;
+            // Each change after a frame, as the axis menu makes them, so the time labels follow.
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::nyse();
+            frame(&ctx, &mut chart, 0.03, vec![]);
             let options = &mut chart.chart_options.time_scale;
-            options.timezone = crate::scales::TimezoneMode::nyse();
             options.time_visible = time_visible;
             options.seconds_visible = seconds_visible;
             options.ticks_visible = ticks_visible;
-            chart.chart_options.tooltip.enabled = false;
-            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.06, vec![]);
             let map = chart.get_chart_mapping();
             let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
