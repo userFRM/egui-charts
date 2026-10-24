@@ -44,6 +44,7 @@ pub mod quote;
 pub mod range_bar;
 pub mod renko;
 mod series_scale;
+mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
@@ -69,6 +70,7 @@ pub use chart_style::{
     LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;

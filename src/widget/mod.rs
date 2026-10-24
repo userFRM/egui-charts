@@ -333,6 +333,8 @@ pub struct Chart {
     pub(crate) feed_link: Option<FeedLink>,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     pub(crate) cursor_modes: CursorModeState,
+    /// The main series' last value, price line, base line, autoscale and click tolerance.
+    pub(crate) main_series_style: crate::model::SeriesStyle,
     /// The last bar's time and price when the last price pulse saw it, and the input time of
     /// that pulse's start, negative infinity before any update.
     pub(crate) last_price_pulse:

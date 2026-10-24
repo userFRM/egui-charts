@@ -827,6 +827,7 @@ impl Chart {
             .filter(|(study, autoscale)| **autoscale && !study.is_volume())
             .map(|(study, _)| study.as_ref()),
             self.main_series_visible,
+            self.main_series_style.autoscale.as_ref(),
             series_values,
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -1186,6 +1187,7 @@ impl Chart {
                 self.state.shown(),
                 max_volume,
                 main_visible_range.clone(),
+                self.main_series_style.hit_tolerance,
             )
             .filter(|(id, _)| {
                 self.main_series_visible
@@ -1244,6 +1246,7 @@ impl Chart {
                     self.state.shown(),
                     max_volume,
                     main_visible_range.clone(),
+                    self.main_series_style.hit_tolerance,
                 )
                 .filter(|(id, _)| {
                     self.main_series_visible
@@ -1388,27 +1391,45 @@ impl Chart {
             }
         }
 
-        // Last price line & label, from the newest bar even when it is scrolled out of view
-        let last_price_tag = if let Some(last) = self
-            .state
-            .data()
-            .bars
-            .last()
-            .filter(|_| self.main_series_visible)
+        let style = &self.main_series_style;
+        if let Some(line) = super::price_series::base_line(&price_map)
+            .filter(|_| self.main_series_visible && style.base_line_visible)
         {
-            let color = if last.close >= last.open {
+            rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                &line,
+                price_rect.left(),
+                false,
+                axis_edge,
+            );
+        }
+
+        // Last price line & label, from the newest bar even when it is scrolled out of view, or
+        // from the newest bar in view
+        let last = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar => self.state.data().bars.last(),
+            crate::model::PriceLineSource::LastVisible => visible_data.last(),
+        };
+        let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
+            let color = style.price_line_color.unwrap_or(if last.close >= last.open {
                 self.config.bullish_color
             } else {
                 self.config.bearish_color
-            };
+            });
             let line = PriceLine::new(last.close, color)
-                .with_width(if self.config.show_price_line {
-                    DESIGN_TOKENS.stroke.hairline
+                .with_width(if self.config.show_price_line && style.price_line_visible {
+                    style.price_line_width
                 } else {
                     0.0
                 })
-                .with_style(crate::model::LineStyle::Dotted)
-                .with_axis_label(show_price_axis && self.config.show_symbol_last_val);
+                .with_style(style.price_line_style)
+                .with_axis_label(
+                    show_price_axis
+                        && self.config.show_symbol_last_val
+                        && style.last_value_visible,
+                );
             let countdown = self.current_bar_countdown();
             if countdown.is_some()
                 && (self.server_time_offset.is_some() || self.feed_link.is_some())
@@ -2453,12 +2474,15 @@ mod tests {
     #[test]
     fn price_labels_and_lines_are_independent_on_either_axis() {
         use crate::model::{Level1Quote, Timeframe};
+        // `series` sets the main series' own label and price line, which the chart-wide
+        // switches override.
         for left in [false, true] {
-            for (label, line, countdown) in [
-                (true, true, true),
-                (true, false, false),
-                (false, true, false),
-                (false, false, false),
+            for (label, line, countdown, series) in [
+                (true, true, true, true),
+                (true, false, false, true),
+                (false, true, false, true),
+                (false, false, false, true),
+                (true, true, false, false),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0, 120.0]);
@@ -2475,6 +2499,8 @@ mod tests {
                 chart.config.show_symbol_prev_close = label;
                 chart.config.show_prev_close_line = line;
                 chart.config.show_countdown = countdown;
+                chart.main_series_style.last_value_visible = series;
+                chart.main_series_style.price_line_visible = series;
                 let bar = chart.state.data().bars.last().unwrap();
                 chart.set_quote(Some(Level1Quote {
                     symbol: "TEST".into(),
@@ -2537,7 +2563,11 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(!price_tags.is_empty(), label, "{left} {label} {line}");
+                assert_eq!(
+                    !price_tags.is_empty(),
+                    label && series,
+                    "{left} {label} {line}"
+                );
                 for tag in price_tags {
                     assert!(if left {
                         tag.right() <= plot.left()
@@ -2545,11 +2575,12 @@ mod tests {
                         tag.left() >= plot.right()
                     });
                 }
-                for (y, color) in [
-                    (close_y, chart.config.bullish_color),
+                for (y, color, shown) in [
+                    (close_y, chart.config.bullish_color, line && series),
                     (
                         prev_y,
                         crate::theme::ThemeExt::active_theme(&ctx).ui.text_secondary,
+                        line,
                     ),
                 ] {
                     let has_line = painted.iter().any(|shape| match shape {
@@ -2567,7 +2598,7 @@ mod tests {
                         _ => false,
                     });
                     assert_eq!(
-                        has_line, line,
+                        has_line, shown,
                         "line at {y}: left={left} label={label} line={line}"
                     );
                 }
