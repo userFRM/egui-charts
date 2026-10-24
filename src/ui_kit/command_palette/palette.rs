@@ -5,6 +5,7 @@ use super::fuzzy::{FuzzyMatch, fuzzy_match};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Key, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
 /// Command palette widget for quick command access
@@ -269,27 +270,10 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
 
     let text_x = icon_x + icon_size + theme.spacing.lg;
     let small = egui::FontId::proportional(theme.text.small);
-    // A description goes under the label; both meet at the row's middle.
-    let label_align = if cmd.description.is_some() {
-        egui::Align2::LEFT_BOTTOM
-    } else {
-        egui::Align2::LEFT_CENTER
-    };
-    let text_pos = egui::pos2(text_x, rect.center().y);
-    let body = egui::FontId::proportional(14.0);
-    painter.text(text_pos, label_align, &cmd.label, body, text);
-    if let Some(description) = &cmd.description {
-        painter.text(
-            text_pos,
-            egui::Align2::LEFT_TOP,
-            description,
-            small.clone(),
-            secondary,
-        );
-    }
-
     // Shortcut at the right edge, the category to its left.
     let mut right = rect.max.x - theme.spacing.md;
+    // Leave at least half the text space for the command and its description.
+    let metadata_left = (text_x + right) / 2.0;
     let shortcut = cmd
         .shortcut
         .map(|shortcut| ui.ctx().format_shortcut(&shortcut));
@@ -297,14 +281,37 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         .into_iter()
         .flatten()
     {
-        let drawn = painter.text(
-            egui::pos2(right, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            label,
-            small.clone(),
-            secondary,
+        if right <= metadata_left {
+            break;
+        }
+        let mut job = LayoutJob::simple_singleline(label.clone(), small.clone(), secondary);
+        job.wrap = TextWrapping::truncate_at_width(right - metadata_left);
+        let galley = painter.layout_job(job);
+        let pos = egui::pos2(
+            right - galley.size().x,
+            rect.center().y - galley.size().y / 2.0,
         );
-        right = drawn.min.x - theme.spacing.lg;
+        painter.galley(pos, galley, secondary);
+        right = pos.x - theme.spacing.lg;
+    }
+
+    // A description goes under the label; both meet at the row's middle.
+    for (label, font, color, align) in [
+        (
+            Some(&cmd.label),
+            egui::FontId::proportional(14.0),
+            text,
+            if cmd.description.is_some() { 1.0 } else { 0.5 },
+        ),
+        (cmd.description.as_ref(), small, secondary, 0.0),
+    ] {
+        if let Some(label) = label {
+            let mut job = LayoutJob::simple_singleline(label.clone(), font, color);
+            job.wrap = TextWrapping::truncate_at_width((right - text_x).max(0.0));
+            let galley = painter.layout_job(job);
+            let pos = egui::pos2(text_x, rect.center().y - galley.size().y * align);
+            painter.galley(pos, galley, color);
+        }
     }
 
     response
@@ -426,6 +433,70 @@ mod tests {
                 frame(&ctx, &mut palette, Some(Key::Enter)).as_deref(),
                 Some("b")
             );
+        }
+    }
+
+    #[test]
+    fn row_text_stays_inside_its_columns_after_narrow_resizing() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let commands = [
+                Command::new("study", "Add Moving Average Convergence Divergence")
+                    .description("Add this study to the current chart in a separate pane")
+                    .icon(&icons::RAY)
+                    .category("Studies")
+                    .shortcut(egui::KeyboardShortcut::new(Modifiers::CTRL, Key::I)),
+                Command::new("settings", "Open settings")
+                    .category("Chart appearance and scale settings"),
+            ];
+            for width in [480.0, 238.0, 278.0, 480.0] {
+                for selected in [false, true] {
+                    for command in &commands {
+                        let mut row = Rect::NOTHING;
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    Vec2::new(width, 200.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| row = command_row(ui, command, selected).rect,
+                        );
+                        let text: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| {
+                                if let egui::Shape::Text(text) = &shape.shape {
+                                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        assert_eq!(
+                            text.len(),
+                            if command.description.is_some() { 4 } else { 2 }
+                        );
+                        for (i, rect) in text.iter().enumerate() {
+                            assert!(
+                                row.contains_rect(*rect),
+                                "text outside row: {rect:?} {row:?}"
+                            );
+                            for other in &text[..i] {
+                                let overlap = rect.intersect(*other);
+                                assert!(
+                                    overlap.width() <= 0.0 || overlap.height() <= 0.0,
+                                    "text columns overlap at width {width}: {rect:?} {other:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
