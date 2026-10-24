@@ -563,6 +563,7 @@ mod tests {
             Box::new(BullBearPower::new(l(0))),
             Box::new(AdvanceDeclineRatioBars::new(l(0))),
             Box::new(UlcerIndex::new(l(0))),
+            Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
         ]
     }
 

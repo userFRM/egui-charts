@@ -14,7 +14,8 @@
 //! Coppock; Bill Williams for the Accelerator Oscillator; Chande for the Aroon Oscillator; Bollinger
 //! for BBTrend; Chaikin for the Chaikin Oscillator; Elder for Bull Bear Power; Martin 1989 for
 //! the Ulcer Index; the simple average of the bar range for the Average Daily Range; up and down
-//! bars against their open for the Advance/Decline Ratio of bars) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! bars against their open for the Advance/Decline Ratio of bars; the detrended price oscillator
+//! of the conventional definition, aligned and centred) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
 //! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
 //!
@@ -49,8 +50,8 @@ use crate::studies::{
 };
 use crate::studies::{
     AcceleratorOscillator, AdvanceDeclineRatioBars, AroonOscillator, AverageDailyRange, BBTrend,
-    BullBearPower, ChaikinOscillator, KnowSureThing, RankCorrelationIndex, RelativeVigorIndex,
-    StochasticRSI, UlcerIndex,
+    BullBearPower, ChaikinOscillator, DetrendedPriceOscillator, KnowSureThing,
+    RankCorrelationIndex, RelativeVigorIndex, StochasticRSI, UlcerIndex,
 };
 use chrono::{TimeZone, Utc};
 
@@ -281,6 +282,11 @@ fn staple_studies_match_published_definitions() {
             Box::new(AdvanceDeclineRatioBars::default()),
         ),
         ("Ulcer(14)", Box::new(UlcerIndex::default())),
+        ("DPO(21)", Box::new(DetrendedPriceOscillator::default())),
+        (
+            "DPO(21,centered)",
+            Box::new(DetrendedPriceOscillator::new(21).with_centered(true)),
+        ),
     ];
     let mut studies: Vec<_> = studies
         .into_iter()
