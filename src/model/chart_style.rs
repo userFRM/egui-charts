@@ -58,12 +58,17 @@ impl Default for LinePlotStyle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AreaStyle {
-    /// Line drawn above the fill.
+    /// Line drawn along the edge of the fill.
     pub line: LinePlotStyle,
-    /// Fill at the highest visible point, including opacity.
+    /// Fill at the top of the gradient, including opacity.
     pub top_fill: Color32,
-    /// Fill at the plot bottom, including opacity.
+    /// Fill at the bottom of the gradient, including opacity.
     pub bottom_fill: Color32,
+    /// Spread the gradient between the line's visible extreme and the pane edge the fill
+    /// reaches, the default, instead of over the whole price pane.
+    pub relative_gradient: bool,
+    /// Fill from the line up to the pane top instead of down to the pane bottom.
+    pub invert_filled_area: bool,
 }
 
 impl Default for AreaStyle {
@@ -73,6 +78,8 @@ impl Default for AreaStyle {
             line: LinePlotStyle::default(),
             top_fill: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 115),
             bottom_fill: Color32::TRANSPARENT,
+            relative_gradient: true,
+            invert_filled_area: false,
         }
     }
 }
