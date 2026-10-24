@@ -559,7 +559,7 @@ mod tests {
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
-            Box::new(PivotPoints::new(l(0))),
+            Box::new(PivotPoints::new().with_pivots_back(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),

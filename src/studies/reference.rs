@@ -11,17 +11,25 @@
 //! Chaikin for the Accumulation/Distribution line and volatility; Bill Williams; Larry Williams for the Ultimate
 //! Oscillator; Elder for Force Index and Elder Ray; Botes and Siepman for the Vortex indicator; Dreiss for the
 //! Choppiness Index; Hutson for TRIX; Dorsey for the Mass Index; Chande for the Chande Momentum Oscillator;
-//! Coppock; Bill Williams for the Accelerator Oscillator; Chande for the Aroon Oscillator; Bollinger
-//! for BBTrend; Chaikin for the Chaikin Oscillator; Elder for Bull Bear Power; Martin 1989 for
-//! the Ulcer Index; the simple average of the bar range for the Average Daily Range; up and down
-//! bars against their open for the Advance/Decline Ratio of bars; the detrended price oscillator
-//! of the conventional definition, aligned and centred; Swenlin for the Price Momentum Oscillator; Pring
-//! for the Special K; Spearman for the RCI Ribbon; Dorsey for the Relative Volatility Index; Blau for the SMI Ergodic lines; Lambert's CCI of
-//! the close for Woodies CCI; Bill Williams for the Alligator; Chande and Kroll 1994 for the Chande Kroll
-//! Stop; Wilder's volatility system for the Volatility Stop) on the same fixture, and rounded to 12 significant
-//! digits. The Special K needs 725 bars, so its row uses a 1000-bar series of its own. Volume signs use exact
-//! integer comparisons; the volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
+//! Coppock) on the same fixture, and rounded to 12 significant digits. Volume signs use exact integer comparisons; the
+//! volatility rows use decimal logarithms at 50-digit precision. Calendar-window rows are
 //! hand-calculated over an inclusive 364-day window.
+//!
+//! The rows of later studies come from these definitions, in the same arithmetic:
+//!
+//! - Bill Williams for the Accelerator Oscillator and the Alligator; Chande for the Aroon Oscillator;
+//!   Bollinger for BBTrend; Chaikin for the Chaikin Oscillator; Elder for Bull Bear Power; Martin 1989
+//!   for the Ulcer Index; the simple average of the bar range for the Average Daily Range; up and down
+//!   bars against their open for the Advance/Decline Ratio of bars; the detrended price oscillator of
+//!   the conventional definition, aligned and centred.
+//! - Swenlin for the Price Momentum Oscillator; Pring for the Special K, whose 725-bar warm-up needs a
+//!   1000-bar series of its own; Spearman for the RCI Ribbon; Dorsey for the Relative Volatility Index;
+//!   Blau for the SMI Ergodic lines; Lambert's CCI of the close for Woodies CCI.
+//! - Chande and Kroll 1994 for the Chande Kroll Stop; Wilder's volatility system for the Volatility Stop;
+//!   the median of the bar midpoints with ATR bands for the Median; the angle of the 34-bar EMA for the
+//!   Chop Zone.
+//! - The conventional floor-trader pivot points with Tom DeMark's and Nick Stott's Camarilla levels,
+//!   from the previous period of UTC dates.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
 //! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
@@ -39,10 +47,11 @@
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
 //! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
 //! second bar, the first with a previous close. A window of the Advance/Decline Ratio of bars without a
-//! down bar has no value, and a bar with its close equal to its open counts as neither up nor down. The Median takes the nearest-rank median (the lower middle
-//! value for an even length) and seeds its EMA with the mean of the first medians, the Chop Zone seeds its EMA
-//! with the mean of the first 34 closes, and the Volatility Stop starts at the first close in an uptrend and
-//! uses the bar's true range as its band until its ATR has a full length.
+//! down bar has no value, and a bar with its close equal to its open counts as neither up nor down. The
+//! Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
+//! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
+//! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
+//! band until its ATR has a full length.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -596,6 +605,57 @@ fn staple_studies_match_published_definitions() {
             "SpecialK-long",
             Box::new(PringsSpecialK::default()) as Box<dyn Indicator>,
             long,
+        ),
+    ]);
+    use crate::studies::{PivotMethod, PivotPoints, PivotTimeframe};
+    // The fixture's minute bars cross UTC midnight once, before bar 107.
+    for (name, method) in [
+        ("Pivots-Trad", PivotMethod::Traditional),
+        ("Pivots-Fib", PivotMethod::Fibonacci),
+        ("Pivots-Woodie", PivotMethod::Woodie),
+        ("Pivots-Classic", PivotMethod::Classic),
+        ("Pivots-DM", PivotMethod::DM),
+        ("Pivots-Cam", PivotMethod::Camarilla),
+    ] {
+        studies.push((
+            name,
+            Box::new(PivotPoints::new().with_method(method)),
+            bars.clone(),
+        ));
+    }
+    // The fixture as daily bars, 14 November 2023 to 11 April 2024.
+    let daily: Vec<_> = bars
+        .iter()
+        .enumerate()
+        .map(|(i, b)| Bar {
+            time: Utc
+                .timestamp_opt(1_700_000_000 + i as i64 * 86_400, 0)
+                .unwrap(),
+            ..b.clone()
+        })
+        .collect();
+    let mut monthly = PivotPoints::new().with_method(PivotMethod::Woodie);
+    monthly.set_timeframe(crate::model::Timeframe::Day1);
+    studies.extend([
+        (
+            "Pivots-Woodie-auto-daily",
+            Box::new(monthly) as Box<dyn Indicator>,
+            daily.clone(),
+        ),
+        (
+            "Pivots-Trad-weekly-daily",
+            Box::new(PivotPoints::new().with_timeframe(PivotTimeframe::Weekly)),
+            daily.clone(),
+        ),
+        (
+            "Pivots-DM-monthly-back2",
+            Box::new(
+                PivotPoints::new()
+                    .with_method(PivotMethod::DM)
+                    .with_timeframe(PivotTimeframe::Monthly)
+                    .with_pivots_back(2),
+            ),
+            daily,
         ),
     ]);
     for (_, study, data) in &mut studies {

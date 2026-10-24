@@ -110,6 +110,7 @@ mod williams_r;
 
 // Volume indicators
 mod acc_dist;
+mod anchor_period;
 mod cmf;
 mod mfi;
 mod obv;
@@ -288,6 +289,7 @@ pub use williams_r::WilliamsR;
 
 // Re-exports - Volume indicators
 pub use acc_dist::AccumulationDistribution;
+pub use anchor_period::AnchorPeriod;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
@@ -307,7 +309,7 @@ pub use keltner::KeltnerChannels;
 pub use std_dev::StandardDeviation;
 
 // Re-exports - Support/Resistance indicators
-pub use pivot_points::{PivotMethod, PivotPoints};
+pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use zigzag::{ZigZag, ZigZagMode};
 
 // Re-exports - Additional Oscillator/Momentum indicators
