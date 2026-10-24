@@ -108,6 +108,25 @@ impl Default for IndicatorPaneConfig {
 }
 
 impl IndicatorPaneConfig {
+    /// Builds the initial appearance from a study's pane metadata.
+    pub fn from_study(study: &dyn Indicator) -> Self {
+        let pane = study.pane();
+        Self {
+            height: pane.height.unwrap_or_else(|| Self::default().height),
+            y_range: pane
+                .range
+                .filter(|(min, max)| min.is_finite() && max.is_finite() && min < max),
+            show_zones: !pane.levels.is_empty(),
+            zones: pane
+                .levels
+                .into_iter()
+                .filter(|(level, _, _)| level.is_finite())
+                .collect(),
+            fill_between_zones: pane.fill_between_levels,
+            ..Self::default()
+        }
+    }
+
     /// Create config for RSI indicator
     pub fn rsi() -> Self {
         Self {
@@ -259,6 +278,11 @@ pub struct IndicatorPane {
     config: IndicatorPaneConfig,
     pub(super) bar_index: Option<usize>,
     pub(super) measured_axis_width: f32,
+    pub(super) price_map: Option<PriceMap>,
+    pub(super) overlay: bool,
+    pub(super) legend_offset: f32,
+    pub(super) pane_controls: bool,
+    pub(super) axis_tags: Vec<Option<Rect>>,
 }
 
 impl IndicatorPane {
@@ -268,6 +292,11 @@ impl IndicatorPane {
             config,
             bar_index: None,
             measured_axis_width: 0.0,
+            price_map: None,
+            overlay: false,
+            legend_offset: 0.0,
+            pane_controls: false,
+            axis_tags: Vec::new(),
         }
     }
 
@@ -520,7 +549,9 @@ impl IndicatorPane {
         let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 
         // Fill background
-        painter.rect_filled(rect, 0.0, chart_bg);
+        if !self.overlay {
+            painter.rect_filled(rect, 0.0, chart_bg);
+        }
 
         // Calculate drawing area to match main chart layout
         let left_padding = layout::LEFT_PADDING;
@@ -538,9 +569,20 @@ impl IndicatorPane {
         );
 
         // Determine y-axis range
-        let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
+        let (y_min, y_max) = self.price_map.map_or_else(
+            || self.calculate_y_range(indicator, &visible_range),
+            |map| {
+                (
+                    map.transform().to_price(map.range().min),
+                    map.transform().to_price(map.range().max),
+                )
+            },
+        );
 
-        let mapping = coords.to_mapping(chart_rect, y_min, y_max);
+        let mut mapping = coords.to_mapping(chart_rect, y_min, y_max);
+        if let Some(map) = self.price_map {
+            mapping.price = map;
+        }
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
@@ -634,7 +676,10 @@ impl IndicatorPane {
         }
         let controls = self.legend_controls_rect(painter, chart_rect, indicator);
         let responses = controls.map(|controls| {
-            let row = Rect::from_min_max(chart_rect.min, controls.right_bottom());
+            let row = Rect::from_min_max(
+                chart_rect.min + egui::vec2(0.0, self.legend_offset),
+                controls.right_bottom(),
+            );
             crate::chart::renderers::study_controls(
                 ui,
                 row,
@@ -674,7 +719,7 @@ impl IndicatorPane {
         })
     }
 
-    fn calculate_y_range(
+    pub(super) fn calculate_y_range(
         &self,
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
@@ -751,7 +796,7 @@ impl IndicatorPane {
             if lower < upper {
                 let color = indicator.plot_style(0).color;
                 painter.rect_filled(
-                    Rect::from_min_max(
+                    Rect::from_two_pos(
                         Pos2::new(rect.left(), self.value_to_y(upper, rect, y_min, y_max)),
                         Pos2::new(rect.right(), self.value_to_y(lower, rect, y_min, y_max)),
                     )
@@ -784,14 +829,16 @@ impl IndicatorPane {
             );
 
             if label.contains("Overbought") || label.contains("above") {
-                // Fill from this level to top
-                let fill_rect =
-                    Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y), Pos2::new(rect.max.x, y));
+                let fill_rect = Rect::from_two_pos(
+                    Pos2::new(rect.left(), self.value_to_y(y_max, rect, y_min, y_max)),
+                    Pos2::new(rect.right(), y),
+                );
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             } else if label.contains("Oversold") || label.contains("below") {
-                // Fill from this level to bottom
-                let fill_rect =
-                    Rect::from_min_max(Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, rect.max.y));
+                let fill_rect = Rect::from_two_pos(
+                    Pos2::new(rect.left(), y),
+                    Pos2::new(rect.right(), self.value_to_y(y_min, rect, y_min, y_max)),
+                );
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             }
         }
@@ -847,6 +894,18 @@ impl IndicatorPane {
 
         // Draw subtle grid lines
         if self.config.show_grid {
+            if let Some(map) = self.price_map {
+                for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+                    painter.line_segment(
+                        [
+                            Pos2::new(rect.left(), mark.y_coord),
+                            Pos2::new(rect.right(), mark.y_coord),
+                        ],
+                        Stroke::new(DESIGN_TOKENS.stroke.extra_thin, grid_color),
+                    );
+                }
+                return;
+            }
             let range = y_max - y_min;
             let step = self.calculate_nice_step(range, 5);
 
@@ -1051,18 +1110,6 @@ impl IndicatorPane {
         y_max: f64,
         coords: &IndicatorCoordParams,
     ) {
-        if indicator.is_volume() {
-            super::volume::paint(
-                painter,
-                rect,
-                indicator,
-                visible_range,
-                &coords.to_mapping(rect, y_min, y_max),
-                y_min,
-                y_max,
-            );
-            return;
-        }
         let values = indicator.values();
         let colors = indicator.colors();
         let line_cnt = indicator.line_cnt();
@@ -1076,6 +1123,9 @@ impl IndicatorPane {
                 continue;
             }
             let mut plot = plot;
+            if indicator.is_volume() && plot.plot_type == crate::studies::PlotType::Histogram {
+                plot.width = coords.bar_spacing * 0.8;
+            }
             plot.color = colors.get(line_idx).copied().unwrap_or(Color32::WHITE);
             let mut points = Vec::new();
 
@@ -1118,7 +1168,7 @@ impl IndicatorPane {
     }
 
     fn draw_y_axis_labels(
-        &self,
+        &mut self,
         painter: &egui::Painter,
         full_rect: Rect,
         chart_rect: Rect,
@@ -1143,15 +1193,20 @@ impl IndicatorPane {
             full_rect.right()
         };
         let text_color = painter.ctx().active_theme().chart.axis_text;
-        let map = PriceMap::new(
-            PriceTransform::default(),
-            PriceRange::new(y_min, y_max),
-            chart_rect.top(),
-            chart_rect.bottom(),
-            false,
-        )
-        .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
-        let mut tags = vec![crosshair_tag];
+        let map = self
+            .price_map
+            .unwrap_or_else(|| {
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(y_min, y_max),
+                    chart_rect.top(),
+                    chart_rect.bottom(),
+                    false,
+                )
+            })
+            .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
+        let mut tags = self.axis_tags.clone();
+        tags.push(crosshair_tag);
         if self.config.show_values {
             if indicator.is_volume() {
                 super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
@@ -1168,6 +1223,10 @@ impl IndicatorPane {
         };
         for tag in tags.iter().flatten() {
             width = width.max(tag.width() + 5.0 + 8.0);
+        }
+        self.axis_tags = tags.clone();
+        if self.overlay {
+            return width;
         }
         let label_x = if left {
             chart_rect.left() - DESIGN_TOKENS.spacing.sm
@@ -1286,11 +1345,14 @@ impl IndicatorPane {
         let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
         let x =
             (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
-                .min(rect.right() - 60.0)
+                .min(rect.right() - if self.pane_controls { 100.0 } else { 60.0 })
                 .max(rect.left());
         Some(
-            Rect::from_min_size(Pos2::new(x, rect.top() + 2.0), egui::vec2(60.0, 20.0))
-                .intersect(rect),
+            Rect::from_min_size(
+                Pos2::new(x, rect.top() + self.legend_offset + 2.0),
+                egui::vec2(60.0, 20.0),
+            )
+            .intersect(rect),
         )
     }
 
@@ -1312,14 +1374,19 @@ impl IndicatorPane {
         ));
         let pos = Pos2::new(
             rect.left() + DESIGN_TOKENS.spacing.sm,
-            rect.top() + 12.0_f32.min(rect.height() / 2.0) - galley.size().y / 2.0,
+            rect.top() + self.legend_offset + 12.0_f32.min(rect.height() / 2.0)
+                - galley.size().y / 2.0,
         );
         painter.galley(pos, galley, text_color);
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {
-        let norm = (value - y_min) / (y_max - y_min);
-        rect.max.y - (norm as f32 * rect.height())
+        if let Some(map) = self.price_map {
+            map.price_to_y(value)
+        } else {
+            let norm = (value - y_min) / (y_max - y_min);
+            rect.max.y - (norm as f32 * rect.height())
+        }
     }
 
     fn calculate_nice_step(&self, range: f64, target_lines: usize) -> f64 {
@@ -1356,54 +1423,63 @@ mod tests {
         );
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
-        let pane = IndicatorPane::with_config(config);
-        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
-        let study = crate::studies::RSI::default();
-        assert_eq!(study.colors(), vec![Color32::from_rgb(41, 98, 255)]);
-        assert_eq!(study.plot_style(0).width, 2.0);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
-            pane.draw_horizontal_lines(
-                ui.painter(),
-                rect,
+        for inverted in [false, true] {
+            let mut pane = IndicatorPane::with_config(config.clone());
+            pane.price_map = Some(PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 100.0),
                 0.0,
                 100.0,
-                Color32::BLACK,
-                Color32::GREEN,
-                Color32::RED,
+                inverted,
+            ));
+            let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+            let study = crate::studies::RSI::default();
+            assert_eq!(study.colors(), vec![Color32::from_rgb(41, 98, 255)]);
+            assert_eq!(study.plot_style(0).width, 2.0);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
+                pane.draw_horizontal_lines(
+                    ui.painter(),
+                    rect,
+                    0.0,
+                    100.0,
+                    Color32::BLACK,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let bands: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) => Some(r),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(bands.len(), 1);
+            assert!((bands[0].rect.top() - 30.0).abs() < 0.001);
+            assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
+            assert_eq!(
+                bands[0].fill,
+                Color32::from_rgba_unmultiplied(41, 98, 255, 51)
             );
-        });
-        let shapes = std::mem::take(&mut output.shapes);
-        output.drop_without_applying_deltas();
-        let bands: Vec<_> = shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) => Some(r),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(bands.len(), 1);
-        assert!((bands[0].rect.top() - 30.0).abs() < 0.001);
-        assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
-        assert_eq!(
-            bands[0].fill,
-            Color32::from_rgba_unmultiplied(41, 98, 255, 51)
-        );
-        let guides: Vec<_> = shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == Color32::from_gray(128) =>
-                {
-                    Some(points)
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(!guides.is_empty());
-        for guide in guides {
-            assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
-            assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
+            let guides: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::from_gray(128) =>
+                    {
+                        Some(points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!guides.is_empty());
+            for guide in guides {
+                assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
+                assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
+            }
         }
     }
 

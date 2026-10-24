@@ -30,6 +30,7 @@ struct Action {
     options: Option<ChartOptions>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
+    panes: Option<super::pane_layout::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     studies: Vec<StudyChange>,
@@ -125,6 +126,7 @@ impl Study {
             && self.inputs == other.inputs
             && self.autoscale == other.autoscale
             && self.indicator.is_visible() == other.indicator.is_visible()
+            && self.indicator.is_overlay() == other.indicator.is_overlay()
             && self.indicator.settings() == other.indicator.settings()
             && self.indicator.colors() == other.indicator.colors()
             && inputs(self.indicator.as_ref()) == inputs(other.indicator.as_ref())
@@ -158,6 +160,7 @@ impl Chart {
             return;
         }
         let mut standalone_drawings = HistoryService::with_max_size(0);
+        self.sync_panes();
         self.drawings.swap_history(&mut standalone_drawings);
         self.history.pending = Some(Pending {
             depth: 1,
@@ -167,6 +170,7 @@ impl Chart {
                 options: Some(self.chart_options.clone()),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
+                panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
                 ..Action::default()
@@ -195,6 +199,7 @@ impl Chart {
         }
         self.apply_config_scale_mode();
         self.drawings.swap_history(&mut pending.standalone_drawings);
+        self.sync_panes();
         let mut action = pending.before;
         action.drawings = pending.standalone_drawings;
         if action.view == Some(self.get_time_scale_state()) {
@@ -224,6 +229,25 @@ impl Chart {
                 action.scale = None;
             }
         }
+        if let Some(panes) = &action.panes
+            && panes.maximized == self.pane_layout.maximized
+            && panes.panes.len() == self.pane_layout.panes.len()
+            && panes
+                .panes
+                .iter()
+                .zip(&self.pane_layout.panes)
+                .all(|(a, b)| {
+                    a.id == b.id
+                        && a.studies == b.studies
+                        && a.height == b.height
+                        && a.collapsed == b.collapsed
+                        && a.scale.options() == b.scale.options()
+                        && a.scale.is_manual() == b.scale.is_manual()
+                        && (!a.scale.is_manual() || a.scale.range() == b.scale.range())
+                })
+        {
+            action.panes = None;
+        }
         action.studies.retain(
             |change| match (&change.before, Study::capture(self, change.id)) {
                 (None, None) => false,
@@ -236,6 +260,7 @@ impl Chart {
             && action.main_series_visible.is_none()
             && action.options.is_none()
             && action.scale.is_none()
+            && action.panes.is_none()
             && action.chart_type.is_none()
             && action.interval.is_none()
             && action.studies.is_empty()
@@ -401,6 +426,10 @@ impl Chart {
         for (change, before) in action.studies.iter_mut().zip(current) {
             change.before = before;
         }
+        if let Some(panes) = &mut action.panes {
+            std::mem::swap(&mut self.pane_layout, panes);
+        }
+        self.sync_panes();
         if let Some(ChartElementId::Indicator(id)) = self.selection.selected_id()
             && !self.study_ids.contains(&id)
         {
@@ -467,6 +496,20 @@ mod tests {
             Color32::RED
         );
         assert!(!chart.study_autoscale[0]);
+        chart.user_action(|chart| assert!(chart.move_indicator_to_pane(sma, rsi)));
+        assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
+        assert!(chart.undo());
+        assert!(
+            chart
+                .indicators()
+                .find(|(id, _)| *id == sma)
+                .unwrap()
+                .1
+                .is_overlay()
+        );
+        assert_eq!(chart.pane_layout.panes[0].studies, [rsi]);
+        assert!(chart.redo());
+        assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
         chart.user_action(|chart| {
             chart.remove_series(rsi);
             chart.remove_series(sma);
@@ -478,6 +521,7 @@ mod tests {
         for _ in 0..2 {
             assert!(chart.undo());
             assert_eq!(chart.study_ids, [rsi, sma, host]);
+            assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
             assert_eq!(chart.indicator_inputs(rsi), Some("5"));
             assert_eq!(chart.indicators().next().unwrap().1.values().len(), 17);
             assert!(chart.redo());

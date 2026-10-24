@@ -305,9 +305,13 @@ impl Chart {
         }
         self.show_elements();
         let frame = ui.ctx().cumulative_frame_nr();
-        let initial_layout = self.first_layout_frame.is_none_or(|first| first == frame);
+        let width = ui.available_width();
+        let resized = self
+            .last_layout
+            .is_none_or(|(previous, changed)| previous != width || changed == frame);
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
+        self.sync_panes();
         // Pane studies share the available height and the lowest time axis.
         let has_panes = self
             .studies
@@ -319,8 +323,12 @@ impl Chart {
         } else {
             self.show_internal(ui, None, footprint)
         };
-        if self.last_rendered_price_rect.width() > 1.0 {
-            self.first_layout_frame.get_or_insert(frame);
+        if self.last_rendered_price_rect.width() > 1.0
+            && self
+                .last_layout
+                .is_none_or(|(previous, _)| previous != width)
+        {
+            self.last_layout = Some((width, frame));
         }
         if (self.measured_axis_width - previous_axis_width).abs() > 0.5 {
             let old_width = self.last_rendered_price_rect.width();
@@ -328,8 +336,17 @@ impl Chart {
                 .calculate_layout_rects(response.rect)
                 .price_rect
                 .width();
-            // Discarded startup passes still belong to the initial layout.
-            if !initial_layout && previous_axis_width > 0.0 && old_width > 0.0 && new_width > 0.0 {
+            // Sizing passes follow the same zoom policy as the viewport resize.
+            if (!resized
+                || self.desired_visible_bars.is_some_and(|count| count > 0)
+                || self
+                    .chart_options
+                    .time_scale
+                    .lock_visible_time_range_on_resize)
+                && previous_axis_width > 0.0
+                && old_width > 0.0
+                && new_width > 0.0
+            {
                 let scale = self.state.time_scale_mut();
                 scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
             }
@@ -410,7 +427,11 @@ impl Chart {
         let rect = response.rect;
 
         if let Some(axis) = shared_time_axis {
-            painter.set_clip_rect(ui.clip_rect().intersect(rect.union(axis)));
+            painter.set_clip_rect(ui.clip_rect().intersect(if rect.height() == 0.0 {
+                axis
+            } else {
+                rect.union(axis)
+            }));
             response = response.union(ui.interact(
                 axis,
                 response.id.with("shared_time_axis"),
@@ -1814,6 +1835,7 @@ impl Chart {
         if let Some(action) = study_action {
             self.apply_study_action(action);
         }
+        self.main_pane_actions(ui, rect, chart_rect);
         shown
     }
 }

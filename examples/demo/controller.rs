@@ -3118,6 +3118,24 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        // A one-shot alert must stay active until the drag, regardless of the simulation clock.
+        app.chart.set_feed_paused(true);
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        app.chart.set_data(
+            SeriesId::MAIN,
+            (0..2)
+                .map(|i| {
+                    Bar::new(
+                        start + chrono::TimeDelta::minutes(i),
+                        100.0,
+                        110.0,
+                        90.0,
+                        105.0,
+                        1000.0,
+                    )
+                })
+                .collect(),
+        );
         let frame = |app: &mut DemoApp, events: Vec<egui::Event>, covered: bool| {
             ctx.run_ui(
                 egui::RawInput {
@@ -3180,6 +3198,10 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             }],
             false,
+        );
+        assert_eq!(
+            app.alerts.alerts()[0].status,
+            egui_charts::model::AlertStatus::Active
         );
         let target = point + egui::vec2(0.0, 45.0);
         let button = |pos, pressed| egui::Event::PointerButton {
@@ -3343,7 +3365,28 @@ mod tests {
                 ctx.set_pixels_per_point(scale);
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                 app.live.set_paused(true);
+                // Keep label widths independent of the simulation's wall-clock start.
+                app.chart.set_feed_paused(true);
+                let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+                app.chart.set_data(
+                    SeriesId::MAIN,
+                    (0..200)
+                        .map(|i| {
+                            Bar::new(
+                                start + chrono::TimeDelta::minutes(i),
+                                100.0,
+                                110.0,
+                                90.0,
+                                105.0,
+                                1000.0,
+                            )
+                        })
+                        .collect(),
+                );
                 *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                app.chart.set_instrument(Some(
+                    egui_charts::model::Instrument::new("SAMPLE").with_price_decimals(2),
+                ));
                 for width in [140.0, 0.0, 80.0, 320.0, 1440.0] {
                     ctx.run_ui(
                         egui::RawInput {
@@ -3355,6 +3398,13 @@ mod tests {
                         },
                         |ui| {
                             app.chart.show(ui);
+                            if width == 140.0 && ui.ctx().current_pass_index() == 0 {
+                                app.chart.set_instrument(Some(
+                                    egui_charts::model::Instrument::new("SAMPLE")
+                                        .with_price_decimals(6),
+                                ));
+                                ui.ctx().request_discard("initial axis precision changed");
+                            }
                         },
                     )
                     .drop_without_applying_deltas();

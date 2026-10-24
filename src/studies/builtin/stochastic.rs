@@ -239,6 +239,26 @@ impl Indicator for Stochastic {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (
+                    80.0,
+                    crate::tokens::DESIGN_TOKENS.semantic.extended.bearish,
+                    "Overbought",
+                ),
+                (
+                    20.0,
+                    crate::tokens::DESIGN_TOKENS.semantic.extended.bullish,
+                    "Oversold",
+                ),
+            ],
+            fill_between_levels: false,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // Stochastic is drawn in separate pane
     }

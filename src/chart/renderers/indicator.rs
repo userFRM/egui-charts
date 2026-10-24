@@ -18,6 +18,9 @@ pub(crate) fn paint_study_plot(
     plot: PlotStyle,
     baseline: f32,
 ) {
+    if !painter.clip_rect().is_positive() {
+        return;
+    }
     let baseline = if baseline.is_finite() {
         baseline.clamp(painter.clip_rect().top(), painter.clip_rect().bottom())
     } else {

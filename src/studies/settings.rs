@@ -62,6 +62,7 @@ pub struct ConfiguredStudy {
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
+    overlay: Option<bool>,
 }
 
 impl ConfiguredStudy {
@@ -79,6 +80,7 @@ impl ConfiguredStudy {
             settings,
             timeframe: None,
             instrument_precision: None,
+            overlay: None,
         }
     }
 }
@@ -200,8 +202,15 @@ impl Indicator for ConfiguredStudy {
     fn is_volume(&self) -> bool {
         self.study.is_volume()
     }
+    fn pane(&self) -> super::StudyPane {
+        self.study.pane()
+    }
     fn is_overlay(&self) -> bool {
-        self.study.is_overlay()
+        self.overlay.unwrap_or_else(|| self.study.is_overlay())
+    }
+    fn set_overlay(&mut self, overlay: bool) -> bool {
+        self.overlay = Some(overlay);
+        true
     }
     fn is_visible(&self) -> bool {
         self.study.is_visible()

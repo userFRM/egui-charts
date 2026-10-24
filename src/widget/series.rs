@@ -760,6 +760,10 @@ mod tests {
         }
         // The second round replaces the bars while the waits of the first are still running.
         for (round, close) in [(0, 200.0), (1, 300.0)] {
+            if round == 1 {
+                // Model unequal measured costs without depending on the runner clock.
+                chart.next_refresh.copy_from_slice(&[3.0, 2.0, 1.0]);
+            }
             for counter in &calls {
                 counter.store(0, Ordering::Relaxed);
             }
@@ -772,15 +776,16 @@ mod tests {
             for k in 1..=3 {
                 let now = if round == 0 { k as f64 } else { 3.0 } / 60.0;
                 let wait = chart.refresh_studies(now);
+                let counts: Vec<_> = calls
+                    .iter()
+                    .map(|counter| counter.load(Ordering::Relaxed))
+                    .collect();
+                assert_eq!(counts.iter().sum::<usize>(), k, "round {round}, call {k}");
                 for (j, (_, study)) in chart.indicators().enumerate() {
-                    assert_eq!(
-                        calls[j].load(Ordering::Relaxed),
-                        usize::from(j < k),
-                        "round {round}, call {k}, study {j}"
-                    );
+                    assert!(counts[j] <= 1, "round {round}, call {k}, study {j}");
                     assert_eq!(
                         study.values().is_empty(),
-                        j >= k,
+                        counts[j] == 0,
                         "round {round}, call {k}, study {j}"
                     );
                 }
