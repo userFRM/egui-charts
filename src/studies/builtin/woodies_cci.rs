@@ -12,8 +12,8 @@
 //! A window with no deviation gives 0. Lines, in order: the CCI 14 columns, the CCI Turbo (6) and
 //! the CCI 14 line. A column is green when the five previous CCI 14 values are all above zero and
 //! red when they are all below. Otherwise it is coloured against its own sign, green below zero and
-//! red at or above it, the colouring of the conventional built-in. Fewer than five previous values
-//! count as mixed. Levels at 100, 0 and -100.
+//! red at or above it. Fewer than five previous values count as mixed. The green is the columns
+//! colour of the settings. Levels at 100, 0 and -100.
 //!
 //! # Example
 //! ```
