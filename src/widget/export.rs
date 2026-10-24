@@ -242,6 +242,8 @@ impl Chart {
                 revision: series.revision,
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
+                marker_options: series.marker_options,
+                change_marks: None,
                 lines: series.lines.clone(),
             })
             .collect();
@@ -250,6 +252,7 @@ impl Chart {
         chart.timeframe = self.timeframe;
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
+        chart.watermark = self.watermark.clone();
         chart.legend_statuses = self.legend_statuses.clone();
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
@@ -259,6 +262,7 @@ impl Chart {
         chart.drawings.drawings = self.drawings.drawings.clone();
         chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
         chart.marks = self.marks.clone();
+        chart.marker_options = self.marker_options;
         chart.price_lines = self.price_lines.clone();
         chart.events = self.events.clone();
         chart.time_scale_events = self.time_scale_events.clone();
@@ -273,7 +277,6 @@ impl Chart {
                 .time_scale_events
                 .extend_from_slice(&source.page.events);
         }
-        chart.pane_layout = self.pane_layout.clone();
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
         chart.start_idx = self.start_idx;
@@ -284,6 +287,9 @@ impl Chart {
         chart.study_inputs = self.study_inputs.clone();
         chart.study_autoscale = self.study_autoscale.clone();
         chart.next_series = self.next_series;
+        // Copied after the studies, replacing the panes that adding them created.
+        chart.pane_layout = self.pane_layout.clone();
+        chart.pane_options = self.pane_options;
         #[cfg(feature = "studies")]
         {
             chart.volume_study = self.volume_study;
