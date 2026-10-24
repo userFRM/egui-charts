@@ -677,7 +677,11 @@ impl Chart {
                             chart_rect,
                             axis_edge,
                             map.price_to_y(value),
-                            map.transform().label(map.transform().to_scale(value), 2),
+                            map.transform().label(
+                                map.transform().to_scale(value),
+                                2,
+                                self.price_label_formatter(map.transform().mode).as_deref(),
+                            ),
                             colors,
                             &axis_tags,
                         );
