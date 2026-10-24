@@ -1117,6 +1117,7 @@ impl Chart {
                 pos,
                 studies,
                 &self.study_ids,
+                behind,
                 &coords,
                 volume_coords.as_ref(),
                 self.state.shown(),

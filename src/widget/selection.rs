@@ -182,13 +182,15 @@ impl Chart {
 /// Hit-test a click on the main chart area, applying selection priority.
 ///
 /// Overlay indicator lines take priority over the series beneath them, matching
-/// the visual stacking order. `study_ids` holds the id of each study in
-/// `studies`. Returns the hit element and the bar index where the hit occurred,
-/// or `None` when the click landed on empty chart area.
+/// the visual stacking order, and the series over the overlays in `behind`, which
+/// are drawn under it. `study_ids` holds the id of each study in `studies`.
+/// Returns the hit element and the bar index where the hit occurred, or `None`
+/// when the click landed on empty chart area.
 pub(super) fn hit_test_main_chart(
     click_pos: Pos2,
     studies: &IndicatorRegistry,
     study_ids: &[SeriesId],
+    behind: &[SeriesId],
     coords: &ChartMapping,
     volume_coords: Option<&ChartMapping>,
     bars: &[crate::model::Bar],
@@ -199,39 +201,49 @@ pub(super) fn hit_test_main_chart(
         return None;
     }
 
-    // 1. Overlay indicators (drawn on top of the series).
-    for (idx, indicator) in studies.indicators().iter().enumerate() {
-        let volume_mapping = if indicator.is_volume() {
-            if !indicator.is_overlay() || !indicator.is_visible() {
+    let overlay_hit = |under_series: bool| {
+        for (idx, indicator) in studies.indicators().iter().enumerate() {
+            if behind.contains(&study_ids[idx]) != under_series {
                 continue;
             }
-            let Some(volume) = volume_coords else {
-                continue;
+            let volume_mapping = if indicator.is_volume() {
+                if !indicator.is_overlay() || !indicator.is_visible() {
+                    continue;
+                }
+                let Some(volume) = volume_coords else {
+                    continue;
+                };
+                Some(super::volume::mapping(
+                    coords,
+                    volume.rect,
+                    indicator.as_ref(),
+                    &visible_range,
+                ))
+            } else {
+                None
             };
-            Some(super::volume::mapping(
-                coords,
-                volume.rect,
+            let study_coords = crate::chart::renderers::study_mapping(indicator.as_ref(), coords);
+            let coords = volume_mapping.as_ref().unwrap_or(&study_coords);
+            if let Some(hit) = hit_test_indicator(
+                click_pos,
                 indicator.as_ref(),
-                &visible_range,
-            ))
-        } else {
-            None
-        };
-        let study_coords = crate::chart::renderers::study_mapping(indicator.as_ref(), coords);
-        let coords = volume_mapping.as_ref().unwrap_or(&study_coords);
-        if let Some(hit) = hit_test_indicator(
-            click_pos,
-            indicator.as_ref(),
-            idx,
-            visible_range.clone(),
-            coords,
-            |price| coords.price_to_y(price),
-        ) {
-            return Some((
-                ChartElementId::Indicator(study_ids[hit.indicator_idx]),
-                hit.bar_idx,
-            ));
+                idx,
+                visible_range.clone(),
+                coords,
+                |price| coords.price_to_y(price),
+            ) {
+                return Some((
+                    ChartElementId::Indicator(study_ids[hit.indicator_idx]),
+                    hit.bar_idx,
+                ));
+            }
         }
+        None
+    };
+
+    // 1. Overlay indicators drawn over the series.
+    if let Some(hit) = overlay_hit(false) {
+        return Some(hit);
     }
 
     // 2. Volume is painted over the price series.
@@ -263,7 +275,8 @@ pub(super) fn hit_test_main_chart(
         return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
     }
 
-    None
+    // 4. Overlay indicators drawn under the series.
+    overlay_hit(true)
 }
 
 #[cfg(test)]
@@ -328,6 +341,7 @@ mod selection_tests {
             pos,
             &IndicatorRegistry::new(),
             &[],
+            &[],
             &mapping,
             None,
             &bars,
@@ -347,6 +361,7 @@ mod selection_tests {
         let hit = hit_test_main_chart(
             pos,
             &IndicatorRegistry::new(),
+            &[],
             &[],
             &mapping,
             None,
@@ -374,23 +389,33 @@ mod selection_tests {
             Pos2::new(mapping.rect.right(), pos.y + 10.0),
         ));
         let empty = IndicatorRegistry::new();
-        for (studies, volume, expected) in [
+        for (studies, behind, volume, expected) in [
             (
                 &registry,
+                &[][..],
                 Some(&volume),
                 ChartElementId::Indicator(SeriesId(2)),
             ),
             (
                 &empty,
+                &[],
                 Some(&volume),
                 ChartElementId::Series(SeriesId::VOLUME),
             ),
-            (&empty, None, ChartElementId::Series(SeriesId::MAIN)),
+            (&empty, &[], None, ChartElementId::Series(SeriesId::MAIN)),
+            // Sent behind the series, the overlay yields to it.
+            (
+                &registry,
+                &[SeriesId(2)],
+                None,
+                ChartElementId::Series(SeriesId::MAIN),
+            ),
         ] {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
                 &[SeriesId(2)],
+                behind,
                 &mapping,
                 volume,
                 &bars,
@@ -422,6 +447,7 @@ mod selection_tests {
             pos,
             &registry,
             &[SeriesId(2)],
+            &[],
             &mapping,
             None,
             &bars,
@@ -439,6 +465,7 @@ mod selection_tests {
         let hit = hit_test_main_chart(
             pos,
             &IndicatorRegistry::new(),
+            &[],
             &[],
             &mapping,
             None,
