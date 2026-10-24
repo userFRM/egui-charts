@@ -33,6 +33,10 @@
 //! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
 //! use egui_charts::ui::replay::{ReplayController, ReplayControls};
 //!
+//! // Keep the full history in the chart and drive its window with the source cursor.
+//! use egui_charts::{Chart, model::{BarData, BarClock, Timeframe}};
+//! let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+//! chart.set_timeframe(Timeframe::Min1);
 //! // Create replay controller with data
 //! # let ts = bars.iter().map(|bar| bar.time).collect();
 //! let mut controller = ReplayController::new(bars, ts);
@@ -46,19 +50,24 @@
 //! });
 //! # });
 //!
-//! // Get current visible bars for chart rendering
-//! let visible_bars = controller.visible_bars();
+//! chart.set_replay_time(controller.cutoff(&BarClock::new(Timeframe::Min1)));
+//! // Supply finer history with chart.set_replay_source when it is available.
+//! // Store controller.session() in host storage and restore it after fetching source history.
 //! ```
 
 mod actions;
 mod config;
 mod controls;
+mod session;
+mod start;
 mod state;
 mod toolbar;
 
 pub use actions::{ReplayAction, ReplaySpeed};
 pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};
+pub use session::ReplaySession;
+pub use start::{ReplayStartAction, ReplayStartPicker};
 pub use state::{PlaybackState, ReplayMarker, ReplayState, TradingSimulationState};
 pub use toolbar::{ReplayToolbar, ReplayToolbarAction, ReplayToolbarConfig, ReplayToolbarState};
 
@@ -82,8 +91,10 @@ pub struct ReplayController {
 }
 
 impl ReplayController {
-    /// Create a new replay controller with bar data
-    pub fn new(bars: Vec<Bar>, ts: Vec<DateTime<Utc>>) -> Self {
+    /// Create a new replay controller with bar data. Timestamps are read from the bars;
+    /// the separate timestamp argument is retained for source compatibility.
+    pub fn new(bars: Vec<Bar>, _ts: Vec<DateTime<Utc>>) -> Self {
+        let ts: Vec<_> = bars.iter().map(|bar| bar.time).collect();
         let mut state = ReplayState::new();
 
         // Initialize state if we have data
@@ -120,7 +131,7 @@ impl ReplayController {
     /// where it was. On a coarser interval the bar that contains the replay time is shown whole; a
     /// host that wants it partial passes that bar built from the finer bars. Otherwise the replay
     /// starts paused on the first bar.
-    pub fn load_data(&mut self, bars: Vec<Bar>, ts: Vec<DateTime<Utc>>, symbol: String) {
+    pub fn load_data(&mut self, bars: Vec<Bar>, _ts: Vec<DateTime<Utc>>, symbol: String) {
         let resume = self.state.is_active().then(|| {
             (
                 self.ts.get(self.state.curr_bar).copied(),
@@ -128,7 +139,7 @@ impl ReplayController {
             )
         });
         self.bars = bars;
-        self.ts = ts;
+        self.ts = self.bars.iter().map(|bar| bar.time).collect();
 
         if !self.bars.is_empty() && !self.ts.is_empty() {
             let start = self.ts.first().copied().unwrap_or_else(Utc::now);
@@ -142,6 +153,12 @@ impl ReplayController {
                     self.state.play();
                 }
             }
+        } else {
+            self.state.stop();
+            self.state.total_bars = 0;
+            self.state.curr_date = None;
+            self.state.start_date = None;
+            self.state.end_date = None;
         }
     }
 

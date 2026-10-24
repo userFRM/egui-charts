@@ -17,6 +17,8 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "replay.rs"]
+mod replay;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -40,7 +42,7 @@ use egui_charts::ui::dialogs::{
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
-use egui_charts::ui::replay::{ReplayAction, ReplayController};
+use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
@@ -209,6 +211,11 @@ pub struct DemoApp {
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
+    replay_start: ReplayStartPicker,
+    replay_selecting: bool,
+    replay_interval: Timeframe,
+    replay_session: Option<(ReplaySession, Timeframe)>,
+    replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
 
@@ -348,6 +355,14 @@ impl DemoApp {
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
             replay: None,
+            replay_start: ReplayStartPicker::default(),
+            replay_selecting: false,
+            replay_interval: Timeframe::Hour1,
+            replay_session: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session"))
+                .flatten(),
+            replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
@@ -456,12 +471,8 @@ impl DemoApp {
         self.chart.set_timeframe(tf);
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
-        // A replay continues at its current time on the new interval.
-        if let Some(replay) = self.replay.as_mut() {
-            let ts = self.bars.iter().map(|b| b.time).collect();
-            replay.load_data(self.bars.clone(), ts, self.state.symbol.clone());
-            self.push_replay_window_to_chart();
-        }
+        // Source playback stays on its own interval when the display interval changes.
+        self.push_replay_window_to_chart();
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
@@ -534,64 +545,6 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
-    }
-
-    // --- replay ------------------------------------------------------------
-
-    fn toggle_replay(&mut self) {
-        if self.replay.is_some() && self.replay_control.is_user_dismissed() {
-            self.replay_control.show_control();
-        } else if self.replay.is_some() {
-            self.stop_replay();
-        } else {
-            self.start_replay();
-        }
-    }
-
-    fn start_replay(&mut self) {
-        self.live_was_paused = if self.footprint.is_some() {
-            self.feed_before_footprint
-        } else {
-            self.live.paused()
-        };
-        self.live.set_paused(true);
-        self.chart.set_feed_paused(true);
-        self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
-        let ts: Vec<_> = self.bars.iter().map(|b| b.time).collect();
-        let mut controller =
-            ReplayController::new(self.bars.clone(), ts).with_symbol(self.state.symbol.clone());
-        controller.handle_action(ReplayAction::EnterReplayMode);
-        // Begin a third of the way in so there is room to step both directions.
-        controller.handle_action(ReplayAction::JumpToPercent(0.33));
-        controller.handle_action(ReplayAction::Play);
-        self.replay = Some(controller);
-        self.state.replay_active = true;
-        self.replay_control.set_symbol(&self.state.symbol);
-        self.replay_control.show_control();
-        self.push_replay_window_to_chart();
-    }
-
-    fn stop_replay(&mut self) {
-        if self.replay.take().is_some() {
-            self.chart.set_feed_paused(self.footprint.is_some());
-            self.live
-                .set_paused(self.footprint.is_some() || self.live_was_paused);
-            self.state.replay_active = false;
-            self.replay_control.hide_control();
-            // Restore the full series the chart had before replay.
-            self.chart.set_data(SeriesId::MAIN, self.bars.clone());
-        }
-    }
-
-    /// Feed the replay controller's current visible window into the chart. This
-    /// is the replay -> chart link the demo previously lacked entirely.
-    fn push_replay_window_to_chart(&mut self) {
-        if let Some(replay) = self.replay.as_ref() {
-            let visible: Vec<Bar> = replay.visible_bars().to_vec();
-            if !visible.is_empty() {
-                self.chart.set_data(SeriesId::MAIN, visible);
-            }
-        }
     }
 
     // --- alerts ------------------------------------------------------------
@@ -908,6 +861,8 @@ impl eframe::App for DemoApp {
             &self.chart.drawings().tool_defaults,
         );
         eframe::set_value(storage, "dark_theme", &self.theme.dark);
+        self.checkpoint_replay();
+        eframe::set_value(storage, "replay_session", &self.replay_session);
         eframe::set_value(
             storage,
             "templates",
@@ -932,16 +887,6 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
-        // Sync the transport from the controller, then route its actions back.
-        if let Some(replay) = self.replay.as_ref() {
-            self.replay_control.sync_from(
-                replay.state.is_active(),
-                replay.state.is_playing(),
-                replay.state.speed.multiplier(),
-                replay.state.curr_bar,
-                replay.state.total_bars,
-            );
-        }
         if self.replay.is_none() {
             let delay = self.live.advance(chrono::Utc::now());
             if !self.live.paused() {
@@ -997,6 +942,7 @@ impl eframe::App for DemoApp {
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
+        self.show_replay_start(&ctx);
         self.show_dialogs(&ctx);
 
         // Transient status notice.
@@ -1738,7 +1684,10 @@ impl DemoApp {
                 }
             });
         self.replay_control.set_dock_rect(chart.response.rect);
-        self.activate_chart_slot(self.layout.active());
+        if !self.replay_selecting && self.replay.is_none() {
+            self.activate_chart_slot(self.layout.active());
+        }
+        self.handle_replay_bar_click(ui.ctx());
         // Right-click context actions resolve after the chart is shown.
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
@@ -1812,10 +1761,20 @@ impl DemoApp {
     }
 
     fn show_replay_control(&mut self, ctx: &egui::Context) {
-        if self.replay.is_none() {
+        let Some(replay) = self.replay.as_ref() else {
             return;
-        }
+        };
+        self.replay_control.sync_from(
+            replay.state.is_active(),
+            replay.state.is_playing(),
+            replay.state.speed.multiplier(),
+            replay.state.curr_bar,
+            replay.state.total_bars,
+        );
         let action = self.replay_control.show(ctx);
+        if action != ReplayControlAction::None {
+            ctx.request_repaint();
+        }
         self.handle_replay_control(action);
     }
 
@@ -1828,27 +1787,25 @@ impl DemoApp {
             ReplayControlAction::Pause => replay.handle_action(ReplayAction::Pause),
             ReplayControlAction::StepForward | ReplayControlAction::NextBar => {
                 replay.handle_action(ReplayAction::StepForward);
-                self.push_replay_window_to_chart();
             }
             ReplayControlAction::StepBackward | ReplayControlAction::PreviousBar => {
                 replay.handle_action(ReplayAction::StepBackward);
-                self.push_replay_window_to_chart();
             }
             ReplayControlAction::GoToStart => {
                 replay.handle_action(ReplayAction::JumpToStart);
-                self.push_replay_window_to_chart();
             }
             ReplayControlAction::GoToEnd => {
                 replay.handle_action(ReplayAction::JumpToEnd);
-                self.push_replay_window_to_chart();
             }
             ReplayControlAction::SetSpeed(s) => replay.handle_action(ReplayAction::SetSpeed(s)),
+            ReplayControlAction::SetUpdateInterval(interval) => self.set_replay_interval(interval),
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
                 self.replay_control.dismiss();
             }
-            ReplayControlAction::None => {}
+            ReplayControlAction::None => return,
         }
+        self.push_replay_window_to_chart();
     }
 
     fn advance_replay(&mut self) {
@@ -1877,6 +1834,8 @@ impl DemoApp {
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
             || self.date_picker.is_open
+            || self.replay_start.is_open
+            || self.replay_selecting
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
@@ -2161,6 +2120,66 @@ mod tests {
                 .stroke_width,
             4.0
         );
+    }
+
+    #[test]
+    fn replay_finer_source_and_saved_position_keep_the_shared_cutoff() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.switch_timeframe(Timeframe::Hour1);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.start_replay();
+        assert_eq!(
+            app.chart.bars(SeriesId::MAIN).len(),
+            1,
+            "first source bar only"
+        );
+        app.replay
+            .as_mut()
+            .unwrap()
+            .handle_action(ReplayAction::JumpToBar(10));
+        app.push_replay_window_to_chart();
+        let cutoff = app.chart.replay_time().unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_replay_control(ui.ctx())
+        })
+        .drop_without_applying_deltas();
+        let state = &app.replay.as_ref().unwrap().state;
+        assert_eq!(
+            app.replay_control.state.progress_pct,
+            state.curr_bar as f32 / (state.total_bars - 1) as f32 * 100.0,
+            "transport must display the cursor chosen after chart rendering"
+        );
+        assert_eq!(app.extra_charts[0].chart.replay_time(), Some(cutoff));
+        app.set_replay_interval(Timeframe::Min1);
+        assert_eq!(
+            app.chart.replay_time(),
+            Some(cutoff),
+            "finer source must retain the cutoff"
+        );
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        let saved = app.replay.as_ref().unwrap().session().unwrap();
+        let cutoff = app.chart.replay_time().unwrap();
+        assert_eq!(app.extra_charts[0].chart.replay_time(), Some(cutoff));
+        assert_eq!(app.state.timeframe, Timeframe::Hour1);
+        app.stop_replay();
+        assert!(app.extra_charts[0].chart.replay_time().is_none());
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new(&cc);
+        assert_eq!(
+            restored.replay_session,
+            Some((saved.clone(), Timeframe::Min1))
+        );
+        restored.start_replay();
+        restored.set_replay_interval(Timeframe::Min1);
+        assert!(restored.replay.as_mut().unwrap().restore_session(&saved));
+        restored.push_replay_window_to_chart();
+        assert_eq!(restored.chart.replay_time(), Some(cutoff));
+        assert!(!restored.replay.as_ref().unwrap().state.is_playing());
     }
 
     #[derive(Default)]
@@ -3230,6 +3249,15 @@ mod tests {
             assert!(!app.drawing_toolbar.state.magnet_mode);
         }
         app.start_replay();
+        assert_eq!(
+            app.replay.as_ref().unwrap().state.curr_bar,
+            0,
+            "replay starts at the first available bar"
+        );
+        assert!(
+            !app.replay.as_ref().unwrap().state.is_playing(),
+            "start selection begins paused"
+        );
         frame(&mut app);
         assert!(app.top_toolbar.state.replay_active);
         app.stop_replay();

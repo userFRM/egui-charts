@@ -31,15 +31,16 @@ impl Chart {
         if matches!(timeframe, crate::model::Timeframe::Ticks(_)) {
             return None;
         }
-        let now = self
-            .server_time_offset
-            .and_then(|offset| chrono::Utc::now().checked_add_signed(offset))
-            .or_else(|| {
-                self.feed_link
-                    .as_ref()
-                    .and_then(super::feed::FeedLink::server_time)
-            })
-            .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
+        let now = self.replay_time().or_else(|| {
+            self.server_time_offset
+                .and_then(|offset| chrono::Utc::now().checked_add_signed(offset))
+                .or_else(|| {
+                    self.feed_link
+                        .as_ref()
+                        .and_then(super::feed::FeedLink::server_time)
+                })
+                .or_else(|| self.quote.as_ref().map(|quote| quote.ts))
+        })?;
         let session = renderers::exchange_session(
             self.instrument(),
             self.config.session_config.as_ref(),
@@ -295,6 +296,7 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
         let _theme_scope = theme
             .as_ref()
@@ -944,7 +946,7 @@ impl Chart {
             .feed_link
             .as_ref()
             .and_then(|link| link.bubbles.as_ref())
-            .filter(|_| time_based && self.main_series_visible)
+            .filter(|_| time_based && self.main_series_visible && self.replay.is_none())
         {
             let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
             bubbles.render(&clipped_painter, visible_data, x, |p| {

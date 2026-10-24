@@ -118,6 +118,8 @@ pub enum ReplayControlAction {
     GoToEnd,
     /// Change replay speed
     SetSpeed(f32),
+    /// Change the source interval used to advance the replay cursor.
+    SetUpdateInterval(crate::model::Timeframe),
     /// Close the control (but don't stop replay)
     Close,
 }
@@ -136,6 +138,8 @@ pub struct FloatingReplayControl {
     user_dismissed: bool,
     /// Replay is on its last bar, where Next and Go to end do nothing
     at_end: bool,
+    update_intervals: Vec<crate::model::Timeframe>,
+    update_interval: Option<crate::model::Timeframe>,
 }
 
 impl Default for FloatingReplayControl {
@@ -154,6 +158,8 @@ impl FloatingReplayControl {
             visible: false,
             user_dismissed: false,
             at_end: false,
+            update_intervals: Vec::new(),
+            update_interval: None,
         }
     }
 
@@ -164,6 +170,17 @@ impl FloatingReplayControl {
     /// rect.
     pub fn set_dock_rect(&mut self, rect: Rect) {
         self.dock_rect = Some(rect);
+    }
+
+    /// Supplies source intervals the host can serve. An empty list hides the selector.
+    /// Selecting one emits an intent; the host reloads that source and retains the cursor time.
+    pub fn set_update_intervals(
+        &mut self,
+        current: crate::model::Timeframe,
+        available: Vec<crate::model::Timeframe>,
+    ) {
+        self.update_interval = Some(current);
+        self.update_intervals = available;
     }
 
     /// Show the control (clears user_dismissed flag)
@@ -462,6 +479,19 @@ impl FloatingReplayControl {
                             speed_response.response.on_hover_text("Playback speed");
                             if speed_response.inner {
                                 action = ReplayControlAction::SetSpeed(speed.multiplier());
+                            }
+
+                            if !self.update_intervals.is_empty()
+                                && let Some(mut interval) = self.update_interval
+                                && ui.combo_select_width(
+                                    "replay_update_interval",
+                                    &mut interval,
+                                    self.update_intervals.iter().copied(),
+                                    |interval| format!("{} updates", interval),
+                                    110.0,
+                                )
+                            {
+                                action = ReplayControlAction::SetUpdateInterval(interval);
                             }
 
                             ui.separator();
