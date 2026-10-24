@@ -887,7 +887,7 @@ mod tests {
                 assert!(!chart.menu_open);
                 let config = chart.config().clone();
                 let options = chart.chart_options().clone();
-                let scale = chart.state().price_scale().options().clone();
+                let scale = *chart.state().price_scale().options();
                 assert!(chart.undo(), "axis choices enter chart history");
                 assert!(!chart.can_undo(), "one action per axis choice");
                 assert!(chart.redo());
