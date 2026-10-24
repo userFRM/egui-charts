@@ -177,6 +177,7 @@ impl Chart {
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
             synced_crosshair_price: None,
+            last_crosshair: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),

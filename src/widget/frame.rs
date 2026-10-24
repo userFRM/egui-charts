@@ -1786,6 +1786,13 @@ impl Chart {
                 } else {
                     hover_pos
                 };
+                self.last_crosshair = index.map(|index| {
+                    let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
+                    (
+                        self.state.shown()[index].time,
+                        main.then(|| price_map.y_to_price(snapped.y)),
+                    )
+                });
                 crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
@@ -1923,6 +1930,9 @@ impl Chart {
                             }
                             None => price_rect.center().y,
                         };
+                        if let Some(bar) = self.state.shown().get(bar_idx.round() as usize) {
+                            self.last_crosshair = Some((bar.time, self.synced_crosshair_price));
+                        }
                         crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
                             Pos2::new(x, y),

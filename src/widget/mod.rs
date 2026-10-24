@@ -139,6 +139,7 @@ pub(crate) mod pan_zoom;
 mod pane_layout;
 mod panes;
 mod price_series;
+mod raster;
 mod readout;
 mod replay;
 mod selection;
@@ -355,6 +356,8 @@ pub struct Chart {
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Main-pane price of the external crosshair; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
+    /// Time and main-pane price of the crosshair last drawn, for exported images.
+    last_crosshair: Option<(DateTime<Utc>, Option<f64>)>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
 
