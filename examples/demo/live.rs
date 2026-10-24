@@ -548,15 +548,20 @@ impl Simulation {
         {
             let price = (shown.price / self.tick_size).round() as i64;
             sub.sink.push_tick(shown);
-            if let Some(market) = &mut self.market {
-                let (sequence, delta) = market.trade(trade.ts, price, side, size);
+            // A subscription made while no trade was shown gets its book with the first one.
+            let market = self.market.get_or_insert_with(|| {
+                let market = Market::new(&self.symbol, self.tick_size, price, self.random);
+                let (sequence, book) = market.snapshot(trade.ts);
+                sub.sink.push_depth_snapshot(sequence, book);
+                market
+            });
+            let (sequence, delta) = market.trade(trade.ts, price, side, size);
+            sub.sink.push_depth_delta(sequence, delta);
+            for _ in 0..CHURN_PER_TRADE {
+                let (sequence, delta) = market.churn(trade.ts);
                 sub.sink.push_depth_delta(sequence, delta);
-                for _ in 0..CHURN_PER_TRADE {
-                    let (sequence, delta) = market.churn(trade.ts);
-                    sub.sink.push_depth_delta(sequence, delta);
-                }
-                sub.sink.push_quote(market.quote(trade.ts));
             }
+            sub.sink.push_quote(market.quote(trade.ts));
         }
         if trade.ts < self.retain_from {
             let open = BarClock::new(Timeframe::Min1).bar_open(trade.ts);
