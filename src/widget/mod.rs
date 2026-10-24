@@ -143,7 +143,7 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
-pub use price_series::SeriesOptions;
+pub use price_series::{SeriesKind, SeriesOptions};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
