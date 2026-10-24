@@ -260,6 +260,18 @@ impl Chart {
         chart.marks = self.marks.clone();
         chart.price_lines = self.price_lines.clone();
         chart.events = self.events.clone();
+        chart.time_scale_events = self.time_scale_events.clone();
+        chart.event_visibility = self.event_visibility.clone();
+        // Freeze loaded source marks without connecting the offscreen chart to the host.
+        if let Some(source) = &self.mark_source {
+            chart.marks.extend_from_slice(&source.page.bar_marks);
+            chart
+                .events
+                .extend_from_slice(&source.page.time_scale_marks);
+            chart
+                .time_scale_events
+                .extend_from_slice(&source.page.events);
+        }
         chart.pane_layout = self.pane_layout.clone();
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
@@ -420,6 +432,85 @@ mod tests {
         }
         let empty = Chart::new(BarData::new()).export_csv().unwrap();
         assert_eq!(empty, "time,open,high,low,close,volume\n");
+    }
+
+    #[test]
+    fn images_retain_loaded_marks_and_event_visibility_without_fetching() {
+        use crate::data::Reply;
+        use crate::model::{EventKind, EventVisibility, Marker, TimeScaleEvent};
+        use crate::services::{Marks, MarksPage, MarksRequest};
+        use crate::widget::test_frames;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct Source {
+            page: MarksPage,
+            calls: AtomicUsize,
+        }
+        impl Marks for Source {
+            fn marks(&self, _: MarksRequest, reply: Reply<MarksPage>) {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                reply.send(Ok(self.page.clone()));
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut chart = test_frames::chart(&[95.0], &[105.0]);
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let time = chart.state.shown()[70].time;
+        let event = TimeScaleEvent {
+            id: "earnings".into(),
+            time,
+            kind: EventKind::Earnings,
+            title: "Host earnings".into(),
+            details: String::new(),
+        };
+        chart.set_markers(SeriesId::MAIN, vec![Marker::new(time).with_text("Manual")]);
+        chart.set_events(vec![Marker::event(time, "Manual axis")]);
+        chart.set_time_scale_events(vec![event.clone()]);
+        chart.set_event_visibility(EventVisibility {
+            show_earnings: true,
+            show_news: false,
+            ..Default::default()
+        });
+        let source = Arc::new(Source {
+            page: MarksPage {
+                bar_marks: vec![Marker::new(time).with_text("Source bar")],
+                time_scale_marks: vec![Marker::event(time, "Source axis")],
+                events: vec![TimeScaleEvent {
+                    kind: EventKind::News,
+                    ..event
+                }],
+            },
+            calls: AtomicUsize::new(0),
+        });
+        chart.set_mark_source(Some(source.clone()));
+        chart.pump_marks(&ctx);
+        assert_eq!(source.calls.load(Ordering::Relaxed), 1);
+
+        let mut snapshot = chart.export_snapshot();
+        assert!(snapshot.mark_source.is_none());
+        assert_eq!(snapshot.event_visibility(), chart.event_visibility());
+        assert_eq!(snapshot.time_scale_events.len(), 2);
+        let shapes = test_frames::shapes(&ctx, &mut snapshot, 0.1, vec![]);
+        for label in ["Manual", "Manual axis", "Source bar", "Source axis", "E"] {
+            assert!(
+                shapes.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == label)),
+                "missing {label}"
+            );
+        }
+        assert!(!shapes.iter().any(|shape| matches!(shape,
+            egui::Shape::Text(text) if text.galley.text() == "N")));
+        let mut image = chart
+            .export_image(&ctx, &ImageExportOptions::default())
+            .unwrap();
+        image.textures_delta.clear();
+        assert_eq!(source.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(chart.marks.len(), 1);
+        assert_eq!(chart.events.len(), 1);
+        assert_eq!(chart.time_scale_events.len(), 1);
     }
 
     #[test]
