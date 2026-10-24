@@ -340,7 +340,7 @@ impl<T: Send + 'static> Drop for Reply<T> {
 ///         let side = Some(TradeSide::Buy);
 ///         sink.push_tick(Tick::new(Utc::now(), 100.0, 2.0, side).with_id(41_207));
 ///         // The buy took the whole offer at 100.
-///         sink.push_depth_delta(8, book(vec![], vec![level(100.0, 0.0)]));
+///         sink.push_depth_delta(8, &book(vec![], vec![level(100.0, 0.0)]));
 ///     }
 /// }
 /// ```
@@ -546,7 +546,10 @@ impl Sink {
     }
 
     /// The levels that changed since the update numbered `sequence - 1`, each with its new size; a
-    /// size of 0 removes the level. The `symbol` of `changes` is ignored. A delta numbered at or
+    /// size of 0 removes the level. The `symbol` of `changes` is ignored. Taken by reference, so a
+    /// feed can clear and refill one `OrderBook` for every delta instead of allocating its levels
+    /// per message: the book itself allocates nothing for a delta once its sides reached their
+    /// depth. A delta numbered at or
     /// below the last one applied is ignored. After a gap, before the first snapshot, or when a
     /// side would exceed 10,000 levels, the book is cleared and the chart calls
     /// [`Datafeed::request_depth_snapshot`] once; a snapshot pushed before the chart sees the loss
@@ -555,7 +558,7 @@ impl Sink {
     /// applies the ones numbered above its own sequence.
     ///
     /// [`Datafeed::request_depth_snapshot`]: super::Datafeed::request_depth_snapshot
-    pub fn push_depth_delta(&self, sequence: u64, changes: OrderBook) {
+    pub fn push_depth_delta(&self, sequence: u64, changes: &OrderBook) {
         self.update(|live| live.depth(|depth| depth.delta(sequence, changes)));
     }
 
@@ -830,7 +833,7 @@ mod tests {
             asks: Vec::new(),
         };
         sink.push_depth_snapshot(5, book(99.0));
-        sink.push_depth_delta(6, book(f64::NAN)); // invalid: the book is lost
+        sink.push_depth_delta(6, &book(f64::NAN)); // invalid: the book is lost
         let quote = |second, bid| Level1Quote {
             ts: at(1, second),
             symbol: "ES".into(),
@@ -876,7 +879,7 @@ mod tests {
         assert_eq!(updates.error, Some(FeedError::Network("timeout".into())));
 
         sink.push_depth_snapshot(7, book(98.0));
-        sink.push_depth_delta(9, book(97.0)); // a gap
+        sink.push_depth_delta(9, &book(97.0)); // a gap
         sink.push_depth_snapshot(10, book(96.0)); // healed before the chart saw the gap
         let (_, updates) = inbox.drain().updates.pop().unwrap();
         let depth = updates.depth.map(|book| book.bids[0].price);

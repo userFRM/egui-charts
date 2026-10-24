@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 /// Each tick represents one matched trade on the exchange, recording the
 /// price, size, and aggressor side. Ticks are the finest-grained market
 /// data and can be aggregated into bars, footprint charts, or volume
-/// profiles. Build it with [`Tick::new`].
+/// profiles. Build it with [`Tick::new`]. A trade names no symbol: the
+/// [`Sink`](crate::data::Sink) it is pushed into stands for one instrument, so a
+/// trade holds no heap data and pushing one allocates nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Tick {
@@ -30,7 +32,7 @@ pub struct Tick {
     pub price: f64,
     /// Trade size/volume
     pub size: f64,
-    /// Side of the trade (if available)
+    /// Aggressor side, `None` when the feed does not classify the trade.
     pub side: Option<TradeSide>,
     /// Exchange trade id or sequence number, unique per symbol and never reused: a number that
     /// restarts each session, such as a daily sequence number, is not an id unless combined with
@@ -38,6 +40,10 @@ pub struct Tick {
     /// trade, and a live trade whose id was already taken is dropped.
     #[serde(default)]
     pub id: Option<u64>,
+    /// Sale conditions the exchange reported, so studies and overlays can leave out prints such
+    /// as off-exchange or auction trades.
+    #[serde(default)]
+    pub conditions: TradeConditions,
 }
 
 impl Tick {
@@ -49,12 +55,19 @@ impl Tick {
             size,
             side,
             id: None,
+            conditions: TradeConditions::NONE,
         }
     }
 
     /// Sets [`id`](Self::id).
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = Some(id);
+        self
+    }
+
+    /// Sets [`conditions`](Self::conditions).
+    pub fn with_conditions(mut self, conditions: TradeConditions) -> Self {
+        self.conditions = conditions;
         self
     }
 }
@@ -64,14 +77,56 @@ impl Tick {
 /// Indicates whether the trade was initiated by a buyer lifting the ask
 /// or a seller hitting the bid. This is essential for computing delta
 /// (buy volume minus sell volume) in footprint and order-flow analysis.
+/// A trade of unknown side has no `TradeSide`: [`Tick::side`] is `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TradeSide {
     /// Buy side (aggressor was buyer)
     Buy,
     /// Sell side (aggressor was seller)
     Sell,
-    /// Unknown/unclassified
-    Unknown,
+}
+
+/// Sale conditions of a trade, as a set of flags. Combine them with `|` and test them with
+/// [`intersects`](Self::intersects):
+///
+/// ```
+/// use egui_charts::model::{Tick, TradeConditions};
+///
+/// let trade = Tick::new(chrono::Utc::now(), 100.0, 5.0, None)
+///     .with_conditions(TradeConditions::AUCTION);
+/// let leave_out = TradeConditions::OFF_EXCHANGE | TradeConditions::AUCTION;
+/// assert!(trade.conditions.intersects(leave_out));
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TradeConditions(u16);
+
+impl TradeConditions {
+    /// A regular trade of continuous trading on the exchange.
+    pub const NONE: Self = Self(0);
+    /// Reported away from the exchange's book, such as by a dark pool or an over-the-counter
+    /// dealer.
+    pub const OFF_EXCHANGE: Self = Self(1);
+    /// Printed by an opening, closing or reopening auction rather than by continuous trading.
+    pub const AUCTION: Self = Self(1 << 1);
+    /// Smaller than the instrument's round lot.
+    pub const ODD_LOT: Self = Self(1 << 2);
+    /// Reported late or out of sequence, after trades executed later than it.
+    pub const OUT_OF_SEQUENCE: Self = Self(1 << 3);
+    /// Executed outside the regular trading session.
+    pub const EXTENDED_HOURS: Self = Self(1 << 4);
+
+    /// Whether any condition of `other` is set.
+    pub fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
+impl std::ops::BitOr for TradeConditions {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
 }
 
 /// A host-supplied session price, independent of the regular close and hovered history.

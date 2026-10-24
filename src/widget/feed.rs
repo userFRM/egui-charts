@@ -1283,7 +1283,7 @@ mod tests {
             bids: Vec::new(),
             asks: Vec::new(),
         };
-        feed.sink().push_depth_delta(5, empty);
+        feed.sink().push_depth_delta(5, &empty);
         frames.run(&mut chart);
         assert_eq!(feed.calls(), [Call::Snapshot(id)], "c: snapshot");
         frames.run(&mut chart);

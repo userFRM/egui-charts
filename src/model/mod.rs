@@ -83,12 +83,10 @@ pub use markers::{
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;
 pub use quote::{
-    Level1Quote, OrderBook, OrderBookLevel, QuoteSource, QuoteSourceError, Tick, TradeSide,
+    Level1Quote, OrderBook, OrderBookLevel, QuoteSource, QuoteSourceError, Tick, TradeConditions,
+    TradeSide,
 };
-pub use range_bar::{
-    RangeBar, RangeBarConfig, TickData as RangeTickData, to_range_bars_from_ohlc,
-    to_range_bars_from_ticks,
-};
+pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use series_scale::SeriesScale;
 pub use session::{
