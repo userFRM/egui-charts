@@ -270,7 +270,6 @@ impl OrderTicket {
         anchor: egui::Pos2,
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
-        one_click: &mut bool,
     ) -> Option<OrderRequest> {
         let mut open = self.open;
         let mut submitted = None;
@@ -285,7 +284,7 @@ impl OrderTicket {
             .show(ctx, |ui| {
                 submitted = egui::ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 80.0).max(0.0))
-                    .show(ui, |ui| self.form(ui, market, presets, one_click))
+                    .show(ui, |ui| self.form(ui, market, presets))
                     .inner;
             });
         self.open = open && submitted.is_none();
@@ -297,7 +296,6 @@ impl OrderTicket {
         ui: &mut Ui,
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
-        one_click: &mut bool,
     ) -> Option<OrderRequest> {
         if !market.rules.time_in_force.contains(&self.time_in_force) {
             self.time_in_force = market.rules.time_in_force[0];
@@ -507,8 +505,6 @@ impl OrderTicket {
                 self.preset_name.clear();
             }
         });
-        ui.checkbox(one_click, "One-click trading")
-            .on_hover_text("Buy and Sell place a market order at once, without this ticket");
 
         let mut submitted = None;
         match request {
@@ -686,13 +682,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        ticket.show(
-                            ui.ctx(),
-                            egui::pos2(310.0, 8.0),
-                            &market,
-                            &mut vec![],
-                            &mut false,
-                        );
+                        ticket.show(ui.ctx(), egui::pos2(310.0, 8.0), &market, &mut vec![]);
                     },
                 );
                 for shape in &output.shapes {

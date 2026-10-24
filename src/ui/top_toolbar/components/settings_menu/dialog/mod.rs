@@ -55,6 +55,11 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    /// The sounds the host can play for fills, by name, offered on the Trading tab. The host
+    /// plays the chosen one; see
+    /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
+    /// Without any, the tab offers no choice.
+    pub execution_sounds: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -131,6 +136,7 @@ impl SettingsDialog {
             ],
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
+            execution_sounds: Vec::new(),
         }
     }
 
@@ -230,7 +236,7 @@ impl SettingsDialog {
         } else {
             match self.active_tab {
                 SettingsTab::Symbol => 616.0,
-                SettingsTab::Trading | SettingsTab::Alerts | SettingsTab::Events => 500.0,
+                SettingsTab::Alerts | SettingsTab::Events => 500.0,
                 _ => 840.0,
             }
         };

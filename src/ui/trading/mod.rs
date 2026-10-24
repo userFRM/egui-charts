@@ -18,9 +18,9 @@ use crate::model::{
     OrderType, Position, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
-use crate::ui::top_toolbar::components::settings_menu::TradingSettings;
+use crate::ui::top_toolbar::components::settings_menu::{TradingNotifications, TradingSettings};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
-use crate::ui_kit::notifications::Toasts;
+use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::Chart;
 use ticket::{Market, OrderTicket, order_quantity};
 
@@ -31,7 +31,8 @@ use ticket::{Market, OrderTicket, order_quantity};
 /// [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route the chart's
 /// Buy and Sell buttons ([`Chart::take_quote_action`]) to [`trade`](Self::trade). Orders reach
 /// the broker only from the ticket's submit button, or at once from Buy and Sell when the user
-/// turned on [`one_click`](Self::one_click).
+/// turned on instant orders in the chart settings
+/// ([`TradingSettings::instant_orders`]).
 ///
 /// ```no_run
 /// # fn frame(ui: &mut egui::Ui, chart: &mut egui_charts::Chart,
@@ -69,18 +70,18 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
-    /// The quantity the ticket opens with, and that one-click orders and the chart menu's
-    /// orders use. Positive, in the symbol's trading units.
+    /// The quantity the ticket opens with, and that instant orders and the chart menu's orders
+    /// use. Positive, in the symbol's trading units.
     pub quantity: f64,
-    /// Buy and Sell place a market order of [`quantity`](Self::quantity) at once instead of
-    /// opening the ticket. Off by default; the user turns it on in the ticket.
-    pub one_click: bool,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
-    /// Which of positions, orders, executions and execution labels [`show`](Self::show) draws.
+    /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
+    /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::ui::top_toolbar::ChartSettingsState::trading)
     /// options here when the user applies them.
     pub display: TradingSettings,
+    /// The sound asked for by fills since the host last took it.
+    sound: Option<String>,
 }
 
 impl Default for Trading {
@@ -102,9 +103,9 @@ impl Default for Trading {
             pending: None,
             decimals: 2,
             quantity: 1.0,
-            one_click: false,
             presets: Vec::new(),
             display: TradingSettings::default(),
+            sound: None,
         }
     }
 }
@@ -116,7 +117,6 @@ impl Trading {
         self.service = Some(service);
         self.inbox = Arc::default();
         self.ticket.open = false;
-        self.one_click = false;
         self.executions.clear();
         self.order_symbols.clear();
         self.connect();
@@ -153,11 +153,11 @@ impl Trading {
     }
 
     /// Handles the Buy or Sell button: a market order of [`quantity`](Self::quantity) at once
-    /// with [`one_click`](Self::one_click), otherwise the ticket for one.
+    /// with [`TradingSettings::instant_orders`], otherwise the ticket for one.
     pub fn trade(&mut self, symbol: String, side: OrderSide) {
         self.load_rules(&symbol);
         let mut request = OrderRequest::new(symbol, side, self.quantity, OrderType::Market);
-        if self.one_click
+        if self.display.instant_orders
             && self.capabilities().market
             && self.rules_ready
             && let Ok(quantity) = order_quantity(self.quantity, &self.rules)
@@ -228,7 +228,7 @@ impl Trading {
                     .and_then(|done| done.err()),
             };
             if let Some(error) = error {
-                toasts.error(format!("Order refused: {error}"));
+                self.notify(toasts, Toast::error(format!("Order refused: {error}")));
             }
         }
     }
@@ -272,6 +272,9 @@ impl Trading {
                         self.pending,
                         Some(TradingLineAction::Close(_) | TradingLineAction::Reverse(_))
                     ) && !account.capabilities.market
+                    || matches!(&self.pending,
+                        Some(TradingLineAction::Exit(_, exit))
+                        if !account.capabilities.accepts(&exit.order_type))
                 {
                     self.pending = None;
                 }
@@ -292,14 +295,15 @@ impl Trading {
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
                     OrderStatus::Rejected(reason) => {
-                        toasts.error(format!("Order rejected: {reason}"));
+                        let toast = Toast::error(format!("Order rejected: {reason}"));
+                        self.notify(toasts, toast);
                     }
                     _ => {}
                 }
             }
             AccountEvent::Position(position) => {
                 if matches!(&self.pending,
-                    Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old))
+                    Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old) | TradingLineAction::Exit(old, _))
                     if old.symbol == position.symbol
                         && (old.quantity != position.quantity || old.average_price != position.average_price))
                 {
@@ -325,15 +329,38 @@ impl Trading {
                         .map(|earlier| earlier.quantity)
                         .sum::<f64>();
                 // Fills that add up to the order within rounding complete it.
-                match order {
+                let toast = match order {
                     Some((_, quantity)) if filled < quantity * (1.0 - 1e-9) => {
-                        toasts.info(format!("Partially filled: {text} ({filled} of {quantity})"))
+                        Toast::info(format!("Partially filled: {text} ({filled} of {quantity})"))
                     }
-                    _ => toasts.success(format!("Filled: {text}")),
+                    _ => Toast::success(format!("Filled: {text}")),
+                };
+                self.notify(toasts, toast);
+                if self.display.play_execution_sound {
+                    self.sound = Some(self.display.execution_sound.clone());
                 }
                 self.executions.push(fill);
             }
             _ => {}
+        }
+    }
+
+    /// The sound to play for the fills since the last call, when the user turned on
+    /// [`TradingSettings::play_execution_sound`]: the name the user chose, or empty for the
+    /// host's first sound. The host plays it; call this after [`poll`](Self::poll).
+    pub fn take_execution_sound(&mut self) -> Option<String> {
+        self.sound.take()
+    }
+
+    /// Shows `toast` if the user's [`TradingSettings::notifications`] level includes it.
+    fn notify(&self, toasts: &mut Toasts, toast: Toast) {
+        let shown = match self.display.notifications {
+            TradingNotifications::All => true,
+            TradingNotifications::Errors => toast.kind == ToastKind::Error,
+            TradingNotifications::Off => false,
+        };
+        if shown {
+            toasts.add(toast);
         }
     }
 
@@ -372,9 +399,15 @@ impl Trading {
 
         if self.service.is_some() {
             let mapping = chart.get_chart_mapping();
+            let display = &self.display;
             let options = TradingLineOptions {
                 modify: capabilities.modify,
                 close: capabilities.market,
+                reverse: display.reverse_button,
+                take_profit: capabilities.limit,
+                stop_loss: capabilities.stop,
+                pnl: display.position_pnl.then_some(display.position_pnl_unit),
+                bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
                 last_price: last,
                 point_value: if self.rules.symbol == symbol {
                     self.rules.point_value
@@ -384,7 +417,6 @@ impl Trading {
                 currency,
                 tick_size: tick,
             };
-            let display = &self.display;
             let lines = {
                 let _theme = chart
                     .theme_override
@@ -447,13 +479,10 @@ impl Trading {
             rules_ready: self.rules_ready,
         };
         let anchor = chart.get_rendered_price_rect().right_top() + egui::vec2(-8.0, 8.0);
-        if let Some(request) = self.ticket.show(
-            ui.ctx(),
-            anchor,
-            &market,
-            &mut self.presets,
-            &mut self.one_click,
-        ) {
+        if let Some(request) = self
+            .ticket
+            .show(ui.ctx(), anchor, &market, &mut self.presets)
+        {
             self.place(request);
         }
     }
@@ -469,6 +498,12 @@ impl Trading {
             Some(TradingLineAction::Cancel(order)) => service.cancel(order.id, self.inbox.reply(0)),
             Some(TradingLineAction::Modify(order, request)) => {
                 service.modify(order.id, request, self.inbox.reply(0));
+            }
+            Some(TradingLineAction::Exit(_, mut exit)) => {
+                if self.rules_ready && self.rules.symbol == exit.symbol {
+                    exit.time_in_force = self.rules.time_in_force[0];
+                }
+                service.place(exit, self.inbox.reply(0));
             }
             Some(TradingLineAction::Close(position) | TradingLineAction::Reverse(position))
                 if position.quantity != 0.0 =>
@@ -564,6 +599,17 @@ fn describe(
             format!("Reverse {} at market?", position(open)),
             "Reverse position",
         ),
+        TradingLineAction::Exit(open, exit) => {
+            let (title, name) = match exit.order_type {
+                OrderType::Limit(_) => ("Place take profit", "take profit"),
+                _ => ("Place stop loss", "stop loss"),
+            };
+            (
+                title,
+                format!("Protect {} with a {name}: {}?", position(open), order(exit)),
+                title,
+            )
+        }
     }
 }
 
@@ -589,6 +635,7 @@ mod tests {
             let capabilities = Capabilities {
                 market: true,
                 limit: true,
+                stop: true,
                 modify: true,
                 ..Capabilities::default()
             };
@@ -618,12 +665,12 @@ mod tests {
         }
     }
 
-    /// Guards the money path of the Buy and Sell buttons: without one-click trading they only
+    /// Guards the money path of the Buy and Sell buttons: without instant orders they only
     /// open the ticket and send nothing; with it they send exactly one market order of the
     /// default quantity. A regression either trades without the user's confirmation or loses
-    /// the one-click order.
+    /// the instant order.
     #[test]
-    fn buy_and_sell_trade_at_once_only_with_one_click() {
+    fn buy_and_sell_trade_at_once_only_with_instant_orders() {
         let broker = Arc::new(Recorder::default());
         let mut trading = Trading::default();
         trading.set_service(broker.clone());
@@ -634,7 +681,7 @@ mod tests {
         assert!(broker.placed.lock().unwrap().is_empty());
         assert!(trading.ticket.open);
 
-        trading.one_click = true;
+        trading.display.instant_orders = true;
         trading.trade("AAPL".into(), OrderSide::Buy);
         assert!(broker.placed.lock().unwrap().is_empty(), "wait for rules");
         let mut rules = TradingRules::new("AAPL");
@@ -693,6 +740,8 @@ mod tests {
                     ("Modify order", true),
                     ("Close position", false),
                     ("Reverse position", false),
+                    ("Place take profit", false),
+                    ("Place stop loss", false),
                 ] {
                     let mut request =
                         OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
@@ -742,18 +791,26 @@ mod tests {
                                 trading.show(ui, chart);
                             },
                         );
-                        let confirm = output
+                        let texts: Vec<_> = output
                             .shapes
                             .iter()
                             .filter_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) if text.galley.text() == operation => {
-                                    Some(text.galley.rect.translate(text.pos.to_vec2()).center())
-                                }
+                                egui::Shape::Text(text) => Some((
+                                    text.galley.text().to_owned(),
+                                    text.galley.rect.translate(text.pos.to_vec2()),
+                                )),
                                 _ => None,
                             })
-                            .next_back();
+                            .collect();
                         output.drop_without_applying_deltas();
-                        confirm
+                        texts
+                    };
+                    let find = |texts: Vec<(String, egui::Rect)>, wanted: &str| {
+                        texts
+                            .into_iter()
+                            .rev()
+                            .find(|(text, _)| text == wanted)
+                            .map(|(_, rect)| rect)
                     };
                     let click = |pos, pressed| egui::Event::PointerButton {
                         pos,
@@ -775,10 +832,20 @@ mod tests {
                     } else {
                         100.0
                     });
+                    // Hovering the label shows the reverse button, left of TP.
+                    let close = egui::pos2(mapping.rect.right() - 17.0, y);
+                    let texts = frame(
+                        &mut trading,
+                        &mut chart,
+                        vec![egui::Event::PointerMoved(close)],
+                    );
+                    let take_profit = find(texts.clone(), "TP").expect("a TP button");
                     let x = match operation {
                         "Modify order" => mapping.rect.center().x,
-                        "Reverse position" => mapping.rect.right() - 35.0,
-                        _ => mapping.rect.right() - 17.0,
+                        "Reverse position" => take_profit.left() - 15.0,
+                        "Place take profit" => take_profit.center().x,
+                        "Place stop loss" => find(texts, "SL").expect("an SL button").center().x,
+                        _ => close.x,
                     };
                     let start = egui::pos2(x, y);
                     frame(
@@ -791,6 +858,10 @@ mod tests {
                         egui::pos2(x, mapping.rect.top())
                     } else if operation == "Modify order" {
                         egui::pos2(x, mapping.price_to_y(103.07))
+                    } else if operation == "Place take profit" {
+                        egui::pos2(x, mapping.price_to_y(95.0))
+                    } else if operation == "Place stop loss" {
+                        egui::pos2(x, mapping.price_to_y(104.0))
                     } else {
                         start
                     };
@@ -805,7 +876,9 @@ mod tests {
                     assert!(broker.cancelled.lock().unwrap().is_empty());
                     assert!(broker.modified.lock().unwrap().is_empty());
                     frame(&mut trading, &mut chart, vec![]);
-                    let confirm = frame(&mut trading, &mut chart, vec![]).expect(operation);
+                    let confirm = find(frame(&mut trading, &mut chart, vec![]), operation)
+                        .expect(operation)
+                        .center();
                     assert!(
                         confirm.x >= 0.0 && confirm.x <= width,
                         "confirmation stays reachable"
@@ -836,10 +909,13 @@ mod tests {
                             assert_eq!(changed[0].1.stop_loss, Some(stop_loss));
                         }
                         _ => {
-                            let quantity = if operation == "Close position" {
-                                2.0
-                            } else {
-                                4.0
+                            // Closing and the exits are for the position's size, reversing for
+                            // twice it.
+                            let (quantity, order_type) = match operation {
+                                "Reverse position" => (4.0, OrderType::Market),
+                                "Place take profit" => (2.0, OrderType::Limit(95.0)),
+                                "Place stop loss" => (2.0, OrderType::Stop(104.0)),
+                                _ => (2.0, OrderType::Market),
                             };
                             assert_eq!(
                                 *broker.placed.lock().unwrap(),
@@ -847,7 +923,7 @@ mod tests {
                                     "SYM",
                                     OrderSide::Buy,
                                     quantity,
-                                    OrderType::Market
+                                    order_type
                                 )]
                             );
                         }
@@ -906,21 +982,38 @@ mod tests {
             ],
             ..Recorder::default()
         });
+        // Each notification level shows its share of the events; fills ask for the chosen sound
+        // once, and only when the user turned it on.
+        let all = [
+            "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
+            "Filled: Buy 2 SYM at 98.00",
+            "Filled: Sell 3 OTHER at 95.00",
+            "Filled: Sell 3 SYM at 95.00",
+            "Order rejected: Insufficient margin",
+        ];
+        for (level, expected, sound) in [
+            (TradingNotifications::Errors, &all[4..], true),
+            (TradingNotifications::Off, &[][..], false),
+            (TradingNotifications::All, &all[..], false),
+        ] {
+            let mut trading = Trading::default();
+            trading.display.notifications = level;
+            trading.display.play_execution_sound = sound;
+            trading.display.execution_sound = "Bell".into();
+            trading.set_service(broker.clone());
+            let mut toasts = Toasts::new();
+            trading.poll(&egui::Context::default(), &mut toasts);
+            let messages: Vec<_> = toasts.toasts().iter().map(|t| t.message.as_str()).collect();
+            assert_eq!(messages, expected, "{level:?}");
+            assert_eq!(
+                trading.take_execution_sound(),
+                sound.then(|| "Bell".to_owned())
+            );
+            assert_eq!(trading.take_execution_sound(), None);
+        }
         let mut trading = Trading::default();
         trading.set_service(broker);
-        let mut toasts = Toasts::new();
-        trading.poll(&egui::Context::default(), &mut toasts);
-        let messages: Vec<_> = toasts.toasts().iter().map(|t| t.message.as_str()).collect();
-        assert_eq!(
-            messages,
-            [
-                "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
-                "Filled: Buy 2 SYM at 98.00",
-                "Filled: Sell 3 OTHER at 95.00",
-                "Filled: Sell 3 SYM at 95.00",
-                "Order rejected: Insufficient margin",
-            ]
-        );
+        trading.poll(&egui::Context::default(), &mut Toasts::new());
 
         let ctx = egui::Context::default();
         let hidden = TradingSettings {

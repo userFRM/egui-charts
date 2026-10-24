@@ -101,6 +101,8 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
 const MAIN_SERIES_ID: usize = usize::MAX;
+/// The sounds the settings offer for fills; the demo shows the chosen one as a notification.
+const DEMO_SOUNDS: [&str; 3] = ["Chime", "Bell", "Beep"];
 const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
 fn indicator_tree_id(id: SeriesId) -> usize {
@@ -435,7 +437,11 @@ impl DemoApp {
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
             indicator_settings: IndicatorSettingsDialog::default(),
-            settings_dialog: SettingsDialog::new(),
+            settings_dialog: {
+                let mut dialog = SettingsDialog::new();
+                dialog.execution_sounds = DEMO_SOUNDS.map(str::to_owned).to_vec();
+                dialog
+            },
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
@@ -1022,6 +1028,17 @@ impl eframe::App for DemoApp {
         self.alerts.poll(&ctx, &mut self.toasts);
         self.symbol_details.poll(&ctx);
         self.trading.poll(&ctx, &mut self.toasts);
+        // The demo has no audio: the sound chosen for fills shows as a notification.
+        if let Some(sound) = self.trading.take_execution_sound() {
+            self.notify(format!(
+                "Sound: {}",
+                if sound.is_empty() {
+                    DEMO_SOUNDS[0]
+                } else {
+                    &sound
+                }
+            ));
+        }
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
         if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {

@@ -30,7 +30,7 @@ pub use data::{
     AlertsSettings, ButtonsSettings, CandleColorConfig, ChartBasicStylesSettings,
     ChartSettingsState, CrosshairSettings, EventsSettings, GridLinesSettings, LineStyle,
     MarginsSettings, ScalesAndLinesSettings, ScalesAppearanceSettings, StatusLineOptions,
-    TradingSettings, WatermarkSettings,
+    TradingNotifications, TradingSettings, WatermarkSettings,
 };
 pub use dialog::SettingsDialog;
 pub use menu::SettingsMenu;

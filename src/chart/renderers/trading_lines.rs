@@ -4,7 +4,7 @@
 use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::chart::coords::ChartMapping;
-use crate::chart::rendering::render_price_line;
+use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::model::{LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PriceLine};
 use crate::theme::ThemeExt;
 
@@ -21,6 +21,36 @@ pub enum TradingLineAction {
     Close(Position),
     /// Turn the position into one of the same size on the other side, at the market.
     Reverse(Position),
+    /// Place the order the user dragged out of the position's TP or SL button: a limit order
+    /// for a take profit or a stop order for a stop loss, on the other side for the position's
+    /// size.
+    Exit(Position, OrderRequest),
+}
+
+/// What a profit or loss on the trading lines is written in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PnlUnit {
+    /// In the account's currency, such as "+12.50 USD".
+    #[default]
+    Money,
+    /// In ticks of the symbol's price, such as "+25 ticks".
+    Ticks,
+    /// As a percentage of the entry price, such as "+0.42%".
+    Percent,
+}
+
+impl PnlUnit {
+    /// Every unit, in the order a menu lists them.
+    pub const ALL: [Self; 3] = [Self::Money, Self::Ticks, Self::Percent];
+
+    /// The unit's name in menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Money => "Money",
+            Self::Ticks => "Ticks",
+            Self::Percent => "Percent",
+        }
+    }
 }
 
 /// What [`render_trading_lines`] drew, and what the user asked for.
@@ -37,8 +67,20 @@ pub struct TradingLines {
 pub struct TradingLineOptions<'a> {
     /// Order and bracket lines can be dragged, and brackets removed.
     pub modify: bool,
-    /// Position lines offer close and reverse buttons.
+    /// Position labels offer a close button, and a reverse button with
+    /// [`reverse`](Self::reverse).
     pub close: bool,
+    /// Hovering a position's label shows its reverse button. Needs [`close`](Self::close).
+    pub reverse: bool,
+    /// Position labels offer a TP button, dragged out to place a take profit as a limit order.
+    pub take_profit: bool,
+    /// Position labels offer an SL button, dragged out to place a stop loss as a stop order.
+    pub stop_loss: bool,
+    /// A position's label gives its profit or loss in this unit, or none.
+    pub pnl: Option<PnlUnit>,
+    /// A take profit or stop loss gives, in this unit, the profit or loss its order makes if
+    /// the price reaches it, or none.
+    pub bracket_pnl: Option<PnlUnit>,
     /// The last price, for a position's profit or loss when the broker reports none.
     pub last_price: Option<f64>,
     /// The profit or loss of one unit moving by one price unit, in the account's currency.
@@ -81,48 +123,12 @@ pub fn render_trading_lines<'a>(
         OrderSide::Buy => theme.ui.accent,
         OrderSide::Sell => theme.ui.error,
     };
-    let money = |value: f64| {
-        let sign = if value < 0.0 { "-" } else { "+" };
-        format!("{sign}{:.2} {}", value.abs(), options.currency)
-    };
     let mut action = None;
     let mut tags = Vec::new();
 
     for position in positions {
-        let side = if position.quantity > 0.0 {
-            OrderSide::Buy
-        } else {
-            OrderSide::Sell
-        };
-        let pnl = position.unrealized_pnl.or_else(|| {
-            options.last_price.map(|last| {
-                (last - position.average_price) * position.quantity * options.point_value
-            })
-        });
-        let pnl_color = match pnl {
-            Some(pnl) if pnl < 0.0 => theme.ui.error,
-            _ => theme.ui.success,
-        };
-        let line =
-            PriceLine::new(position.average_price, side_color(side)).with_style(LineStyle::Solid);
-        let label = Label {
-            id: ("trading_position", &position.symbol),
-            body: pnl.map_or_else(String::new, money),
-            body_color: pnl_color,
-            quantity: position.quantity.abs(),
-            buttons: if options.close {
-                &[Button::Reverse, Button::Cancel]
-            } else {
-                &[]
-            },
-            draggable: false,
-        };
-        let (_, pressed) = label.show(ui, mapping, options, &line, &mut tags);
-        action = action.or(match pressed {
-            Some(Button::Cancel) => Some(TradingLineAction::Close(position.clone())),
-            Some(Button::Reverse) => Some(TradingLineAction::Reverse(position.clone())),
-            None => None,
-        });
+        let pressed = show_position(ui, mapping, options, position, &mut tags);
+        action = action.or(pressed);
     }
 
     for order in orders {
@@ -143,13 +149,24 @@ pub fn render_trading_lines<'a>(
             let Some(price) = price.filter(|price| price.is_finite()) else {
                 continue;
             };
-            let (body, color) = match level {
+            let (name, color) = match level {
                 Level::Entry => (
                     format!("{} {kind}", request.side.label()),
                     side_color(request.side),
                 ),
                 Level::TakeProfit => ("TP".to_owned(), theme.ui.success),
                 Level::StopLoss => ("SL".to_owned(), theme.ui.error),
+            };
+            // A bracket's result if it is reached, from the entry or, for a market order, the
+            // last price.
+            let entry = entry_price(&request.order_type).or(options.last_price);
+            let body = |price: f64| match (level, options.bracket_pnl, entry) {
+                (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                    let gain = (price - entry) * direction(request.side);
+                    let money = gain * open * options.point_value;
+                    format!("{name} {}", pnl_text(unit, money, gain, entry, options).0)
+                }
+                _ => name.clone(),
             };
             let line = PriceLine::new(price, color).with_style(if level == Level::Entry {
                 LineStyle::Dashed
@@ -160,7 +177,7 @@ pub fn render_trading_lines<'a>(
             let cancel = level == Level::Entry || options.modify;
             let label = Label {
                 id: ("trading_order", &order.id.0),
-                body,
+                body: &body,
                 body_color: color,
                 quantity: open,
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
@@ -210,6 +227,312 @@ pub fn render_trading_lines<'a>(
     TradingLines { action, tags }
 }
 
+/// 1 for a buy and -1 for a sell: the sign of a price move in the side's favour.
+fn direction(side: OrderSide) -> f64 {
+    match side {
+        OrderSide::Buy => 1.0,
+        OrderSide::Sell => -1.0,
+    }
+}
+
+/// A profit or loss of `money` in the account's currency, or of `gain` in price from `entry`,
+/// written in `unit`, and the value written, whose sign colours it.
+fn pnl_text(
+    unit: PnlUnit,
+    money: f64,
+    gain: f64,
+    entry: f64,
+    options: &TradingLineOptions<'_>,
+) -> (String, f64) {
+    let round = |value: f64, decimals: i32| {
+        let scale = 10f64.powi(decimals);
+        (value * scale).round() / scale
+    };
+    let (value, text) = match unit {
+        PnlUnit::Money => {
+            let value = round(money, 2);
+            (value, format!("{:.2} {}", value.abs(), options.currency))
+        }
+        PnlUnit::Ticks => {
+            let value = (gain / options.tick_size).round();
+            (value, format!("{} ticks", value.abs()))
+        }
+        PnlUnit::Percent => {
+            let value = round(gain / entry * 100.0, 2);
+            (value, format!("{:.2}%", value.abs()))
+        }
+    };
+    let sign = if value > 0.0 {
+        "+"
+    } else if value < 0.0 {
+        "-"
+    } else {
+        ""
+    };
+    (format!("{sign}{}", text.trim_end()), value)
+}
+
+/// Draws a position's line at its average price and its label at the right of the plot: from
+/// left to right a reverse button while the label is hovered, TP and SL buttons, the quantity,
+/// the profit or loss and a close button. Dragging TP or SL out of the label shows the exit at
+/// the pointer's price; releasing it asks for that exit order. Returns what the user asked for.
+fn show_position(
+    ui: &mut Ui,
+    mapping: &ChartMapping,
+    options: &TradingLineOptions<'_>,
+    position: &Position,
+    tags: &mut Vec<(f64, Color32)>,
+) -> Option<TradingLineAction> {
+    let theme = ui.ctx().active_theme();
+    let side = if position.quantity > 0.0 {
+        OrderSide::Buy
+    } else {
+        OrderSide::Sell
+    };
+    let color = match side {
+        OrderSide::Buy => theme.ui.accent,
+        OrderSide::Sell => theme.ui.error,
+    };
+    let size = position.quantity.abs();
+    let entry = position.average_price;
+    let y = mapping.price_to_y(entry);
+    if !y.is_finite() || !mapping.is_y_visible(y) {
+        return None;
+    }
+    let painter = ui.painter().with_clip_rect(mapping.rect);
+    let line = PriceLine::new(entry, color).with_style(LineStyle::Solid);
+    render_price_line(
+        &painter,
+        mapping.rect,
+        &mapping.price,
+        &line,
+        mapping.rect.left(),
+        false,
+        f32::INFINITY,
+    );
+    tags.push((entry, color));
+
+    let key = ui.scope_id().with(("trading_position", &position.symbol));
+    let font = FontId::proportional(11.0);
+    let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
+    let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
+    // The result the position makes when the price moves by `gain` in its favour.
+    let result = |unit, gain: f64| {
+        pnl_text(
+            unit,
+            gain * size * options.point_value,
+            gain,
+            entry,
+            options,
+        )
+    };
+    let pnl = options.pnl.and_then(|unit| {
+        let gain = options
+            .last_price
+            .map(|last| (last - entry) * direction(side))
+            .or_else(|| {
+                position
+                    .unrealized_pnl
+                    .map(|pnl| pnl / (size * options.point_value))
+            })?;
+        let (text, value) = match (unit, position.unrealized_pnl) {
+            // The broker's own figure, when it reports one.
+            (PnlUnit::Money, Some(pnl)) => pnl_text(unit, pnl, gain, entry, options),
+            _ => result(unit, gain),
+        };
+        let text_color = if value > 0.0 {
+            theme.ui.success
+        } else if value < 0.0 {
+            theme.ui.error
+        } else {
+            theme.ui.text_secondary
+        };
+        Some((layout(text, text_color), text_color))
+    });
+    let exits = [
+        (options.take_profit, "TP", theme.ui.success),
+        (options.stop_loss, "SL", theme.ui.error),
+    ]
+    .map(|(offered, name, color)| offered.then(|| (name, layout(name.to_owned(), color), color)));
+    let quantity = layout(format!("{size}"), Color32::WHITE);
+    let close = if options.close { HEIGHT } else { 0.0 };
+    let total = exits
+        .iter()
+        .flatten()
+        .map(|(_, galley, _)| width(galley))
+        .sum::<f32>()
+        + width(&quantity)
+        + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley))
+        + close;
+    let right = mapping.rect.right() - 8.0;
+    let reverse = options.close && options.reverse;
+    let left = right - total - if reverse { HEIGHT } else { 0.0 };
+    let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
+    let hovered = ui.rect_contains_pointer(label.intersect(mapping.rect));
+    let cell = |x: f32, w: f32| Rect::from_min_size(pos2(x, label.top()), vec2(w, HEIGHT));
+    let stroke = Stroke::new(1.0, color);
+    let mut action = None;
+
+    if reverse && hovered {
+        let rect = cell(left, HEIGHT);
+        let response = ui
+            .interact(
+                rect.intersect(mapping.rect),
+                key.with("reverse"),
+                Sense::click(),
+            )
+            .on_hover_text("Reverse position");
+        painter.rect(rect, 2.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        if response.hovered() {
+            painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
+        }
+        paint_glyph(&painter, Button::Reverse, rect.center(), color);
+        if response.clicked() {
+            action = Some(TradingLineAction::Reverse(position.clone()));
+        }
+    }
+
+    let mut x = right - total;
+    for (name, galley, exit_color) in exits.into_iter().flatten() {
+        let rect = cell(x, width(&galley));
+        x = rect.right();
+        let id = key.with(name);
+        let response = ui
+            .interact(rect.intersect(mapping.rect), id, Sense::drag())
+            .on_hover_text(if name == "TP" {
+                "Drag to place a take profit"
+            } else {
+                "Drag to place a stop loss"
+            });
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        }
+        painter.rect_filled(rect, 2.0, theme.chart.bg);
+        let r = rect.shrink(0.5);
+        draw_dashed_polyline(
+            &painter,
+            &[
+                r.left_top(),
+                r.right_top(),
+                r.right_bottom(),
+                r.left_bottom(),
+                r.left_top(),
+            ],
+            Stroke::new(1.0, exit_color),
+            3.0,
+            2.0,
+        );
+        painter.galley(
+            pos2(rect.left() + PADDING, y - galley.size().y / 2.0),
+            galley,
+            exit_color,
+        );
+        let price = response
+            .interact_pointer_pos()
+            .filter(|_| response.dragged() || response.drag_stopped())
+            .map(|pointer| {
+                let y = pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom());
+                to_step(mapping.y_to_price(y), options.tick_size, f64::round)
+            })
+            .filter(|price| price.is_finite() && *price != entry);
+        let Some(price) = price else {
+            continue;
+        };
+        if response.drag_stopped() {
+            let exit = OrderRequest::new(
+                position.symbol.clone(),
+                match side {
+                    OrderSide::Buy => OrderSide::Sell,
+                    OrderSide::Sell => OrderSide::Buy,
+                },
+                size,
+                if name == "TP" {
+                    OrderType::Limit(price)
+                } else {
+                    OrderType::Stop(price)
+                },
+            );
+            action = action.or(Some(TradingLineAction::Exit(position.clone(), exit)));
+            continue;
+        }
+        // The exit being dragged: its line and a label like a bracket's.
+        let line = PriceLine::new(price, exit_color).with_style(LineStyle::Dotted);
+        render_price_line(
+            &painter,
+            mapping.rect,
+            &mapping.price,
+            &line,
+            mapping.rect.left(),
+            false,
+            f32::INFINITY,
+        );
+        tags.push((price, exit_color));
+        let text = match options.bracket_pnl {
+            Some(unit) => format!(
+                "{name} {}",
+                result(unit, (price - entry) * direction(side)).0
+            ),
+            None => name.to_owned(),
+        };
+        let text = layout(text, exit_color);
+        let y = mapping.price_to_y(price);
+        let preview = Rect::from_min_size(
+            pos2(right - width(&text), y - HEIGHT / 2.0),
+            vec2(width(&text), HEIGHT),
+        );
+        painter.rect(
+            preview,
+            2.0,
+            theme.chart.bg,
+            Stroke::new(1.0, exit_color),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            pos2(preview.left() + PADDING, y - text.size().y / 2.0),
+            text,
+            exit_color,
+        );
+    }
+
+    let rect = cell(x, width(&quantity));
+    x = rect.right();
+    painter.rect_filled(rect, 0.0, color);
+    painter.galley(
+        pos2(rect.left() + PADDING, y - quantity.size().y / 2.0),
+        quantity,
+        Color32::WHITE,
+    );
+    if let Some((pnl, text_color)) = pnl {
+        let rect = cell(x, width(&pnl));
+        x = rect.right();
+        painter.rect(rect, 0.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        painter.galley(
+            pos2(rect.left() + PADDING, y - pnl.size().y / 2.0),
+            pnl,
+            text_color,
+        );
+    }
+    if options.close {
+        let rect = cell(x, HEIGHT);
+        let response = ui
+            .interact(
+                rect.intersect(mapping.rect),
+                key.with("close"),
+                Sense::click(),
+            )
+            .on_hover_text("Close position");
+        painter.rect(rect, 2.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        if response.hovered() {
+            painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
+        }
+        paint_glyph(&painter, Button::Cancel, rect.center(), color);
+        if response.clicked() {
+            action = action.or(Some(TradingLineAction::Close(position.clone())));
+        }
+    }
+    action
+}
+
 /// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
 /// step's decimals.
 pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
@@ -237,7 +560,8 @@ fn entry_price(order_type: &OrderType) -> Option<f64> {
 /// The label at the right end of a trading line: a description, the open quantity and buttons.
 struct Label<'a> {
     id: (&'a str, &'a str),
-    body: String,
+    /// The description at the line's price.
+    body: &'a dyn Fn(f64) -> String,
     body_color: Color32,
     quantity: f64,
     buttons: &'a [Button],
@@ -269,7 +593,8 @@ impl Label<'_> {
         let font = FontId::proportional(11.0);
         let painter = ui.painter().clone();
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
-        let body = (!self.body.is_empty()).then(|| layout(self.body.clone(), self.body_color));
+        let body = (self.body)(staged.unwrap_or(line.price));
+        let body = (!body.is_empty()).then(|| layout(body, self.body_color));
         let quantity = layout(format!("{}", self.quantity), Color32::WHITE);
         let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
         let total = body.as_deref().map_or(0.0, width)
@@ -371,11 +696,7 @@ impl Label<'_> {
                     key.with(index),
                     Sense::click(),
                 )
-                .on_hover_text(match (button, self.buttons.len()) {
-                    (Button::Cancel, 1) => "Cancel",
-                    (Button::Cancel, _) => "Close",
-                    (Button::Reverse, _) => "Reverse",
-                });
+                .on_hover_text("Cancel");
             if response.hovered() {
                 clipped.rect_filled(cell.shrink(1.0), 1.0, line.color.gamma_multiply(0.2));
             }
