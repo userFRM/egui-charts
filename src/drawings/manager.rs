@@ -460,6 +460,7 @@ impl DrawingManager {
                     .filter(|d| {
                         d.is_visible_on_timeframe(&self.curr_timeframe)
                             && self.dragging_handle.is_none_or(|(id, _)| id != d.id)
+                            && self.drag_group.iter().all(|old| old.id != d.id)
                     })
                     .flat_map(|d| d.points.iter().copied()),
             ),
@@ -1822,6 +1823,16 @@ mod tests {
         // A pointer near the first anchor snaps to it under magnet mode.
         let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
         assert_eq!(snapped, Pos2::new(100.0, 100.0));
+
+        // A group being translated cannot magnetize to another member's old position.
+        manager.drawings = drawings;
+        let mut peer = Drawing::new(2, DrawingToolType::TrendLine);
+        peer.points = vec![Pos2::new(300.0, 300.0), Pos2::new(400.0, 400.0)];
+        manager.drawings.push(peer);
+        manager.select_drawings([1, 2]);
+        manager.start_drag_body(1, Pos2::new(150.0, 150.0));
+        let pointer = Pos2::new(303.0, 302.0);
+        assert_eq!(manager.snap_point(pointer, &manager.drawings), pointer);
     }
 
     /// A position's stop is an anchor of its own: it starts mirrored around
