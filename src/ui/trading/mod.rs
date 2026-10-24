@@ -338,9 +338,12 @@ impl Trading {
     }
 
     /// Draws the chart symbol's working orders, brackets and positions as lines on `chart`, its
-    /// fills as arrows, and the order ticket, leaving out the layers [`display`](Self::display)
-    /// turns off. Sends the order the user submits, and asks the user to confirm a change made on
-    /// a line before sending it.
+    /// fills as marks on their bars, and the order ticket, leaving out the layers
+    /// [`display`](Self::display) turns off. The fills of one side in one bar form one mark: an
+    /// arrow under the bar's low for buys or over its high for sells, with a chevron for each
+    /// fill up to ten, and hovering it lists every fill. The lines and their labels are drawn
+    /// over the marks. Sends the order the user submits, and asks the user to confirm a change
+    /// made on a line before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         let symbol = chart.symbol().to_owned();
         let symbol = symbol.as_str();
@@ -387,18 +390,7 @@ impl Trading {
                     .theme_override
                     .as_ref()
                     .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-                let lines = render_trading_lines(
-                    ui,
-                    &mapping,
-                    self.orders
-                        .iter()
-                        .filter(|o| display.show_orders && o.request.symbol == symbol),
-                    self.positions
-                        .iter()
-                        .filter(|p| display.show_poss && p.symbol == symbol),
-                    &options,
-                );
-                // Over the lines, so that a fill on the latest bar is not hidden by their labels.
+                // Under the lines, so that no mark covers an order's or a position's label.
                 if display.show_executions {
                     let fills: Vec<_> = self
                         .executions
@@ -411,7 +403,17 @@ impl Trading {
                         .collect();
                     executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
                 }
-                lines
+                render_trading_lines(
+                    ui,
+                    &mapping,
+                    self.orders
+                        .iter()
+                        .filter(|o| display.show_orders && o.request.symbol == symbol),
+                    self.positions
+                        .iter()
+                        .filter(|p| display.show_poss && p.symbol == symbol),
+                    &options,
+                )
             };
             chart.trading_tags = lines.tags;
             self.pending = self.pending.take().or(lines.action);
@@ -855,11 +857,13 @@ mod tests {
         }
     }
 
-    /// Each fill of the chart's symbol is an arrow with its tip on the fill's price, on the bar
-    /// its time falls in, a second buy there stacks below the first and a sell stays on the price
-    /// above them; a fill of another symbol is not drawn, and hovering an arrow describes its
-    /// fill. A partial fill, the fill that completes an order and a rejection each raise a
-    /// notification, the rejection with the broker's reason. The display options hide the fills, the orders and the positions.
+    /// The fills of one side in one bar are one mark: an arrow just under the bar's low for buys,
+    /// with a chevron per fill, and just over its high for sells; a fill of another symbol is not
+    /// drawn. Labels, off by default, give the total quantity at the quantity-weighted average
+    /// price; hovering a mark lists its fills; the position's label is drawn over the marks. A
+    /// partial fill, the fill that completes an order and a rejection each raise a notification,
+    /// the rejection with the broker's reason. The display options hide the fills, the orders and
+    /// the positions.
     #[test]
     fn fills_are_drawn_on_their_bar_and_announced() {
         use crate::theme::ThemeExt;
@@ -872,19 +876,25 @@ mod tests {
             order.filled = filled;
             order
         };
-        let fill = |id, side, quantity| {
-            AccountEvent::Execution(Execution::new(OrderId::new(id), time, side, 95.0, quantity))
+        let fill = |id, side, price, quantity| {
+            AccountEvent::Execution(Execution::new(
+                OrderId::new(id),
+                time,
+                side,
+                price,
+                quantity,
+            ))
         };
         let broker = Arc::new(Recorder {
             state: vec![
                 AccountEvent::Order(order("1", "SYM", OrderStatus::Working, 0.0)),
-                fill("1", OrderSide::Buy, 1.0),
+                fill("1", OrderSide::Buy, 95.0, 1.0),
                 AccountEvent::Order(order("1", "SYM", OrderStatus::Filled, 3.0)),
-                fill("1", OrderSide::Buy, 2.0),
+                fill("1", OrderSide::Buy, 98.0, 2.0),
                 AccountEvent::Order(order("2", "OTHER", OrderStatus::Filled, 3.0)),
-                fill("2", OrderSide::Sell, 3.0),
+                fill("2", OrderSide::Sell, 95.0, 3.0),
                 AccountEvent::Order(order("5", "SYM", OrderStatus::Filled, 3.0)),
-                fill("5", OrderSide::Sell, 3.0),
+                fill("5", OrderSide::Sell, 95.0, 3.0),
                 AccountEvent::Order(order(
                     "3",
                     "SYM",
@@ -892,7 +902,7 @@ mod tests {
                     0.0,
                 )),
                 AccountEvent::Order(order("4", "SYM", OrderStatus::Working, 0.0)),
-                AccountEvent::Position(Position::new("SYM", 3.0, 95.0)),
+                AccountEvent::Position(Position::new("SYM", 3.0, 97.0)),
             ],
             ..Recorder::default()
         });
@@ -905,7 +915,7 @@ mod tests {
             messages,
             [
                 "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
-                "Filled: Buy 2 SYM at 95.00",
+                "Filled: Buy 2 SYM at 98.00",
                 "Filled: Sell 3 OTHER at 95.00",
                 "Filled: Sell 3 SYM at 95.00",
                 "Order rejected: Insufficient margin",
@@ -919,17 +929,29 @@ mod tests {
             show_executions: false,
             ..TradingSettings::default()
         };
+        let labelled = TradingSettings {
+            show_execution_labels: true,
+            ..TradingSettings::default()
+        };
         let mut clock = 0.0;
-        for (display, drawn) in [(TradingSettings::default(), true), (hidden, false)] {
+        for (display, drawn, labels) in [
+            (TradingSettings::default(), true, false),
+            (labelled, true, true),
+            (hidden, false, false),
+        ] {
             trading.display = display;
-            let (mut tips, mut hovered) = (Vec::new(), false);
+            let (mut tips, mut texts, mut hovered, mut covered) =
+                (Vec::new(), Vec::new(), false, false);
             for frame in 0..4 {
                 clock += 1.0;
-                // The pointer rests on the first arrow's head once it has been drawn.
-                let events = chart.index_to_x(95.0).filter(|_| frame == 1).map(|x| {
-                    let y = chart.get_chart_mapping().price_to_y(95.0);
-                    egui::Event::PointerMoved(egui::pos2(x, y + 4.0))
-                });
+                let (x, low) = (
+                    chart.index_to_x(95.0),
+                    chart.get_chart_mapping().price_to_y(90.0),
+                );
+                // The pointer rests on the buy mark once it has been drawn.
+                let events = x
+                    .filter(|_| frame == 1)
+                    .map(|x| egui::Event::PointerMoved(egui::pos2(x, low + 10.0)));
                 let input = egui::RawInput {
                     time: Some(clock),
                     events: events.into_iter().collect(),
@@ -940,30 +962,69 @@ mod tests {
                     trading.show(ui, &mut chart);
                 });
                 let (buy, sell) = (ctx.active_theme().ui.accent, ctx.active_theme().ui.error);
-                tips = output
+                let chevrons: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, shape)| match &shape.shape {
+                        egui::Shape::Path(path)
+                            if path.points.len() == 3
+                                && (path.stroke.color == egui::epaint::ColorMode::Solid(buy)
+                                    || path.stroke.color
+                                        == egui::epaint::ColorMode::Solid(sell)) =>
+                        {
+                            Some((at, path.points[1]))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                tips = chevrons.iter().map(|(_, tip)| *tip).collect();
+                texts = output
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Path(path) if path.fill == buy || path.fill == sell => {
-                            Some(path.points[0])
+                        egui::Shape::Text(text) if text.galley.text().contains(" @ ") => {
+                            Some(text.galley.text().to_owned())
                         }
                         _ => None,
                     })
                     .collect();
                 // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later.
-                let tooltip = "Buy 1 at 95.00\nSun 18 Feb '24 10:13:20";
+                let tooltip = "Buy 1 at 95.00, Sun 18 Feb '24 10:13:20\n\
+                               Buy 2 at 98.00, Sun 18 Feb '24 10:13:20";
                 hovered = output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == tooltip)
                 });
+                // The last shape filled in the buy colour is a quantity box of the lines; the
+                // price axis tags come before the marks.
+                let label = output.shapes.iter().rposition(
+                    |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == buy),
+                );
+                covered = chevrons
+                    .last()
+                    .zip(label)
+                    .is_some_and(|((mark, _), label)| *mark > label);
                 output.drop_without_applying_deltas();
             }
             let x = chart.index_to_x(95.0).unwrap();
-            let y = chart.get_chart_mapping().price_to_y(95.0);
-            // An arrow is 12 points tall, and stacked arrows 3 points apart; the sell arrow above
-            // the price touches the buy arrows below it without covering them.
-            let expected = [egui::pos2(x, y), egui::pos2(x, y + 15.0), egui::pos2(x, y)];
+            let mapping = chart.get_chart_mapping();
+            let (low, high) = (mapping.price_to_y(90.0), mapping.price_to_y(110.0));
+            // The two buys stack their chevrons 4 points apart from 4 points under the low; the
+            // sell hangs 4 points over the high.
+            let expected = [
+                egui::pos2(x, low + 4.0),
+                egui::pos2(x, low + 8.0),
+                egui::pos2(x, high - 4.0),
+            ];
             assert_eq!(tips, if drawn { &expected[..] } else { &[] });
-            assert_eq!(hovered, drawn, "hovering an arrow describes its fill");
+            let labels_expected: &[&str] = if labels {
+                &["3 @ 97.00", "3 @ 95.00"]
+            } else {
+                &[]
+            };
+            assert_eq!(texts, labels_expected);
+            assert_eq!(hovered, drawn, "hovering a mark lists its fills");
+            assert!(!covered, "the position's label is drawn over the marks");
             assert_eq!(chart.trading_tags.is_empty(), !drawn);
         }
     }

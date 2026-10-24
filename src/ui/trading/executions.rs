@@ -1,22 +1,25 @@
-//! The account's fills on the chart: an arrow on the bar of each fill, its tip on the fill's
-//! price.
+//! The account's fills on the chart: one mark per side and bar, an arrow under the bar's low for
+//! buys and over its high for sells, with a chevron for each fill.
 
-use egui::{Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
+use egui::{FontId, Rect, Sense, Shape, Stroke, Ui, pos2};
 
 use crate::model::{Execution, OrderSide};
+use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::widget::Chart;
 
-/// Half the width of an arrow's head.
+/// The most chevrons one mark draws; a mark of more fills still lists them all on hover.
+const MAX_CHEVRONS: usize = 10;
+/// Half the width of a chevron.
 const HALF_WIDTH: f32 = 5.0;
-/// The height of an arrow's head.
-const HEAD: f32 = 6.0;
-/// The height of an arrow's stem.
-const STEM: f32 = 6.0;
-/// Half the width of an arrow's stem.
-const HALF_STEM: f32 = 1.5;
-/// The space between an arrow and its label, and between stacked arrows.
-const GAP: f32 = 3.0;
+/// The height of a chevron.
+const CHEVRON: f32 = 5.0;
+/// The distance between stacked chevrons.
+const STEP: f32 = 4.0;
+/// The length of a mark of one fill, from its tip to the end of its shaft.
+const LENGTH: f32 = 16.0;
+/// The space between a bar and its marks, and between a mark and its label.
+const GAP: f32 = 4.0;
 
 /// "Buy" or "Sell".
 pub(super) fn side_name(side: OrderSide) -> &'static str {
@@ -26,11 +29,12 @@ pub(super) fn side_name(side: OrderSide) -> &'static str {
     }
 }
 
-/// Draws `fills` on the price pane of `chart`: an arrow pointing up in the buy colour or down in
-/// the sell colour, on the bar the fill's time falls in, with its tip on the fill's price and,
-/// with `labels`, the side and quantity beside it. An arrow that would cover an earlier one moves
-/// away from its price, below it for a buy and above it for a sell. Hovering an arrow shows the
-/// fill's side, quantity, price and time.
+/// Draws `fills` on the price pane of `chart`. The fills of one side in one bar form one mark: an
+/// arrow pointing up in the buy colour just under the bar's low, or down in the sell colour just
+/// over its high, with one chevron per fill stacked along its shaft, up to [`MAX_CHEVRONS`]. With
+/// `labels`, "<quantity> @ <price>" sits under a buy mark and over a sell mark: the total quantity
+/// at the quantity-weighted average price, written with `decimals`. Hovering a mark lists each of
+/// its fills with its side, quantity, price and time.
 pub(super) fn show(
     ui: &mut Ui,
     chart: &Chart,
@@ -38,115 +42,107 @@ pub(super) fn show(
     labels: bool,
     decimals: usize,
 ) {
+    // A bar spans from its time to the next bar's, so a fill belongs to the bar at or before it.
+    let mut marks: Vec<(f64, OrderSide, Vec<&Execution>)> = Vec::new();
+    for fill in fills {
+        let Some(index) = chart.time_to_index(fill.time).map(f64::floor) else {
+            continue;
+        };
+        match marks
+            .iter_mut()
+            .find(|(at, side, _)| *at == index && *side == fill.side)
+        {
+            Some((_, _, group)) => group.push(fill),
+            None => marks.push((index, fill.side, vec![fill])),
+        }
+    }
+
     let mapping = chart.get_chart_mapping();
     let theme = ui.ctx().active_theme();
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let height = HEAD + STEM;
-    let mut placed = Vec::<Rect>::new();
-    for (index, fill) in fills.iter().enumerate() {
-        // A bar spans from its time to the next bar's, so a fill belongs to the bar at or before it.
-        let Some(x) = chart
-            .time_to_index(fill.time)
-            .and_then(|at| chart.index_to_x(at.floor()))
-        else {
+    let bars = chart.state.shown();
+    for (index, side, group) in &marks {
+        let Some(x) = chart.index_to_x(*index) else {
             continue;
         };
-        let y = mapping.price_to_y(fill.price);
-        if !y.is_finite() || x < mapping.rect.left() - HALF_WIDTH || x > mapping.rect.right() {
+        if x < mapping.rect.left() - HALF_WIDTH || x > mapping.rect.right() + HALF_WIDTH {
             continue;
         }
-        let (color, down) = match fill.side {
-            OrderSide::Buy => (theme.ui.accent, 1.0),
-            OrderSide::Sell => (theme.ui.error, -1.0),
-        };
-        let label = labels.then(|| {
-            painter.layout_no_wrap(
-                format!("{} {}", side_name(fill.side), fill.quantity),
-                FontId::proportional(11.0),
-                color,
-            )
-        });
-        let width = label
-            .as_ref()
-            .map_or(0.0, |label| GAP + label.size().x + 2.0);
-        let mut rect = Rect::from_two_pos(
-            pos2(x - HALF_WIDTH, y),
-            pos2(x + HALF_WIDTH + width, y + down * height),
-        );
-        // Touching is not covering: a buy and a sell at one price both keep their tips on it.
-        while placed
+        let quantity: f64 = group.iter().map(|fill| fill.quantity).sum();
+        let price = group
             .iter()
-            .any(|other| other.intersect(rect).is_positive())
-        {
-            rect = rect.translate(vec2(0.0, down * (height + GAP)));
+            .map(|fill| fill.price * fill.quantity)
+            .sum::<f64>()
+            / quantity;
+        // A fill timed after the last bar waits at its price for its bar.
+        let (low, high) = usize::try_from(*index as i64)
+            .ok()
+            .and_then(|index| bars.get(index))
+            .map_or((price, price), |bar| (bar.low, bar.high));
+        let (color, down, edge) = match side {
+            OrderSide::Buy => (theme.ui.accent, 1.0, mapping.price_to_y(low) + GAP),
+            OrderSide::Sell => (theme.ui.error, -1.0, mapping.price_to_y(high) - GAP),
+        };
+        if !edge.is_finite() {
+            continue;
         }
-        placed.push(rect);
-        let tip = pos2(
-            x,
-            if down > 0.0 {
-                rect.top()
-            } else {
-                rect.bottom()
-            },
-        );
-        paint_arrow(&painter, tip, down, color, theme.chart.bg);
-        if let Some(label) = label {
-            let at = pos2(
-                x + HALF_WIDTH + GAP,
-                tip.y + down * height / 2.0 - label.size().y / 2.0,
-            );
-            // The chart's background keeps the label readable over the bars.
-            painter.rect_filled(
-                Rect::from_min_size(at, label.size()).expand(1.0),
-                2.0,
-                theme.chart.bg,
-            );
-            painter.galley(at, label, color);
-        }
-        let hover = rect.intersect(mapping.rect);
-        if hover.is_positive() {
-            ui.interact(
-                hover,
-                ui.scope_id().with(("execution", index)),
-                Sense::hover(),
-            )
-            .on_hover_text(format!(
-                "{} {} at {:.*}\n{}",
-                side_name(fill.side),
-                fill.quantity,
-                decimals,
-                fill.price,
-                // With seconds, also on charts of daily bars.
-                chart.build_time_formatter().format_crosshair(fill.time, 1)
+        let chevrons = group.len().min(MAX_CHEVRONS);
+        let length = LENGTH + STEP * (chevrons - 1) as f32;
+        let at = |dx: f32, dy: f32| pos2(x + dx, edge + down * dy);
+        let stroke = Stroke::new(1.5, color);
+        painter.line_segment([at(0.0, 0.0), at(0.0, length)], stroke);
+        for chevron in 0..chevrons {
+            let dy = STEP * chevron as f32;
+            painter.add(Shape::line(
+                vec![
+                    at(-HALF_WIDTH, dy + CHEVRON),
+                    at(0.0, dy),
+                    at(HALF_WIDTH, dy + CHEVRON),
+                ],
+                stroke,
             ));
         }
+        let mut rect = Rect::from_two_pos(at(-HALF_WIDTH, 0.0), at(HALF_WIDTH, length));
+        if labels {
+            let label = painter.layout_no_wrap(
+                format!("{quantity} @ {price:.decimals$}"),
+                FontId::proportional(typography::SM_MD),
+                chart.config().text_color,
+            );
+            let size = label.size();
+            let top = if down > 0.0 {
+                rect.bottom() + GAP
+            } else {
+                rect.top() - GAP - size.y
+            };
+            let label_rect = Rect::from_min_size(pos2(x - size.x / 2.0, top), size);
+            painter.galley(label_rect.min, label, chart.config().text_color);
+            rect = rect.union(label_rect);
+        }
+        let hover = rect.expand(2.0).intersect(mapping.rect);
+        if hover.is_positive() {
+            let time = chart.build_time_formatter();
+            let text = group
+                .iter()
+                .map(|fill| {
+                    format!(
+                        "{} {} at {:.decimals$}, {}",
+                        side_name(fill.side),
+                        fill.quantity,
+                        fill.price,
+                        // With seconds, also on charts of daily bars.
+                        time.format_crosshair(fill.time, 1)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.interact(
+                hover,
+                ui.scope_id()
+                    .with(("execution", side_name(*side), index.to_bits())),
+                Sense::hover(),
+            )
+            .on_hover_text(text);
+        }
     }
-}
-
-/// An arrow with its tip at `tip`, hanging below it when `down` is 1 and above it when -1,
-/// outlined in `halo` so that it stands out from the bars behind it.
-fn paint_arrow(painter: &egui::Painter, tip: Pos2, down: f32, color: Color32, halo: Color32) {
-    let at = |x: f32, y: f32| tip + vec2(x, down * y);
-    painter.add(Shape::closed_line(
-        vec![
-            at(0.0, 0.0),
-            at(HALF_WIDTH, HEAD),
-            at(HALF_STEM, HEAD),
-            at(HALF_STEM, HEAD + STEM),
-            at(-HALF_STEM, HEAD + STEM),
-            at(-HALF_STEM, HEAD),
-            at(-HALF_WIDTH, HEAD),
-        ],
-        Stroke::new(2.0, halo),
-    ));
-    painter.add(Shape::convex_polygon(
-        vec![at(0.0, 0.0), at(HALF_WIDTH, HEAD), at(-HALF_WIDTH, HEAD)],
-        color,
-        Stroke::NONE,
-    ));
-    painter.rect_filled(
-        Rect::from_two_pos(at(-HALF_STEM, HEAD - 0.5), at(HALF_STEM, HEAD + STEM)),
-        0.0,
-        color,
-    );
 }
