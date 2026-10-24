@@ -109,7 +109,9 @@ use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 pub mod indicator_pane;
-pub use crate::chart::renderers::{Legend, LegendStatus, QuoteSide, StudyAction, StudyValue};
+pub use crate::chart::renderers::{
+    Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
+};
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
@@ -306,6 +308,7 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
+    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -509,6 +512,13 @@ impl Chart {
     /// Supplies a host-owned instrument image for the legend. `None` hides it.
     pub fn set_legend_badge(&mut self, badge: Option<egui::ImageSource<'static>>) {
         self.legend_badge = badge;
+    }
+
+    /// Paints `watermark` behind the series of the price pane, in addition to the symbol
+    /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
+    /// `None` removes it.
+    pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
+        self.watermark = watermark;
     }
 
     /// Supplies status marks and their host-defined meaning and colours.

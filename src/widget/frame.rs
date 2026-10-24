@@ -710,6 +710,9 @@ impl Chart {
 
         // Draw watermark overlay (if enabled)
         self.draw_watermark(&painter, chart_rect);
+        if let Some(watermark) = &self.watermark {
+            renderers::render_watermark(ui, &painter, chart_rect, watermark);
+        }
 
         if self.state.data().is_empty() {
             self.pump_marks(ui.ctx());

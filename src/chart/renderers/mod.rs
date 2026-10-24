@@ -22,6 +22,7 @@ mod session_breaks;
 mod tooltip;
 mod trading_lines;
 mod volume;
+mod watermark;
 
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
 pub use axis_currency::render_axis_currency;
@@ -51,3 +52,5 @@ pub use trading_lines::{
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{decimals, to_step};
 pub use volume::render_volume_bar;
+pub(crate) use watermark::render_watermark;
+pub use watermark::{Watermark, WatermarkLine};
