@@ -324,7 +324,9 @@ impl Chart {
             self.show_internal(ui, None, footprint)
         };
         if self.last_rendered_price_rect.width() > 1.0
-            && self.last_layout.is_none_or(|(previous, _)| previous != width)
+            && self
+                .last_layout
+                .is_none_or(|(previous, _)| previous != width)
         {
             self.last_layout = Some((width, frame));
         }
