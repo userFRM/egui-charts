@@ -11,6 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
+use egui_charts::ui::widget_bar::WatchlistQuote;
 
 const RETAINED_TRADES: usize = 100_000;
 
@@ -23,6 +24,8 @@ struct Simulation {
     price_ticks: i64,
     random: u64,
     id: u64,
+    /// The id of the first execution not yet handed to the time and sales panel.
+    tape: u64,
     trades: VecDeque<Tick>,
     history: Vec<Bar>,
     next_trade: DateTime<Utc>,
@@ -49,6 +52,7 @@ impl LiveFeed {
             price_ticks: (spec.start_price / tick_size).round() as i64,
             random: 0x5eed_u64.wrapping_mul(spec.seed),
             id: 0,
+            tape: 0,
             trades: VecDeque::new(),
             history: Vec::new(),
             next_trade: start - TimeDelta::days(7),
@@ -79,6 +83,7 @@ impl LiveFeed {
             price_ticks: sim.price_ticks,
             random: sim.random,
             id: sim.id,
+            tape: sim.tape,
             trades: sim.trades.clone(),
             history: sim.history.clone(),
             next_trade: sim.next_trade,
@@ -173,6 +178,44 @@ impl LiveFeed {
         instrument
     }
 
+    /// The executions the subscription received since the last call, at most the latest 10,000,
+    /// for the time and sales panel. A new symbol starts with its retained executions.
+    pub(super) fn drain_tape(&self) -> Vec<Tick> {
+        let mut sim = self.state();
+        let Some(extended_hours) = sim.subscription.as_ref().map(|sub| sub.extended_hours) else {
+            return Vec::new();
+        };
+        let start = sim
+            .trades
+            .partition_point(|trade| trade.id < Some(sim.tape))
+            .max(sim.trades.len().saturating_sub(10_000));
+        let tape = sim
+            .trades
+            .range(start..)
+            .filter_map(|trade| sim.shown_trade(trade, extended_hours))
+            .collect();
+        sim.tape = sim.id;
+        tape
+    }
+
+    /// The latest price and the close of the previous UTC day, for the watchlist row of the
+    /// chart symbol.
+    pub(super) fn day_change(&self) -> Option<(f64, f64)> {
+        let sim = self.state();
+        let midnight = sim.now.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+        let prev_close = match sim.trades.iter().rev().find(|trade| trade.ts < midnight) {
+            Some(trade) => trade.price,
+            None => {
+                sim.history
+                    .iter()
+                    .rev()
+                    .find(|bar| bar.time < midnight)?
+                    .close
+            }
+        };
+        Some((sim.price_ticks as f64 * sim.tick_size, prev_close))
+    }
+
     pub(super) fn paused(&self) -> bool {
         self.state().paused
     }
@@ -218,6 +261,27 @@ impl LiveFeed {
         );
         to_trade.min(to_second)
     }
+}
+
+/// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
+/// which stands for the previous close. `None` for symbols outside the catalog.
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<WatchlistQuote> {
+    let spec = DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))?;
+    let (tick_size, price_decimals) = if spec.start_price < 10.0 {
+        (0.0001, 4)
+    } else {
+        (0.01, 2)
+    };
+    let t = now.timestamp_millis() as f64 / 1000.0;
+    let phase = spec.seed as f64;
+    let swing = 0.02 * (t / 900.0 + phase).sin() + 0.002 * (t / 7.0 + 2.0 * phase).sin();
+    Some(WatchlistQuote {
+        last: (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size,
+        prev_close: spec.start_price,
+        price_decimals: Some(price_decimals),
+    })
 }
 
 impl Simulation {
