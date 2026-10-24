@@ -348,7 +348,12 @@ impl<'a> Legend<'a> {
                 let row_start = layout.pos;
                 if self.show_indicator_titles {
                     layout.text(
-                        study.name().to_owned(),
+                        if study.is_volume() {
+                            "Vol"
+                        } else {
+                            study.name()
+                        }
+                        .to_owned(),
                         typography::MD,
                         colors.text,
                         bounds.width(),
@@ -365,19 +370,20 @@ impl<'a> Legend<'a> {
                     }
                     if self.show_indicator_values && study.is_visible() {
                         let up = study.values().value(0, self.bar_index);
+                        let line = usize::from(up.is_none());
                         if let Some(value) = up.or_else(|| study.values().value(1, self.bar_index))
-                            && study.plot_style(usize::from(up.is_none())).visible
+                            && study.plot_style(line).visible
                         {
-                            let label = crate::scales::PriceFormatter::format(
-                                &crate::scales::VolumeFormatter {
-                                    precision: study.precision().unwrap_or(3),
-                                },
-                                value,
-                            );
+                            // The column colour without its transparency.
+                            let [r, g, b, _] = study
+                                .colors()
+                                .get(line)
+                                .map_or(colors.bar_color(up.is_some()), |color| *color)
+                                .to_srgba_unmultiplied();
                             layout.text(
-                                label,
+                                study.format_value(value),
                                 typography::MD,
-                                colors.bar_color(up.is_some()),
+                                Color32::from_rgb(r, g, b),
                                 bounds.width(),
                             );
                         }

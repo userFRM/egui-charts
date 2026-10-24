@@ -24,11 +24,8 @@ impl super::Chart {
             use crate::studies::Indicator;
             use crate::theme::ThemeExt;
             let mut study = crate::studies::Volume::default();
-            let alpha = ctx.active_theme().chart.volume_alpha;
-            study.set_colors(vec![
-                egui::Color32::from_rgba_unmultiplied(38, 198, 218, alpha),
-                egui::Color32::from_rgba_unmultiplied(236, 64, 122, alpha),
-            ]);
+            let chart = ctx.active_theme().chart;
+            study.set_colors(vec![chart.volume_up(), chart.volume_down()]);
             let id = self.add_indicator(Box::new(study));
             self.volume_study = Some(id);
         } else if let Some(id) = self.volume_study.take() {
@@ -112,12 +109,7 @@ pub(super) fn tags(
     if let Some(value) = study.values().value(2, bar)
         && map.range().contains(value)
     {
-        let label = crate::scales::PriceFormatter::format(
-            &crate::scales::VolumeFormatter {
-                precision: study.precision().unwrap_or(3),
-            },
-            value,
-        );
+        let label = study.format_value(value);
         occupied.push(crate::chart::rendering::axes::render_axis_value(
             painter,
             rect,
@@ -245,12 +237,17 @@ mod tests {
             .unwrap()
             .set_input("overlay", InputValue::Toggle(false))
             .unwrap();
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("show_average", InputValue::Toggle(true))
+            .unwrap();
         let painted = shapes(&ctx, &mut chart, 2.0, vec![]);
         assert!(
             painted.iter().any(|shape| matches!(shape,
                 egui::Shape::Text(text)
                     if text.galley.text().starts_with("Volume")
-                        && text.galley.text().matches("1.000M").count() == 2
+                        && text.galley.text().matches("1.00M").count() == 2
             )),
             "pane legend includes the columns and moving average"
         );

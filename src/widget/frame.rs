@@ -2160,18 +2160,7 @@ mod tests {
                 output.textures_delta.clear();
                 assert!(
                     output.shapes.iter().any(|shape| match &shape.shape {
-                        Shape::Rect(rect) =>
-                            rect.fill
-                                == if cfg!(feature = "studies") {
-                                    egui::Color32::from_rgba_unmultiplied(
-                                        38,
-                                        198,
-                                        218,
-                                        theme.chart.volume_alpha,
-                                    )
-                                } else {
-                                    theme.chart.volume_up()
-                                },
+                        Shape::Rect(rect) => rect.fill == theme.chart.volume_up(),
                         _ => false,
                     }),
                     "footprint keeps the volume histogram"
@@ -2254,6 +2243,13 @@ mod tests {
             config.show_indicator_last_val = hidden != 8;
             chart.set_main_series_visible(hidden != 11);
             frame(&ctx, &mut chart, 0.0, vec![]);
+            if let Some(volume) = chart.volume_study {
+                chart
+                    .indicator_mut(volume)
+                    .unwrap()
+                    .set_input("show_average", crate::studies::InputValue::Toggle(true))
+                    .unwrap();
+            }
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::Rect(rect)
                 if rect.fill == chart.config.bullish_color && chart.last_rendered_price_rect.contains(rect.rect.center()))), hidden != 11, "main series body: hidden={hidden}");
@@ -2283,9 +2279,9 @@ mod tests {
             }
             for (text, visible) in [
                 ("Vol 1", hidden == 10),
-                ("Volume", !matches!(hidden, 5 | 6 | 10 | 11)),
+                ("Vol", !matches!(hidden, 5 | 6 | 10 | 11)),
                 ("SMA 9", !matches!(hidden, 5 | 7 | 10 | 11)),
-                ("1.000", !matches!(hidden, 5 | 8 | 10 | 11)),
+                ("1", !matches!(hidden, 5 | 8 | 10 | 11)),
             ] {
                 assert_eq!(texts.contains(&text), visible, "{text}: hidden={hidden}");
             }
@@ -3116,9 +3112,9 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         use egui::Color32;
 
-        // Volume uses cyan and pink independently of candle colours.
+        // Volume uses the theme's volume colours with and without the volume study.
         // A second opacity checks that the default study inherits the applied theme.
-        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected, band) in [
+        for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
             (
                 Theme::dark(),
                 153,
@@ -3126,7 +3122,6 @@ mod tests {
                 ChartType::Candles,
                 0.12,
                 12.0,
-                [[23, 119, 131, 153], [142, 38, 73, 153]],
                 [[23, 100, 92, 153], [143, 50, 48, 153]],
             ),
             (
@@ -3136,7 +3131,6 @@ mod tests {
                 ChartType::Heikin,
                 0.12,
                 12.0,
-                [[8, 40, 44, 51], [47, 13, 24, 51]],
                 [[8, 33, 31, 51], [48, 17, 16, 51]],
             ),
             (
@@ -3146,7 +3140,6 @@ mod tests {
                 ChartType::Line,
                 0.25,
                 0.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
             (
@@ -3156,7 +3149,6 @@ mod tests {
                 ChartType::Area,
                 0.4,
                 6.0,
-                [[19, 99, 109, 128], [118, 32, 61, 128]],
                 [[19, 83, 77, 128], [120, 42, 40, 128]],
             ),
         ] {
@@ -3202,11 +3194,6 @@ mod tests {
             assert!(!dots.is_empty(), "missing volume selection handles");
             assert!(dots.iter().all(|dot| (dot.y - volume.top()).abs() < 0.001));
             let pitch = chart.state.time_scale().bar_spacing();
-            let expected = if cfg!(feature = "studies") {
-                expected
-            } else {
-                band
-            };
             for (colour, fraction) in expected.into_iter().zip([1.0, 0.5]) {
                 let colour =
                     Color32::from_rgba_premultiplied(colour[0], colour[1], colour[2], colour[3]);
