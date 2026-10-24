@@ -3,6 +3,7 @@
 use egui::{Color32, RichText, Ui};
 use serde::{Deserialize, Serialize};
 
+use crate::chart::{decimals, to_step};
 use crate::model::{Capabilities, OrderRequest, OrderSide, OrderType, TimeInForce, TradingRules};
 use crate::theme::ThemeExt;
 use crate::ui_kit::form::FormGrid;
@@ -569,20 +570,6 @@ impl OrderTicket {
 fn round_down(quantity: f64, step: f64) -> f64 {
     // The tolerance keeps 0.3 / 0.1 = 2.9999999999999996 at 3 steps.
     to_step(quantity, step, |steps| (steps + 1e-9).floor())
-}
-
-/// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
-/// step's decimals.
-pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
-    let scale = 10f64.powi(decimals(step) as i32);
-    (round(value / step) * step * scale).round() / scale
-}
-
-/// Decimals needed to write `step`, such as 2 for 0.25.
-fn decimals(step: f64) -> usize {
-    let text = format!("{step}");
-    text.split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
 }
 
 /// Rounds a quantity down to the symbol's step and checks its bounds.

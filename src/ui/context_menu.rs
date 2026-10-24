@@ -548,7 +548,7 @@ impl ChartContextMenu {
                 .tick_size
                 .filter(|tick| tick.is_finite() && *tick > 0.0)
                 .map_or(self.click_price, |tick| {
-                    crate::ui::trading::to_step(self.click_price, tick, f64::round)
+                    crate::chart::to_step(self.click_price, tick, f64::round)
                 });
             // Above the market a sell waits as a limit order and a buy as a stop order; below it,
             // the other way round. At the market either order can fill immediately.

@@ -19,7 +19,6 @@ use crate::services::{AccountEvent, Broker, Listener};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::Toasts;
 use crate::widget::Chart;
-pub(crate) use ticket::to_step;
 use ticket::{Market, OrderTicket, order_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
@@ -733,7 +732,7 @@ mod tests {
                     let end = if edge {
                         egui::pos2(x, mapping.rect.top())
                     } else if operation == "Modify order" {
-                        egui::pos2(x, mapping.price_to_y(103.0))
+                        egui::pos2(x, mapping.price_to_y(103.07))
                     } else {
                         start
                     };
@@ -768,10 +767,15 @@ mod tests {
                             let changed = broker.modified.lock().unwrap();
                             assert_eq!(changed.len(), 1);
                             assert_eq!(changed[0].0, order.id);
-                            let price = if edge { 128.0 } else { 103.0 };
+                            // Prices are written at the tick's decimals, brackets included.
+                            let (price, take_profit, stop_loss) = if edge {
+                                (128.0, 125.0, 131.0)
+                            } else {
+                                (103.07, 100.07, 106.07)
+                            };
                             assert_eq!(changed[0].1.order_type, OrderType::Limit(price));
-                            assert_eq!(changed[0].1.take_profit, Some(price - 3.0));
-                            assert_eq!(changed[0].1.stop_loss, Some(price + 3.0));
+                            assert_eq!(changed[0].1.take_profit, Some(take_profit));
+                            assert_eq!(changed[0].1.stop_loss, Some(stop_loss));
                         }
                         _ => {
                             let quantity = if operation == "Close position" {

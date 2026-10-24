@@ -185,17 +185,20 @@ pub fn render_trading_lines<'a>(
                 Level::Entry => {
                     if let Some(price) = price {
                         let delta = price - entry_price(&request.order_type).unwrap_or(price);
+                        // The other levels keep their distance, written at the tick's decimals.
+                        let scale = 10f64.powi(decimals(options.tick_size) as i32);
+                        let shift = |other: f64| ((other + delta) * scale).round() / scale;
                         changed.order_type = match request.order_type {
                             OrderType::Limit(_) => OrderType::Limit(price),
                             OrderType::Stop(_) => OrderType::Stop(price),
                             OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
                                 stop: price,
-                                limit: limit + delta,
+                                limit: shift(limit),
                             },
                             other => other,
                         };
-                        changed.take_profit = changed.take_profit.map(|exit| exit + delta);
-                        changed.stop_loss = changed.stop_loss.map(|exit| exit + delta);
+                        changed.take_profit = changed.take_profit.map(shift);
+                        changed.stop_loss = changed.stop_loss.map(shift);
                     }
                 }
                 Level::TakeProfit => changed.take_profit = price,
@@ -205,6 +208,20 @@ pub fn render_trading_lines<'a>(
         }
     }
     TradingLines { action, tags }
+}
+
+/// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
+/// step's decimals.
+pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
+    let scale = 10f64.powi(decimals(step) as i32);
+    (round(value / step) * step * scale).round() / scale
+}
+
+/// Decimals needed to write `step`, such as 2 for 0.25.
+pub(crate) fn decimals(step: f64) -> usize {
+    let text = format!("{step}");
+    text.split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
 }
 
 /// The price an order waits for: its limit or stop price, or the stop of a stop-limit order.
@@ -285,7 +302,7 @@ impl Label<'_> {
             {
                 let price =
                     mapping.y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom()));
-                value = (price / options.tick_size).round() * options.tick_size;
+                value = to_step(price, options.tick_size, f64::round);
                 if value.is_finite() {
                     ui.ctx().data_mut(|data| data.insert_temp(key, value));
                 }
