@@ -150,7 +150,8 @@ pub struct ChartSyncOptions {
     pub sync_time_axis: bool,
     /// Synchronize the hovered timestamp.
     pub sync_crosshair: bool,
-    /// Synchronize completed drawings, only between charts of the same symbol.
+    /// Synchronize completed main-pane drawings between charts of the same symbol.
+    /// Study-owned drawings stay local because study ids and scales belong to each chart.
     pub sync_drawings: bool,
     /// Synchronize symbol changes. A host without a feed must supply replacement bars.
     pub sync_symbol: bool,

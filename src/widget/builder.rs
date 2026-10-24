@@ -108,6 +108,7 @@ impl Chart {
             },
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
+            element_studies: Default::default(),
             #[cfg(feature = "studies")]
             volume_setting: false,
             #[cfg(feature = "studies")]

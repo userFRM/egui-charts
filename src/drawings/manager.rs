@@ -178,6 +178,9 @@ pub struct DrawingManager {
 
     /// Pane used to project and drag screen-anchored annotations.
     pane_rect: Rect,
+    pane: Option<usize>,
+    pane_members: Vec<Option<usize>>,
+    pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     pub(crate) text_editor: Option<TextEditState>,
 
     // Services
@@ -236,6 +239,9 @@ impl DrawingManager {
             preview_point: false,
             next_id: 0,
             pane_rect: Rect::NOTHING,
+            pane: None,
+            pane_members: vec![None],
+            pane_clips: std::collections::HashMap::new(),
             text_editor: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
@@ -463,6 +469,7 @@ impl DrawingManager {
                     .iter()
                     .filter(|d| {
                         d.is_visible_on_timeframe(&self.curr_timeframe)
+                            && self.pane_members.contains(&d.pane)
                             && self.dragging_handle.is_none_or(|(id, _)| id != d.id)
                             && self.drag_group.iter().all(|old| old.id != d.id)
                     })
@@ -482,7 +489,13 @@ impl DrawingManager {
     ///
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
-        if !drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+        if !drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            || (!self.pane_clips.is_empty()
+                && !self
+                    .pane_clips
+                    .get(&drawing.pane)
+                    .is_some_and(|rect| rect.contains(point)))
+        {
             return None;
         }
         HandleService::hit_test_handle(drawing, point, self.options.handle_config.size)
@@ -518,6 +531,7 @@ impl DrawingManager {
                 .iter()
                 .filter(|d| {
                     d.id != drawing_id
+                        && self.pane_members.contains(&d.pane)
                         && self.selection.is_selected(d.id)
                         && !d.locked
                         && d.is_visible_on_timeframe(&self.curr_timeframe)
@@ -720,6 +734,7 @@ impl DrawingManager {
                 drawing
             }
         };
+        drawing.pane = self.pane;
         drawing.z_order = self.top_z_order();
         self.preview_point = false;
         drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
@@ -1096,6 +1111,41 @@ impl DrawingManager {
         }
     }
 
+    /// Starts a widget pane pass. Standalone managers keep the default main-pane context.
+    pub(crate) fn set_pane(
+        &mut self,
+        pane: Option<usize>,
+        members: Vec<Option<usize>>,
+        rect: Rect,
+    ) {
+        if pane.is_none() {
+            self.pane_clips.clear();
+        }
+        for member in &members {
+            self.pane_clips.insert(*member, rect);
+        }
+        self.pane = pane;
+        self.pane_members = members;
+        self.pane_rect = rect;
+    }
+
+    pub(crate) fn owns_pane(&self, drawing: &Drawing) -> bool {
+        self.pane_members.contains(&drawing.pane)
+    }
+
+    pub(crate) fn update_pane_screen_coords(
+        &mut self,
+        bar_to_x: impl Fn(f32) -> f32 + Copy,
+        price_to_y: impl Fn(f64) -> f32 + Copy,
+    ) {
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            if self.pane_members.contains(&drawing.pane) {
+                drawing.update_screen_coords(bar_to_x, price_to_y);
+                drawing.update_pane_coords(self.pane_rect);
+            }
+        }
+    }
+
     /// Projects anchored annotations into `pane` after chart-coordinate updates.
     /// The chart calls this automatically; standalone managers call it before rendering.
     pub fn update_pane_anchors(&mut self, pane: Rect) {
@@ -1149,6 +1199,13 @@ impl DrawingManager {
             .into_iter()
             .rev()
             .filter(|d| d.is_visible_on_timeframe(&self.curr_timeframe))
+            .filter(|d| {
+                self.pane_clips.is_empty()
+                    || self
+                        .pane_clips
+                        .get(&d.pane)
+                        .is_some_and(|rect| rect.contains(point))
+            })
             .find(|drawing| {
                 let paint = painted
                     .iter()
@@ -1295,10 +1352,14 @@ impl DrawingManager {
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         let painter = &painter.with_clip_rect(price_rect);
         let mut painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
-        painted.clear();
+        painted.retain(|paint| {
+            self.drawings
+                .iter()
+                .any(|d| d.id == paint.id && !self.owns_pane(d))
+        });
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
-            if drawing.is_visible_on_timeframe(&self.curr_timeframe) {
+            if self.owns_pane(drawing) && drawing.is_visible_on_timeframe(&self.curr_timeframe) {
                 let start = painter.ctx().graphics(|g| {
                     g.get(painter.layer_id())
                         .map_or(0, |list| list.next_idx().0)
@@ -1318,13 +1379,17 @@ impl DrawingManager {
         }
 
         // Render current drawing being created
-        if let Some(ref drawing) = self.curr_drawing {
+        if let Some(ref drawing) = self.curr_drawing
+            && self.owns_pane(drawing)
+        {
             drawing.render(painter, price_rect, view);
         }
 
         // Render handles for every visible selected drawing.
         for drawing in self.drawings.iter().filter(|d| {
-            self.selection.is_selected(d.id) && d.is_visible_on_timeframe(&self.curr_timeframe)
+            self.selection.is_selected(d.id)
+                && self.owns_pane(d)
+                && d.is_visible_on_timeframe(&self.curr_timeframe)
         }) {
             self.render_handles(painter, drawing);
         }
@@ -1392,17 +1457,20 @@ mod tests {
                 .collect();
             drawing.text = Some("A long text annotation".into());
             manager.drawings.push(drawing);
-            ctx.run_ui(RawInput::default(), |ui| {
-                let view = ChartView {
-                    instrument: None,
-                    bars: &[],
-                    revision: 0,
-                    bar_to_x: &|b| b * 10.0,
-                    price_to_y: &|p| 500.0 - p as f32,
-                };
-                manager.render_all(ui.painter(), pane, &view);
-            })
-            .drop_without_applying_deltas();
+            let render = |manager: &DrawingManager| {
+                ctx.run_ui(RawInput::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &[],
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        price_to_y: &|p| 500.0 - p as f32,
+                    };
+                    manager.render_all(ui.painter(), pane, &view);
+                })
+                .drop_without_applying_deltas();
+            };
+            render(&manager);
             assert_eq!(
                 manager.hit_test(Pos2::new(hit.0, hit.1)),
                 Some(7),
@@ -1419,6 +1487,12 @@ mod tests {
             }
             manager.drawings[0].visible = false;
             assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
+            manager.delete_drawing(7);
+            render(&manager);
+            assert!(
+                manager.painted.lock().unwrap().is_empty(),
+                "deleted geometry is released"
+            );
         }
     }
 

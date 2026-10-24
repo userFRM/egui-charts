@@ -270,8 +270,8 @@ impl Chart {
     ///
     /// On price-based types the time scale and reported indices count elements, one OHLC bar
     /// per brick, line, column or range bar. Each carries the last contributing bar's time.
-    /// Price-based types keep studies, drawings and markers but do not draw, hit or edit them.
-    /// Studies continue to update and all three appear again on time-based types.
+    /// Studies use element OHLC on price-based types; time annotations follow element slots.
+    /// Source-bar study results remain available through [`Self::indicators`].
     ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
@@ -304,6 +304,10 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        if let Some(wait) = self.refresh_element_studies(ui.input(|i| i.time)) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
         let frame = ui.ctx().cumulative_frame_nr();
         let width = ui.available_width();
         let resized = self
@@ -318,7 +322,7 @@ impl Chart {
             .indicators()
             .iter()
             .any(|study| !study.is_overlay() && study.is_visible());
-        let response = if has_panes && !self.chart_type.is_time_independent() {
+        let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
             self.show_internal(ui, None, footprint)
@@ -553,22 +557,21 @@ impl Chart {
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
-        let is_drawing_interaction = time_based
-            && (self.drawings.active_tool.is_some()
-                || self.drawings.dragging_handle.is_some()
-                || self.drawings.text_editor.is_some()
-                || self.drawings.curr_drawing.is_some()
-                || ui
-                    .input(|i| i.pointer.press_origin())
-                    .is_some_and(|origin| {
-                        self.drawings
-                            .selected_ids()
-                            .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
-                            || self
-                                .drawings
-                                .hit_test(origin)
-                                .is_some_and(|id| self.drawings.is_selected(id))
-                    }));
+        let is_drawing_interaction = self.drawings.active_tool.is_some()
+            || self.drawings.dragging_handle.is_some()
+            || self.drawings.text_editor.is_some()
+            || self.drawings.curr_drawing.is_some()
+            || ui
+                .input(|i| i.pointer.press_origin())
+                .is_some_and(|origin| {
+                    self.drawings
+                        .selected_ids()
+                        .any(|id| self.drawings.hit_test_handle_by_id(origin, id).is_some())
+                        || self
+                            .drawings
+                            .hit_test(origin)
+                            .is_some_and(|id| self.drawings.is_selected(id))
+                });
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
             &response,
@@ -688,12 +691,16 @@ impl Chart {
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
         let transform = self.state.fit_price_scale_with_series(
-            self.studies
-                .indicators()
-                .iter()
-                .zip(&self.study_autoscale)
-                .filter(|(study, autoscale)| time_based && **autoscale && !study.is_volume())
-                .map(|(study, _)| study.as_ref()),
+            (if self.chart_type.is_time_independent() {
+                &self.element_studies.studies
+            } else {
+                &self.studies
+            })
+            .indicators()
+            .iter()
+            .zip(&self.study_autoscale)
+            .filter(|(study, autoscale)| **autoscale && !study.is_volume())
+            .map(|(study, _)| study.as_ref()),
             self.main_series_visible,
             series_values,
         );
@@ -919,12 +926,10 @@ impl Chart {
             });
         }
 
-        // Bar-indexed studies have no position on an element time scale.
-        let hidden_studies = crate::studies::IndicatorRegistry::new();
-        let studies = if time_based {
-            &self.studies
+        let studies = if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
         } else {
-            &hidden_studies
+            &self.studies
         };
         // Draw indicators
         for study in studies
@@ -1000,7 +1005,7 @@ impl Chart {
             let price = coords.y_to_price(click_pos.y);
 
             // Drawings sit on top of the series, so they take priority.
-            let drawing_hit = self.drawings.hit_test(click_pos).filter(|_| time_based);
+            let drawing_hit = self.drawings.hit_test(click_pos);
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
                 // Right-clicking a drawing selects it and
@@ -1065,10 +1070,23 @@ impl Chart {
         self.render_main_chart_selection(&painter, &coords, visible_data, main_visible_range);
 
         // Render bar marks (Widget API annotations)
-        if time_based && self.main_series_visible && !self.marks.is_empty() {
+        if self.main_series_visible && !self.marks.is_empty() {
+            let markers;
+            let marks = if time_based {
+                &self.marks
+            } else {
+                markers = rendering::candles::price_based::markers(
+                    &self.marks,
+                    &self.state,
+                    self.chart_type,
+                    &self.chart_type_params,
+                    self.older_bars_drawn,
+                );
+                &markers
+            };
             renderers::render_markers(
                 &clipped_price_ctx,
-                &self.marks,
+                marks,
                 self.state.shown(),
                 &price_map,
                 &crate::chart::coords::ChartMapping {
@@ -1393,7 +1411,7 @@ impl Chart {
         let time_labels = painter.add(egui::Shape::Noop);
 
         // Handle drawing tools
-        if time_based {
+        {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
 
@@ -1421,20 +1439,6 @@ impl Chart {
             self.cursor_modes = cursor_modes;
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
-        }
-
-        if !time_based
-            && (!self.study_ids.is_empty()
-                || !self.drawings.drawings.is_empty()
-                || !self.marks.is_empty())
-        {
-            painter.text(
-                price_rect.left_bottom() + Vec2::new(8.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Studies, drawings and markers are not shown on this chart type",
-                egui::FontId::proportional(typography::SM),
-                self.config.text_color,
-            );
         }
 
         // Render "Jump to Latest" button
@@ -1543,11 +1547,7 @@ impl Chart {
                     .and_then(|index| self.state.shown().get(index))
                     .map(|bar| bar.close);
                 legend.bar_index = selected;
-                legend.studies = if time_based {
-                    self.studies.indicators()
-                } else {
-                    &[]
-                };
+                legend.studies = self.rendered_studies().indicators();
                 legend.show_volume = self.main_series_visible
                     && self.chart_type.supports_volume()
                     && self.config.show_legend_volume;

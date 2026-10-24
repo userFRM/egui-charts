@@ -265,6 +265,7 @@ pub struct Chart {
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     #[cfg(feature = "studies")]
     volume_setting: bool,
     #[cfg(feature = "studies")]
@@ -582,9 +583,7 @@ impl Chart {
             .padding
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let study_axes = if !self.chart_type.is_time_independent()
-            && (self.config.show_left_axis || self.config.show_right_axis)
-        {
+        let study_axes = if self.config.show_left_axis || self.config.show_right_axis {
             self.studies
                 .indicators()
                 .iter()

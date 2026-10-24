@@ -4155,24 +4155,17 @@ mod tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            let studies_visible = kind == ChartType::Candles;
-            assert_eq!(
-                text.iter().any(|text| text == "SMA: SMA(2)"),
-                studies_visible,
+            assert!(text.iter().any(|text| text == "SMA: SMA(2)"), "{text:?}");
+            // The two-element average is the sum of the displayed closes divided by two.
+            assert!(
+                text.contains(&format!(
+                    "{:.3}",
+                    (bars[index - 1].close + bars[index].close) / 2.0
+                )),
                 "{text:?}"
             );
-            if studies_visible {
-                // The two-bar average is the sum of these closes divided by two.
-                assert!(
-                    text.contains(&format!(
-                        "{:.3}",
-                        (bars[index - 1].close + bars[index].close) / 2.0
-                    )),
-                    "{text:?}"
-                );
-                assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
-                assert!(text.iter().any(|text| text == "∅"), "{text:?}");
-            }
+            assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
+            assert!(text.iter().any(|text| text == "∅"), "{text:?}");
             assert!(
                 !text
                     .iter()

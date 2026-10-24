@@ -198,19 +198,35 @@ mod tests {
     /// edit; double-click reopens it, and Escape discards the draft without deselecting.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
-        for tool in [
+        for (tool, pane) in [
             DrawingToolType::TextLabel,
             DrawingToolType::AnchoredText,
             DrawingToolType::Note,
             DrawingToolType::AnchoredNote,
             DrawingToolType::Callout,
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|tool| [(tool, false), (tool, true)])
+        {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
+            if pane {
+                chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Pane", |bars| {
+                        vec![crate::studies::IndicatorValue::Single(15.0); bars.len()]
+                    })
+                    .with_overlay(false),
+                ));
+            }
             frame(&ctx, &mut chart, 0.0, vec![]);
             chart.drawings_mut().set_active_tool(Some(tool));
-            let from = pos2(300.0, 220.0);
-            let to = pos2(420.0, 280.0);
+            let rect = if pane {
+                chart.get_rendered_indicator_panes()[0].chart_rect
+            } else {
+                chart.get_rendered_price_rect()
+            };
+            let from = rect.min + rect.size() * egui::vec2(0.4, 0.4);
+            let to = rect.min + rect.size() * egui::vec2(0.6, 0.7);
             let button = |pos, pressed| Event::PointerButton {
                 pos,
                 button: PointerButton::Primary,
@@ -285,6 +301,10 @@ mod tests {
                 );
                 step(&mut chart, vec![button(on_text, false)]);
             }
+            assert!(
+                chart.take_indicator_settings_request().is_none(),
+                "drawing double click owns its pane"
+            );
             step(
                 &mut chart,
                 vec![

@@ -60,14 +60,27 @@ impl Chart {
     /// Projects retained timestamps against the current rendered bars, including whitespace.
     pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
+        let state = &self.state;
+        let chart_type = self.chart_type;
+        let params = &self.chart_type_params;
+        let older_bars_drawn = self.older_bars_drawn;
         let mut project = |point: &mut ChartPoint| {
-            if let Some((time, _)) = point.time_anchor
-                && let Some(index) = index_at(bars, time)
-            {
-                // Several price-based elements can share a time; keep an already matching rank.
-                if time_at(bars, point.bar_idx as f64) != Some(time) {
-                    point.bar_idx = index as f32;
-                    point.time_anchor = Some((time, point.bar_idx));
+            if let Some((time, _)) = point.time_anchor {
+                let index = crate::chart::rendering::candles::price_based::element_index_at(
+                    state,
+                    chart_type,
+                    params,
+                    older_bars_drawn,
+                    time,
+                )
+                .map(|index| index as f64)
+                .or_else(|| index_at(bars, time));
+                if let Some(index) = index {
+                    // Keep the rank of an anchor already on one of several equal-time elements.
+                    if time_at(bars, point.bar_idx as f64) != Some(time) {
+                        point.bar_idx = index as f32;
+                        point.time_anchor = Some((time, point.bar_idx));
+                    }
                 }
             }
         };

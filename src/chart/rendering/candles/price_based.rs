@@ -10,6 +10,9 @@
 //! Builders keep only the newest elements (10,000 bricks or lines, 5,000 columns or range bars), and
 //! Renko and range bars start late on a long history. The time scale starts at the oldest kept element.
 
+mod studies;
+pub(crate) use studies::ElementStudies;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -233,6 +236,63 @@ pub(super) fn range_bars(
     )
 }
 
+/// The element containing a loaded time. Columns include quiet bars up to the next column's
+/// start; other elements cover the interval up to their completion. Repeated completions
+/// choose the first slot. Times in unloaded history or outside the source series have no slot.
+pub(crate) fn element_index_at(
+    state: &crate::model::ChartState,
+    chart_type: ChartType,
+    params: &ChartTypeParams,
+    older_bars_drawn: bool,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Option<usize> {
+    let source = &state.data().bars;
+    let (first, last) = source.first().zip(source.last())?;
+    if !state.shows_elements() || time < first.time || time > last.time {
+        return None;
+    }
+    let elements = state.shown();
+    if chart_type == ChartType::PointAndFigure {
+        let built = point_and_figure(source, state.revision(), params);
+        if time < built.elements.first()?.start_time {
+            return None;
+        }
+        return Some(
+            built
+                .elements
+                .partition_point(|column| column.start_time <= time)
+                .saturating_sub(1),
+        );
+    }
+    if !older_bars_drawn && time < elements.first()?.time {
+        return None;
+    }
+    Some(
+        elements
+            .partition_point(|bar| bar.time < time)
+            .min(elements.len() - 1),
+    )
+}
+
+/// Maps host marker times to their element slots, excluding unloaded history.
+pub(crate) fn markers(
+    markers: &[crate::model::Marker],
+    state: &crate::model::ChartState,
+    chart_type: ChartType,
+    params: &ChartTypeParams,
+    older_bars_drawn: bool,
+) -> Vec<crate::model::Marker> {
+    markers
+        .iter()
+        .filter_map(|marker| {
+            let index = element_index_at(state, chart_type, params, older_bars_drawn, marker.time)?;
+            let mut marker = marker.clone();
+            marker.time = state.shown()[index].time;
+            Some(marker)
+        })
+        .collect()
+}
+
 /// One bar per kept element, and whether older elements were left out by the element or work limit.
 /// Time-based types, invalid parameters and empty builds keep the source bars' axes.
 pub(crate) fn elements(
@@ -279,6 +339,247 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// Studies consume element OHLC, and time annotations land on completion slots.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn studies_and_annotations_follow_price_based_elements() {
+        use crate::{
+            drawings::DrawingToolType,
+            model::{BarData, Marker, MarkerPos},
+            studies::{CustomIndicator, IndicatorValue, RSI, SMA},
+            widget::{
+                Chart, SeriesId,
+                test_frames::{frame, shapes},
+            },
+        };
+        use egui::{Color32, Context, Event, Modifiers, PointerButton, Shape};
+        for kind in [
+            ChartType::Renko,
+            ChartType::Kagi,
+            ChartType::LineBreak,
+            ChartType::PointAndFigure,
+            ChartType::Range,
+        ] {
+            let ctx = Context::default();
+            let closes: Vec<_> = (0..8)
+                .flat_map(|_| [100.0, 103.0, 101.0, 104.0, 100.0, 105.0])
+                .collect();
+            let source = bars(0, &closes, None);
+            let mut chart = Chart::new(BarData::from_bars(source.clone()));
+            let sma = chart.add_indicator(Box::new(SMA::new(3)));
+            let study_color = Color32::from_rgb(17, 83, 149);
+            chart
+                .indicator_mut(sma)
+                .unwrap()
+                .set_colors(vec![study_color]);
+            chart.add_indicator(Box::new(RSI::new(2)));
+            chart.add_indicator(Box::new(CustomIndicator::new("Fit", |bars| {
+                vec![IndicatorValue::Single(120.0); bars.len()]
+            })));
+            assert_eq!(
+                chart
+                    .indicators()
+                    .find(|(id, _)| *id == sma)
+                    .unwrap()
+                    .1
+                    .values()
+                    .value(0, 2),
+                Some(304.0 / 3.0)
+            );
+            chart.set_chart_type_params(ChartTypeParams {
+                kagi_reversal: 1.0,
+                ..Default::default()
+            });
+            chart.set_chart_type(kind);
+            chart.set_visible_bars(300);
+            let marker = Marker::new(source[16].time)
+                .with_pos(MarkerPos::InBar)
+                .with_text("element marker");
+            chart.set_markers(SeriesId::MAIN, vec![marker.clone()]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            frame(&ctx, &mut chart, 0.15, vec![]);
+            assert!(
+                chart.state.price_scale().range().max >= 120.0,
+                "overlay fit on {kind:?}"
+            );
+            assert_eq!(
+                chart.get_rendered_indicator_panes().len(),
+                1,
+                "RSI pane on {kind:?}"
+            );
+            assert_eq!(
+                chart
+                    .indicators()
+                    .find(|(id, _)| *id == sma)
+                    .unwrap()
+                    .1
+                    .values()
+                    .value(0, 2),
+                Some(304.0 / 3.0)
+            );
+            let elements = chart.state.shown().to_vec();
+            let value_at = |at| {
+                chart
+                    .study_values_at(at)
+                    .into_iter()
+                    .find(|row| row.study == "SMA")
+                    .unwrap()
+                    .value
+            };
+            for at in 2..elements.len() {
+                let want = elements[at - 2..=at]
+                    .iter()
+                    .map(|bar| bar.close)
+                    .sum::<f64>()
+                    / 3.0;
+                assert!(
+                    (value_at(at).unwrap() - want).abs() < 1e-9,
+                    "{kind:?} SMA at {at}"
+                );
+            }
+            if kind == ChartType::Renko {
+                // The first three one-unit closes are 101, 102, 103: SMA(3) = 102.
+                assert_eq!(value_at(2), Some(102.0));
+            }
+            assert!(!chart.study_values_at(2).is_empty());
+            let at = elements
+                .partition_point(|bar| bar.time < marker.time)
+                .min(elements.len() - 1);
+            let x = chart.get_chart_mapping().idx_to_x(at);
+            let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+            let map = chart.get_chart_mapping();
+            let first_value = chart
+                .study_values_at(2)
+                .into_iter()
+                .find(|row| row.study == "SMA")
+                .unwrap()
+                .value
+                .unwrap();
+            let first = egui::pos2(map.idx_to_x(2), map.price_to_y(first_value));
+            assert!(
+                painted.iter().any(|shape| match shape {
+                    Shape::LineSegment { points, stroke } =>
+                        stroke.color == study_color
+                            && points.iter().any(|p| p.distance(first) < 0.1),
+                    Shape::Path(path) =>
+                        path.stroke.color == egui::epaint::ColorMode::Solid(study_color)
+                            && path.points.iter().any(|p| p.distance(first) < 0.1),
+                    _ => false,
+                }),
+                "SMA geometry on {kind:?}"
+            );
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "element marker" && (text.pos.x + text.galley.size().x * 0.5 - x).abs() < 0.1)), "marker slot on {kind:?}");
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::TrendLine));
+            let mut now = 0.2;
+            for index in [2, 5] {
+                let pos = egui::pos2(map.idx_to_x(index), map.price_to_y(102.0));
+                for events in [
+                    vec![Event::PointerMoved(pos)],
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    }],
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                ] {
+                    now += 0.05;
+                    frame(&ctx, &mut chart, now, events);
+                }
+            }
+            assert_eq!(chart.drawings().drawings.len(), 1, "draw on {kind:?}");
+            let saved = chart.save_drawings().unwrap();
+            let times: Vec<_> = saved.drawings[0]
+                .points
+                .iter()
+                .map(|point| point.ts_ms)
+                .collect();
+            chart.set_chart_type(ChartType::Candles);
+            frame(&ctx, &mut chart, 0.6, vec![]);
+            assert_eq!(
+                chart.save_drawings().unwrap().drawings[0]
+                    .points
+                    .iter()
+                    .map(|p| p.ts_ms)
+                    .collect::<Vec<_>>(),
+                times
+            );
+            chart.set_chart_type(kind);
+            frame(&ctx, &mut chart, 0.7, vec![]);
+            assert_eq!(
+                chart.save_drawings().unwrap().drawings[0]
+                    .points
+                    .iter()
+                    .map(|p| p.ts_ms)
+                    .collect::<Vec<_>>(),
+                times
+            );
+            // A live correction must update every affected element output, without changing bar results.
+            let mut live = source.last().unwrap().clone();
+            live.close = 108.0;
+            live.high = 108.0;
+            chart.update(SeriesId::MAIN, live);
+            frame(&ctx, &mut chart, 1.0, vec![]);
+            let elements = chart.state.shown();
+            let output = chart
+                .study_values_at(elements.len() - 1)
+                .into_iter()
+                .find(|row| row.study == "SMA")
+                .unwrap()
+                .value;
+            let last = elements.len() - 1;
+            let want = elements[last - 2..]
+                .iter()
+                .map(|bar| bar.close)
+                .sum::<f64>()
+                / 3.0;
+            assert!((output.unwrap() - want).abs() < 1e-9, "live {kind:?}");
+            chart
+                .indicator_mut(sma)
+                .unwrap()
+                .set_input("period", crate::studies::InputValue::Length(2))
+                .unwrap();
+            frame(&ctx, &mut chart, 1.5, vec![]);
+            let elements = chart.state.shown();
+            let output = chart
+                .study_values_at(1)
+                .into_iter()
+                .find(|row| row.study == "SMA")
+                .unwrap()
+                .value;
+            assert_eq!(
+                output,
+                Some((elements[0].close + elements[1].close) / 2.0),
+                "edited input on {kind:?}"
+            );
+            if kind == ChartType::PointAndFigure {
+                // Quiet bars at 109 and 108 still belong to the up column, before the 107 reversal.
+                let quiet = bars(0, &[100.0, 110.0, 109.0, 108.0, 107.0], None);
+                chart.set_markers(
+                    SeriesId::MAIN,
+                    vec![
+                        Marker::new(quiet[2].time)
+                            .with_pos(MarkerPos::InBar)
+                            .with_text("quiet marker"),
+                    ],
+                );
+                chart.set_data(SeriesId::MAIN, quiet);
+                frame(&ctx, &mut chart, 2.0, vec![]);
+                let x = chart.get_chart_mapping().idx_to_x(0);
+                let painted = shapes(&ctx, &mut chart, 2.1, vec![]);
+                assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "quiet marker" && (text.pos.x + text.galley.size().x * 0.5 - x).abs() < 0.1)), "quiet time belongs to the existing column");
+            }
+        }
     }
 
     #[test]

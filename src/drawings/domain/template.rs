@@ -21,6 +21,7 @@ impl DrawingTemplate {
         settings.chart_points.clear();
         settings.level_ys.clear();
         settings.screen_anchor = None;
+        settings.pane = None;
         settings.completed = false;
         Self { settings }
     }
@@ -49,6 +50,7 @@ impl DrawingTemplate {
             level_ys: drawing.level_ys.clone(),
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
+            pane: drawing.pane,
             z_order: drawing.z_order,
             ..self.settings.clone()
         };

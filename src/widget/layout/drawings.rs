@@ -36,7 +36,12 @@ impl DrawingLinks {
         let mut changes = Vec::new();
         let mut current = HashSet::new();
         for (slot, chart) in charts.iter().take(count).enumerate() {
-            for drawing in &chart.drawings().drawings {
+            for drawing in chart
+                .drawings()
+                .drawings
+                .iter()
+                .filter(|d| d.pane.is_none())
+            {
                 let Ok(style) = serde_json::to_string(drawing) else {
                     continue;
                 };
@@ -112,7 +117,12 @@ impl DrawingLinks {
         // Cache the propagated state too, so receiver updates cannot echo back next frame.
         self.previous.clear();
         for (slot, chart) in charts.iter().take(count).enumerate() {
-            for drawing in &chart.drawings().drawings {
+            for drawing in chart
+                .drawings()
+                .drawings
+                .iter()
+                .filter(|d| d.pane.is_none())
+            {
                 if let Ok(style) = serde_json::to_string(drawing) {
                     self.previous.insert(
                         (slot, drawing.id),
@@ -321,5 +331,12 @@ mod tests {
         let mapped = map_drawing(drawing, &source, &target).unwrap();
         assert_eq!(mapped.chart_points[0].bar_idx, 1.5);
         assert_eq!(mapped.chart_points[1].bar_idx, 3.5);
+        // Study ids are local to each chart, so pane drawings cannot be mirrored by id.
+        let mut owned = drawing.clone();
+        owned.pane = Some(7);
+        source.drawings_mut().add_synced_drawing(owned);
+        let mut local = DrawingLinks::default();
+        local.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        assert!(target.drawings().drawings.iter().all(|d| d.pane.is_none()));
     }
 }

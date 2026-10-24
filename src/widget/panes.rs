@@ -38,7 +38,7 @@ impl Chart {
                     self.study_ids
                         .iter()
                         .position(|study| study == id)
-                        .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
+                        .is_some_and(|idx| self.rendered_studies().indicators()[idx].is_visible())
                 })
             })
             .filter(|(_, pane)| maximized.is_none_or(|id| id == pane.id))
@@ -132,6 +132,11 @@ impl Chart {
             )
             .inner;
 
+        let studies = if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
+        };
         // Render separate pane indicators below the main chart
         let (start_idx, end_idx) = self.state.visible_range();
         let visible_range = start_idx..end_idx;
@@ -141,7 +146,7 @@ impl Chart {
         let coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
             time_scale.right_offset(),
-            self.state.data().len().saturating_sub(1),
+            self.state.shown().len().saturating_sub(1),
             start_idx,
         );
 
@@ -176,7 +181,7 @@ impl Chart {
             let mut shared_range = (f64::INFINITY, f64::NEG_INFINITY);
             for id in &members {
                 let idx = self.study_ids.iter().position(|study| study == id).unwrap();
-                let study = self.studies.indicators()[idx].as_ref();
+                let study = studies.indicators()[idx].as_ref();
                 if study.is_visible() {
                     let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
                         .calculate_y_range(study, &displayed_range);
@@ -190,7 +195,7 @@ impl Chart {
                 .iter()
                 .find_map(|id| {
                     let idx = self.study_ids.iter().position(|study| study == id)?;
-                    let study = self.studies.indicators()[idx].as_ref();
+                    let study = studies.indicators()[idx].as_ref();
                     if !study.is_visible() {
                         return None;
                     }
@@ -219,7 +224,7 @@ impl Chart {
                 shared_range = (f64::INFINITY, f64::NEG_INFINITY);
                 for id in &members {
                     let idx = self.study_ids.iter().position(|study| study == id).unwrap();
-                    let study = self.studies.indicators()[idx].as_ref();
+                    let study = studies.indicators()[idx].as_ref();
                     if study.is_visible() {
                         for line in (0..study.line_cnt()).filter(|line| {
                             let plot = study.plot_style(*line);
@@ -247,13 +252,14 @@ impl Chart {
                 transform.to_scale(shared_range.1),
             );
             let map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let mut drawing_response = None;
             let mut member_row = 0;
             let mut axis_tags = Vec::new();
             for id in members {
                 let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
                     continue;
                 };
-                let indicator = &self.studies.indicators()[idx];
+                let indicator = &studies.indicators()[idx];
                 if !indicator.is_visible() {
                     continue;
                 }
@@ -332,7 +338,7 @@ impl Chart {
                                 .filter_map(|id| {
                                     self.study_ids.iter().position(|study| study == id)
                                 })
-                                .map(|idx| self.studies.indicators()[idx].as_ref())
+                                .map(|idx| studies.indicators()[idx].as_ref())
                                 .filter(|study| study.is_visible())
                                 .flat_map(|study| {
                                     (0..study.line_cnt())
@@ -387,11 +393,10 @@ impl Chart {
                         settings_response,
                     } = interaction;
 
+                    let pane_response = pane_response.interact(Sense::click_and_drag());
+
                     // A click on the legend's close "x" removes this study.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
-                    if pane_response.double_clicked() {
-                        self.indicator_settings_request = Some(id);
-                    }
                     if close_clicked {
                         pending_indicator_action =
                             Some(crate::chart::renderers::StudyAction::Remove(idx));
@@ -443,6 +448,8 @@ impl Chart {
                         && !toggle.clicked()
                         && !control_clicked
                         && pane_response.clicked()
+                        && self.drawings.active_tool.is_none()
+                        && !self.drawings.eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
                         let hit = self.pane_layout.panes[pane_idx]
@@ -453,7 +460,7 @@ impl Chart {
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
                                 hit_test_pane_indicator(
                                     click_pos,
-                                    self.studies.indicators()[idx].as_ref(),
+                                    studies.indicators()[idx].as_ref(),
                                     idx,
                                     visible_range.clone(),
                                     chart_rect,
@@ -487,6 +494,7 @@ impl Chart {
                         }
                     }
 
+                    drawing_response = Some((pane_response, chart_rect, id));
                     // Store the pane info for hit testing by platform
                     self.last_rendered_indicator_panes
                         .push(RenderedIndicatorPane {
@@ -499,6 +507,65 @@ impl Chart {
                             mapping: pane_coords,
                         });
                 }
+            }
+            if !collapsed && let Some((pane_response, chart_rect, study_id)) = drawing_response {
+                let history = self.history.start_drawing_action(&mut self.drawings);
+                let mut drawings = std::mem::take(&mut self.drawings);
+                let mut cursors = std::mem::take(&mut self.cursor_modes);
+                let timescale = self.state.time_scale().clone();
+                let painter = ui.painter().clone();
+                self.handle_pane_drawings(
+                    ui,
+                    &mut drawings,
+                    &mut cursors,
+                    &pane_response,
+                    chart_rect,
+                    &map,
+                    &painter,
+                    &timescale,
+                    Some(pane_id),
+                );
+                let drawing_hit = pane_response
+                    .interact_pointer_pos()
+                    .and_then(|pos| drawings.hit_test(pos));
+                if pane_response.double_clicked() && drawing_hit.is_none() {
+                    self.indicator_settings_request = Some(study_id);
+                }
+                if pane_response.clicked() && drawing_hit.is_some() {
+                    pending_pane_selection = None;
+                    self.selection.deselect();
+                }
+                super::tool_interaction::render_pane_eraser_highlight(
+                    &ui.painter().with_clip_rect(chart_rect),
+                    &drawings,
+                    &cursors,
+                );
+                if pane_response.secondary_clicked()
+                    && let Some(pos) = pane_response.interact_pointer_pos()
+                {
+                    self.right_click = Some(if let Some(id) = drawings.hit_test(pos) {
+                        if drawings.is_selected(id) {
+                            let ids: Vec<_> =
+                                std::iter::once(id).chain(drawings.selected_ids()).collect();
+                            drawings.select_drawings(ids);
+                        } else {
+                            drawings.select(id);
+                        }
+                        super::RightClickTarget::Drawing {
+                            drawing_id: id,
+                            pos,
+                        }
+                    } else {
+                        super::RightClickTarget::Background {
+                            pos,
+                            price: map.y_to_price(pos.y),
+                        }
+                    });
+                }
+                self.drawings = drawings;
+                self.cursor_modes = cursors;
+                self.history
+                    .finish_drawing_action(&mut self.drawings, history);
             }
             ui.allocate_space(panel_rect.size());
             pane_rects.push((pane_idx, pane_id, panel_rect, collapsed));
@@ -576,6 +643,105 @@ mod tests {
         pointer(ctx, chart, to, None);
         pointer(ctx, chart, to, Some(false));
         pointer(ctx, chart, to, None);
+    }
+
+    /// Pane drawings retain study units through editing, layout changes and storage.
+    #[test]
+    fn drawings_use_the_owning_study_pane_scale() {
+        use crate::drawings::DrawingToolType;
+        use crate::scales::PriceScaleMode;
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for (mode, inverted, low, high, middle) in [
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
+                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
+                (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
+            ] {
+                let ctx = Context::default();
+                let mut chart = chart(&[1000.0], &[1100.0]);
+                chart.set_theme(&ctx, &theme);
+                let study = chart.add_indicator(Box::new(RSI::new(14)));
+                chart.sync_panes();
+                let scale = &mut chart.pane_layout.panes[0].scale;
+                scale.options_mut().mode = mode;
+                scale.options_mut().invert_scale = inverted;
+                let transform = crate::scales::PriceTransform { mode, base: 1.0 };
+                scale.rebase(transform);
+                scale.set_range(transform.to_scale(low), transform.to_scale(high));
+                crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, Vec::new());
+                let pane = chart.get_rendered_indicator_panes()[0].clone();
+                // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
+                let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
+                let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+                chart
+                    .drawings_mut()
+                    .set_active_tool(Some(DrawingToolType::TrendLine));
+                click(&ctx, &mut chart, first);
+                click(&ctx, &mut chart, second);
+                assert_eq!(
+                    chart.drawings().drawings.len(),
+                    1,
+                    "drawing on a study pane"
+                );
+                let id = chart.drawings().drawings[0].id;
+                for point in &chart.drawings().drawings[0].chart_points {
+                    assert!((point.price - middle).abs() < 1e-3);
+                }
+                assert_eq!(chart.drawings().hit_test(first.lerp(second, 0.5)), Some(id));
+                assert_eq!(
+                    chart
+                        .drawings()
+                        .hit_test(chart.get_rendered_price_rect().center()),
+                    None
+                );
+                chart.drawings_mut().select(id);
+                let to = first + egui::vec2(0.0, 15.0);
+                drag(&ctx, &mut chart, first, to);
+                let moved = chart.drawings().drawings[0].chart_points[0].price;
+                assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
+                assert!(chart.undo());
+                assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
+                assert!(chart.redo());
+                let saved = chart.save_drawings().unwrap().to_json().unwrap();
+                chart.load_drawings(&saved).unwrap();
+                chart.pane_layout.maximized = Some(study);
+                pointer(&ctx, &mut chart, Pos2::ZERO, None);
+                let drawing = &chart.drawings().drawings[0];
+                let pane = &chart.get_rendered_indicator_panes()[0];
+                assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
+                let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
+                assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
+                for width in [320.0, 360.0] {
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                    let pane = &chart.get_rendered_indicator_panes()[0];
+                    let drawing = &chart.drawings().drawings[0];
+                    assert!(pane.chart_rect.width() > 0.0 && pane.chart_rect.right() <= width);
+                    assert!((drawing.points[0].y - pane.mapping.price_to_y(moved)).abs() < 0.01);
+                    let on_line = drawing.points[0].lerp(drawing.points[1], 0.5);
+                    if pane.chart_rect.contains(on_line) {
+                        assert_eq!(chart.drawings().hit_test(on_line), Some(drawing.id));
+                    }
+                }
+                chart.set_indicator_visible(study, false);
+                pointer(&ctx, &mut chart, Pos2::ZERO, None);
+                assert_eq!(
+                    chart.drawings().hit_test(on_line),
+                    None,
+                    "hidden panes have no drawing hits"
+                );
+            }
+        }
     }
 
     #[test]

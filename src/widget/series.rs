@@ -293,7 +293,8 @@ impl Chart {
     /// [`add_indicator`](Self::add_indicator). A study that is not updated incrementally can lag
     /// the bars by its wait between full recomputes, at least 0.25 s; after the bars changed from
     /// the first one on, as when `set_data` loads other bars or older bars are loaded in front, it
-    /// has no values until it is recomputed.
+    /// has no values until it is recomputed. On price-based types these remain the source-bar
+    /// results; [`Self::study_values_at`] returns the displayed element results.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)
@@ -320,48 +321,38 @@ impl Chart {
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let instrument = self.instrument().cloned();
         let bars = &self.state.data().bars;
-        let studies = self.studies.indicators_mut();
-        let mut due = None::<usize>;
-        for (at, study) in studies.iter_mut().enumerate() {
+        for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
             if study.set_instrument(instrument.as_ref()) {
                 self.pending_from[at] = Some(0);
-            }
-            let Some(from) = self.pending_from[at] else {
-                continue;
-            };
-            let len = study.values().len();
-            if study.is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len {
-                study.update(bars, from);
-                self.pending_from[at] = None;
-            } else if (from == 0 || now >= self.next_refresh[at])
-                && due.is_none_or(|first| self.next_refresh[at] < self.next_refresh[first])
-            {
-                due = Some(at);
+                self.element_studies.dirty = true;
             }
         }
-        if let Some(at) = due {
-            let started = Instant::now();
-            let from = self.pending_from[at].take().unwrap_or(0);
-            studies[at].update(bars, from);
-            let cost = started.elapsed().as_secs_f64();
-            self.next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
+        refresh_values(
+            self.studies.indicators_mut(),
+            bars,
+            &mut self.pending_from,
+            &mut self.next_refresh,
+            now,
+        )
+    }
+
+    pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
+        let cache = &mut self.element_studies;
+        refresh_values(
+            cache.studies.indicators_mut(),
+            &cache.bars,
+            &mut cache.pending_from,
+            &mut cache.next_refresh,
+            now,
+        )
+    }
+
+    pub(super) fn rendered_studies(&self) -> &crate::studies::IndicatorRegistry {
+        if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
         }
-        let mut wait = None::<f64>;
-        for (at, study) in studies.iter_mut().enumerate() {
-            let Some(from) = self.pending_from[at] else {
-                continue;
-            };
-            let left = if from == 0 {
-                if !study.values().is_empty() {
-                    study.update(&[], 0);
-                }
-                0.0
-            } else {
-                (self.next_refresh[at] - now).max(0.0)
-            };
-            wait = Some(wait.map_or(left, |wait| wait.min(left)));
-        }
-        wait
     }
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
@@ -400,6 +391,15 @@ impl Chart {
             self.state.revision(),
         );
         self.older_bars_drawn = built.as_ref().is_none_or(|(_, trimmed)| !trimmed);
+        if self.chart_type.is_time_independent() {
+            self.element_studies.sync(
+                &self.studies,
+                built
+                    .as_ref()
+                    .map_or_else(|| std::sync::Arc::from([]), |(bars, _)| bars.clone()),
+                self.timeframe,
+            );
+        }
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
@@ -433,6 +433,53 @@ impl Chart {
         }
         follow
     }
+}
+
+fn refresh_values(
+    studies: &mut [Box<dyn Indicator>],
+    bars: &[Bar],
+    pending_from: &mut [Option<usize>],
+    next_refresh: &mut [f64],
+    now: f64,
+) -> Option<f64> {
+    let mut due = None::<usize>;
+    for (at, study) in studies.iter_mut().enumerate() {
+        let Some(from) = pending_from[at] else {
+            continue;
+        };
+        let len = study.values().len();
+        if study.is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len {
+            study.update(bars, from);
+            pending_from[at] = None;
+        } else if (from == 0 || now >= next_refresh[at])
+            && due.is_none_or(|first| next_refresh[at] < next_refresh[first])
+        {
+            due = Some(at);
+        }
+    }
+    if let Some(at) = due {
+        let started = Instant::now();
+        let from = pending_from[at].take().unwrap_or(0);
+        studies[at].update(bars, from);
+        let cost = started.elapsed().as_secs_f64();
+        next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
+    }
+    let mut wait = None::<f64>;
+    for (at, study) in studies.iter_mut().enumerate() {
+        let Some(from) = pending_from[at] else {
+            continue;
+        };
+        let left = if from == 0 {
+            if !study.values().is_empty() {
+                study.update(&[], 0);
+            }
+            0.0
+        } else {
+            (next_refresh[at] - now).max(0.0)
+        };
+        wait = Some(wait.map_or(left, |wait| wait.min(left)));
+    }
+    wait
 }
 
 /// Least time in seconds between two full recomputes of a study while bars stream; a study
@@ -484,7 +531,6 @@ mod tests {
     /// profile, the bars alone give 99..111. Relative modes use close 110.
     #[test]
     fn autoscale_includes_only_visible_overlay_values() {
-        use crate::model::ChartType;
         use crate::scales::PriceScaleMode;
         use crate::studies::{CustomIndicator, VolProfileVisible};
         use crate::widget::test_frames::chart;
@@ -512,7 +558,6 @@ mod tests {
                 "pane",
                 "short",
                 "profile",
-                "renko",
                 "independent",
                 "no_scale",
                 "displaced_future",
@@ -520,9 +565,6 @@ mod tests {
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
-                if case == "renko" {
-                    chart.set_chart_type(ChartType::Renko);
-                }
                 chart.price_scale_mut().options_mut().mode = mode;
                 frame(&ctx, &mut chart, 0.0, Vec::new());
                 chart.set_visible_bars(20);
