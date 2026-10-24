@@ -1,9 +1,8 @@
 //! Semantic color tokens -- domain-organized color definitions.
 //!
 //! These structs hold the color values of [`DESIGN_TOKENS`](super::DESIGN_TOKENS).
-//! They contain both light and dark variants where applicable (e.g.,
-//! `panel_bg_light` / `panel_bg_dark`). The [`theme`](crate::theme) module
-//! resolves these into single values based on the active theme preset.
+//! They supply component defaults and fallbacks. Theme presets define their
+//! own palettes in the [`theme`](crate::theme) module.
 //!
 //! For most use cases, prefer reading colors from the applied theme
 //! ([`ThemeExt::active_theme`](crate::theme::ThemeExt::active_theme)) rather than
@@ -53,20 +52,10 @@ pub struct UiSemanticTokens {
     pub text_light: Color32,
     pub text_secondary_light: Color32,
     pub text_muted_light: Color32,
-    pub text_disabled_light: Color32,
     pub border_light: Color32,
     pub border_subtle_light: Color32,
-    pub border_control_light: Color32,
-    pub panel_bg_dark: Color32,
-    pub panel_bg_secondary_dark: Color32,
-    pub panel_bg_floating_dark: Color32,
-    pub text_dark: Color32,
-    pub text_secondary_dark: Color32,
     pub text_muted_dark: Color32,
-    pub text_disabled_dark: Color32,
     pub border_dark: Color32,
-    pub border_subtle_dark: Color32,
-    pub border_control_dark: Color32,
     pub icon_light: Color32,
     pub icon_hover_light: Color32,
     pub icon_dark: Color32,
@@ -75,33 +64,23 @@ pub struct UiSemanticTokens {
     pub btn_bg_light: Color32,
     pub btn_bg_hover_light: Color32,
     pub btn_bg_active_light: Color32,
-    pub btn_bg_dark: Color32,
-    pub btn_bg_hover_dark: Color32,
-    pub btn_bg_active_dark: Color32,
     pub accent: Color32,
     pub accent_hover: Color32,
-    pub selection_bg_light: Color32,
-    pub selection_text_light: Color32,
     pub success_light: Color32,
     pub warning_light: Color32,
-    pub error_light: Color32,
     pub info_light: Color32,
     pub success_dark: Color32,
-    pub warning_dark: Color32,
     pub error_dark: Color32,
-    pub info_dark: Color32,
 }
 
-/// Chart area color tokens (dark chart is default, light chart variants included).
+/// Chart area color tokens for default and fallback rendering.
 ///
 /// Defines colors for the chart background, grid lines, axis text, crosshair,
 /// candle/bar colors (bullish/bearish), volume bar alpha, and watermark.
-/// Light chart variants (rare) are suffixed with `_light`.
 #[derive(Clone, Debug)]
 pub struct ChartSemanticTokens {
     pub bg: Color32,
     pub bg_axis: Color32,
-    pub bg_selection: Color32,
     pub grid_line: Color32,
     pub grid_line_major: Color32,
     pub axis_text: Color32,
@@ -115,13 +94,6 @@ pub struct ChartSemanticTokens {
     pub volume_down_alpha: u8,
     pub watermark_alpha: u8,
     pub selection_text: Color32,
-    // Light chart variants
-    pub bg_light: Color32,
-    pub bg_axis_light: Color32,
-    pub bg_selection_light: Color32,
-    pub grid_line_light: Color32,
-    pub grid_line_major_light: Color32,
-    pub crosshair_line_light: Color32,
 }
 
 /// Brand accent colors (consistent across light/dark themes).
@@ -163,8 +135,6 @@ pub struct TpoSemanticTokens {
     pub session_separator: Color32,
     /// Default TPO letter color
     pub letter_default: Color32,
-    /// Opening range marker color
-    pub opening_range: Color32,
     /// TPO grid line color
     pub grid: Color32,
     /// Period colors for time-based coloring (12 colors)
@@ -197,55 +167,23 @@ pub struct IndicatorSemanticTokens {
     pub bb_middle: Color32,
     /// Bollinger Band lower line color.
     pub bb_lower: Color32,
-    /// Bollinger Band fill (between upper and lower) color.
-    pub bb_fill: Color32,
     /// RSI line color.
     pub rsi: Color32,
-    /// RSI overbought zone line color.
-    pub rsi_overbought: Color32,
-    /// RSI oversold zone line color.
-    pub rsi_oversold: Color32,
     /// MACD main line color.
     pub macd_line: Color32,
     /// MACD signal line color.
     pub macd_signal: Color32,
-    /// MACD histogram positive bar color.
-    pub macd_hist_pos: Color32,
-    /// MACD histogram negative bar color.
-    pub macd_hist_neg: Color32,
     /// VWAP line color.
     pub vwap: Color32,
 }
 
-/// Drawing tool colors (lines, handles, Fibonacci levels, labels).
+/// Drawing label and Fibonacci level colors.
 #[derive(Clone, Debug)]
 pub struct DrawingSemanticTokens {
-    /// Default drawing line color.
-    pub default_line: Color32,
-    /// Drag handle color in resting state.
-    pub handle: Color32,
-    /// Drag handle color when hovered.
-    pub handle_hover: Color32,
-    /// Drag handle color when pressed/dragging.
-    pub handle_active: Color32,
-    /// Line color when hovered (highlight).
-    pub line_hover: Color32,
-    /// Line color when selected.
-    pub line_selected: Color32,
-    /// Drawing label background color.
-    pub label_bg: Color32,
     /// Drawing label text color.
     pub label_text: Color32,
-    /// Fibonacci retracement 0% level color.
-    pub fib_0: Color32,
-    /// Fibonacci retracement 23.6% level color.
-    pub fib_236: Color32,
-    /// Fibonacci retracement 38.2% level color.
-    pub fib_382: Color32,
     /// Fibonacci retracement 50% level color.
     pub fib_50: Color32,
-    /// Fibonacci retracement 61.8% level color.
-    pub fib_618: Color32,
     /// Fibonacci retracement 100% level color.
     pub fib_100: Color32,
 }

@@ -60,10 +60,9 @@ pub struct SizingTokens {
     pub menu: MenuSizingTokens,
 }
 
-/// Toolbar dimensions (top, left, bottom, right panels and button sizes).
+/// Toolbar dimensions (left, bottom and right panels and button sizes).
 #[derive(Clone, Debug)]
 pub struct ToolbarSizingTokens {
-    pub top_height: f32,
     pub left_width: f32,
     pub bottom_height: f32,
     pub right_icon_width: f32,
@@ -400,7 +399,6 @@ pub struct StrokeTokens {
 #[derive(Clone, Debug)]
 pub struct ShadowTokens {
     pub offset_sm: f32,
-    pub offset_md: f32,
 }
 
 /// Layout tokens for menu shadows and label offsets.
