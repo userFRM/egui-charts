@@ -116,6 +116,8 @@ pub(super) fn show(
                 rect.top() - GAP - size.y
             };
             let label_rect = Rect::from_min_size(pos2(x - size.x / 2.0, top), size);
+            // The chart's background keeps the label readable over the bars beside its own.
+            painter.rect_filled(label_rect.expand(1.0), 2.0, theme.chart.bg);
             painter.galley(label_rect.min, label, chart.config().text_color);
             rect = rect.union(label_rect);
         }
