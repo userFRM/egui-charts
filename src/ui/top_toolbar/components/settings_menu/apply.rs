@@ -113,6 +113,8 @@ impl ChartSettingsState {
             CrosshairLineStyle::Solid => LineStyle::Solid,
             CrosshairLineStyle::Dashed => LineStyle::Dashed,
             CrosshairLineStyle::Dotted => LineStyle::Dotted,
+            CrosshairLineStyle::LargeDashed => LineStyle::LargeDashed,
+            CrosshairLineStyle::SparseDotted => LineStyle::SparseDotted,
         };
         let decimals = chart
             .state()
@@ -203,6 +205,8 @@ impl ChartSettingsState {
             LineStyle::Solid => CrosshairLineStyle::Solid,
             LineStyle::Dashed => CrosshairLineStyle::Dashed,
             LineStyle::Dotted => CrosshairLineStyle::Dotted,
+            LineStyle::LargeDashed => CrosshairLineStyle::LargeDashed,
+            LineStyle::SparseDotted => CrosshairLineStyle::SparseDotted,
         };
         let config = chart.config_mut();
         config.bullish_color = self.candle_colors.body_up;

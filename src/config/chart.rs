@@ -53,6 +53,10 @@ pub enum SessionBreakStyle {
     Dashed,
     /// Dotted line
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`
+    SparseDotted,
 }
 
 /// Trading session configuration

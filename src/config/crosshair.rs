@@ -43,6 +43,10 @@ pub enum CrosshairLineStyle {
     /// Dotted line (default)
     #[default]
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`
+    SparseDotted,
 }
 
 /// Crosshair options

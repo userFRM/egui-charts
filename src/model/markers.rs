@@ -173,13 +173,20 @@ impl Marker {
     }
 }
 
-/// Line style of drawings and price lines.
+/// Line style of drawings, series, grid and price lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum LineStyle {
+    /// A continuous line.
     #[default]
     Solid,
+    /// Short dashes.
     Dashed,
+    /// Closely spaced dots.
     Dotted,
+    /// Dashes twice as long as [`Dashed`](Self::Dashed), with twice the gap.
+    LargeDashed,
+    /// Dots with twice the spacing of [`Dotted`](Self::Dotted).
+    SparseDotted,
 }
 
 impl LineStyle {
@@ -191,12 +198,44 @@ impl LineStyle {
             LineStyle::Solid => None,
             LineStyle::Dashed => Some((8.0, 4.0)),
             LineStyle::Dotted => Some((2.0, 3.0)),
+            LineStyle::LargeDashed => Some((16.0, 8.0)),
+            LineStyle::SparseDotted => Some((2.0, 8.0)),
+        }
+    }
+
+    /// The dash pattern of one-pixel lines such as price, grid and crosshair lines, or `None`
+    /// for solid. Their dots are one pixel long.
+    #[inline]
+    pub(crate) fn hairline_pattern(&self) -> Option<(f32, f32)> {
+        match self {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((4.0, 4.0)),
+            LineStyle::Dotted => Some((1.0, 3.0)),
+            LineStyle::LargeDashed => Some((8.0, 8.0)),
+            LineStyle::SparseDotted => Some((1.0, 7.0)),
         }
     }
 
     /// All available line styles
     pub fn all() -> &'static [LineStyle] {
-        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+        &[
+            LineStyle::Solid,
+            LineStyle::Dashed,
+            LineStyle::Dotted,
+            LineStyle::LargeDashed,
+            LineStyle::SparseDotted,
+        ]
+    }
+
+    /// The style's name in settings menus.
+    pub fn name(&self) -> &'static str {
+        match self {
+            LineStyle::Solid => "Solid",
+            LineStyle::Dashed => "Dashed",
+            LineStyle::Dotted => "Dotted",
+            LineStyle::LargeDashed => "Large dashed",
+            LineStyle::SparseDotted => "Sparse dotted",
+        }
     }
 }
 

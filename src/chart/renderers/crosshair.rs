@@ -129,6 +129,12 @@ pub(crate) fn render_crosshair_lines(
             CrosshairLineStyle::Dotted => {
                 draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0)
             }
+            CrosshairLineStyle::LargeDashed => {
+                draw_dashed_line(context.painter, from, to, stroke, 10.0, 10.0)
+            }
+            CrosshairLineStyle::SparseDotted => {
+                draw_dashed_line(context.painter, from, to, stroke, 1.0, 7.0)
+            }
         }
     };
     match options.style {
