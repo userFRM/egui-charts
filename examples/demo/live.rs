@@ -529,7 +529,6 @@ impl Datafeed for LiveFeed {
         let pair = |label: &str, value: String| (label.to_owned(), value);
         reply.send(Ok(SymbolDetails::new(
             vec![
-                pair("Previous close", price(1.0)),
                 pair(
                     "52-week range",
                     format!("{} - {}", price(0.82), price(1.17)),
