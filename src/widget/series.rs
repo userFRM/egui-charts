@@ -9,6 +9,10 @@ use crate::studies::Indicator;
 use std::collections::BTreeSet;
 use web_time::Instant;
 
+/// Handle of a price line added with [`Chart::add_price_line`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PriceLineId(u64);
+
 impl Chart {
     /// Take the study settings request from a legend button or a double-click in a study pane.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
@@ -118,15 +122,72 @@ impl Chart {
         }
     }
 
-    /// Replaces the price lines drawn on the scale of `series`.
+    /// Replaces the price lines drawn on the scale of `series`. Handles of its previous lines,
+    /// from [`add_price_line`](Self::add_price_line), no longer refer to a line.
     ///
     /// Every bar series accepts price lines. The price
     /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
     pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
+        let first = self.next_price_line;
+        self.next_price_line += lines.len() as u64;
+        if let Some(stored) = self.price_lines_mut(series, "set_price_lines") {
+            *stored = (first..).map(PriceLineId).zip(lines).collect();
+        }
+    }
+
+    /// Adds `line` to the price lines drawn on the scale of `series` and returns its handle,
+    /// with which [`update_price_line`](Self::update_price_line) moves or restyles it and
+    /// [`remove_price_line`](Self::remove_price_line) removes it. `None` when `series` holds no
+    /// bars, as with [`set_price_lines`](Self::set_price_lines).
+    pub fn add_price_line(&mut self, series: SeriesId, line: PriceLine) -> Option<PriceLineId> {
+        let id = PriceLineId(self.next_price_line);
+        self.price_lines_mut(series, "add_price_line")?
+            .push((id, line));
+        self.next_price_line += 1;
+        Some(id)
+    }
+
+    /// The price line of `id`, or `None` once it is removed, replaced by
+    /// [`set_price_lines`](Self::set_price_lines) or its series is removed.
+    pub fn price_line(&self, id: PriceLineId) -> Option<&PriceLine> {
+        std::iter::once(&self.price_lines)
+            .chain(self.price_series.iter().map(|item| &item.lines))
+            .flatten()
+            .find_map(|(line_id, line)| (*line_id == id).then_some(line))
+    }
+
+    /// Replaces the price line of `id`, keeping its place in the drawing order. Returns `false`
+    /// when `id` no longer refers to a line.
+    pub fn update_price_line(&mut self, id: PriceLineId, line: PriceLine) -> bool {
+        let stored = std::iter::once(&mut self.price_lines)
+            .chain(self.price_series.iter_mut().map(|item| &mut item.lines))
+            .flatten()
+            .find(|(line_id, _)| *line_id == id);
+        stored.map(|(_, stored)| *stored = line).is_some()
+    }
+
+    /// Removes the price line of `id`. Returns `false` when `id` no longer refers to a line.
+    pub fn remove_price_line(&mut self, id: PriceLineId) -> bool {
+        std::iter::once(&mut self.price_lines)
+            .chain(self.price_series.iter_mut().map(|item| &mut item.lines))
+            .any(|lines| {
+                let len = lines.len();
+                lines.retain(|(line_id, _)| *line_id != id);
+                lines.len() < len
+            })
+    }
+
+    fn price_lines_mut(
+        &mut self,
+        series: SeriesId,
+        call: &str,
+    ) -> Option<&mut Vec<(PriceLineId, PriceLine)>> {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
-            item.lines = lines;
-        } else if self.main_series_present && holds_bars(series, "set_price_lines") {
-            self.price_lines = lines;
+            Some(&mut item.lines)
+        } else if self.main_series_present && holds_bars(series, call) {
+            Some(&mut self.price_lines)
+        } else {
+            None
         }
     }
 
@@ -1091,5 +1152,70 @@ mod tests {
             let after: Vec<f32> = points.iter().map(|point| point.bar_idx).collect();
             assert_eq!(after, moved, "{name}");
         }
+    }
+
+    /// A handle moves, restyles and removes only its own line, on the main series and on an
+    /// added series. Replacing a series' lines or removing the series retires its handles, and a
+    /// study takes no line. The moved line's tag and title use their own colours.
+    #[test]
+    fn price_line_handles_change_only_their_own_line() {
+        use crate::model::PriceLine;
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::{Color32, Shape};
+
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.config.show_volume = false;
+        let kept = PriceLine::new(105.0, Color32::GOLD);
+        let kept_id = chart.add_price_line(SeriesId::MAIN, kept.clone()).unwrap();
+        let moved = chart
+            .add_price_line(SeriesId::MAIN, PriceLine::new(112.0, Color32::RED))
+            .unwrap();
+        let (fill, text, title) = (
+            Color32::from_rgb(10, 20, 30),
+            Color32::from_rgb(200, 210, 220),
+            Color32::from_rgb(1, 2, 3),
+        );
+        let restyled = PriceLine::new(115.0, Color32::BLUE)
+            .with_axis_label_colors(fill, text)
+            .with_title("Target")
+            .with_title_color(title);
+        assert!(chart.update_price_line(moved, restyled.clone()));
+        assert_eq!(chart.price_line(kept_id), Some(&kept));
+        assert_eq!(chart.price_line(moved), Some(&restyled));
+
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+        let y = chart.last_price_map.price_to_y(115.0);
+        let tag = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(tag) if tag.fill == fill => Some(tag.rect),
+                _ => None,
+            })
+            .expect("the moved line's tag");
+        assert!((tag.center().y - y).abs() < 1.0);
+        assert!(painted.iter().any(|shape| matches!(shape,
+            Shape::Text(t) if t.galley.text() == "Target"
+                && t.galley.job.sections[0].format.color == title)));
+        assert!(painted.iter().any(|shape| matches!(shape,
+            Shape::Text(t) if t.galley.text() == "115.00"
+                && t.galley.job.sections[0].format.color == text)));
+
+        assert!(chart.remove_price_line(kept_id));
+        assert!(!chart.remove_price_line(kept_id));
+        assert!(!chart.update_price_line(kept_id, kept.clone()));
+        assert_eq!(chart.price_line(moved), Some(&restyled));
+        chart.set_price_lines(SeriesId::MAIN, vec![kept.clone()]);
+        assert_eq!(chart.price_line(moved), None);
+
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        let line = chart.add_price_line(series, kept.clone()).unwrap();
+        assert!(chart.update_price_line(line, restyled.clone()));
+        assert_eq!(chart.price_line(line), Some(&restyled));
+        assert!(chart.remove_series(series));
+        assert_eq!(chart.price_line(line), None);
+        let study = chart.add_indicator(Box::new(SMA::new(3)));
+        assert_eq!(chart.add_price_line(study, kept), None);
     }
 }

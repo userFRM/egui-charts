@@ -38,7 +38,7 @@ pub(super) struct PriceSeries {
     pub bars: Vec<Bar>,
     pub feed: FeedState,
     pub markers: Vec<Marker>,
-    pub lines: Vec<PriceLine>,
+    pub lines: Vec<(super::PriceLineId, PriceLine)>,
 }
 
 impl Chart {
@@ -279,7 +279,7 @@ impl Chart {
         &self,
         key: SeriesScale,
         rect: Rect,
-    ) -> impl Iterator<Item = (f64, Color32, PriceMap)> + '_ {
+    ) -> impl Iterator<Item = (f64, (Color32, Color32), PriceMap)> + '_ {
         self.price_series
             .iter()
             .filter(move |item| item.visible && item.options.scale == key)
@@ -287,18 +287,27 @@ impl Chart {
                 let map = self.series_map(item, rect);
                 item.lines
                     .iter()
-                    .filter(|line| line.axis_label)
-                    .map(|line| (line.price, line.color))
+                    .filter(|(_, line)| line.axis_label)
+                    .map(|(_, line)| {
+                        (
+                            line.price,
+                            crate::chart::rendering::axes::axis_label_colors(line),
+                        )
+                    })
                     .chain(
                         item.bars
                             .last()
                             .filter(|_| self.config.show_symbol_last_val)
-                            .map(|bar| (bar.close, item.options.color)),
+                            .map(|bar| {
+                                let color = item.options.color;
+                                let text = crate::chart::rendering::axes::tag_text_color(color);
+                                (bar.close, (text, color))
+                            }),
                     )
                     .filter(move |(value, _)| {
                         map.range().contains(map.transform().to_scale(*value))
                     })
-                    .map(move |(value, color)| (value, color, map))
+                    .map(move |(value, colors)| (value, colors, map))
             })
     }
 
@@ -350,7 +359,7 @@ impl Chart {
                 }
                 previous = Some(point);
             }
-            for line in &item.lines {
+            for (_, line) in &item.lines {
                 crate::chart::rendering::render_price_line(
                     &plot,
                     rect,
@@ -580,7 +589,7 @@ impl Chart {
             let ctx = RenderContext::new(&clipped, label_rect);
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
-            for (value, color, mapping) in self.secondary_axis_values(key, rect) {
+            for (value, colors, mapping) in self.secondary_axis_values(key, rect) {
                 tags.push(crate::chart::rendering::axes::render_axis_value(
                     &clipped,
                     label_rect,
@@ -589,7 +598,7 @@ impl Chart {
                     mapping
                         .transform()
                         .label(mapping.transform().to_scale(value), 2),
-                    (crate::chart::rendering::axes::tag_text_color(color), color),
+                    colors,
                     &tags,
                 ));
             }

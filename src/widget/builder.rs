@@ -178,6 +178,7 @@ impl Chart {
             // Marks (Widget API)
             marks: Vec::new(),
             price_lines: Vec::new(),
+            next_price_line: 0,
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
             // Selection (Widget API)

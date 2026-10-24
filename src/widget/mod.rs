@@ -144,6 +144,7 @@ mod replay;
 mod selection;
 mod series;
 pub use price_series::SeriesOptions;
+pub use series::PriceLineId;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -357,7 +358,9 @@ pub struct Chart {
     /// Bar marks (annotations on chart bars, e.g., trade signals); see [`Chart::set_markers`].
     pub(crate) marks: Vec<crate::model::Marker>,
     /// Horizontal lines on the main series; see [`Chart::set_price_lines`].
-    price_lines: Vec<crate::model::PriceLine>,
+    price_lines: Vec<(PriceLineId, crate::model::PriceLine)>,
+    /// The number of price line handles issued.
+    next_price_line: u64,
     /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
     #[cfg(feature = "ui")]
     pub(crate) trading_tags: Vec<(f64, egui::Color32)>,

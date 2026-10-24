@@ -1225,7 +1225,7 @@ impl Chart {
             )));
         }
         let mut pending_values = Vec::new();
-        for line in self.price_lines.iter().filter(|_| self.main_series_visible) {
+        for (_, line) in self.price_lines.iter().filter(|_| self.main_series_visible) {
             rendering::render_price_line(
                 &painter,
                 price_rect,
@@ -1236,11 +1236,15 @@ impl Chart {
                 axis_edge,
             );
             if line.axis_label {
-                pending_values.push((line.price, line.color));
+                pending_values.push((line.price, rendering::axes::axis_label_colors(line)));
             }
         }
         #[cfg(feature = "ui")]
-        pending_values.extend(std::mem::take(&mut self.trading_tags));
+        pending_values.extend(
+            std::mem::take(&mut self.trading_tags)
+                .into_iter()
+                .map(|(value, fill)| (value, (rendering::axes::tag_text_color(fill), fill))),
+        );
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
@@ -1274,7 +1278,7 @@ impl Chart {
                 axis_edge,
             );
             if self.config.show_symbol_prev_close {
-                pending_values.push((previous.close, line.color));
+                pending_values.push((previous.close, rendering::axes::axis_label_colors(&line)));
             }
         }
 
@@ -1331,7 +1335,7 @@ impl Chart {
 
         tags.push(last_price_tag);
         if show_price_axis {
-            for (value, color) in &pending_values {
+            for (value, colors) in &pending_values {
                 if price_map
                     .range()
                     .contains(price_map.transform().to_scale(*value))
@@ -1346,14 +1350,14 @@ impl Chart {
                         axis_edge,
                         price_map.price_to_y(*value),
                         label,
-                        (rendering::axes::tag_text_color(*color), *color),
+                        *colors,
                         &tags,
                     ));
                 }
             }
         }
         if show_price_axis {
-            for (value, color, map) in
+            for (value, colors, map) in
                 self.secondary_axis_values(self.main_series_scale, price_rect)
             {
                 tags.push(rendering::axes::render_axis_value(
@@ -1362,7 +1366,7 @@ impl Chart {
                     axis_edge,
                     map.price_to_y(value),
                     map.transform().label(map.transform().to_scale(value), 2),
-                    (rendering::axes::tag_text_color(color), color),
+                    colors,
                     &tags,
                 ));
             }

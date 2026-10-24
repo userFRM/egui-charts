@@ -215,6 +215,12 @@ pub struct PriceLine {
     pub title: Option<String>,
     /// Price label on the axis, on a tag in the line's colour. Default true.
     pub axis_label: bool,
+    /// Fill of the axis tag; `None` uses [`color`](Self::color).
+    pub axis_label_color: Option<Color32>,
+    /// Text of the axis tag; `None` picks white or black, whichever reads on the fill.
+    pub axis_label_text_color: Option<Color32>,
+    /// Colour of the title; `None` uses [`color`](Self::color).
+    pub title_color: Option<Color32>,
 }
 
 impl PriceLine {
@@ -227,6 +233,9 @@ impl PriceLine {
             style: LineStyle::Dashed,
             title: None,
             axis_label: true,
+            axis_label_color: None,
+            axis_label_text_color: None,
+            title_color: None,
         }
     }
 
@@ -255,6 +264,21 @@ impl PriceLine {
     #[must_use]
     pub fn with_axis_label(mut self, show: bool) -> Self {
         self.axis_label = show;
+        self
+    }
+
+    /// Sets the fill and the text colour of the axis tag.
+    #[must_use]
+    pub fn with_axis_label_colors(mut self, fill: Color32, text: Color32) -> Self {
+        self.axis_label_color = Some(fill);
+        self.axis_label_text_color = Some(text);
+        self
+    }
+
+    /// Sets the colour of the title.
+    #[must_use]
+    pub fn with_title_color(mut self, color: Color32) -> Self {
+        self.title_color = Some(color);
         self
     }
 }
