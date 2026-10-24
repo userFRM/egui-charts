@@ -373,6 +373,18 @@ pub struct ChartTypeParams {
     pub line_break_count: usize,
     /// Baseline: where the base line is drawn.
     pub baseline: BaselineLevel,
+    /// TPO: minutes per period, raised to the bar interval when shorter.
+    pub tpo_period_minutes: u32,
+    /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
+    /// about 40 rows to the visible price range.
+    pub tpo_row_ticks: u32,
+    /// TPO: share of the TPOs in the value area, in percent.
+    pub tpo_value_area: f64,
+    /// TPO: separate profiles for pre-market, regular and post-market hours.
+    pub tpo_split_sessions: bool,
+    /// TPO: sessions combined into one profile, as in
+    /// [`TPOConfig::composites`](super::TPOConfig::composites).
+    pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
 }
 
 impl Default for ChartTypeParams {
@@ -394,11 +406,30 @@ impl Default for ChartTypeParams {
             pnf_reversal: 3,
             line_break_count: 3,
             baseline: BaselineLevel::PercentOfPane(50.0),
+            tpo_period_minutes: 30,
+            tpo_row_ticks: 0,
+            tpo_value_area: 70.0,
+            tpo_split_sessions: false,
+            tpo_composites: Vec::new(),
         }
     }
 }
 
 impl ChartTypeParams {
+    /// The TPO settings for an instrument with minimum price increment `tick_size`, as the TPO
+    /// chart type builds its profiles with them.
+    pub fn tpo_config(&self, tick_size: Option<f64>) -> super::TPOConfig {
+        super::TPOConfig {
+            // A zero row lets the renderer fit the rows to the visible range.
+            tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
+            period_minutes: self.tpo_period_minutes,
+            value_area_pct: self.tpo_value_area / 100.0,
+            split_sessions: self.tpo_split_sessions,
+            composites: self.tpo_composites.clone(),
+            ..Default::default()
+        }
+    }
+
     /// Create with ATR-based Renko brick size
     pub fn with_atr_renko(atr: f64, multiplier: f64) -> Self {
         Self {
