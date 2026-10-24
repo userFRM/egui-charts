@@ -12,7 +12,7 @@ authors = ["userFRM"]
 keywords = ["trading", "charts", "finance", "egui", "candlestick"]
 categories = ["visualization", "gui", "graphics", "rendering::engine"]
 readme = "README.md"
-# `examples/demo` is a self-contained `eframe`+`wgpu`/Trunk workspace built only
+# `examples/demo` is a self-contained `eframe`+`glow`/Trunk workspace built only
 # by Trunk, never by the host crate.  Auto-discovery would otherwise pick up
 # `examples/demo/main.rs` as a `demo` example and try to build it here, so the
 # example set is declared explicitly instead.
