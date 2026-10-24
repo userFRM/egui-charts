@@ -1018,6 +1018,9 @@ impl DemoApp {
             .show(ui, |ui| {
                 use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
+                let mut panel_action = None;
+                let mut widget_action = None;
+                let mut show_help = false;
                 let mut footprint_enabled = self.footprint.is_some();
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
@@ -1038,6 +1041,30 @@ impl DemoApp {
                                     ui.checkbox(&mut paused, "Pause synthetic feed")
                                 },
                             );
+                            if ui.ctx().content_rect().width() < 600.0 {
+                                ui.separator();
+                                for (label, panel) in [
+                                    ("Object Tree", SidePanel::ObjectTree),
+                                    ("Alerts", SidePanel::Alerts),
+                                    ("Data Window", SidePanel::DataWindow),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        panel_action = Some(panel);
+                                        ui.close();
+                                    }
+                                }
+                                for widget in &self.widget_bar.widgets {
+                                    if widget.id != 1 && ui.button(&widget.tooltip).clicked() {
+                                        widget_action = Some(widget.id);
+                                        ui.close();
+                                    }
+                                }
+                                if ui.button("Keyboard shortcuts").clicked() {
+                                    show_help = true;
+                                    ui.close();
+                                }
+                                ui.separator();
+                            }
                             for (label, action) in [
                                 ("Quick search", TopToolbarAction::OpenQuickSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
@@ -1051,6 +1078,18 @@ impl DemoApp {
                     },
                     |_| {},
                 );
+                if let Some(panel) = panel_action {
+                    self.open_panel = (self.open_panel != Some(panel)).then_some(panel);
+                    self.widget_bar.active_widget = None;
+                }
+                if let Some(id) = widget_action {
+                    self.open_panel = None;
+                    self.widget_bar.active_widget =
+                        (self.widget_bar.active_widget != Some(id)).then_some(id);
+                }
+                if show_help {
+                    self.keyboard_shortcuts.toggle();
+                }
                 self.live.set_paused(paused);
                 if footprint_enabled != self.footprint.is_some() {
                     if footprint_enabled {
@@ -1376,6 +1415,9 @@ impl DemoApp {
     }
 
     fn show_widget_bar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if ui.ctx().content_rect().width() < 600.0 {
+            return;
+        }
         self.widget_bar.active_icon = match self.open_panel {
             Some(SidePanel::ObjectTree) => Some(RightBarIcon::ObjectTree),
             Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),

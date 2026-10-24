@@ -1605,7 +1605,17 @@ impl Chart {
                     && self.config.show_legend_volume;
                 let (quote_action, study_settings, bottom) = ui
                     .push_id(shown.id, |ui| {
-                        legend.show_with_colors(ui, price_rect, &colors)
+                        legend.show_with_colors(
+                            ui,
+                            Rect::from_min_max(
+                                price_rect.min,
+                                egui::pos2(
+                                    (price_rect.right() - 48.0).min(rect.right() - 100.0),
+                                    price_rect.bottom(),
+                                ),
+                            ),
+                            &colors,
+                        )
                     })
                     .inner;
                 if let Some(action) = quote_action {
