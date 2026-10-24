@@ -17,8 +17,6 @@ pub struct AlertDialogConfig {
     pub row_spacing: f32,
     /// Label width
     pub label_width: f32,
-    /// Input width
-    pub input_width: f32,
     /// Button height
     pub button_height: f32,
 }
@@ -32,7 +30,6 @@ impl Default for AlertDialogConfig {
             content_padding: DESIGN_TOKENS.spacing.xl,
             row_spacing: DESIGN_TOKENS.spacing.lg,
             label_width: DESIGN_TOKENS.sizing.settings_dialog.label_width,
-            input_width: DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
             button_height: DESIGN_TOKENS.sizing.settings_dialog.button_height,
         }
     }

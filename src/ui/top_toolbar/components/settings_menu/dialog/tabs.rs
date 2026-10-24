@@ -3,14 +3,13 @@
 //! This module contains all the tab-specific UI rendering code,
 //! keeping the main dialog module focused on core structure.
 
-use egui::{Color32, FontId, RichText, Stroke, Ui};
+use egui::{Color32, FontId, RichText, Ui};
 
 use super::SettingsDialog;
 use crate::theme::components::SettingsDialogStyle;
-use crate::ui::model::LayoutStyle;
 use crate::ui_kit::ColorPicker;
 
-use crate::styles::{stroke, typography};
+use crate::styles::typography;
 
 use super::super::data::LineStyle;
 use super::super::types::{
@@ -23,36 +22,6 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
             ui.vertical(|ui| {
-                // LAYOUT STYLE
-                self.draw_section_header(ui, "LAYOUT STYLE", style);
-
-                self.draw_setting_row_with_controls(ui, "Panel layout", style, |ui, dialog| {
-                    styled_dropdown(
-                        ui,
-                        "layout_style",
-                        DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
-                        style.val_text,
-                        match dialog.layout_style {
-                            LayoutStyle::Modern => "Modern",
-                            LayoutStyle::Classic => "Classic",
-                        },
-                        |ui| {
-                            ui.selectable_value(
-                                &mut dialog.layout_style,
-                                LayoutStyle::Modern,
-                                "Modern",
-                            );
-                            ui.selectable_value(
-                                &mut dialog.layout_style,
-                                LayoutStyle::Classic,
-                                "Classic",
-                            );
-                        },
-                    );
-                });
-
-                ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.section_spacing);
-
                 // CHART BASIC STYLES
                 self.draw_section_header(ui, "CHART BASIC STYLES", style);
 
@@ -137,7 +106,10 @@ impl SettingsDialog {
                     );
 
                     // Color picker(s) based on mode
-                    if dialog.settings.grid_lines.mode != GridLinesMode::None {
+                    if matches!(
+                        dialog.settings.grid_lines.mode,
+                        GridLinesMode::Horizontal | GridLinesMode::Both
+                    ) {
                         ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.button_gap);
                         if let Some(color) =
                             ColorPicker::new(&mut dialog.color_picker_states.grid_h, "grid_h")
@@ -147,11 +119,13 @@ impl SettingsDialog {
                             dialog.settings.grid_lines.horizontal_color = color;
                         }
                     }
-                    if dialog.settings.grid_lines.mode == GridLinesMode::Both
-                        && let Some(color) =
-                            ColorPicker::new(&mut dialog.color_picker_states.grid_v, "grid_v")
-                                .show(ui)
-                                .inner
+                    if matches!(
+                        dialog.settings.grid_lines.mode,
+                        GridLinesMode::Vertical | GridLinesMode::Both
+                    ) && let Some(color) =
+                        ColorPicker::new(&mut dialog.color_picker_states.grid_v, "grid_v")
+                            .show(ui)
+                            .inner
                     {
                         dialog.settings.grid_lines.vertical_color = color;
                     }
@@ -734,48 +708,6 @@ fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, 
     (*label, *line) = mode;
 }
 
-pub(super) fn configure_dialog_visuals(ui: &mut Ui, style: &SettingsDialogStyle) {
-    let visuals = ui.visuals_mut();
-
-    // Widget backgrounds and rounding
-    visuals.widgets.noninteractive.bg_fill = style.dropdown_bg;
-    visuals.widgets.noninteractive.weak_bg_fill = style.dropdown_bg;
-    visuals.widgets.noninteractive.bg_stroke = style.dropdown_border;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(stroke::HAIRLINE, style.val_text);
-
-    visuals.widgets.inactive.bg_fill = style.dropdown_bg;
-    visuals.widgets.inactive.weak_bg_fill = style.dropdown_bg;
-    visuals.widgets.inactive.bg_stroke = style.dropdown_border;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(stroke::HAIRLINE, style.val_text);
-
-    visuals.widgets.hovered.bg_fill = style.dropdown_bg_hover;
-    visuals.widgets.hovered.weak_bg_fill = style.dropdown_bg_hover;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(stroke::HAIRLINE, style.val_text);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(stroke::HAIRLINE, style.val_text);
-
-    visuals.widgets.active.bg_fill = style.input_bg_focus;
-    visuals.widgets.active.weak_bg_fill = style.input_bg_focus;
-    visuals.widgets.active.bg_stroke = style.input_border_focus;
-    visuals.widgets.active.fg_stroke = Stroke::new(stroke::HAIRLINE, style.val_text);
-
-    // Selection colors for dropdowns
-    visuals.selection.bg_fill = style.tab_bg_active;
-    visuals.selection.stroke = Stroke::new(1.0, style.val_text);
-
-    // Text input (TextEdit)
-    visuals.extreme_bg_color = style.input_bg;
-
-    // Checkbox styling
-    visuals.widgets.inactive.expansion = 0.0;
-    visuals.widgets.hovered.expansion = 0.0;
-    visuals.widgets.active.expansion = 0.0;
-
-    // Popup background (for ComboBox dropdown)
-    visuals.window_fill = style.sidebar_bg;
-    visuals.window_stroke = style.dropdown_border;
-    visuals.popup_shadow = egui::Shadow::NONE;
-}
-
 fn styled_dropdown<R>(
     ui: &mut Ui,
     id: &str,
@@ -785,6 +717,7 @@ fn styled_dropdown<R>(
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) {
     egui::ComboBox::from_id_salt(id)
+        .icon(crate::ui_kit::buttons::combo_chevron)
         .width(width)
         .selected_text(
             RichText::new(selected)
@@ -801,28 +734,6 @@ fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Col
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_min_height(42.0);
-                ui.spacing_mut().icon_width = 18.0;
-                ui.spacing_mut().icon_width_inner = 12.0;
-                let background = ui.visuals().panel_fill;
-                let hover = ui.visuals().widgets.hovered.bg_fill;
-                let widgets = &mut ui.visuals_mut().widgets;
-                for (visuals, hovered) in [
-                    (&mut widgets.inactive, false),
-                    (&mut widgets.hovered, true),
-                    (&mut widgets.active, true),
-                ] {
-                    visuals.bg_fill = if *checked {
-                        text_color
-                    } else if hovered {
-                        hover
-                    } else {
-                        background
-                    };
-                    visuals.fg_stroke =
-                        Stroke::new(1.5, if *checked { background } else { text_color });
-                    visuals.bg_stroke = Stroke::new(1.0, text_color);
-                    visuals.corner_radius = egui::CornerRadius::same(3);
-                }
                 ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color))
                     .changed()
             },
@@ -842,7 +753,7 @@ fn styled_text_input(ui: &mut Ui, text: &mut String, width: f32) {
 
 fn line_style_preview(ls: LineStyle) -> &'static str {
     match ls {
-        LineStyle::Solid => "\u{2014}\u{2014}\u{2014}",
+        LineStyle::Solid => "Solid",
         LineStyle::Dashed => "\u{2013} \u{2013} \u{2013}",
         LineStyle::Dotted => "· · · ·",
     }

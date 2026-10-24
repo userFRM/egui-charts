@@ -240,45 +240,38 @@ impl SymbolTab {
     }
 
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        // Bullish body color
-        ui.label("Body (up)");
-        Self::color_picker(ui, &mut settings.bullish_color);
-        ui.end_row();
-
-        // Bearish body color
-        ui.label("Body (down)");
-        Self::color_picker(ui, &mut settings.bearish_color);
+        ui.label("Body");
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            Self::color_picker(ui, &mut settings.bullish_color);
+            Self::color_picker(ui, &mut settings.bearish_color);
+        });
         ui.end_row();
 
         if settings.chart_type.is_time_independent() {
             return;
         }
 
-        // Border colors
-        ui.label("Border (up)");
-        Self::optional_color_picker(
-            ui,
-            &mut settings.bullish_border_color,
-            settings.bullish_color,
-        );
-        ui.end_row();
-
-        ui.label("Border (down)");
-        Self::optional_color_picker(
-            ui,
-            &mut settings.bearish_border_color,
-            settings.bearish_color,
-        );
-        ui.end_row();
-
-        // Wick colors
-        ui.label("Wick (up)");
-        Self::optional_color_picker(ui, &mut settings.bullish_wick_color, settings.bullish_color);
-        ui.end_row();
-
-        ui.label("Wick (down)");
-        Self::optional_color_picker(ui, &mut settings.bearish_wick_color, settings.bearish_color);
-        ui.end_row();
+        for (label, up, down) in [
+            (
+                "Border",
+                &mut settings.bullish_border_color,
+                &mut settings.bearish_border_color,
+            ),
+            (
+                "Wick",
+                &mut settings.bullish_wick_color,
+                &mut settings.bearish_wick_color,
+            ),
+        ] {
+            ui.label(label);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                Self::optional_color_picker(ui, up, settings.bullish_color);
+                Self::optional_color_picker(ui, down, settings.bearish_color);
+            });
+            ui.end_row();
+        }
     }
 
     fn color_picker(ui: &mut Ui, color: &mut Color32) {

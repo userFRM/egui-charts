@@ -11,6 +11,8 @@ mod layouts;
 use egui_charts::widget::ChartLayout;
 use layouts::{DemoChart, LayoutTab};
 
+#[path = "comparison.rs"]
+mod comparison;
 #[path = "live.rs"]
 mod live;
 
@@ -41,13 +43,14 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
+use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
-use egui_charts::ui_kit::notifications::{NotificationPanel, Toast, Toasts};
+use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
@@ -159,6 +162,7 @@ pub struct DemoApp {
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
+    comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     indicator_templates: Vec<SavedIndicators>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
@@ -286,6 +290,7 @@ impl DemoApp {
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
+            comparisons: Vec::new(),
             indicator_templates: Vec::new(),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 [
@@ -318,6 +323,7 @@ impl DemoApp {
         app.alerts
             .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
         app.apply_session();
+        app.settings_state = ChartSettingsState::from_chart(&app.chart);
         app
     }
 
@@ -363,6 +369,80 @@ impl DemoApp {
         self.regenerate_bars();
         // A symbol change invalidates an in-flight replay.
         self.stop_replay();
+    }
+
+    fn sync_comparisons(&mut self) {
+        self.comparisons
+            .retain(|(_, id, _)| self.chart.indicators().any(|(current, _)| current == *id));
+        self.compare_dialog.compared_symbols = self
+            .comparisons
+            .iter()
+            .filter_map(|(symbol, id, _)| {
+                let (_, study) = self.chart.indicators().find(|(current, _)| current == id)?;
+                let spec = DemoSymbol::find(symbol);
+                let mut entry =
+                    CompareSymbol::new(symbol, spec.company_name, spec.exchange, study.colors()[0]);
+                entry.visible = study.is_visible();
+                Some(entry)
+            })
+            .collect();
+    }
+
+    fn handle_comparison(&mut self, action: CompareAction) {
+        match action {
+            CompareAction::AddSymbol(symbol) => {
+                if self
+                    .comparisons
+                    .iter()
+                    .any(|(current, _, _)| *current == symbol)
+                    || !DemoSymbol::catalog()
+                        .iter()
+                        .any(|spec| spec.symbol == symbol)
+                {
+                    return;
+                }
+                let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
+                let colors = [
+                    self.theme.ui.info,
+                    self.theme.ui.warning,
+                    self.theme.ui.success,
+                ];
+                let color = colors[self.comparisons.len() % colors.len()];
+                let id = self
+                    .chart
+                    .add_indicator(Box::new(comparison::Comparison::new(
+                        symbol.clone(),
+                        feed.clone(),
+                        color,
+                    )));
+                self.comparisons.push((symbol, id, feed));
+            }
+            CompareAction::RemoveSymbol(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    self.chart.remove_series(*id);
+                }
+            }
+            CompareAction::ToggleVisibility(symbol) => {
+                if let Some((_, id, _)) = self
+                    .comparisons
+                    .iter()
+                    .find(|(current, _, _)| *current == symbol)
+                {
+                    let visible = self
+                        .chart
+                        .indicators()
+                        .find(|(current, _)| current == id)
+                        .is_some_and(|(_, study)| study.is_visible());
+                    self.chart.set_indicator_visible(*id, !visible);
+                }
+            }
+            CompareAction::None | CompareAction::Close => {}
+        }
+        self.sync_comparisons();
     }
 
     fn regenerate_bars(&mut self) {
@@ -627,15 +707,10 @@ impl DemoApp {
             _ => {}
         }
 
-        // Symbol search (used by the pill, quick search, and compare entry).
         let symbols = DemoSymbol::symbols();
-        if let egui_charts::ui::top_toolbar::CompareAction::AddSymbol(symbol) =
-            self.compare_dialog.show(ctx, &symbols)
-        {
-            self.toasts.add(Toast::info(format!(
-                "Comparison requested: {symbol}. The host must attach a comparison series."
-            )));
-        }
+        self.sync_comparisons();
+        let action = self.compare_dialog.show(ctx, &symbols);
+        self.handle_comparison(action);
         self.symbol_search
             .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
@@ -685,7 +760,11 @@ impl DemoApp {
 
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
-        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+        let ids: Vec<SeriesId> = chart
+            .indicators()
+            .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
+            .map(|(id, _)| id)
+            .collect();
         for id in ids {
             chart.remove_series(id);
         }
@@ -830,9 +909,18 @@ impl eframe::App for DemoApp {
             }
         }
 
+        for (_, _, feed) in &self.comparisons {
+            feed.set_paused(self.live.paused() || self.replay.is_some());
+            feed.advance(chrono::Utc::now());
+        }
+
         for extra in &mut self.extra_charts {
             extra.live.set_symbol(extra.chart.symbol());
             let delay = extra.live.advance(chrono::Utc::now());
+            for (_, _, feed) in &extra.comparisons {
+                feed.set_paused(extra.live.paused());
+                feed.advance(chrono::Utc::now());
+            }
             if !extra.live.paused() {
                 ctx.request_repaint_after(delay);
             }
@@ -1055,11 +1143,13 @@ impl DemoApp {
                 let studies = self
                     .chart
                     .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
                     .map(|(_, study)| study.clone_box())
                     .collect();
                 let inputs = self
                     .chart
                     .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
                     .map(|(id, _)| {
                         self.chart
                             .indicator_inputs(id)
@@ -1163,7 +1253,11 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllIndicators => {
                 let chart = &mut self.chart;
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(id, _)| !self.comparisons.iter().any(|(_, current, _)| current == id))
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.set_indicator_visible(id, false);
                 }
@@ -1913,7 +2007,99 @@ mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
-    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    #[test]
+    fn comparison_dialog_adds_hides_and_removes_chart_series() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let main_symbol = app.chart.symbol().to_owned();
+        let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        app.handle_top_toolbar(&ctx, TopToolbarAction::OpenCompare);
+        for (label, count, visible) in [
+            ("AAPL", 1, true),
+            ("Hide", 1, false),
+            ("Show", 1, true),
+            ("X", 0, false),
+        ] {
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.show_dialogs(ui.ctx()),
+                );
+                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                pos
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).expect("comparison action is visible");
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            let comparisons: Vec<_> = app
+                .chart
+                .indicators()
+                .filter(|(_, study)| study.name() == "AAPL")
+                .collect();
+            assert_eq!(
+                comparisons.len(),
+                count,
+                "{label} must change actual chart membership"
+            );
+            if let Some((_, study)) = comparisons.first() {
+                assert_eq!(study.is_visible(), visible);
+                assert!(study.values().line(0).iter().any(|value| value.is_finite()));
+            }
+            if label == "AAPL" {
+                let colour = comparisons[0].1.colors()[0];
+                let mut painted = false;
+                for _ in 0..3 {
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        app.show_chart(ui, app.theme.chart.bg)
+                    });
+                    painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == colour));
+                    output.drop_without_applying_deltas();
+                }
+                assert!(painted, "comparison prices must be painted");
+                app.handle_top_toolbar(&ctx, TopToolbarAction::SaveIndicatorTemplate);
+                assert!(app.indicator_templates.last().unwrap().studies.is_empty());
+                app.handle_top_toolbar(
+                    &ctx,
+                    TopToolbarAction::ApplyIndicatorTemplate("Study set 1".into()),
+                );
+                assert!(
+                    app.chart
+                        .indicators()
+                        .any(|(_, study)| study.name() == "AAPL")
+                );
+            }
+            assert_eq!(app.compare_dialog.compared_symbols.len(), count);
+            assert_eq!(app.chart.symbol(), main_symbol);
+            assert!(
+                app.chart.bars(SeriesId::MAIN) == main_bars,
+                "comparison actions must preserve the main data"
+            );
+        }
+    }
+
     #[test]
     fn display_settings_apply_styles_and_read_back() {
         use egui_charts::config::{BackgroundStyle, CrosshairLineStyle};
@@ -1936,6 +2122,7 @@ mod tests {
         state.grid_lines.vertical_color = egui::Color32::BLUE;
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
+        state.margins.right_bars = 17;
         apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
         assert_eq!(
             app.chart.config().background_style,
@@ -1967,6 +2154,14 @@ mod tests {
         assert_eq!(app.settings_state.precision, state.precision);
         assert_eq!(app.settings_state.margins, state.margins);
         assert_eq!(app.settings_state.watermark, state.watermark);
+        let mut next = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
+        next.time += chrono::TimeDelta::minutes(1);
+        app.chart.update(SeriesId::MAIN, next);
+        assert_eq!(
+            app.chart.get_time_scale_state().1,
+            17.0,
+            "live bars retain the chosen right margin"
+        );
         let before = app.settings_state.clone();
         for (timezone, top, bottom, width) in [
             ("Unknown", 10.0, 10.0, 1.0),

@@ -7,8 +7,6 @@
 
 mod tabs;
 
-use tabs::configure_dialog_visuals;
-
 use super::{
     actions::SettingsAction, config::SettingsDialogConfig, data::ChartSettingsState,
     types::SettingsTab,
@@ -19,7 +17,7 @@ use crate::theme::Theme;
 use crate::theme::components::SettingsDialogStyle;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
-use crate::ui::model::{LayoutStyle, TemplateManager};
+use crate::ui::model::TemplateManager;
 use crate::ui_kit::ColorPickerState;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
@@ -40,7 +38,6 @@ pub struct SettingsDialog {
     pub is_open: bool,
     active_tab: SettingsTab,
     settings: ChartSettingsState,
-    original_settings: ChartSettingsState,
     /// Current template name (empty if using default/unsaved settings)
     template_name: String,
     /// Whether the template dropdown menu is open
@@ -54,8 +51,6 @@ pub struct SettingsDialog {
     margin_top_str: String,
     margin_bottom_str: String,
     margin_right_str: String,
-    /// Current layout style (Modern or Classic)
-    layout_style: LayoutStyle,
     /// Controls the host hid.
     hidden: HashSet<Control>,
 }
@@ -76,8 +71,6 @@ struct ColorPickerStates {
     crosshair: ColorPickerState,
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
-    scales_lines: ColorPickerState,
-    alert: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -111,14 +104,11 @@ impl SettingsDialog {
                 crosshair: ColorPickerState::new(settings.crosshair.color),
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
-                scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
-                alert: ColorPickerState::new(settings.alerts.alert_color),
             },
-            margin_top_str: format!("{}", settings.margins.top_percent as u32),
-            margin_bottom_str: format!("{}", settings.margins.bottom_percent as u32),
+            margin_top_str: format!("{}", settings.margins.top_percent),
+            margin_bottom_str: format!("{}", settings.margins.bottom_percent),
             margin_right_str: format!("{}", settings.margins.right_bars),
             settings,
-            original_settings: ChartSettingsState::default(),
             template_name: String::new(),
             template_menu_open: false,
             template_manager: TemplateManager::new(),
@@ -135,7 +125,6 @@ impl SettingsDialog {
                 "Australia/Sydney".to_string(),
             ],
             config: SettingsDialogConfig::default(),
-            layout_style: LayoutStyle::Classic,
             hidden: HashSet::new(),
         }
     }
@@ -151,21 +140,9 @@ impl SettingsDialog {
 
     pub fn open(&mut self, settings: ChartSettingsState) {
         self.is_open = true;
-        self.settings = settings.clone();
-        self.original_settings = settings;
+        self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
-    }
-
-    /// Open the dialog with layout style
-    pub fn open_with_layout(&mut self, settings: ChartSettingsState, layout_style: LayoutStyle) {
-        self.layout_style = layout_style;
-        self.open(settings);
-    }
-
-    /// Set the current layout style (call before show() if needed)
-    pub fn set_layout_style(&mut self, layout_style: LayoutStyle) {
-        self.layout_style = layout_style;
     }
 
     /// Sync all color picker states from the current settings
@@ -188,12 +165,9 @@ impl SettingsDialog {
         self.color_picker_states.crosshair.sel_color = self.settings.crosshair.color;
         self.color_picker_states.watermark.sel_color = self.settings.watermark.color;
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
-        self.color_picker_states.scales_lines.sel_color =
-            self.settings.scales_appearance.lines_color;
-        self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
 
-        self.margin_top_str = format!("{}", self.settings.margins.top_percent as u32);
-        self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent as u32);
+        self.margin_top_str = format!("{}", self.settings.margins.top_percent);
+        self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);
         self.margin_right_str = format!("{}", self.settings.margins.right_bars);
     }
 
@@ -203,11 +177,6 @@ impl SettingsDialog {
 
     pub fn settings(&self) -> &ChartSettingsState {
         &self.settings
-    }
-
-    /// Get the current layout style setting
-    pub fn layout_style(&self) -> LayoutStyle {
-        self.layout_style
     }
 
     pub fn show(&mut self, ctx: &Context, theme: &Theme) -> SettingsAction {
@@ -244,10 +213,8 @@ impl SettingsDialog {
 
         let mut is_open = self.is_open;
         let mut style = SettingsDialogStyle::from_theme(theme);
-        style.sidebar_bg = theme.ui.panel_bg;
-        style.tab_bg_active = theme.ui.btn_bg_hover;
-        style.tab_icon_active = theme.ui.text;
         style.label_text = theme.ui.text;
+        style.section_header_text = theme.ui.text_secondary;
         let height = if self.config.height > 0.0 {
             self.config.height
         } else {
@@ -298,9 +265,6 @@ impl SettingsDialog {
 
     fn draw_content(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) -> SettingsAction {
         let mut action = SettingsAction::None;
-
-        // Configure visuals for dialog widgets
-        configure_dialog_visuals(ui, style);
 
         let content_height = (ui.available_height() - 68.0).max(0.0);
 
@@ -584,6 +548,34 @@ mod tests {
     use egui::Pos2;
 
     #[test]
+    fn grid_colour_pickers_follow_the_visible_directions() {
+        use super::super::GridLinesMode;
+        for theme in [Theme::light(), Theme::dark()] {
+            for (mode, horizontal, vertical) in [
+                (GridLinesMode::None, false, false),
+                (GridLinesMode::Horizontal, true, false),
+                (GridLinesMode::Vertical, false, true),
+                (GridLinesMode::Both, true, true),
+            ] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut settings = ChartSettingsState::default();
+                settings.grid_lines.mode = mode;
+                settings.grid_lines.horizontal_color = Color32::from_rgb(151, 32, 19);
+                settings.grid_lines.vertical_color = Color32::from_rgb(29, 43, 157);
+                let mut dialog = SettingsDialog::new();
+                dialog.open(settings.clone());
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    dialog.draw_canvas_tab(ui, &SettingsDialogStyle::from_theme(&theme));
+                });
+                let shown = [settings.grid_lines.horizontal_color, settings.grid_lines.vertical_color].map(|colour| output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == colour)));
+                output.drop_without_applying_deltas();
+                assert_eq!(shown, [horizontal, vertical], "{mode:?}");
+            }
+        }
+    }
+
+    #[test]
     fn settings_tracks_theme_without_changing_defaults_until_apply() {
         for (width, apply) in [
             (1440.0, false),
@@ -596,8 +588,12 @@ mod tests {
                 let mut dialog = SettingsDialog::new();
                 let mut settings = ChartSettingsState::default();
                 settings.chart_basic_styles.background_color = configured;
+                settings.margins.top_percent = 12.5;
+                settings.margins.bottom_percent = 7.5;
                 settings.sync_legacy_fields();
                 dialog.open(settings.clone());
+                assert_eq!(dialog.margin_top_str, "12.5");
+                assert_eq!(dialog.margin_bottom_str, "7.5");
                 let mut frame = |theme: &Theme, events| {
                     crate::theme::apply_to_egui(&ctx, theme);
                     let mut action = SettingsAction::None;
@@ -623,7 +619,6 @@ mod tests {
                     });
                     output.drop_without_applying_deltas();
                     assert_eq!(dialog.settings, settings);
-                    assert_eq!(dialog.original_settings, settings);
                     assert_eq!(
                         dialog.color_picker_states.background.sel_color,
                         if configured == Color32::PLACEHOLDER {

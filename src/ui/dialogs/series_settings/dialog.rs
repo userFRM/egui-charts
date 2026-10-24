@@ -129,7 +129,7 @@ impl SeriesSettingsDialog {
                         });
                 },
                 |ui| {
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::both()
                         .id_salt("series_content")
                         .show(ui, |ui| {
                             ui.space_md();
@@ -217,7 +217,7 @@ mod tests {
                         let inert_colour_controls = output.shapes.iter().any(|shape| {
                             matches!(
                                 &shape.shape, egui::Shape::Text(text)
-                                if matches!(text.galley.text(), "Border (up)" | "Wick (up)")
+                                if matches!(text.galley.text(), "Border" | "Wick")
                             )
                         });
                         output.drop_without_applying_deltas();

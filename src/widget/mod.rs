@@ -482,9 +482,23 @@ impl Chart {
 
     /// Sets the right margin in bars and moves to that margin when it changes.
     pub fn set_right_margin(&mut self, bars: f32) {
-        if bars.is_finite() && bars >= 0.0 && self.chart_options.time_scale.right_offset != bars {
-            self.chart_options.time_scale.right_offset = bars;
-            self.state.time_scale_mut().set_right_offset(bars);
+        let options = &mut self.chart_options.time_scale;
+        if bars.is_finite()
+            && bars >= 0.0
+            && (options.right_offset != bars || options.right_offset_pixels.is_some())
+        {
+            options.right_offset = bars;
+            options.right_offset_pixels = None;
+            let scale = self.state.time_scale_mut();
+            scale.apply_options(
+                scale.bar_spacing(),
+                options.min_bar_spacing,
+                options.max_bar_spacing,
+                options.fix_left_edge,
+                options.fix_right_edge,
+                bars,
+                None,
+            );
         }
     }
 

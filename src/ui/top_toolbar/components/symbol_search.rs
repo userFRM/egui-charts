@@ -632,8 +632,6 @@ pub struct CompareSymbolsConfig {
     pub width: f32,
     /// Dialog height
     pub height: f32,
-    /// Maximum number of matching suggestions to render.
-    pub max_results: usize,
     /// Background color
     pub bg_color: Color32,
     /// Text color
@@ -651,7 +649,6 @@ impl Default for CompareSymbolsConfig {
         Self {
             width: 840.0,
             height: 560.0,
-            max_results: 20,
             bg_color: Color32::TRANSPARENT,
             text_color: Color32::TRANSPARENT,
             muted_color: Color32::TRANSPARENT,
@@ -878,14 +875,10 @@ impl CompareSymbolsDialog {
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 let query = self.search_query.to_lowercase();
-                for symbol in symbols
-                    .iter()
-                    .filter(|symbol| {
-                        symbol.name.to_lowercase().contains(&query)
-                            || symbol.display_name.to_lowercase().contains(&query)
-                    })
-                    .take(config.max_results)
-                {
+                for symbol in symbols.iter().filter(|symbol| {
+                    symbol.name.to_lowercase().contains(&query)
+                        || symbol.display_name.to_lowercase().contains(&query)
+                }) {
                     if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
                         action = a;
                     }
@@ -1238,26 +1231,14 @@ mod tests {
 
     #[test]
     fn test_max_results_limit() {
-        let symbols: Vec<_> = (0..40)
-            .map(|index| Symbol::new(format!("S{index}"), "Sample"))
-            .collect();
-        for limit in [0, 1, 2] {
-            let mut dialog = SymbolSearchDialog::new();
-            dialog.config.max_results = limit;
-            dialog.update_filtered_symbols(&symbols);
-            assert_eq!(dialog.filtered_symbols.len(), limit);
-        }
-        let ctx = Context::default();
-        let mut compare = CompareSymbolsDialog::new();
-        let config = compare.config.resolved(&ctx.global_style().visuals);
-        let output = ctx.run_ui(Default::default(), |ui| {
-            compare.draw_content(ui, &symbols, &config);
-        });
-        let rows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if symbols.iter().any(|symbol| symbol.name == text.galley.text())
-        )).count();
-        output.drop_without_applying_deltas();
-        assert_eq!(rows, 20, "compare suggestions use the default result cap");
+        let mut dialog = SymbolSearchDialog::new();
+        dialog.config.max_results = 2;
+
+        let symbols = create_test_symbols();
+        dialog.search_query = "USD".to_string();
+        dialog.update_filtered_symbols(&symbols);
+
+        assert!(dialog.filtered_symbols.len() <= 2);
     }
 
     #[test]

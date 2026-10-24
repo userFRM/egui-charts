@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub(super) struct DemoChart {
     pub chart: Chart,
     pub live: Arc<LiveFeed>,
+    pub comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
 }
 
 pub(super) struct LayoutTab {
@@ -21,6 +22,7 @@ pub(super) struct LayoutTab {
 struct Workspace {
     chart: Chart,
     live: Arc<LiveFeed>,
+    comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     extra: Vec<DemoChart>,
     layout: ChartLayout,
     slot: usize,
@@ -66,7 +68,7 @@ impl DemoApp {
             mode.chart_count()
         };
         while self.extra_charts.len() + 1 < count {
-            let mut copy = self.copy_chart(&self.chart, &self.live);
+            let mut copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
             // New slots receive drawings through synchronization, which records their links.
             copy.chart.drawings_mut().drawings.clear();
             self.extra_charts.push(copy);
@@ -78,7 +80,12 @@ impl DemoApp {
         self.top_toolbar.chart_grid_selector.set_layout(mode);
     }
 
-    fn copy_chart(&self, source: &Chart, feed: &LiveFeed) -> DemoChart {
+    fn copy_chart(
+        &self,
+        source: &Chart,
+        feed: &LiveFeed,
+        comparisons: &[(String, SeriesId, Arc<LiveFeed>)],
+    ) -> DemoChart {
         let live = Arc::new(feed.fork());
         live.set_symbol(source.symbol());
         let (session, adjusted) = feed.view(source.extended_hours());
@@ -101,8 +108,28 @@ impl DemoApp {
         *chart.price_scale_mut() = source.state().price_scale().clone();
         let (spacing, offset) = source.get_time_scale_state();
         chart.apply_synced_time_scale(spacing, offset);
+        let mut copied_comparisons = Vec::new();
         for (id, indicator) in source.indicators() {
-            let copy = chart.add_indicator(indicator.clone_box());
+            let copy = if let Some((symbol, _, feed)) =
+                comparisons.iter().find(|(_, current, _)| *current == id)
+            {
+                let feed = Arc::new(feed.fork());
+                let copy = chart.add_indicator(Box::new(super::comparison::Comparison::new(
+                    symbol.clone(),
+                    feed.clone(),
+                    indicator.colors()[0],
+                )));
+                if let Some(study) = chart.indicator_mut(copy) {
+                    study
+                        .apply_settings(&[], indicator.settings())
+                        .expect("existing comparison style");
+                }
+                chart.set_indicator_visible(copy, indicator.is_visible());
+                copied_comparisons.push((symbol.clone(), copy, feed));
+                copy
+            } else {
+                chart.add_indicator(indicator.clone_box())
+            };
             if let Some(inputs) = source.indicator_inputs(id) {
                 chart.set_indicator_inputs(copy, inputs);
             }
@@ -112,7 +139,11 @@ impl DemoApp {
             drawing.stored_id = None;
             drawing.created_at = None;
         }
-        DemoChart { chart, live }
+        DemoChart {
+            chart,
+            live,
+            comparisons: copied_comparisons,
+        }
     }
 
     pub(super) fn activate_chart_slot(&mut self, slot: usize) {
@@ -132,6 +163,7 @@ impl DemoApp {
         if let Some(target) = self.extra_charts.get_mut(other) {
             std::mem::swap(&mut self.chart, &mut target.chart);
             std::mem::swap(&mut self.live, &mut target.live);
+            std::mem::swap(&mut self.comparisons, &mut target.comparisons);
             // Restore stable slot order after moving the former active chart into the vector.
             let old_position = if self.layout_slot < slot {
                 self.layout_slot
@@ -270,6 +302,7 @@ impl DemoApp {
         self.layout_tabs[self.layout_tab].workspace = Some(Workspace {
             chart: std::mem::replace(&mut self.chart, next.chart),
             live: std::mem::replace(&mut self.live, next.live),
+            comparisons: std::mem::replace(&mut self.comparisons, next.comparisons),
             extra: std::mem::replace(&mut self.extra_charts, next.extra),
             layout: std::mem::replace(&mut self.layout, next.layout),
             slot: std::mem::replace(&mut self.layout_slot, next.slot),
@@ -283,7 +316,7 @@ impl DemoApp {
     }
 
     fn new_layout(&mut self, name: Option<String>) {
-        let copy = self.copy_chart(&self.chart, &self.live);
+        let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
         let duplicate = name.is_some();
         let layout = if duplicate {
             self.layout.clone()
@@ -293,7 +326,7 @@ impl DemoApp {
         let extra = if duplicate {
             self.extra_charts
                 .iter()
-                .map(|c| self.copy_chart(&c.chart, &c.live))
+                .map(|c| self.copy_chart(&c.chart, &c.live, &c.comparisons))
                 .collect()
         } else {
             Vec::new()
@@ -312,6 +345,7 @@ impl DemoApp {
             workspace: Some(Workspace {
                 chart: copy.chart,
                 live: copy.live,
+                comparisons: copy.comparisons,
                 extra,
                 layout,
                 slot: if duplicate { self.layout_slot } else { 0 },
@@ -390,6 +424,7 @@ mod tests {
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
         app.chart.set_main_series_visible(false);
+        app.handle_comparison(super::super::CompareAction::AddSymbol("AAPL".into()));
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         let frame = |app: &mut DemoApp| {
@@ -425,6 +460,13 @@ mod tests {
                 egui::Color32::from_gray(10 + slot as u8)
             );
         }
+        app.handle_comparison(super::super::CompareAction::RemoveSymbol("AAPL".into()));
+        app.activate_chart_slot(1);
+        app.sync_comparisons();
+        assert_eq!(app.compare_dialog.compared_symbols.len(), 1);
+        app.activate_chart_slot(0);
+        app.sync_comparisons();
+        assert!(app.compare_dialog.compared_symbols.is_empty());
         let before = app.chart.get_time_scale_state();
         app.new_layout(Some("Saved".into()));
         assert_eq!(app.layout.mode, ChartLayoutMode::Four);
