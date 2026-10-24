@@ -144,6 +144,7 @@ mod replay;
 mod selection;
 mod series;
 pub use price_series::SeriesOptions;
+pub use series::{BarsInRange, MismatchDirection};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -343,6 +344,8 @@ pub struct Chart {
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,
+    /// Pane id, plot rect and price mapping of each pane drawn in the last frame.
+    last_pane_maps: Vec<(SeriesId, Rect, crate::scales::PriceMap)>,
     // =========================================================================
     // Multi-Chart Sync State
     // =========================================================================

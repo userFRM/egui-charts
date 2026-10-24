@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// histories ever share one.
 static REVISIONS: AtomicU64 = AtomicU64::new(0);
 
-fn next_revision() -> u64 {
+pub(crate) fn next_revision() -> u64 {
     REVISIONS.fetch_add(1, Ordering::Relaxed)
 }
 

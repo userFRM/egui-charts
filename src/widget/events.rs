@@ -35,11 +35,19 @@ pub enum ChartEvent {
         button: PointerButton,
     },
     /// A successful history page or `set_data` completed, including an empty result.
-    /// Live updates and failed or obsolete feed replies do not emit this event.
+    /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
     DataLoaded {
         /// Bar series that received data.
         series: SeriesId,
         /// Total accepted bars now held by that series, after cleaning and merging.
+        bars: usize,
+    },
+    /// A live bar from `update` or the chart's feed changed the bars of a series, or `pop_bars`
+    /// removed some. Changes of one series in a row are reported once, with the latest count.
+    DataUpdated {
+        /// Bar series whose bars changed.
+        series: SeriesId,
+        /// Total bars now held by that series.
         bars: usize,
     },
     /// The symbol setter accepted a different symbol.
@@ -105,6 +113,21 @@ impl Chart {
         });
     }
 
+    pub(super) fn data_updated(&mut self, series: SeriesId) {
+        let bars = self.bars(series).len();
+        if let Some(ChartEvent::DataUpdated {
+            series: last,
+            bars: count,
+        }) = self.host_events.queue.back_mut()
+            && *last == series
+        {
+            *count = bars;
+        } else {
+            self.host_events
+                .push(ChartEvent::DataUpdated { series, bars });
+        }
+    }
+
     fn pointer_at(&self, pos: Pos2) -> Option<ChartPointer> {
         let scale = self.state.time_scale();
         let plot = self.last_rendered_price_rect;
@@ -146,6 +169,19 @@ impl Chart {
                 })
                 .collect::<Vec<_>>();
             (group.id, pane.mapping.price, values)
+        } else if let Some((pane, _, map)) = self
+            .last_pane_maps
+            .iter()
+            .find(|(_, rect, _)| rect.contains(pos))
+        {
+            // A pane of bar series without studies: snap to their closes at the time.
+            let values = self
+                .price_series
+                .iter()
+                .filter(|item| item.visible && self.series_pane(item.id) == Some(*pane))
+                .filter_map(|item| item.legend_value(Some(time)))
+                .collect();
+            (*pane, *map, values)
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {

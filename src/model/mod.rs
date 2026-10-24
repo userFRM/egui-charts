@@ -66,6 +66,8 @@ pub use bar::{Bar, BarData};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+#[cfg(feature = "widget")]
+pub(crate) use chartstate::next_revision;
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;

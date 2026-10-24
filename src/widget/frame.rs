@@ -337,13 +337,17 @@ impl Chart {
             .is_none_or(|(previous, changed)| previous != width || changed == frame);
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
+        self.last_pane_maps.clear();
         self.sync_panes();
-        // Pane studies share the available height and the lowest time axis.
+        // Pane studies and series share the available height and the lowest time axis.
         let has_panes = self
             .studies
             .indicators()
             .iter()
-            .any(|study| !study.is_overlay() && study.is_visible());
+            .any(|study| !study.is_overlay() && study.is_visible())
+            || self.price_series.iter().any(|item| {
+                item.visible && self.series_pane(item.id) != Some(super::SeriesId::MAIN)
+            });
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {

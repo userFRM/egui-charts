@@ -12,6 +12,7 @@ pub(super) struct PaneLayout {
 #[derive(Clone)]
 pub(super) struct Pane {
     pub(super) id: SeriesId,
+    /// Studies and added bar series shown in the pane, in placement order.
     pub(super) studies: Vec<SeriesId>,
     pub(super) height: Option<f32>,
     pub(super) collapsed: Option<bool>,
@@ -22,10 +23,12 @@ impl Chart {
     pub(super) fn sync_panes(&mut self) {
         for pane in &mut self.pane_layout.panes {
             pane.studies.retain(|id| {
-                self.study_ids
-                    .iter()
-                    .position(|study| study == id)
-                    .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
+                self.price_series.iter().any(|item| item.id == *id)
+                    || self
+                        .study_ids
+                        .iter()
+                        .position(|study| study == id)
+                        .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
             });
             if !pane.studies.contains(&pane.id)
                 && let Some(id) = pane.studies.first().copied()
@@ -71,10 +74,14 @@ impl Chart {
                 && !self.pane_layout.panes.iter().any(|pane| {
                     pane.id == id
                         && pane.studies.iter().any(|study| {
-                            self.study_ids
+                            self.price_series
                                 .iter()
-                                .position(|id| id == study)
-                                .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
+                                .any(|item| item.id == *study && item.visible)
+                                || self
+                                    .study_ids
+                                    .iter()
+                                    .position(|id| id == study)
+                                    .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
                         })
                 })
         }) {
@@ -117,6 +124,69 @@ impl Chart {
         }
         self.sync_panes();
         true
+    }
+
+    /// Moves an added bar series to the main pane, the pane of another series or study, or a
+    /// new pane of its own below the others. Pass `SeriesId::MAIN`, a series or study shown in
+    /// the destination pane, or the moved series' own id respectively. In another pane than
+    /// the main one, the series uses that pane's price scale. Returns `false` for an unknown id
+    /// or destination.
+    pub fn move_series_to_pane(&mut self, id: SeriesId, target: SeriesId) -> bool {
+        if !self.price_series.iter().any(|item| item.id == id) {
+            return false;
+        }
+        self.sync_panes();
+        let pane_of = |member| {
+            self.pane_layout
+                .panes
+                .iter()
+                .position(|pane| pane.studies.contains(&member))
+        };
+        if target == id && pane_of(id).is_some_and(|at| self.pane_layout.panes[at].studies == [id])
+        {
+            return true;
+        }
+        let destination = pane_of(target).map(|at| self.pane_layout.panes[at].id);
+        if target != SeriesId::MAIN && target != id && destination.is_none() {
+            return false;
+        }
+        for pane in &mut self.pane_layout.panes {
+            pane.studies.retain(|member| *member != id);
+        }
+        if target == id {
+            self.pane_layout.panes.push(Pane {
+                id,
+                studies: vec![id],
+                height: None,
+                collapsed: None,
+                scale: crate::scales::PriceScale::new(crate::scales::PriceScaleOptions::default()),
+            });
+        } else if let Some(pane) = self
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|pane| Some(pane.id) == destination)
+        {
+            pane.studies.push(id);
+        }
+        self.sync_panes();
+        true
+    }
+
+    /// The pane showing a bar series: `SeriesId::MAIN` for the main pane, otherwise the id of
+    /// one of the pane's series or studies, which names the pane until it leaves the pane.
+    /// `None` for an absent series or a study.
+    pub fn series_pane(&self, id: SeriesId) -> Option<SeriesId> {
+        if id == SeriesId::MAIN {
+            return self.main_series_present.then_some(SeriesId::MAIN);
+        }
+        self.price_series.iter().any(|item| item.id == id).then(|| {
+            self.pane_layout
+                .panes
+                .iter()
+                .find(|pane| pane.studies.contains(&id))
+                .map_or(SeriesId::MAIN, |pane| pane.id)
+        })
     }
 }
 
@@ -378,10 +448,14 @@ impl Chart {
             }
             ui.separator();
             for study in self.pane_layout.panes[pane_idx].studies.clone() {
-                let Some(idx) = self.study_ids.iter().position(|id| *id == study) else {
-                    continue;
+                let name = match self.study_ids.iter().position(|id| *id == study) {
+                    Some(idx) => self.studies.indicators()[idx].name(),
+                    None => match self.price_series.iter().find(|item| item.id == study) {
+                        Some(item) => &item.options.name,
+                        None => continue,
+                    },
                 };
-                ui.menu_button(self.studies.indicators()[idx].name(), |ui| {
+                ui.menu_button(name, |ui| {
                     if ui.button("Move to main pane").clicked() {
                         action = Some(6);
                         move_study = Some(study);
@@ -426,14 +500,14 @@ impl Chart {
             }
             Some(6 | 7) => {
                 let study = move_study.unwrap();
-                self.move_indicator_to_pane(
-                    study,
-                    if action == Some(6) {
-                        SeriesId::MAIN
-                    } else {
-                        study
-                    },
-                );
+                let target = if action == Some(6) {
+                    SeriesId::MAIN
+                } else {
+                    study
+                };
+                if !self.move_indicator_to_pane(study, target) {
+                    self.move_series_to_pane(study, target);
+                }
             }
             _ => {}
         }

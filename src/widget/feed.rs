@@ -399,6 +399,9 @@ impl Chart {
                 let incoming = updates.bars.into_values().collect();
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
+                if merged.first_changed.is_some() {
+                    self.data_updated(SeriesId::MAIN);
+                }
             }
             if let Some(quote) = updates.quote
                 && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)

@@ -172,6 +172,7 @@ impl Chart {
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
             last_rendered_indicator_panes: Vec::new(),
+            last_pane_maps: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
             last_hover_bar_idx: None,
