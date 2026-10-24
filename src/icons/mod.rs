@@ -283,6 +283,8 @@ pub mod icons {
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
+    /// An arrow into a price axis, for pinning a study to a scale.
+    pub const PIN_TO_SCALE: Icon = crate::icon_from_path!("ui/pin-scale.svg");
     pub const WATCHLIST: Icon = crate::icon_from_path!("ui/watchlist.svg");
     pub const UI_DRAG_HANDLE: Icon = crate::icon_from_path!("ui/drag-handle.svg");
     pub const UI_MORE_HORIZONTAL: Icon = crate::icon_from_path!("ui/more.svg");

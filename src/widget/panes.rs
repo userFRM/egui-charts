@@ -388,6 +388,7 @@ impl Chart {
                         close_response,
                         visibility_response,
                         settings_response,
+                        menu,
                     } = interaction;
 
                     let pane_response = pane_response.interact(Sense::click_and_drag());
@@ -410,7 +411,12 @@ impl Chart {
                         pending_indicator_action =
                             Some(crate::chart::renderers::StudyAction::Settings(idx));
                     }
-                    let control_clicked = close_clicked || visibility_clicked || settings_clicked;
+                    if let Some(pos) = menu {
+                        pending_indicator_action =
+                            Some(crate::chart::renderers::StudyAction::Menu { index: idx, pos });
+                    }
+                    let control_clicked =
+                        close_clicked || visibility_clicked || settings_clicked || menu.is_some();
                     let header = Rect::from_min_max(
                         chart_rect.min + egui::vec2(0.0, panel.legend_offset),
                         Pos2::new(

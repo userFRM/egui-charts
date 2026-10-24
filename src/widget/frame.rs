@@ -970,6 +970,96 @@ impl Chart {
             self.config.price_source,
         );
 
+        let studies = if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
+        };
+        let volume_map = volume_rect.is_positive().then(|| {
+            crate::scales::PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(
+                    0.0,
+                    studies
+                        .indicators()
+                        .iter()
+                        .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
+                        .map_or(max_volume.max(1.0), |study| {
+                            super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                        }),
+                ),
+                volume_rect.top(),
+                volume_rect.bottom(),
+                false,
+            )
+            .with_price_precision(Some(
+                self.instrument()
+                    .and_then(|instrument| instrument.volume_decimals)
+                    .unwrap_or(0),
+            ))
+        });
+        self.host_events.volume_map = volume_map;
+        // The main pane's visual order: overlays listed before the series are drawn under it.
+        let series_at = self
+            .pane_layout
+            .main
+            .iter()
+            .position(|id| *id == super::SeriesId::MAIN)
+            .unwrap_or(0);
+        let (behind, front) = self.pane_layout.main.split_at(series_at);
+        let paint_overlay = |id: &super::SeriesId| {
+            let Some(study) = self
+                .study_ids
+                .iter()
+                .position(|study| study == id)
+                .map(|idx| &studies.indicators()[idx])
+                .filter(|study| study.is_visible() && study.is_overlay())
+            else {
+                return;
+            };
+            if study.is_volume() && self.main_series_visible {
+                let rect = super::volume::overlay_rect(price_rect, &self.config);
+                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
+                super::volume::paint(
+                    &painter,
+                    rect,
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    &coords,
+                    min,
+                    max,
+                );
+            }
+            // TPO studies draw the chart type's profiles beside the bars.
+            if let Some(config) = study
+                .tpo()
+                .filter(|_| !self.chart_type.is_time_independent())
+            {
+                rendering::candles::tpo::render_live_tpo(
+                    &clipped_painter,
+                    price_rect,
+                    &self.state.data().bars,
+                    start_idx..start_idx + visible_data.len(),
+                    self.state.revision(),
+                    &price_map,
+                    config,
+                    &bar_clock,
+                    idx_to_coord,
+                    chart_rect.min.x,
+                    self.config.bullish_color,
+                    self.config.bearish_color,
+                );
+            }
+            renderers::IndicatorRenderer::render(
+                &price_ctx,
+                std::slice::from_ref(study),
+                visible_data,
+                &price_map,
+                &coords,
+            );
+        };
+        behind.iter().for_each(paint_overlay);
+
         if self.main_series_visible {
             if let Some((flow, config)) = footprint.filter(|_| time_based) {
                 if show_volume && !cfg!(feature = "studies") {
@@ -1014,85 +1104,7 @@ impl Chart {
             });
         }
 
-        let studies = if self.chart_type.is_time_independent() {
-            &self.element_studies.studies
-        } else {
-            &self.studies
-        };
-        let volume_map = volume_rect.is_positive().then(|| {
-            crate::scales::PriceMap::new(
-                crate::scales::PriceTransform::default(),
-                crate::scales::PriceRange::new(
-                    0.0,
-                    studies
-                        .indicators()
-                        .iter()
-                        .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
-                        .map_or(max_volume.max(1.0), |study| {
-                            super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
-                        }),
-                ),
-                volume_rect.top(),
-                volume_rect.bottom(),
-                false,
-            )
-            .with_price_precision(Some(
-                self.instrument()
-                    .and_then(|instrument| instrument.volume_decimals)
-                    .unwrap_or(0),
-            ))
-        });
-        self.host_events.volume_map = volume_map;
-        // Draw indicators
-        for study in studies
-            .indicators()
-            .iter()
-            .filter(|study| study.is_volume() && study.is_overlay() && study.is_visible())
-        {
-            if self.main_series_visible {
-                let rect = super::volume::overlay_rect(price_rect, &self.config);
-                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
-                super::volume::paint(
-                    &painter,
-                    rect,
-                    study.as_ref(),
-                    &(start_idx..end_idx),
-                    &coords,
-                    min,
-                    max,
-                );
-            }
-        }
-        // TPO studies draw the chart type's profiles beside the bars.
-        for config in studies
-            .indicators()
-            .iter()
-            .filter(|study| study.is_visible() && study.is_overlay())
-            .filter_map(|study| study.tpo())
-            .filter(|_| !self.chart_type.is_time_independent())
-        {
-            rendering::candles::tpo::render_live_tpo(
-                &clipped_painter,
-                price_rect,
-                &self.state.data().bars,
-                start_idx..start_idx + visible_data.len(),
-                self.state.revision(),
-                &price_map,
-                config,
-                &bar_clock,
-                idx_to_coord,
-                chart_rect.min.x,
-                self.config.bullish_color,
-                self.config.bearish_color,
-            );
-        }
-        renderers::IndicatorRenderer::render(
-            &price_ctx,
-            studies.indicators(),
-            visible_data,
-            &price_map,
-            &coords,
-        );
+        front.iter().for_each(paint_overlay);
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area

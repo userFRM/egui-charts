@@ -46,6 +46,7 @@ use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
     KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
+    StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
@@ -237,6 +238,8 @@ pub struct DemoApp {
     interval_entry: Option<String>,
     interval_focus: bool,
     copied_drawing: Option<String>,
+    // A study copied in this session, kept across symbols and intervals.
+    copied_study: Option<String>,
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
@@ -451,6 +454,7 @@ impl DemoApp {
             interval_entry: None,
             interval_focus: false,
             copied_drawing: None,
+            copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
@@ -2073,7 +2077,7 @@ impl DemoApp {
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
-            self.handle_context_action(action);
+            self.handle_context_action(ui.ctx(), action);
         }
     }
 
@@ -2104,7 +2108,7 @@ impl DemoApp {
         }
     }
 
-    fn handle_context_action(&mut self, action: ChartContextAction) {
+    fn handle_context_action(&mut self, ctx: &egui::Context, action: ChartContextAction) {
         match action {
             ChartContextAction::Host { id, context } => {
                 self.toasts.info(format!(
@@ -2118,7 +2122,38 @@ impl DemoApp {
             }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
+            ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
             ChartContextAction::Drawing(a) => self.handle_drawing_context(a),
+        }
+    }
+
+    /// The study menu applied its chart actions; these are the host's.
+    fn handle_study_context(
+        &mut self,
+        ctx: &egui::Context,
+        id: SeriesId,
+        action: StudyContextMenuAction,
+    ) {
+        match action {
+            StudyContextMenuAction::AddAlert(alert) => self.alerts.save(*alert),
+            StudyContextMenuAction::AddIndicator => self.indicator_dialog.open(),
+            StudyContextMenuAction::AddToFavorites(name) => {
+                self.indicator_dialog.favorites.insert(name);
+            }
+            StudyContextMenuAction::Copy => self.copy_study(ctx, id),
+            StudyContextMenuAction::ObjectTree => {
+                self.open_panel = Some(SidePanel::ObjectTree);
+                self.object_tree.state_mut().select(indicator_tree_id(id));
+            }
+            _ => {}
+        }
+    }
+
+    fn copy_study(&mut self, ctx: &egui::Context, id: SeriesId) {
+        if let Some(text) = self.chart.copy_indicator(id) {
+            ctx.copy_text(text.clone());
+            self.copied_drawing = None;
+            self.copied_study = Some(text);
         }
     }
 
@@ -2310,8 +2345,15 @@ impl DemoApp {
                         Ok(Some(text)) => {
                             ctx.copy_text(text.clone());
                             self.copied_drawing = Some(text);
+                            self.copied_study = None;
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            if let Some(egui_charts::widget::ChartElementId::Indicator(id)) =
+                                self.chart.selected_element()
+                            {
+                                self.copy_study(ctx, id);
+                            }
+                        }
                         Err(error) => {
                             self.toasts
                                 .error(format!("Could not copy drawings: {error}"));
@@ -2339,12 +2381,22 @@ impl DemoApp {
     }
 
     fn paste_drawing(&mut self) {
-        if let Some(text) = self.copied_drawing.clone() {
+        if let Some(text) = self.copied_drawing.clone().or(self.copied_study.clone()) {
             self.paste_drawing_text(&text);
         }
     }
 
     fn paste_drawing_text(&mut self, text: &str) {
+        if text.starts_with("egui-charts-study\n") {
+            if let Err(error) = self
+                .chart
+                .paste_indicator(text, &egui_charts::studies::IndicatorFactory::new())
+            {
+                self.toasts
+                    .error(format!("Could not paste the study: {error}"));
+            }
+            return;
+        }
         if !text.starts_with("egui-charts-drawings\n") {
             return;
         }

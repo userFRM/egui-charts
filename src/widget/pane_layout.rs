@@ -7,6 +7,23 @@ use egui::{Pos2, Rect, Sense, Ui};
 pub(super) struct PaneLayout {
     pub(super) panes: Vec<Pane>,
     pub(super) maximized: Option<SeriesId>,
+    /// Draw order of the main pane from back to front: its overlay studies and, as
+    /// `SeriesId::MAIN`, the price series.
+    pub(super) main: Vec<SeriesId>,
+}
+
+/// A change of a study's place in the draw order of its pane, where each item is drawn over the
+/// ones before it. In the main pane the price series is one of the items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualOrder {
+    /// Draw over every other item of the pane.
+    BringToFront,
+    /// Swap places with the item drawn just over it.
+    BringForward,
+    /// Swap places with the item drawn just under it.
+    SendBackward,
+    /// Draw under every other item of the pane.
+    SendToBack,
 }
 
 #[derive(Clone)]
@@ -66,6 +83,23 @@ impl Chart {
                 });
             }
         }
+        let overlays: Vec<_> = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .filter(|(_, study)| study.is_overlay())
+            .map(|(id, _)| *id)
+            .collect();
+        let main = &mut self.pane_layout.main;
+        main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id));
+        if !main.contains(&SeriesId::MAIN) {
+            main.insert(0, SeriesId::MAIN);
+        }
+        for id in overlays {
+            if !main.contains(&id) {
+                main.push(id);
+            }
+        }
         if self.pane_layout.maximized.is_some_and(|id| {
             id != SeriesId::MAIN
                 && !self.pane_layout.panes.iter().any(|pane| {
@@ -121,6 +155,83 @@ impl Chart {
 }
 
 impl Chart {
+    /// The study panes from top to bottom, each by its first study, with that study's name.
+    #[cfg(feature = "ui")]
+    pub(crate) fn indicator_panes(&self) -> Vec<(SeriesId, &str)> {
+        self.pane_layout
+            .panes
+            .iter()
+            .filter_map(|pane| {
+                let first = *pane.studies.first()?;
+                let idx = self.study_ids.iter().position(|id| *id == first)?;
+                Some((first, self.studies.indicators()[idx].name()))
+            })
+            .collect()
+    }
+
+    /// The first study of the pane drawing study `id`, or `None` in the main pane.
+    #[cfg(feature = "ui")]
+    pub(crate) fn pane_of(&self, id: SeriesId) -> Option<SeriesId> {
+        self.pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.studies.contains(&id))
+            .and_then(|pane| pane.studies.first().copied())
+    }
+
+    /// Moves a study to a new pane directly above or below its pane; a study of the main pane
+    /// goes to a new pane below it. Returns `false` for an unknown id, `above` for a study of
+    /// the main pane, or a custom presentation that rejects placement edits.
+    #[cfg(feature = "ui")]
+    pub(crate) fn move_indicator_to_new_pane(&mut self, study: SeriesId, above: bool) -> bool {
+        self.sync_panes();
+        let from = self
+            .pane_layout
+            .panes
+            .iter()
+            .position(|pane| pane.studies.contains(&study));
+        if above && from.is_none() {
+            return false;
+        }
+        // A study alone in its pane leaves no pane behind; the new one takes its place.
+        let kept = from.is_some_and(|at| self.pane_layout.panes[at].studies.len() > 1);
+        if !self.move_indicator_to_pane(study, study) {
+            return false;
+        }
+        let to = from.map_or(0, |at| at + usize::from(kept && !above));
+        if let Some(pane) = self.pane_layout.panes.pop() {
+            self.pane_layout.panes.insert(to, pane);
+        }
+        true
+    }
+
+    /// Moves study `id` in the draw order of its pane, among the pane's studies and, in the main
+    /// pane, the price series. Returns `false` for an id that is not a study of the chart.
+    pub fn reorder_indicator(&mut self, id: SeriesId, order: VisualOrder) -> bool {
+        if !self.study_ids.contains(&id) {
+            return false;
+        }
+        self.sync_panes();
+        let layout = &mut self.pane_layout;
+        let Some(items) = std::iter::once(&mut layout.main)
+            .chain(layout.panes.iter_mut().map(|pane| &mut pane.studies))
+            .find(|items| items.contains(&id))
+        else {
+            return false;
+        };
+        let at = items.iter().position(|item| *item == id).unwrap();
+        let last = items.len() - 1;
+        let to = match order {
+            VisualOrder::BringToFront => last,
+            VisualOrder::BringForward => (at + 1).min(last),
+            VisualOrder::SendBackward => at.saturating_sub(1),
+            VisualOrder::SendToBack => 0,
+        };
+        let item = items.remove(at);
+        items.insert(to, item);
+        true
+    }
+
     pub(super) fn pane_scale_interaction(
         &mut self,
         ui: &mut Ui,

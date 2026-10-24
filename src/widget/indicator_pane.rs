@@ -262,6 +262,9 @@ pub struct PaneInteraction {
     pub visibility_response: Option<Response>,
     /// Settings button response, when the legend is shown.
     pub settings_response: Option<Response>,
+    /// Corner of the study menu, when the legend's more-actions button was clicked or its row
+    /// secondary-clicked this frame.
+    pub menu: Option<Pos2>,
 }
 
 /// A separate-pane indicator panel rendered via direct egui painting.
@@ -713,9 +716,11 @@ impl IndicatorPane {
             indicator,
             text_color,
         );
-        let (visibility_response, settings_response, close_response) = match responses {
-            Some([visibility, settings, close]) => (Some(visibility), Some(settings), Some(close)),
-            None => (None, None, None),
+        let (visibility_response, settings_response, close_response, menu) = match responses {
+            Some(([visibility, settings, close], menu)) => {
+                (Some(visibility), Some(settings), Some(close), menu)
+            }
+            None => (None, None, None, None),
         };
 
         // Return panel info for hit testing
@@ -728,6 +733,7 @@ impl IndicatorPane {
             close_response,
             visibility_response,
             settings_response,
+            menu,
         })
     }
 
@@ -1274,12 +1280,12 @@ impl IndicatorPane {
         let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
         let x =
             (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
-                .min(rect.right() - if self.pane_controls { 100.0 } else { 60.0 })
+                .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
                 .max(rect.left());
         Some(
             Rect::from_min_size(
                 Pos2::new(x, rect.top() + self.legend_offset + 2.0),
-                egui::vec2(60.0, 20.0),
+                egui::vec2(80.0, 20.0),
             )
             .intersect(rect),
         )

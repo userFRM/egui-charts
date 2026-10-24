@@ -310,6 +310,16 @@ impl Chart {
         true
     }
 
+    /// Pins study `id` to the pane's price scale, a scale of its own or no scale. Returns `false`
+    /// for an id that is not a study of the chart, or a custom presentation that keeps its scale.
+    pub fn set_indicator_scale(&mut self, id: SeriesId, scale: crate::studies::StudyScale) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.studies.indicators_mut()[at].set_scale(scale)
+    }
+
     /// The chart's studies with their ids, in the order they were added. Their values reflect the
     /// bars as of the last [`show`](Self::show), or of the call to
     /// [`add_indicator`](Self::add_indicator). A study that is not updated incrementally can lag

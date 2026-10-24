@@ -127,6 +127,7 @@ impl Study {
             && self.autoscale == other.autoscale
             && self.indicator.is_visible() == other.indicator.is_visible()
             && self.indicator.is_overlay() == other.indicator.is_overlay()
+            && self.indicator.scale() == other.indicator.scale()
             && self.indicator.settings() == other.indicator.settings()
             && self.indicator.colors() == other.indicator.colors()
             && inputs(self.indicator.as_ref()) == inputs(other.indicator.as_ref())
@@ -231,6 +232,7 @@ impl Chart {
         }
         if let Some(panes) = &action.panes
             && panes.maximized == self.pane_layout.maximized
+            && panes.main == self.pane_layout.main
             && panes.panes.len() == self.pane_layout.panes.len()
             && panes
                 .panes

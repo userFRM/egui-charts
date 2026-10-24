@@ -124,6 +124,8 @@ mod anchors;
 pub mod builder;
 mod clipboard;
 mod crosshair;
+#[cfg(feature = "ui")]
+pub(crate) use crosshair::menu_value;
 mod events;
 mod feed;
 mod marks;
@@ -143,6 +145,7 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
+pub use pane_layout::VisualOrder;
 pub use price_series::SeriesOptions;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
@@ -315,7 +318,7 @@ pub struct Chart {
     quote_action: Option<QuoteSide>,
     server_time_offset: Option<chrono::TimeDelta>,
     bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
-    indicator_settings_request: Option<SeriesId>,
+    pub(crate) indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
     extended_hours: bool,

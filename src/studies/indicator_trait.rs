@@ -398,6 +398,12 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Changes the [`scale`](Self::scale) used in the study's pane.
+    /// Returns whether this study supports the change. The chart's presentation wrapper does.
+    fn set_scale(&mut self, _scale: super::StudyScale) -> bool {
+        false
+    }
+
     /// Volume plots use an independent zero-based scale: up columns, down columns and MA.
     /// Renderers size columns to 80% of the bar pitch and format values as volume.
     fn is_volume(&self) -> bool {
