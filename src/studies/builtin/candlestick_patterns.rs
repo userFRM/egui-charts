@@ -33,7 +33,7 @@
 //! | BE | Engulfing | bearish | `b` long black in an uptrend; `p1` small white; `b`'s body covers `p1`'s, extending past at least one end |
 //! | BE | Engulfing | bullish | `b` long white in a downtrend; `p1` small black; `b`'s body covers `p1`'s, extending past at least one end |
 //! | EDS | Evening Doji Star | bearish | as Evening Star with a doji body for `p1` |
-//! | ES | Evening Star | bearish | `b` in an uptrend; `p2` long white; `p1` small, its body gapping above `p2`'s; `b` long black, its body gapping below `p1`'s and closing into the upper half of `p2`'s body |
+//! | ES | Evening Star | bearish | `b` in an uptrend; `p2` long white; `p1` small, its body gapping above `p2`'s; `b` long black, its body gapping below `p1`'s and closing into the lower half of `p2`'s body |
 //! | FTM | Falling Three Methods | bearish | `p4` long black in a downtrend; `p3`, `p2`, `p1` small white, opening and closing within `p4`'s range; `b` long black closing below `p4`'s close |
 //! | FW | Falling Window | bearish | `p1` in a downtrend; `b`'s high below `p1`'s low, neither range zero |
 //! | GD | Gravestone Doji | bearish | a doji body with a lower shadow no longer than the body |
@@ -51,7 +51,7 @@
 //! | MB | Marubozu Black | bearish | long black body, each shadow at most 5% of the body |
 //! | MW | Marubozu White | bullish | long white body, each shadow at most 5% of the body |
 //! | MDS | Morning Doji Star | bullish | as Morning Star with a doji body for `p1` |
-//! | MS | Morning Star | bullish | `b` in a downtrend; `p2` long black; `p1` small, its body gapping below `p2`'s; `b` long white, its body gapping above `p1`'s and closing into the lower half of `p2`'s body |
+//! | MS | Morning Star | bullish | `b` in a downtrend; `p2` long black; `p1` small, its body gapping below `p2`'s; `b` long white, its body gapping above `p1`'s and closing into the upper half of `p2`'s body |
 //! | ON | On Neck | bearish | `b` in a downtrend; `p1` long black; `b` small white, opening below `p1`'s close and closing equal to `p1`'s low |
 //! | P | Piercing | bullish | `p1` long black in a downtrend; `b` white, opening at or below `p1`'s low, closing above the middle of `p1`'s body and below its open |
 //! | RTM | Rising Three Methods | bullish | `p4` long white in an uptrend; `p3`, `p2`, `p1` small black, opening and closing within `p4`'s range; `b` long white closing above `p4`'s close |
@@ -72,7 +72,8 @@
 //! Three lines: Bullish at the low of a bar with a bullish pattern (an upward triangle),
 //! Bearish at the high of a bar with a bearish one (a downward triangle) and Neutral at the
 //! high of a bar with a doji or spinning top (a circle). Each mark is labelled with the
-//! abbreviations of the patterns found on the bar, one per line. Every pattern has a toggle,
+//! abbreviations of the patterns found on the bar, one per line; on a bar with a bearish
+//! pattern the neutral ones join the bearish label, so the two never overlap. Every pattern has a toggle,
 //! all on by default, and the pattern type marks both sides (the default, neutral patterns
 //! included) or only the bullish or only the bearish patterns.
 //!
@@ -691,7 +692,17 @@ impl Indicator for CandlestickPatterns {
 
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let side = [Bullish, Bearish, Neutral].get(line).copied()?;
-        let text: Vec<&str> = self.found(bar, side).map(|p| p.abbr).collect();
+        let bearish = self.found(bar, Bearish).next().is_some();
+        let text: Vec<&str> = match side {
+            // The bearish and neutral marks share the high, so one label names both.
+            Bearish => self
+                .found(bar, Bearish)
+                .chain(self.found(bar, Neutral))
+                .map(|p| p.abbr)
+                .collect(),
+            Neutral if bearish => Vec::new(),
+            _ => self.found(bar, side).map(|p| p.abbr).collect(),
+        };
         (!text.is_empty()).then(|| text.join("\n"))
     }
 
@@ -778,7 +789,11 @@ impl Indicator for CandlestickPatterns {
             self.values.push_lines(&[
                 at(Bullish, bar.low),
                 at(Bearish, bar.high),
-                at(Neutral, bar.high),
+                if self.found(i, Bearish).next().is_some() {
+                    f64::NAN
+                } else {
+                    at(Neutral, bar.high)
+                },
             ]);
         }
     }
@@ -984,6 +999,11 @@ mod tests {
                 &[(100.0, 104.25, 99.75, 104.0), (104.5, 105.25, 104.25, 105.0), (105.0, 105.25, 103.5, 103.75)]),
         ];
         let none = PatternTrend::NoDetection;
+        // Bars near 100 are in a downtrend after closes falling to 90 and in an uptrend after
+        // closes rising to 99. A reversal needs the trend it ends, a continuation the trend
+        // it continues, and the shapes below need none.
+        let falling = walk((90..150).rev().map(f64::from));
+        let rising = walk((40..100).map(f64::from));
         for (label, line, abbr, hit, miss) in cases {
             assert_eq!(
                 text(none, &flat, hit, label, line).as_deref(),
@@ -993,14 +1013,38 @@ mod tests {
             assert_eq!(text(none, &flat, miss, label, 0), None, "{label} near miss");
             assert_eq!(text(none, &flat, miss, label, 1), None, "{label} near miss");
             assert_eq!(text(none, &flat, miss, label, 2), None, "{label} near miss");
+            let trendless = [
+                "D", "DD", "GD", "K", "LLS", "LUS", "MB", "MW", "STB", "STW", "3BC", "3WS",
+            ];
+            let continuation = ["DTG", "FTM", "FW", "ON", "RTM", "RW", "UTG"];
+            let (with, against) = if (line == 0) != continuation.contains(&abbr) {
+                (&falling, &rising)
+            } else {
+                (&rising, &falling)
+            };
+            let sma = PatternTrend::Sma50;
+            assert_eq!(
+                text(sma, with, hit, label, line).as_deref(),
+                Some(abbr),
+                "{label} in trend"
+            );
+            assert_eq!(
+                text(sma, against, hit, label, line).as_deref(),
+                trendless.contains(&abbr).then_some(abbr),
+                "{label} against trend"
+            );
         }
+
+        // The trend is checked on the bar the definition names: a window rising from a bar
+        // below SMA(50) is not marked, even when the gap carries the close above it.
+        let window: &[Ohlc] = &[(90.0, 90.25, 88.75, 89.0), (120.0, 121.0, 119.5, 120.5)];
+        let rw = "Rising Window - Bullish";
+        assert_eq!(text(PatternTrend::Sma50, &falling, window, rw, 0), None);
 
         // A hammer needs a downtrend: the close below SMA(50), and for the stricter rule also
         // SMA(50) below SMA(200). After 150 rising and 60 falling closes SMA(50) is below the
         // close but above SMA(200).
         let hammer: &[Ohlc] = &[(89.0, 89.5, 87.0, 89.5)];
-        let falling = walk((90..150).rev().map(f64::from));
-        let rising = walk((40..100).map(f64::from));
         let turned = walk((1..=150).chain((90..150).rev()).map(f64::from));
         let long_fall = walk((90..300).rev().map(f64::from));
         let h = "Hammer - Bullish";
@@ -1025,5 +1069,27 @@ mod tests {
             text(none, &flat, dragonfly, "", 0).as_deref(),
             Some("DD\nH\nLLS")
         );
+
+        // A neutral doji closing a bearish Tri-Star shares the high, so the bearish label names it.
+        let tri_star: &[Ohlc] = &[
+            (100.0, 101.0, 99.0, 100.0),
+            (102.0, 103.0, 101.0, 102.0),
+            (100.0, 101.0, 99.0, 100.0),
+        ];
+        assert_eq!(text(none, &flat, tri_star, "", 1).as_deref(), Some("3S\nD"));
+        assert_eq!(text(none, &flat, tri_star, "", 2), None);
+
+        // The pattern type keeps one side and drops the neutral patterns.
+        let mut data = flat.clone();
+        data.extend(
+            tri_star
+                .iter()
+                .map(|&(o, h, l, c)| Bar::new(Utc::now(), o, h, l, c, 1.0)),
+        );
+        let mut study = CandlestickPatterns::new(none).with_pattern_type(PatternType::Bullish);
+        study.calculate(&data);
+        let last = data.len() - 1;
+        assert_eq!(study.plot_text(1, last), None);
+        assert_eq!(study.plot_text(2, last), None);
     }
 }
