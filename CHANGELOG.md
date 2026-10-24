@@ -167,6 +167,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Command palette labels and descriptions stay clear of categories and shortcuts in narrow windows. Long text is shortened to fit its column. ([#308](https://github.com/userFRM/egui-charts/issues/308))
 - Shared comparison scales retain manual bounds when members are hidden, removed or reassigned. Comparison lines remain visible beyond the main history, relative axes retain their units in whitespace, and hidden study axes no longer consume comparison gutters. Removing the main series keeps its feed stopped when playback resumes. Copied layouts remap drawing pane ownership to the copied studies. ([#87](https://github.com/userFRM/egui-charts/issues/87))
 
 - Applying drawing templates preserves the target study pane, and saved defaults omit pane ownership. Standalone drawing managers release cached geometry after drawings are deleted. Chart layouts keep study-owned drawings local rather than copying their chart-local study ids into another chart. ([#151](https://github.com/userFRM/egui-charts/issues/151))
@@ -754,6 +755,8 @@ All notable changes to this project are documented in this file. The format is b
 - `MagnetButton::show`, `HideMenu::show` and `RemoveMenu::show` return the button's `Response`, where they returned tuples of flags and a rect. `MagnetButton::show_submenu(ui, magnet_on, magnet_type)`, `HideMenu::show_submenu(ui, trading, state)`, `RemoveMenu::show_submenu(ui)` and `TemplatesButton::show_submenu(ui, templates)` draw into the `Ui` they are given. `components::render_svg_at_rect_themed` no longer moves the layout cursor.
 
 ### Removed
+
+- Unread design token fields: `UiSemanticTokens::{panel_bg_dark, panel_bg_secondary_dark, panel_bg_floating_dark, text_dark, text_secondary_dark, text_disabled_dark, text_disabled_light, border_subtle_dark, border_control_dark, border_control_light, btn_bg_dark, btn_bg_hover_dark, btn_bg_active_dark, selection_bg_light, selection_text_light, error_light, warning_dark, info_dark}`, `ChartSemanticTokens::{bg_selection, bg_selection_light, bg_light, bg_axis_light, grid_line_light, grid_line_major_light, crosshair_line_light}`, `IndicatorSemanticTokens::{bb_fill, rsi_overbought, rsi_oversold, macd_hist_pos, macd_hist_neg}`, `DrawingSemanticTokens::{default_line, handle, handle_hover, handle_active, line_hover, line_selected, label_bg, fib_0, fib_236, fib_382, fib_618}`, `TpoSemanticTokens::opening_range`, `ToolbarSizingTokens::top_height` and `ShadowTokens::offset_md`. Migration: remove these fields from token struct literals; read applied colours from `ThemeExt::active_theme` and keep host-specific constants where no theme field applies. `UiSemanticTokens::border_dark` and `DrawingSemanticTokens::fib_50` retain their rendering readers, and `ChartSemanticTokens::watermark_alpha` remains available as the documented watermark migration target. ([#367](https://github.com/userFRM/egui-charts/issues/367))
 
 - Unread layout timestamps, cloud/default flags and the `LayoutInfo` wrapper, unused `LayoutAction::OpenMenu` and `SetDefault`, and unused `LayoutMenuConfig` colours and item height. Migration: supply `LayoutMenu::layouts` as `Vec<String>` and update that list directly instead of calling `add_layout`; `LayoutMenuConfig` retains only `menu_width`.
 
