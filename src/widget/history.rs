@@ -27,7 +27,7 @@ struct Pending {
 struct Action {
     config: Option<ChartConfig>,
     options: Option<ChartOptions>,
-    view: (f32, f32),
+    view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
@@ -149,7 +149,7 @@ impl Chart {
             before: Action {
                 config: Some(self.config.clone()),
                 options: Some(self.chart_options.clone()),
-                view: self.get_time_scale_state(),
+                view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
@@ -173,6 +173,9 @@ impl Chart {
         self.drawings.swap_history(&mut pending.standalone_drawings);
         let mut action = pending.before;
         action.drawings = pending.standalone_drawings;
+        if action.view == Some(self.get_time_scale_state()) {
+            action.view = None;
+        }
         if action.config.as_ref() == Some(&self.config) {
             action.config = None;
         }
@@ -201,7 +204,8 @@ impl Chart {
                 _ => true,
             },
         );
-        if action.config.is_none()
+        if action.view.is_none()
+            && action.config.is_none()
             && action.options.is_none()
             && action.scale.is_none()
             && action.chart_type.is_none()
@@ -283,6 +287,7 @@ impl Chart {
         let Some(mut action) = stack.pop() else {
             return false;
         };
+        let current_view = self.get_time_scale_state();
         if let Some((kind, params)) = &mut action.chart_type {
             let current = (self.chart_type, self.chart_type_params.clone());
             self.set_chart_type(*kind);
@@ -303,24 +308,8 @@ impl Chart {
             std::mem::swap(&mut self.config, config);
         }
         if let Some(options) = &mut action.options {
-            let current = &self.chart_options.time_scale;
-            let target = &options.time_scale;
-            let spacing_changed = current.bar_spacing != target.bar_spacing;
-            let offset_changed = current.right_offset != target.right_offset
-                || current.right_offset_pixels != target.right_offset_pixels;
-            let mut view = self.get_time_scale_state();
-            std::mem::swap(&mut view, &mut action.view);
-            let spacing = if spacing_changed {
-                view.0
-            } else {
-                action.view.0
-            };
-            let offset = if offset_changed {
-                view.1
-            } else {
-                action.view.1
-            };
             std::mem::swap(&mut self.chart_options, options);
+            let (spacing, offset) = self.get_time_scale_state();
             let opt = &self.chart_options.time_scale;
             self.state.time_scale_mut().apply_options(
                 spacing,
@@ -331,6 +320,12 @@ impl Chart {
                 offset,
                 None,
             );
+        }
+        if let Some(view) = &mut action.view {
+            self.apply_synced_time_scale(view.0, view.1);
+            *view = current_view;
+            self.pending_scroll_time = None;
+            self.tracking_mode_active = false;
         }
         if let Some(scale) = &mut action.scale {
             std::mem::swap(self.state.price_scale_mut(), scale);
@@ -410,7 +405,7 @@ mod tests {
     use crate::model::BarData;
     use crate::studies::{InputValue, RSI, SMA};
     use crate::widget::test_frames::chart;
-    use egui::Color32;
+    use egui::{Color32, Context, Event, Key, Modifiers, RawInput};
 
     #[test]
     fn study_edits_and_bulk_removal_restore_ids_order_and_settings() {
@@ -680,8 +675,6 @@ mod tests {
             Some("host")
         );
     }
-
-    use egui::{Context, Event, Key, Modifiers, RawInput};
 
     #[test]
     fn command_z_y_and_shift_z_share_the_chart_history_on_both_platforms() {

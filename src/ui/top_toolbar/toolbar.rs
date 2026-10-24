@@ -143,7 +143,7 @@ impl Slot {
             S::QuickSearch => (
                 &embedded_icons::QUICK_SEARCH,
                 "Quick Search",
-                A::OpenSymbolSearch,
+                A::OpenQuickSearch,
             ),
             S::Settings => (&embedded_icons::SETTINGS_GEAR, "Settings", A::OpenSettings),
             S::Fullscreen => (
@@ -775,11 +775,17 @@ mod tests {
     }
 
     #[test]
-    fn export_menus_require_a_choice() {
+    fn toolbar_buttons_and_menu_choices_emit_distinct_actions() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             for (slot, label, expected) in [
+                (
+                    S::QuickSearch,
+                    "Quick Search",
+                    TopToolbarAction::OpenQuickSearch,
+                ),
+                (S::Symbol, "Symbol", TopToolbarAction::OpenSymbolSearch),
                 (
                     S::Screenshot,
                     "Download image",
@@ -843,10 +849,14 @@ mod tests {
                 };
                 frame(vec![click(pos, true)]);
                 let (action, _, _) = frame(vec![click(pos, false)]);
+                if matches!(slot, S::QuickSearch | S::Symbol) {
+                    assert_eq!(action, expected);
+                    continue;
+                }
                 assert_eq!(
                     action,
                     TopToolbarAction::None,
-                    "opening the menu must not capture an image"
+                    "opening a menu emits no action"
                 );
                 frame(vec![]);
                 let (_, _, download) = frame(vec![]);

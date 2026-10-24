@@ -1000,7 +1000,7 @@ impl DemoApp {
                             ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
                                 .on_hover_text("Pause the feed to inspect the footprint sample");
                             for (label, action) in [
-                                ("Quick search", TopToolbarAction::OpenSymbolSearch),
+                                ("Quick search", TopToolbarAction::OpenQuickSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
                             ] {
                                 if ui.button(label).clicked() {
@@ -1059,10 +1059,9 @@ impl DemoApp {
                                 .icon_scale(24.0 / 28.0)
                                 .show(ui),
                             "Quick search",
-                            Some(egui::KeyboardShortcut::new(
-                                egui::Modifiers::COMMAND,
-                                egui::Key::K,
-                            )),
+                            self.chart
+                                .shortcuts()
+                                .shortcut(egui_charts::config::KeyboardAction::OpenQuickSearch),
                         )
                         .clicked();
                     },
@@ -1133,6 +1132,7 @@ impl DemoApp {
             TopToolbarAction::OpenSymbolSearch | TopToolbarAction::OpenCompare => {
                 self.symbol_search.open();
             }
+            TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
             TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
             TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
@@ -1220,6 +1220,10 @@ impl DemoApp {
     }
 
     fn show_drawing_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if self.chart.zoom_was_applied() {
+            self.drawing_toolbar.state.zoom_mode_active = false;
+        }
+        self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
@@ -1245,6 +1249,18 @@ impl DemoApp {
     }
 
     pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
+        match action {
+            DrawingToolbarAction::ZoomIn => {
+                self.chart
+                    .set_zoom_mode(self.drawing_toolbar.state.zoom_mode_active);
+                return;
+            }
+            DrawingToolbarAction::ZoomOut => {
+                self.chart.zoom_back();
+                return;
+            }
+            _ => {}
+        }
         self.user_action(|app| app.handle_drawing_toolbar_edit(action));
     }
 
@@ -1330,12 +1346,6 @@ impl DemoApp {
             }
             DrawingToolbarAction::HideAllDrawings => dm.toggle_visibility_all(),
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
-            DrawingToolbarAction::ZoomIn => {
-                let _ = dm.redo();
-            }
-            DrawingToolbarAction::ZoomOut => {
-                let _ = dm.undo();
-            }
             DrawingToolbarAction::InsertEmoji { icon_name } => {
                 dm.start_icon_insertion(icon_name.to_string())
             }
@@ -2438,9 +2448,15 @@ mod tests {
     fn quick_search_executes_studies_tools_and_settings() {
         use eframe::App;
         use egui::{Event, Key, Modifiers, RawInput};
-        for (query, same_frame) in ["RSI", "Trend Line", "Chart settings"]
+        for (query, same_frame, toolbar) in ["RSI", "Trend Line", "Chart settings"]
             .into_iter()
-            .flat_map(|query| [(query, false), (query, true)])
+            .flat_map(|query| {
+                [
+                    (query, false, false),
+                    (query, true, false),
+                    (query, true, true),
+                ]
+            })
         {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -2452,6 +2468,10 @@ mod tests {
                     dm.start_drawing_with_coords(tool, egui::pos2(10.0, 100.0), |x| x, f64::from);
                     dm.add_point_with_coords(egui::pos2(20.0, 120.0), |x| x, f64::from);
                 });
+            }
+            if toolbar {
+                app.handle_top_toolbar(&ctx, TopToolbarAction::OpenQuickSearch);
+                assert!(!app.symbol_search.is_open());
             }
             let key = |key, modifiers| Event::Key {
                 key,
@@ -2465,7 +2485,11 @@ mod tests {
                     Modifiers::CTRL.plus(Modifiers::COMMAND),
                     if same_frame {
                         vec![
-                            key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND)),
+                            if toolbar {
+                                Event::ModifiersChanged(Modifiers::NONE)
+                            } else {
+                                key(Key::K, Modifiers::CTRL.plus(Modifiers::COMMAND))
+                            },
                             Event::Text(query.into()),
                         ]
                     } else {
@@ -2680,6 +2704,48 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(!app.drawing_toolbar.state.lock_all);
+    }
+
+    #[test]
+    fn zoom_controls_leave_drawing_history_untouched() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.user_action(|chart| {
+            chart
+                .drawings_mut()
+                .add_synced_drawing(egui_charts::drawings::Drawing::new(
+                    0,
+                    egui_charts::drawings::DrawingToolType::TrendLine,
+                ));
+        });
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        app.drawing_toolbar.state.zoom_mode_active = true;
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomIn);
+        assert!(app.chart.drawings().drawings.is_empty());
+        assert!(app.chart.can_redo());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        let before = app.chart.get_time_scale_state();
+        let rect = app.chart.get_rendered_price_rect();
+        assert!(app.chart.execute_box_zoom(
+            rect.min + rect.size() * 0.2,
+            rect.max - rect.size() * 0.2,
+            rect,
+            rect.width()
+        ));
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_drawing_toolbar(ui, egui::Color32::BLACK);
+        })
+        .drop_without_applying_deltas();
+        assert!(app.drawing_toolbar.state.has_zoom_history);
+        app.handle_drawing_toolbar(DrawingToolbarAction::ZoomOut);
+        assert_eq!(app.chart.get_time_scale_state(), before);
+        assert!(!app.chart.state().has_zoom_history());
+        assert!(app.chart.drawings().drawings.is_empty());
+        assert!(app.chart.can_redo());
     }
 
     #[test]

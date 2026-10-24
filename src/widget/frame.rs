@@ -2487,6 +2487,15 @@ mod tests {
                 mode,
                 "button {button}"
             );
+            assert!(chart.undo(), "button {button}: navigation edit is undoable");
+            assert_eq!(chart.get_time_scale_state(), (20.0, -20.0));
+            assert_eq!(chart.state.price_scale().is_manual(), initial_manual);
+            assert_eq!(chart.state.price_scale().options().mode, initial_mode);
+            assert!(chart.redo());
+            assert!((chart.get_time_scale_state().0 - spacing).abs() < 1e-4);
+            assert!((f64::from(chart.get_time_scale_state().1) - offset).abs() < 1e-4);
+            assert_eq!(chart.state.price_scale().is_manual(), manual);
+            assert_eq!(chart.state.price_scale().options().mode, mode);
         }
     }
 

@@ -165,13 +165,7 @@ impl KeyboardShortcutsDialog {
                             .show(ui, |ui| {
                                 for action in actions {
                                     ui.label(RichText::new(action.label()).size(theme.text.body));
-                                    let keys: Vec<_> = shortcuts
-                                        .bindings
-                                        .iter()
-                                        .filter_map(|(key, bound)| {
-                                            (bound == action).then_some(*key)
-                                        })
-                                        .collect();
+                                    let keys: Vec<_> = shortcuts.keys_for(*action).collect();
                                     ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
                                 }

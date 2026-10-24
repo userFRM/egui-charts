@@ -127,11 +127,10 @@ use crate::chart::state;
 
 pub mod builder;
 mod feed;
-mod history;
-pub mod keyboard;
-pub use keyboard::{ShortcutMap, ShortcutRequest};
 mod frame;
+mod history;
 pub(crate) mod interaction;
+pub mod keyboard;
 mod navigation;
 pub(crate) mod pan_zoom;
 mod panes;
@@ -141,6 +140,7 @@ mod sync;
 use feed::FeedLink;
 pub(crate) mod tool_interaction;
 
+pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// Interactive financial chart widget for egui.
@@ -569,6 +569,13 @@ impl Chart {
     /// (check with [`Chart::zoom_was_applied`]).
     pub fn set_zoom_mode(&mut self, active: bool) {
         self.zoom_mode_active = active;
+    }
+
+    /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    pub fn zoom_back(&mut self) -> bool {
+        self.pending_scroll_time = None;
+        self.tracking_mode_active = false;
+        self.state.pop_zoom_state()
     }
 
     /// Returns `true` if a box-zoom was completed in the most recent frame.

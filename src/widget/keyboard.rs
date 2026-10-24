@@ -28,9 +28,23 @@ impl Default for ShortcutMap {
 impl ShortcutMap {
     /// The first binding for an action, for a platform-formatted menu hint.
     pub fn shortcut(&self, action: KeyboardAction) -> Option<KeyboardShortcut> {
+        self.keys_for(action).next()
+    }
+
+    pub(crate) fn keys_for(
+        &self,
+        action: KeyboardAction,
+    ) -> impl Iterator<Item = KeyboardShortcut> + '_ {
         self.bindings
             .iter()
-            .find_map(|(key, bound)| (*bound == action).then_some(*key))
+            .enumerate()
+            .filter_map(move |(index, (key, bound))| {
+                (*bound == action
+                    && !self.bindings[..index]
+                        .iter()
+                        .any(|(earlier, _)| earlier == key))
+                .then_some(*key)
+            })
     }
 
     /// Consume the first bound key press, leaving other input for its owner.
@@ -93,9 +107,10 @@ impl ShortcutMap {
         }
         let mut custom = Vec::new();
         for (_, action) in &self.bindings {
-            if !categories
-                .iter()
-                .any(|(_, actions)| actions.contains(action))
+            if self.shortcut(*action).is_some()
+                && !categories
+                    .iter()
+                    .any(|(_, actions)| actions.contains(action))
                 && !custom.contains(action)
             {
                 custom.push(*action);
@@ -573,6 +588,21 @@ mod tests {
                     ),
                 );
             }
+            let map = chart.shortcuts();
+            let visible = map
+                .by_category()
+                .into_iter()
+                .flat_map(|(_, actions)| actions)
+                .any(|action| action == KeyboardAction::OpenQuickSearch);
+            assert_eq!(
+                visible,
+                pass != 4,
+                "help must not advertise a shadowed binding"
+            );
+            assert_eq!(
+                map.shortcut(KeyboardAction::OpenQuickSearch).is_some(),
+                pass != 4
+            );
             let events = match pass {
                 2 => vec![
                     Event::Key {
