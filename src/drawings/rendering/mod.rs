@@ -517,7 +517,77 @@ impl Drawing {
     pub fn render(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         self.render_original(painter, rect, view);
     }
+
+    /// The screen x range this drawing paints in, for tools that paint within three times the
+    /// diagonal of their anchors plus [`PAINT_MARGIN`] on either side of them, so a drawing
+    /// outside the pane's x range can be skipped. `None` for tools that can reach the pane's
+    /// edges, as lines extended left or right do.
+    pub(crate) fn paint_span(&self) -> Option<egui::Rangef> {
+        use DrawingToolType as T;
+        let bounded = matches!(
+            self.tool_type,
+            T::TrendLine
+                | T::InfoLine
+                | T::TrendAngle
+                | T::Rect
+                | T::RotatedRect
+                | T::Circle
+                | T::Ellipse
+                | T::Triangle
+                | T::Arc
+                | T::Polyline
+                | T::DoubleCurve
+                | T::Path
+                | T::Curve
+                | T::Brush
+                | T::Highlighter
+                | T::Sector
+                | T::FibonacciSpeedResistanceArcs
+                | T::FibonacciCircles
+                | T::GannSquare
+                | T::GannBox
+                | T::GannFixed
+                | T::XABCDPattern
+                | T::CypherPattern
+                | T::HeadAndShoulders
+                | T::ABCDPattern
+                | T::TrianglePattern
+                | T::ThreeDrivesPattern
+                | T::ElliottImpulse
+                | T::ElliottCorrection
+                | T::ElliottTriangle
+                | T::ElliottDoubleCombo
+                | T::ElliottTripleCombo
+                | T::LongPos
+                | T::ShortPos
+                | T::Forecast
+                | T::BarsPattern
+                | T::GhostFeed
+                | T::FixedRangeVolumeProfile
+                | T::Measure
+                | T::DateAndPriceRange
+                | T::Arrow
+                | T::ArrowMarker
+                | T::ArrowMarkUp
+                | T::ArrowMarkDown
+                | T::ArrowMarkLeft
+                | T::ArrowMarkRight
+                | T::FontIcon
+                | T::Sticker
+                | T::Image
+        );
+        if !bounded || self.extend_left || self.extend_right {
+            return None;
+        }
+        let hull = self.bounding_rect()?;
+        let reach = 3.0 * hull.size().length() + PAINT_MARGIN;
+        Some(hull.x_range().expand(reach))
+    }
 }
+
+/// Room beyond the anchors for the labels, markers and fixed-size extensions of a drawing with a
+/// [`Drawing::paint_span`].
+const PAINT_MARGIN: f32 = 200.0;
 
 /// Bars the data-driven drawing tests share; their reference values were
 /// computed independently from these OHLCV rows. The last bar has no range.
@@ -633,6 +703,87 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Guards culling: a drawing with a paint span paints nothing outside it, for spread,
+    /// near-vertical and tiny anchors, so skipping it when the span misses the pane hides nothing
+    /// in view. A tool added to the bounded list whose paint reaches further, such as a line to the
+    /// pane edge, fails it.
+    #[test]
+    fn drawings_paint_within_their_span() {
+        let layouts: [&[(f32, f32)]; 3] = [
+            &[
+                (100., 100.),
+                (300., 300.),
+                (200., 250.),
+                (350., 150.),
+                (400., 200.),
+                (250., 120.),
+                (450., 280.),
+                (150., 180.),
+            ],
+            &[
+                (200., 100.),
+                (200.5, 300.),
+                (201., 150.),
+                (201.5, 280.),
+                (202., 120.),
+                (202.5, 260.),
+                (203., 140.),
+                (203.5, 300.),
+            ],
+            &[
+                (200., 200.),
+                (201., 202.),
+                (202., 199.),
+                (203., 201.),
+                (204., 200.),
+                (205., 202.),
+                (206., 198.),
+                (207., 201.),
+            ],
+        ];
+        let bars = sample_bars();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+        let mut wrong = Vec::new();
+        for &tool in DrawingToolType::all() {
+            for layout in layouts {
+                let mut drawing = Drawing::new(7, tool);
+                let count = tool.required_points().unwrap_or(layout.len());
+                drawing.points = layout
+                    .iter()
+                    .take(count)
+                    .map(|&(x, y)| Pos2::new(x, y))
+                    .collect();
+                drawing.chart_points = (drawing.points.iter())
+                    .map(|p| crate::drawings::ChartPoint::new(p.x / 40.0, 500.0 - p.y as f64))
+                    .collect();
+                drawing.text = Some("Sample".into());
+                let Some(span) = drawing.paint_span() else {
+                    continue;
+                };
+                let ctx = Context::default();
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|b| b * 40.0,
+                        price_to_y: &|p| 500.0 - p as f32,
+                    };
+                    drawing.render(ui.painter(), pane, &view);
+                });
+                for shape in &output.shapes {
+                    let x = shape.shape.visual_bounding_rect().x_range();
+                    let span = span.expand(0.5);
+                    if x.min <= x.max && !(span.contains(x.min) && span.contains(x.max)) {
+                        wrong.push(format!("{tool:?} paints {x:?} outside {span:?}"));
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Text size changes the laid-out box; bold adds weight without requiring host fonts.

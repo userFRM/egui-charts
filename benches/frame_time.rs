@@ -9,6 +9,7 @@
 
 use egui::{Rect, UiBuilder, pos2, vec2};
 use egui_charts::ChartType;
+use egui_charts::drawings::{ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType};
 use egui_charts::model::BarData;
 use egui_charts::studies::{
     ADX, ATR, BollingerBands, EMA, IchimokuCloud, MACD, ParabolicSAR, RSI, SMA, Stochastic,
@@ -28,9 +29,18 @@ struct Scenario {
     charts: usize,
     columns: usize,
     studies: bool,
+    drawings: Drawings,
 }
 
-const SCENARIOS: [Scenario; 4] = [
+/// Where the 500 drawings of a scenario are anchored, every drawing tool in turn.
+#[derive(PartialEq)]
+enum Drawings {
+    None,
+    InView,
+    AcrossHistory,
+}
+
+const SCENARIOS: [Scenario; 6] = [
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed out",
         bars: 5_000_000,
@@ -38,6 +48,7 @@ const SCENARIOS: [Scenario; 4] = [
         charts: 1,
         columns: 1,
         studies: false,
+        drawings: Drawings::None,
     },
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed in",
@@ -46,6 +57,7 @@ const SCENARIOS: [Scenario; 4] = [
         charts: 1,
         columns: 1,
         studies: false,
+        drawings: Drawings::None,
     },
     Scenario {
         name: "4 charts, 100,000 bars",
@@ -54,6 +66,7 @@ const SCENARIOS: [Scenario; 4] = [
         charts: 4,
         columns: 2,
         studies: false,
+        drawings: Drawings::None,
     },
     Scenario {
         name: "8 charts, 100,000 bars, 10 studies each",
@@ -62,6 +75,25 @@ const SCENARIOS: [Scenario; 4] = [
         charts: 8,
         columns: 4,
         studies: true,
+        drawings: Drawings::None,
+    },
+    Scenario {
+        name: "1 chart, 10,000 bars, 500 drawings in view",
+        bars: 10_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::InView,
+    },
+    Scenario {
+        name: "1 chart, 10,000 bars, 500 drawings across the history",
+        bars: 10_000,
+        visible: 200,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::AcrossHistory,
     },
 ];
 
@@ -73,8 +105,8 @@ fn main() {
         .skip(1)
         .filter(|a| !a.starts_with("--"))
         .collect();
-    println!("| scenario | shapes | frame ms (median) | tessellation ms (median) |");
-    println!("|---|---:|---:|---:|");
+    println!("| scenario | shapes | vertices | frame ms (median) | tessellation ms (median) |");
+    println!("|---|---:|---:|---:|---:|");
     for scenario in &SCENARIOS {
         if !filters.is_empty() && !filters.iter().any(|f| scenario.name.contains(f.as_str())) {
             continue;
@@ -108,9 +140,10 @@ fn main() {
                 .map_or(0.0, |d| d.as_secs_f64() * 1e3)
         };
         println!(
-            "| {} | {} | {:.3} | {:.3} |",
+            "| {} | {} | {} | {:.3} | {:.3} |",
             scenario.name,
             samples.last().map_or(0, |s| s.shapes),
+            samples.last().map_or(0, |s| s.vertices),
             median(|s| s.frame),
             median(|s| s.tessellate),
         );
@@ -141,6 +174,32 @@ fn chart(scenario: &Scenario) -> Chart {
         chart.add_indicator(Box::new(Stochastic::default()));
         chart.add_indicator(Box::new(ATR::default()));
         chart.add_indicator(Box::new(ADX::default()));
+    }
+    let tools: Vec<DrawingToolType> = DrawingToolType::all()
+        .iter()
+        .copied()
+        .filter(|tool| tool.interaction_mode() != DrawingInteractionMode::NotDrawing)
+        .collect();
+    for k in 0..if scenario.drawings == Drawings::None {
+        0
+    } else {
+        500
+    } {
+        let tool = tools[k % tools.len()];
+        // Anchors at most 35 bars apart, from a bar in view or anywhere in the history.
+        let first = match scenario.drawings {
+            Drawings::InView => scenario.bars - scenario.visible + k * 7 % (scenario.visible - 40),
+            _ => k * 19 % (scenario.bars - 40),
+        };
+        let mut drawing = Drawing::new(k, tool);
+        drawing.text = Some("Note".into());
+        drawing.chart_points = (0..tool.required_points().unwrap_or(8))
+            .map(|j| {
+                let price = 100.0 + 6.0 * ((k + j) as f64).sin();
+                ChartPoint::new((first + 5 * j) as f32, price)
+            })
+            .collect();
+        chart.drawings_mut().add_synced_drawing(drawing);
     }
     chart
 }
