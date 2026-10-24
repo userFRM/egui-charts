@@ -295,16 +295,18 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        if let Some(theme) = self.theme_override.clone() {
-            let _theme_scope = crate::theme::ThemeScope::new(ui.ctx(), &theme);
-            return ui
-                .scope(|ui| {
-                    crate::theme::apply_to_style(ui.style_mut(), &theme);
-                    self.show_themed_content(ui, footprint)
-                })
-                .inner;
-        }
-        self.show_themed_content(ui, footprint)
+        let theme = self.theme_override.clone();
+        let _theme_scope = theme
+            .as_ref()
+            .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
+        ui.scope(|ui| {
+            if let Some(theme) = &theme {
+                crate::theme::apply_to_style(ui.style_mut(), theme);
+            }
+            self.show_themed_content(ui, footprint)
+        })
+        .inner
     }
 
     fn show_themed_content(

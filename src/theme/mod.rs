@@ -416,6 +416,7 @@ pub(crate) fn readable_color(
         .unwrap_or(text)
 }
 
+/// Applies the same palette and spacing to a local UI or to the global styles.
 pub(crate) fn apply_to_style(style: &mut egui::Style, theme: &Theme) {
     let mut visuals = if theme.dark {
         egui::Visuals::dark()
@@ -629,6 +630,34 @@ mod tests {
             assert_eq!(ctx.active_theme(), global);
             assert_eq!(ctx.global_style().visuals, original_style.visuals);
             assert_eq!(ctx.global_style().spacing, original_style.spacing);
+        }
+        let mut chart_id = None;
+        for update_theme in [false, true] {
+            if update_theme {
+                chart.set_theme(&ctx, &global);
+            }
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let response = chart.show(ui);
+                        if let Some(id) = chart_id {
+                            assert_eq!(response.id, id, "theme changes must retain chart UI state");
+                            assert!(response.has_focus());
+                        } else {
+                            chart_id = Some(response.id);
+                            response.request_focus();
+                        }
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
         }
         chart.set_theme_override(None);
         let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
