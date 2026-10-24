@@ -146,79 +146,69 @@ pub(crate) fn render_watermark(ui: &Ui, painter: &Painter, rect: Rect, watermark
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Pos2, load::SizedTexture};
+    use crate::widget::test_frames::{chart, shapes};
+    use egui::load::SizedTexture;
 
-    /// In a 400 by 300 pane with 10 points of padding, a 100 by 50 image, a 40 point bold line
-    /// (48 tall) and a 20 point line (24 tall) form a block 122 tall. Top, centre and bottom
-    /// alignment put its top at 10, 150 - 61 = 89 and 290 - 122 = 168; each part sits on the
-    /// left edge at 10, on the centre at 200 or on the right edge at 390, and each line is
-    /// centred in its row. The bold line is painted twice, 0.6 points apart.
+    /// With 10 points of padding, a 100 by 50 image, a 40 point bold line (48 tall) and a 20
+    /// point line (24 tall) form a block 122 tall. Top, centre and bottom alignment put its top
+    /// at the padded pane's top, 61 above its centre and 122 above its bottom; each part sits on
+    /// its left edge, centre or right edge, and each line is centred in its row. The bold line is
+    /// painted twice, 0.6 points apart.
     #[test]
     fn watermark_stacks_its_image_and_lines_at_the_alignment() {
-        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
         let (bold, plain) = (Color32::from_rgb(1, 2, 3), Color32::from_rgb(4, 5, 6));
-        for (align, top, x) in [
-            (Align2::LEFT_TOP, 10.0, egui::Align::Min),
-            (Align2::CENTER_CENTER, 89.0, egui::Align::Center),
-            (Align2::RIGHT_BOTTOM, 168.0, egui::Align::Max),
-        ] {
-            let watermark = Watermark::default()
-                .with_image(
-                    egui::Image::from_texture(SizedTexture::new(
-                        egui::TextureId::User(7),
-                        Vec2::new(200.0, 100.0),
-                    ))
-                    .max_size(Vec2::new(100.0, 50.0)),
-                )
-                .with_line(WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold))
-                .with_line(WatermarkLine::new("Apple Inc", 20.0, plain))
-                .with_align(align)
-                .with_padding(10.0);
-            let ctx = egui::Context::default();
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(rect),
-                    ..Default::default()
-                },
-                |ui| {
-                    let painter = ui.painter().clone();
-                    render_watermark(ui, &painter, rect, &watermark);
-                },
-            );
-            let bounds: Vec<_> = output
-                .shapes
-                .iter()
-                .map(|clipped| {
-                    let bounds = match &clipped.shape {
-                        // The layout box, not the glyphs' ink.
-                        Shape::Text(t) => t.galley.rect.translate(t.pos.to_vec2()),
-                        shape => shape.visual_bounding_rect(),
-                    };
-                    (clipped.shape.clone(), bounds)
-                })
-                .collect();
-            output.drop_without_applying_deltas();
-            let edge = |part: Rect| match x {
-                egui::Align::Min => part.left() - 10.0,
-                egui::Align::Center => part.center().x - 200.0,
-                egui::Align::Max => part.right() - 390.0,
+        let texture = egui::TextureId::User(7);
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        for align in [Align2::LEFT_TOP, Align2::CENTER_CENTER, Align2::RIGHT_BOTTOM] {
+            chart.set_watermark(Some(
+                Watermark::default()
+                    .with_image(
+                        egui::Image::from_texture(SizedTexture::new(
+                            texture,
+                            Vec2::new(200.0, 100.0),
+                        ))
+                        .max_size(Vec2::new(100.0, 50.0)),
+                    )
+                    .with_line(
+                        WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold),
+                    )
+                    .with_line(WatermarkLine::new("Apple Inc", 20.0, plain))
+                    .with_align(align)
+                    .with_padding(10.0),
+            ));
+            let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+            let pane = chart.last_rendered_price_rect.shrink(10.0);
+            let top = match align.y() {
+                egui::Align::Min => pane.top(),
+                egui::Align::Center => pane.center().y - 61.0,
+                egui::Align::Max => pane.bottom() - 122.0,
             };
-            let image = bounds
+            let edge = |part: Rect| match align.x() {
+                egui::Align::Min => part.left() - pane.left(),
+                egui::Align::Center => part.center().x - pane.center().x,
+                egui::Align::Max => part.right() - pane.right(),
+            };
+            let image = painted
                 .iter()
-                .find(|(shape, _)| !matches!(shape, Shape::Text(_)))
+                .find(|shape| shape.texture_id() == texture)
                 .expect("the image")
-                .1;
+                .visual_bounding_rect();
             assert_eq!(image.size(), Vec2::new(100.0, 50.0), "{align:?}");
-            assert_eq!((image.top(), edge(image)), (top, 0.0), "{align:?}");
+            assert!((image.top() - top).abs() < 0.01, "{align:?}");
+            assert!(edge(image).abs() < 0.01, "{align:?}");
             for (color, centre, copies) in
                 [(bold, top + 50.0 + 24.0, 2), (plain, top + 122.0 - 12.0, 1)]
             {
-                let texts: Vec<_> = bounds
+                // The layout box, not the glyphs' ink.
+                let texts: Vec<_> = painted
                     .iter()
-                    .filter(
-                        |(shape, _)| matches!(shape, Shape::Text(t) if t.fallback_color == color),
-                    )
-                    .map(|(_, rect)| *rect)
+                    .filter_map(|shape| match shape {
+                        Shape::Text(t) if t.fallback_color == color => {
+                            Some(t.galley.rect.translate(t.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
                     .collect();
                 assert_eq!(texts.len(), copies, "{align:?}");
                 assert!((texts[0].center().y - centre).abs() < 0.01, "{align:?}");
