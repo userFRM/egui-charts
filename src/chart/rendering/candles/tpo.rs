@@ -265,9 +265,9 @@ fn cached_profiles(
 /// This is the live entry point of the TPO chart type and the TPO study. It builds the profiles
 /// of the whole sessions that the bars `visible` of `full_data` belong to, in the sessions of
 /// `clock`, reuses unchanged sessions, and anchors each profile at its session's first bar, or
-/// at the plot's left edge while that bar is out of view, fitting it within the session's width. Coordinates flow through the chart's shared price
-/// mapping ([`PriceMap`]) and the supplied `idx_to_coord`, so the profile stays correct under
-/// pan and zoom.
+/// at the plot's left edge while that bar is out of view, fitting it within the session's width.
+/// Coordinates flow through the chart's shared price mapping ([`PriceMap`]) and the supplied
+/// `idx_to_coord`, so the profile stays correct under pan and zoom.
 ///
 /// The price-bin (tick) size auto-derives from the visible price range toward a
 /// readable row count unless the caller pins it via `config.tick_size`. Letters
