@@ -272,6 +272,7 @@ impl Chart {
     }
 
     pub(super) fn record_study(&mut self, id: SeriesId) {
+        self.element_studies.dirty = true;
         if self
             .history
             .pending
@@ -388,6 +389,7 @@ impl Chart {
         if let Some(scale) = &mut action.scale {
             std::mem::swap(self.state.price_scale_mut(), scale);
         }
+        self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
         // templates retain order and stable ids while unrelated host studies stay present.
         let current: Vec<_> = action

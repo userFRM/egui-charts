@@ -84,7 +84,7 @@ impl Chart {
                 .chain(
                     self.study_ids
                         .iter()
-                        .zip(self.studies.indicators())
+                        .zip(self.rendered_studies().indicators())
                         .filter(|(_, study)| study.is_overlay())
                         .map(|(id, _)| Some(id.0)),
                 )
@@ -131,7 +131,7 @@ impl Chart {
                 .or_else(|| response.hover_pos())
         {
             let distance = drawing_manager.options.magnet_distance;
-            let bars = &self.state.data().bars;
+            let bars = self.state.shown();
             let strong = drawing_manager.options.strong_magnet;
             let index = x_to_bar_snapped(pointer.x);
             let first = if strong {
@@ -168,7 +168,7 @@ impl Chart {
                 for study in self
                     .study_ids
                     .iter()
-                    .zip(self.studies.indicators())
+                    .zip(self.rendered_studies().indicators())
                     .filter(|(id, s)| {
                         s.is_visible()
                             && if pane.is_some() {
@@ -270,7 +270,7 @@ impl Chart {
         // Render existing drawings against the chart's bars
         let view = ChartView {
             instrument: self.instrument(),
-            bars: &self.state.data().bars,
+            bars: self.state.shown(),
             revision: self.state.revision(),
             bar_to_x: &bar_to_x,
             price_to_y: &price_to_y,
@@ -547,14 +547,14 @@ mod tests {
     }
 
     /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
-    /// set to another interval or a price-based chart type.
+    /// set to another interval; price-based types retain interval visibility.
     #[test]
     fn a_hidden_drawing_is_neither_drawn_nor_hit() {
         let color = Color32::from_rgb(1, 2, 3);
         for (interval, kind, shown) in [
             (Timeframe::Day1, ChartType::Candles, true),
             (Timeframe::Hour1, ChartType::Candles, false),
-            (Timeframe::Day1, ChartType::Renko, false),
+            (Timeframe::Day1, ChartType::Renko, true),
         ] {
             let (ctx, mut chart) = (Context::default(), chart(&[10.0], &[20.0]));
             chart.set_timeframe(interval);

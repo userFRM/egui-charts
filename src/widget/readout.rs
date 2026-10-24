@@ -5,15 +5,15 @@ use crate::chart::renderers::StudyValue;
 
 impl Chart {
     /// Values of visible study plots at a rendered bar index, with legend names and precision.
-    /// Gaps remain `None`; price-based charts return no study values because their indices count
-    /// rendered elements rather than source bars. Call after [`Self::show`] to use refreshed studies.
+    /// Gaps remain `None`; price-based charts use studies calculated from element OHLC.
+    /// Call after [`Self::show`] to use refreshed studies.
     pub fn study_values_at(&self, index: usize) -> Vec<StudyValue> {
-        if self.chart_type.is_time_independent() || index >= self.state.shown().len() {
+        if index >= self.state.shown().len() {
             return Vec::new();
         }
         let mut rows = Vec::new();
         for study in self
-            .studies
+            .rendered_studies()
             .indicators()
             .iter()
             .filter(|study| study.is_visible())

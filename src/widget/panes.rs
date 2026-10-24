@@ -38,7 +38,7 @@ impl Chart {
                     self.study_ids
                         .iter()
                         .position(|study| study == id)
-                        .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
+                        .is_some_and(|idx| self.rendered_studies().indicators()[idx].is_visible())
                 })
             })
             .filter(|(_, pane)| maximized.is_none_or(|id| id == pane.id))
@@ -132,6 +132,11 @@ impl Chart {
             )
             .inner;
 
+        let studies = if self.chart_type.is_time_independent() {
+            &self.element_studies.studies
+        } else {
+            &self.studies
+        };
         // Render separate pane indicators below the main chart
         let (start_idx, end_idx) = self.state.visible_range();
         let visible_range = start_idx..end_idx;
@@ -141,7 +146,7 @@ impl Chart {
         let coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
             time_scale.right_offset(),
-            self.state.data().len().saturating_sub(1),
+            self.state.shown().len().saturating_sub(1),
             start_idx,
         );
 
@@ -176,7 +181,7 @@ impl Chart {
             let mut shared_range = (f64::INFINITY, f64::NEG_INFINITY);
             for id in &members {
                 let idx = self.study_ids.iter().position(|study| study == id).unwrap();
-                let study = self.studies.indicators()[idx].as_ref();
+                let study = studies.indicators()[idx].as_ref();
                 if study.is_visible() {
                     let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
                         .calculate_y_range(study, &displayed_range);
@@ -190,7 +195,7 @@ impl Chart {
                 .iter()
                 .find_map(|id| {
                     let idx = self.study_ids.iter().position(|study| study == id)?;
-                    let study = self.studies.indicators()[idx].as_ref();
+                    let study = studies.indicators()[idx].as_ref();
                     if !study.is_visible() {
                         return None;
                     }
@@ -219,7 +224,7 @@ impl Chart {
                 shared_range = (f64::INFINITY, f64::NEG_INFINITY);
                 for id in &members {
                     let idx = self.study_ids.iter().position(|study| study == id).unwrap();
-                    let study = self.studies.indicators()[idx].as_ref();
+                    let study = studies.indicators()[idx].as_ref();
                     if study.is_visible() {
                         for line in (0..study.line_cnt()).filter(|line| {
                             let plot = study.plot_style(*line);
@@ -254,7 +259,7 @@ impl Chart {
                 let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
                     continue;
                 };
-                let indicator = &self.studies.indicators()[idx];
+                let indicator = &studies.indicators()[idx];
                 if !indicator.is_visible() {
                     continue;
                 }
@@ -333,7 +338,7 @@ impl Chart {
                                 .filter_map(|id| {
                                     self.study_ids.iter().position(|study| study == id)
                                 })
-                                .map(|idx| self.studies.indicators()[idx].as_ref())
+                                .map(|idx| studies.indicators()[idx].as_ref())
                                 .filter(|study| study.is_visible())
                                 .flat_map(|study| {
                                     (0..study.line_cnt())
@@ -392,14 +397,6 @@ impl Chart {
 
                     // A click on the legend's close "x" removes this study.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
-                    if pane_response.double_clicked()
-                        && self
-                            .drawings
-                            .hit_test(pane_response.interact_pointer_pos().unwrap_or_default())
-                            .is_none()
-                    {
-                        self.indicator_settings_request = Some(id);
-                    }
                     if close_clicked {
                         pending_indicator_action =
                             Some(crate::chart::renderers::StudyAction::Remove(idx));
@@ -463,7 +460,7 @@ impl Chart {
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
                                 hit_test_pane_indicator(
                                     click_pos,
-                                    self.studies.indicators()[idx].as_ref(),
+                                    studies.indicators()[idx].as_ref(),
                                     idx,
                                     visible_range.clone(),
                                     chart_rect,
@@ -497,7 +494,7 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect));
+                    drawing_response = Some((pane_response, chart_rect, id));
                     // Store the pane info for hit testing by platform
                     self.last_rendered_indicator_panes
                         .push(RenderedIndicatorPane {
@@ -511,7 +508,7 @@ impl Chart {
                         });
                 }
             }
-            if !collapsed && let Some((pane_response, chart_rect)) = drawing_response {
+            if !collapsed && let Some((pane_response, chart_rect, study_id)) = drawing_response {
                 let history = self.history.start_drawing_action(&mut self.drawings);
                 let mut drawings = std::mem::take(&mut self.drawings);
                 let mut cursors = std::mem::take(&mut self.cursor_modes);
@@ -528,6 +525,16 @@ impl Chart {
                     &timescale,
                     Some(pane_id),
                 );
+                let drawing_hit = pane_response
+                    .interact_pointer_pos()
+                    .and_then(|pos| drawings.hit_test(pos));
+                if pane_response.double_clicked() && drawing_hit.is_none() {
+                    self.indicator_settings_request = Some(study_id);
+                }
+                if pane_response.clicked() && drawing_hit.is_some() {
+                    pending_pane_selection = None;
+                    self.selection.deselect();
+                }
                 super::tool_interaction::render_pane_eraser_highlight(
                     &ui.painter().with_clip_rect(chart_rect),
                     &drawings,
@@ -537,7 +544,11 @@ impl Chart {
                     && let Some(pos) = pane_response.interact_pointer_pos()
                 {
                     self.right_click = Some(if let Some(id) = drawings.hit_test(pos) {
-                        if !drawings.is_selected(id) {
+                        if drawings.is_selected(id) {
+                            let ids: Vec<_> =
+                                std::iter::once(id).chain(drawings.selected_ids()).collect();
+                            drawings.select_drawings(ids);
+                        } else {
                             drawings.select(id);
                         }
                         super::RightClickTarget::Drawing {

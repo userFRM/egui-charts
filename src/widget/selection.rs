@@ -81,7 +81,13 @@ impl Chart {
 
         match selected {
             ChartElementId::Indicator(id) => {
-                let Some((_, indicator)) = self.indicators().find(|(study, _)| *study == id) else {
+                let Some(indicator) = self
+                    .study_ids
+                    .iter()
+                    .position(|study| *study == id)
+                    .and_then(|at| self.rendered_studies().indicators().get(at))
+                    .map(|study| study.as_ref())
+                else {
                     return;
                 };
                 if !indicator.is_visible()
