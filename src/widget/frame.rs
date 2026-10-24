@@ -119,12 +119,91 @@ impl Chart {
     }
 
     fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
-        TimeFormatterBuilder::new()
+        let mut builder = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(self.chart_options.time_scale.seconds_visible)
             .with_time_visible(self.chart_options.time_scale.time_visible)
-            .with_timezone(self.display_timezone())
-            .build()
+            .with_timezone(self.display_timezone());
+        if let Some(locale) = &self.locale {
+            builder = builder.with_locale(locale.clone());
+        }
+        if let Some(date_format) = &self.date_format {
+            builder = builder.with_date_format(date_format.clone());
+        }
+        if let Some(formatter) = &self.time_formatter {
+            builder = builder.with_formatter(formatter.clone_box());
+        }
+        builder.build()
+    }
+
+    /// Names months and weekdays in time axis, crosshair and tooltip labels in `locale`'s
+    /// language, such as `"de-DE"` (see [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
+    /// `None` restores English names.
+    pub fn set_locale(&mut self, locale: Option<String>) {
+        self.locale = locale;
+    }
+
+    /// Writes crosshair and tooltip dates with a `strftime` pattern, such as `"%d.%m.%Y"`, followed
+    /// by the clock for intraday bars. `None` restores the built-in dates, which an invalid pattern
+    /// also falls back to.
+    pub fn set_date_format(&mut self, date_format: Option<String>) {
+        self.date_format = date_format;
+    }
+
+    /// Formats time axis marks with [`TimeFormatter::format`], which receives the
+    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip and
+    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    ///
+    /// The formatter replaces the built-in one, the locale and the date format. It receives
+    /// wall-clock times in the chart's time zone, and the time scale's
+    /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
+    /// `None` restores the built-in formatter.
+    ///
+    /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
+    /// [`TimeFormatter::format_crosshair`]: crate::scales::TimeFormatter::format_crosshair
+    pub fn set_time_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
+    ) {
+        self.time_formatter = formatter;
+    }
+
+    /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
+    /// price tags with [`PriceFormatter::format`], and the axis ticks with
+    /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
+    /// instrument's decimals. It applies to every price scale; studies keep their own formats.
+    /// `None` restores the built-in labels.
+    ///
+    /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
+    /// [`PriceFormatter::format_tick`]: crate::scales::PriceFormatter::format_tick
+    pub fn set_price_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        self.price_formatter = formatter;
+    }
+
+    /// Formats price scale labels in the percentage and indexed-to-100 modes, as
+    /// [`set_price_formatter`](Self::set_price_formatter) does in the others. The formatter
+    /// receives the percentage or index value the axis shows. `None` restores signed
+    /// percentages and index values.
+    pub fn set_percentage_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        self.percentage_formatter = formatter;
+    }
+
+    /// The host formatter for the labels of a price scale in `mode`.
+    pub(super) fn price_label_formatter(
+        &self,
+        mode: crate::scales::PriceScaleMode,
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        match mode {
+            crate::scales::PriceScaleMode::Percentage
+            | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
+            _ => self.price_formatter.clone(),
+        }
     }
 
     /// Overrides automatic session breaks with host logic. `None` restores metadata-based breaks.
@@ -787,6 +866,8 @@ impl Chart {
             .price_scale()
             .map(transform, price_rect.min.y, price_rect.max.y);
 
+        let price_formatter = self.price_label_formatter(price_map.transform().mode);
+
         // Store the final price mapping and rects for external use (selection dots, hit testing)
         self.last_price_map = price_map;
         self.last_rendered_price_rect = price_rect;
@@ -1358,6 +1439,7 @@ impl Chart {
                 self.instrument()
                     .and_then(|instrument| instrument.volume_decimals),
                 if has_currency { 24.0 } else { 0.0 },
+                price_formatter.as_deref(),
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -1375,6 +1457,7 @@ impl Chart {
                     let label = price_map.transform().label(
                         price_map.transform().to_scale(*value),
                         price_map.price_precision().unwrap_or(2),
+                        price_formatter.as_deref(),
                     );
                     tags.push(rendering::axes::render_axis_value(
                         &painter,
@@ -1397,7 +1480,11 @@ impl Chart {
                     price_rect,
                     axis_edge,
                     map.price_to_y(value),
-                    map.transform().label(map.transform().to_scale(value), 2),
+                    map.transform().label(
+                        map.transform().to_scale(value),
+                        2,
+                        self.price_label_formatter(map.transform().mode).as_deref(),
+                    ),
                     (rendering::axes::tag_text_color(color), color),
                     &tags,
                 ));
@@ -1484,6 +1571,7 @@ impl Chart {
                     study.as_ref(),
                     axis_edge,
                     &mut tags,
+                    price_formatter.as_deref(),
                 );
             }
         }
@@ -1538,7 +1626,8 @@ impl Chart {
                         "{name} {}",
                         price_map.transform().label(
                             price_map.transform().to_scale(value),
-                            price_map.price_precision().unwrap_or(2)
+                            price_map.price_precision().unwrap_or(2),
+                            price_formatter.as_deref(),
                         )
                     );
                     tags.push(rendering::axes::render_axis_value(
@@ -1778,6 +1867,7 @@ impl Chart {
                     last_price_tag,
                     formatter.as_ref(),
                     bar_seconds,
+                    price_formatter.as_deref(),
                 );
 
                 if volume_rect.contains(hover_pos)
@@ -1901,6 +1991,7 @@ impl Chart {
                             last_price_tag,
                             formatter.as_ref(),
                             bar_seconds,
+                            price_formatter.as_deref(),
                         );
                     }
                 }
@@ -1951,12 +2042,14 @@ impl Chart {
                 price_map.transform().label(
                     price_map.transform().to_scale(bar.close),
                     price_map.price_precision().unwrap_or(2),
+                    price_formatter.as_deref(),
                 )
             });
         self.measured_axis_width = rendering::axes::price_axis_width(
             &painter,
             &price_map,
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
+            price_formatter.as_deref(),
         );
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
@@ -2001,7 +2094,14 @@ impl Chart {
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend(crosshair_tags);
         if self.config.show_right_axis {
-            rendering::render_price_labels(&price_ctx, &price_map, &colors, &tags, price_labels);
+            rendering::render_price_labels(
+                &price_ctx,
+                &price_map,
+                &colors,
+                &tags,
+                price_labels,
+                price_formatter.as_deref(),
+            );
         } else if self.config.show_left_axis {
             renderers::render_price_labels_at_pos(
                 &price_ctx,
@@ -2010,6 +2110,7 @@ impl Chart {
                 crate::scales::PriceScaleId::Left,
                 &tags,
                 price_labels,
+                price_formatter.as_deref(),
             );
         }
         if self.config.show_time_labels {
@@ -2838,6 +2939,101 @@ mod tests {
             );
             let ticks = painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { points, .. } if (points[0].y - map.rect.bottom()).abs() < 0.1 && (points[1].y - points[0].y - 3.0).abs() < 0.1)).count();
             assert_eq!(ticks > 0, ticks_visible, "tick visibility: {seconds}");
+        }
+    }
+
+    #[test]
+    fn host_formatters_reach_axes_crosshair_and_tags() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use crate::scales::{PriceFormatter, TickMarkType, TimeFormatter};
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "tick time".into()
+            }
+            fn format_crosshair(&self, _: DateTime<Utc>, _: i64) -> String {
+                "hover time".into()
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(Host)
+            }
+        }
+        impl PriceFormatter for Host {
+            fn format(&self, _: f64) -> String {
+                "label price".into()
+            }
+            fn format_tick(&self, _: f64) -> String {
+                "tick price".into()
+            }
+            fn clone_box(&self) -> Box<dyn PriceFormatter> {
+                Box::new(Host)
+            }
+        }
+        // Wednesday 13 March 2024, 14:30 UTC, at the hovered bar.
+        let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
+        type Setup = fn(&mut crate::widget::Chart);
+        let cases: [(Setup, &[&str]); 5] = [
+            (
+                |chart| chart.set_locale(Some("de-DE".into())),
+                &["Mi 13 Mär '24 14:30"],
+            ),
+            (
+                |chart| chart.set_date_format(Some("%d.%m.%Y".into())),
+                &["13.03.2024 14:30"],
+            ),
+            (
+                |chart| chart.set_time_formatter(Some(Arc::new(Host))),
+                &["hover time", "tick time"],
+            ),
+            (
+                |chart| chart.set_price_formatter(Some(Arc::new(Host))),
+                &["label price", "tick price"],
+            ),
+            (
+                |chart| {
+                    chart.set_percentage_formatter(Some(Arc::new(Host)));
+                    chart.apply_series_settings(&SeriesSettings {
+                        price_scale_mode: PriceScaleMode::Percentage,
+                        ..SeriesSettings::default()
+                    });
+                },
+                &["label price", "tick price"],
+            ),
+        ];
+        for (setup, expected) in cases {
+            let ctx = egui::Context::default();
+            let bars = (0..100)
+                .map(|i| {
+                    let open = 100.0 + i as f64;
+                    Bar::new(
+                        time + Duration::minutes(i - 50),
+                        open,
+                        open + 2.0,
+                        open - 1.0,
+                        open + 1.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min1);
+            chart.chart_options.tooltip.enabled = false;
+            setup(&mut chart);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+            for text in expected {
+                assert!(
+                    painted.iter().any(
+                        |shape| matches!(shape, Shape::Text(shape) if shape.galley.text() == *text)
+                    ),
+                    "{text}"
+                );
+            }
         }
     }
 

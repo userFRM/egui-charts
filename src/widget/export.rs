@@ -253,6 +253,11 @@ impl Chart {
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
         chart.session_provider = self.session_provider.clone();
+        chart.locale = self.locale.clone();
+        chart.date_format = self.date_format.clone();
+        chart.time_formatter = self.time_formatter.clone();
+        chart.price_formatter = self.price_formatter.clone();
+        chart.percentage_formatter = self.percentage_formatter.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
         chart.drawings.drawings = self.drawings.drawings.clone();

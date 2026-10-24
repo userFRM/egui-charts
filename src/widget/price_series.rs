@@ -586,20 +586,31 @@ impl Chart {
                     label_rect,
                     axis.right(),
                     mapping.price_to_y(value),
-                    mapping
-                        .transform()
-                        .label(mapping.transform().to_scale(value), 2),
+                    mapping.transform().label(
+                        mapping.transform().to_scale(value),
+                        2,
+                        self.price_label_formatter(mapping.transform().mode)
+                            .as_deref(),
+                    ),
                     (crate::chart::rendering::axes::tag_text_color(color), color),
                     &tags,
                 ));
             }
+            let formatter = self.price_label_formatter(map.transform().mode);
             crate::chart::renderers::render_price_labels_at_pos(
-                &ctx, &map, colors, position, &tags, slot,
+                &ctx,
+                &map,
+                colors,
+                position,
+                &tags,
+                slot,
+                formatter.as_deref(),
             );
             measured = measured.max(crate::chart::rendering::axes::price_axis_width(
                 &clipped,
                 &map,
                 &[],
+                formatter.as_deref(),
             ));
             ui.interact(
                 axis,

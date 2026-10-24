@@ -195,18 +195,25 @@ impl PriceTransform {
     }
 
     /// Formats a scale value for the axis: prices, signed percentages or index values.
-    pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
-        match self.mode {
-            PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
-            mode => {
-                use super::{DefaultPriceFormatter, PriceFormatter};
-                let price = if mode == PriceScaleMode::Logarithmic {
-                    self.to_price(value)
-                } else {
-                    value
-                };
-                DefaultPriceFormatter::with_precision(decimals).format(price)
-            }
+    ///
+    /// A host `formatter` receives the price in the normal and logarithmic modes and
+    /// the percentage or index value otherwise, and replaces `decimals`.
+    pub(crate) fn label(
+        &self,
+        value: f64,
+        decimals: usize,
+        formatter: Option<&dyn super::PriceFormatter>,
+    ) -> String {
+        use super::{DefaultPriceFormatter, PriceFormatter};
+        let value = if self.mode == PriceScaleMode::Logarithmic {
+            self.to_price(value)
+        } else {
+            value
+        };
+        match (formatter, self.mode) {
+            (Some(formatter), _) => formatter.format(value),
+            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
 }
