@@ -5,7 +5,9 @@ use egui_charts::data::{
     Datafeed, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription, SubscriptionId,
     aggregate_trades, resample,
 };
-use egui_charts::model::{Bar, BarClock, Instrument, Level1Quote, Tick, Timeframe, TradeSide};
+use egui_charts::model::{
+    Bar, BarClock, DataStatus, Instrument, Level1Quote, Tick, Timeframe, TradeSide,
+};
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 
@@ -175,6 +177,10 @@ impl LiveFeed {
             instrument = instrument
                 .with_time_zone(egui_charts::model::TimezoneId::utc())
                 .with_session(sample_session());
+        }
+        // Index quotes are commonly licensed delayed; the legend marks them.
+        if sim.symbol == "SPX" {
+            instrument = instrument.with_data_status(DataStatus::Delayed);
         }
         instrument
     }

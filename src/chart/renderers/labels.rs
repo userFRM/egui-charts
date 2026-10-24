@@ -797,6 +797,8 @@ mod tests {
                     color: theme.ui.text,
                     background: theme.ui.panel_bg_secondary,
                 }];
+                let instrument = crate::model::Instrument::new("Sample equity fund")
+                    .with_data_status(crate::model::DataStatus::Delayed);
                 let bar = Bar::new(
                     Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
                     749.37,
@@ -818,6 +820,7 @@ mod tests {
                                 (badge.id(), Vec2::splat(18.0)).into(),
                             ));
                             legend.statuses = &statuses;
+                            legend.instrument = Some(&instrument);
                             legend.show_volume = false;
                             legend.show(ui, plot);
                         },
@@ -871,6 +874,8 @@ mod tests {
                     text.iter()
                         .any(|text| text.galley.text() == "+1.32 (+0.18%)")
                 );
+                assert!(text.iter().any(|text| text.galley.text() == "D"
+                    && text.galley.job.sections[0].format.color == theme.ui.warning));
                 let centres: Vec<_> = text
                     .iter()
                     .map(|text| text.pos.y + text.galley.size().y / 2.0)

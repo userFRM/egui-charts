@@ -81,6 +81,8 @@ pub struct Instrument {
     /// OHLCV intervals supplied without aggregation. `None` means unspecified; an empty list
     /// means no native bar history. Derived intervals remain available through host resampling.
     pub native_timeframes: Option<Vec<Timeframe>>,
+    /// How current the feed's data is. The legend marks delayed and end-of-day data.
+    pub data_status: Option<DataStatus>,
 }
 
 impl Instrument {
@@ -99,6 +101,7 @@ impl Instrument {
             time_zone: None,
             session: None,
             native_timeframes: None,
+            data_status: None,
         }
     }
 
@@ -170,6 +173,24 @@ impl Instrument {
         self.native_timeframes = Some(timeframes.into_iter().collect());
         self
     }
+
+    /// Sets [`data_status`](Self::data_status).
+    pub fn with_data_status(mut self, status: DataStatus) -> Self {
+        self.data_status = Some(status);
+        self
+    }
+}
+
+/// How current a feed's data is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DataStatus {
+    /// Updates as the market trades.
+    Realtime,
+    /// Updates some time after the market trades, as exchanges require of many free feeds.
+    Delayed,
+    /// Updates once a day, after the close.
+    EndOfDay,
 }
 
 /// A time zone.
