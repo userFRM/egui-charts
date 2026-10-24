@@ -5,13 +5,15 @@ use egui_charts::data::{
     Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
     SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
-use egui_charts::model::{Bar, BarClock, Instrument, Level1Quote, Tick, Timeframe, TradeSide};
-use std::collections::VecDeque;
+use egui_charts::model::{
+    Bar, BarClock, DataStatus, Instrument, Level1Quote, Tick, Timeframe, TradeSide,
+};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
-use egui_charts::ui::widget_bar::WatchlistQuote;
+use egui_charts::ui::widget_bar::{ExtendedHoursQuote, ExtendedSession, WatchlistQuote};
 
 const RETAINED_TRADES: usize = 100_000;
 
@@ -176,6 +178,10 @@ impl LiveFeed {
                 .with_time_zone(egui_charts::model::TimezoneId::utc())
                 .with_session(sample_session());
         }
+        // Index quotes are commonly licensed delayed; the legend marks them.
+        if sim.symbol == "SPX" {
+            instrument = instrument.with_data_status(DataStatus::Delayed);
+        }
         instrument
     }
 
@@ -232,6 +238,70 @@ impl LiveFeed {
             }
         };
         Some((last, prev_close))
+    }
+
+    /// SAMPLE's last regular-hours price with its time and the regular close of the day before,
+    /// and a later trade outside regular hours: pre-market in its extended window, post-market
+    /// otherwise. `None` for the other symbols, which have no trading hours.
+    pub(super) fn regular_quote(
+        &self,
+    ) -> Option<(DateTime<Utc>, f64, f64, Option<ExtendedHoursQuote>)> {
+        let sim = self.state();
+        if sim.symbol != "SAMPLE" {
+            return None;
+        }
+        let hours = egui_charts::model::ExchangeSessionProvider::new(
+            egui_charts::model::TimezoneId::utc(),
+            Some(sample_session()),
+        );
+        let newest_first = sim
+            .trades
+            .iter()
+            .rev()
+            .map(|trade| (trade.ts, trade.price))
+            .chain(sim.history.iter().rev().map(|bar| (bar.time, bar.close)));
+        let (time, last) = newest_first
+            .clone()
+            .find(|&(time, _)| hours.is_open(time, false))?;
+        let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+        let (_, prev_close) = newest_first
+            .clone()
+            .find(|&(t, _)| t < midnight && hours.is_open(t, false))?;
+        let extended =
+            newest_first
+                .clone()
+                .next()
+                .filter(|&(t, _)| t > time)
+                .map(|(time, last)| ExtendedHoursQuote {
+                    session: if hours.is_open(time, true) {
+                        ExtendedSession::PreMarket
+                    } else {
+                        ExtendedSession::PostMarket
+                    },
+                    last,
+                    time,
+                });
+        Some((time, last, prev_close, extended))
+    }
+
+    /// The volume traded since midnight UTC and the average volume of the earlier whole days.
+    /// The synthetic history spans a week, which stands in for the 30 days of the average.
+    pub(super) fn daily_volume(&self) -> (f64, f64) {
+        let sim = self.state();
+        let mut days = BTreeMap::new();
+        let sizes = sim
+            .history
+            .iter()
+            .map(|bar| (bar.time, bar.volume))
+            .chain(sim.trades.iter().map(|trade| (trade.ts, trade.size)));
+        for (time, size) in sizes {
+            *days.entry(time.date_naive()).or_insert(0.0) += size;
+        }
+        let today = days.remove(&sim.now.date_naive()).unwrap_or(0.0);
+        // The first day starts mid-day.
+        let whole: Vec<f64> = days.into_values().skip(1).collect();
+        let average = whole.iter().sum::<f64>() / whole.len().max(1) as f64;
+        (today, average)
     }
 
     pub(super) fn paused(&self) -> bool {
@@ -518,7 +588,6 @@ impl Datafeed for LiveFeed {
         };
         let decimals = if spec.start_price < 10.0 { 4 } else { 2 };
         let price = |factor: f64| format!("{:.*}", decimals, spec.start_price * factor);
-        let volume = 0.5 + (spec.seed % 10) as f64 * 0.35;
         let kind = match spec.exchange {
             "Crypto" => "Cryptocurrency",
             "Index" => "Index",
@@ -528,17 +597,17 @@ impl Datafeed for LiveFeed {
         };
         let pair = |label: &str, value: String| (label.to_owned(), value);
         reply.send(Ok(SymbolDetails::new(
-            vec![
-                pair(
-                    "52-week range",
-                    format!("{} - {}", price(0.82), price(1.17)),
-                ),
-                pair("Average volume (30D)", format!("{volume:.2}M")),
-            ],
+            vec![pair(
+                "52-week range",
+                format!("{} - {}", price(0.82), price(1.17)),
+            )],
             vec![
                 pair("Type", kind.into()),
                 pair("Source", "Synthetic data generated by the demo".into()),
             ],
+        )
+        .with_url(
+            "https://github.com/userFRM/egui-charts/blob/main/examples/demo/sampledata.rs",
         )));
     }
 }

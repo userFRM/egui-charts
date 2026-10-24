@@ -3,21 +3,45 @@
 use super::{Chart, ChartElementId, SeriesId};
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::data::FeedState;
-use crate::model::{Bar, Marker, PriceLine, SeriesScale};
+use crate::model::{
+    Bar, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerZOrder, PriceLine, PriceLineSource,
+    SeriesScale, SeriesStyle,
+};
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
+use crate::tokens::DESIGN_TOKENS;
+use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect, Stroke};
 
-/// Display settings for a host-fed close-price line in the main pane.
+/// How a host-fed series draws its closes.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SeriesKind {
+    /// A line through the closes.
+    #[default]
+    Line,
+    /// A column per bar from `base` to the close, 80% of the bar spacing wide and at least one
+    /// pixel tall. The scale's fit includes `base`.
+    Columns {
+        /// The price the columns rise above or fall below.
+        base: f64,
+    },
+}
+
+/// Display settings for a host-fed close-price series in the main pane.
 #[derive(Debug, Clone)]
 pub struct SeriesOptions {
     /// Host-supplied title, displayed beside the series values.
     pub name: String,
-    /// Line and last-value tag colour.
+    /// Line, column and last-value tag colour.
     pub color: Color32,
     /// Line width in logical pixels.
     pub width: f32,
     /// Scale shared with series carrying the same assignment.
     pub scale: SeriesScale,
+    /// Line or columns.
+    pub kind: SeriesKind,
+    /// Last value label, price line, base line and autoscale. By default the series labels its
+    /// last value without a price line.
+    pub style: SeriesStyle,
 }
 
 impl Default for SeriesOptions {
@@ -27,8 +51,28 @@ impl Default for SeriesOptions {
             color: Color32::from_rgb(41, 98, 255),
             width: 2.0,
             scale: SeriesScale::Right,
+            kind: SeriesKind::Line,
+            style: SeriesStyle {
+                price_line_visible: false,
+                ..SeriesStyle::default()
+            },
         }
     }
+}
+
+/// The base line of a percentage or indexed scale mapped by `map`, at 0% or 100.
+pub(super) fn base_line(map: &PriceMap) -> Option<PriceLine> {
+    let transform = map.transform();
+    matches!(
+        transform.mode,
+        PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+    )
+    .then(|| {
+        PriceLine::new(transform.base, DESIGN_TOKENS.semantic.extended.gray)
+            .with_width(DESIGN_TOKENS.stroke.hairline)
+            .with_style(LineStyle::Solid)
+            .with_axis_label(false)
+    })
 }
 
 pub(super) struct PriceSeries {
@@ -38,7 +82,9 @@ pub(super) struct PriceSeries {
     pub bars: Vec<Bar>,
     pub feed: FeedState,
     pub markers: Vec<Marker>,
-    pub lines: Vec<PriceLine>,
+    pub marker_options: MarkerOptions,
+    pub change_marks: Option<super::change_marks::ChangeMarks>,
+    pub lines: Vec<(super::PriceLineId, PriceLine)>,
 }
 
 impl Chart {
@@ -59,6 +105,8 @@ impl Chart {
             bars: Vec::new(),
             feed: FeedState::default(),
             markers: Vec::new(),
+            marker_options: MarkerOptions::default(),
+            change_marks: None,
             lines: Vec::new(),
         });
         id
@@ -161,6 +209,32 @@ impl Chart {
         }
     }
 
+    /// The last value label, price line, base line, autoscale and click tolerance of a present
+    /// bar series.
+    pub fn series_style(&self, id: SeriesId) -> Option<&SeriesStyle> {
+        if id == SeriesId::MAIN && self.main_series_present {
+            Some(&self.main_series_style)
+        } else {
+            self.price_series
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| &item.options.style)
+        }
+    }
+
+    /// Changes the last value label, price line, base line, autoscale or click tolerance of a
+    /// present bar series. Changes take effect on the next rendered frame.
+    pub fn series_style_mut(&mut self, id: SeriesId) -> Option<&mut SeriesStyle> {
+        if id == SeriesId::MAIN && self.main_series_present {
+            Some(&mut self.main_series_style)
+        } else {
+            self.price_series
+                .iter_mut()
+                .find(|item| item.id == id)
+                .map(|item| &mut item.options.style)
+        }
+    }
+
     /// The scale shared by this present bar series, including its options and fitted range.
     pub fn series_price_scale(&self, id: SeriesId) -> Option<&PriceScale> {
         let scale = self.series_scale(id)?;
@@ -202,18 +276,50 @@ impl Chart {
         }
     }
 
-    fn series_range(&self, item: &PriceSeries) -> std::ops::Range<usize> {
+    /// The times of the first and the last bar slot in view, whitespace included.
+    fn visible_times(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let logical = self.state.time_scale().visible_logical_range();
         let bars = self.state.shown();
-        let times = super::sync::time_at(bars, logical.left.floor() as f64)
-            .zip(super::sync::time_at(bars, logical.right.floor() as f64));
-        match times {
-            Some((first, last)) if first <= last => {
+        super::sync::time_at(bars, logical.left.floor() as f64)
+            .zip(super::sync::time_at(bars, logical.right.floor() as f64))
+            .filter(|(first, last)| first <= last)
+    }
+
+    pub(super) fn series_range(&self, item: &PriceSeries) -> std::ops::Range<usize> {
+        match self.visible_times() {
+            Some((first, last)) => {
                 item.bars.partition_point(|bar| bar.time < first)
                     ..item.bars.partition_point(|bar| bar.time <= last)
             }
-            _ => 0..0,
+            None => 0..0,
         }
+    }
+
+    /// The bar whose close the series' price line and last value label show.
+    fn series_last_bar<'a>(&self, item: &'a PriceSeries) -> Option<&'a Bar> {
+        match item.options.style.price_line_source {
+            PriceLineSource::LastBar => item.bars.last(),
+            PriceLineSource::LastVisible => item.bars[self.series_range(item)].last(),
+        }
+    }
+
+    /// The prices of the price-anchored `markers` in view, when `options` fit them.
+    pub(super) fn marker_prices<'a>(
+        &self,
+        markers: impl IntoIterator<Item = &'a Marker>,
+        options: MarkerOptions,
+    ) -> impl Iterator<Item = f64> {
+        let window = self.visible_times().filter(|_| options.auto_scale);
+        markers.into_iter().filter_map(move |marker| {
+            let (first, last) = window?;
+            let anchored = matches!(
+                marker.position,
+                MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
+            );
+            (anchored && (first..=last).contains(&marker.time))
+                .then_some(marker.price)
+                .flatten()
+        })
     }
 
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
@@ -223,11 +329,27 @@ impl Chart {
         PriceTransform { mode, base }
     }
 
+    /// The visible host series drawn on the price pane.
+    pub(super) fn main_pane_series(&self) -> impl Iterator<Item = &PriceSeries> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible && !self.in_pane(item.id))
+    }
+
+    /// The close of `item` at the time of the shown bar `bar`, if it has a bar then.
+    pub(super) fn series_close_at(&self, item: &PriceSeries, bar: usize) -> Option<f64> {
+        let time = self.state.shown().get(bar)?.time;
+        item.bars
+            .binary_search_by_key(&time, |bar| bar.time)
+            .ok()
+            .map(|at| item.bars[at].close)
+    }
+
     /// Fits every independent range and returns the secondary values sharing the main range.
     pub(super) fn fit_secondary_series(&mut self) -> Vec<f64> {
         let mut values =
             std::collections::HashMap::<SeriesScale, (PriceTransform, f64, f64)>::new();
-        for item in self.price_series.iter().filter(|item| item.visible) {
+        for item in self.main_pane_series() {
             let transform = self.series_transform(item);
             let range = self.series_range(item);
             let entry = values.entry(item.options.scale).or_insert((
@@ -235,8 +357,32 @@ impl Chart {
                 f64::INFINITY,
                 f64::NEG_INFINITY,
             ));
-            for bar in &item.bars[range] {
-                let value = transform.to_scale(bar.close);
+            let bars = &item.bars[range];
+            let base = match item.options.kind {
+                SeriesKind::Columns { base } if !bars.is_empty() => Some(base),
+                _ => None,
+            };
+            let default = bars
+                .iter()
+                .map(|bar| bar.close)
+                .chain(base)
+                .filter(|value| value.is_finite())
+                .fold(None, |range: Option<(f64, f64)>, value| {
+                    Some(range.map_or((value, value), |(min, max)| {
+                        (min.min(value), max.max(value))
+                    }))
+                });
+            let fitted = match &item.options.style.autoscale {
+                Some(provider) => provider.range(bars, default),
+                None => default,
+            };
+            let markers = self.marker_prices(&item.markers, item.marker_options);
+            for value in fitted
+                .into_iter()
+                .flat_map(|(min, max)| [min, max])
+                .chain(markers)
+            {
+                let value = transform.to_scale(value);
                 if value.is_finite() {
                     if !entry.1.is_finite() {
                         entry.0 = transform;
@@ -267,7 +413,7 @@ impl Chart {
         main
     }
 
-    fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
+    pub(super) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
         self.secondary_scale(item.options.scale).map(
             self.series_transform(item),
             rect.top(),
@@ -279,32 +425,50 @@ impl Chart {
         &self,
         key: SeriesScale,
         rect: Rect,
-    ) -> impl Iterator<Item = (f64, Color32, PriceMap)> + '_ {
-        self.price_series
-            .iter()
-            .filter(move |item| item.visible && item.options.scale == key)
+    ) -> impl Iterator<Item = (f64, (Color32, Color32), PriceMap)> + '_ {
+        self.main_pane_series()
+            .filter(move |item| item.options.scale == key)
             .flat_map(move |item| {
                 let map = self.series_map(item, rect);
-                item.lines
-                    .iter()
-                    .filter(|line| line.axis_label)
-                    .map(|line| (line.price, line.color))
-                    .chain(
-                        item.bars
-                            .last()
-                            .filter(|_| self.config.show_symbol_last_val)
-                            .map(|bar| (bar.close, item.options.color)),
-                    )
+                self.series_axis_values(item)
                     .filter(move |(value, _)| {
                         map.range().contains(map.transform().to_scale(*value))
                     })
-                    .map(move |(value, color)| (value, color, map))
+                    .map(move |(value, colors)| (value, colors, map))
             })
+    }
+
+    /// The price-line labels and the last close that `item` shows on its price axis, each with
+    /// its text and tag colours.
+    pub(super) fn series_axis_values<'a>(
+        &'a self,
+        item: &'a PriceSeries,
+    ) -> impl Iterator<Item = (f64, (Color32, Color32))> + 'a {
+        item.lines
+            .iter()
+            .filter(|(_, line)| line.axis_label)
+            .map(|(_, line)| {
+                (
+                    line.price,
+                    crate::chart::rendering::axes::axis_label_colors(line),
+                )
+            })
+            .chain(
+                self.series_last_bar(item)
+                    .filter(|_| {
+                        self.config.show_symbol_last_val && item.options.style.last_value_visible
+                    })
+                    .map(|bar| {
+                        let color = item.options.color;
+                        let text = crate::chart::rendering::axes::tag_text_color(color);
+                        (bar.close, (text, color))
+                    }),
+            )
     }
 
     pub(super) fn series_axis_keys(&self) -> Vec<SeriesScale> {
         let mut keys = Vec::new();
-        for item in self.price_series.iter().filter(|item| item.visible) {
+        for item in self.main_pane_series() {
             let key = item.options.scale;
             if key != self.main_series_scale
                 && !matches!(key, SeriesScale::Overlay(_))
@@ -318,95 +482,165 @@ impl Chart {
 
     pub(super) fn paint_secondary_series(&self, painter: &egui::Painter, rect: Rect) {
         let plot = painter.with_clip_rect(painter.clip_rect().intersect(rect));
+        for item in self.main_pane_series() {
+            self.paint_series(&plot, rect, item, self.series_map(item, rect));
+        }
+    }
+
+    /// Paints the close line, price lines, change marks and markers of `item` in `rect` with
+    /// `map`. Markers placed above the series are left to `paint_marks` on the price pane; in
+    /// another pane they are painted here, after the pane's studies.
+    pub(super) fn paint_series(
+        &self,
+        plot: &egui::Painter,
+        rect: Rect,
+        item: &PriceSeries,
+        map: PriceMap,
+    ) {
         let main = self.state.shown();
-        for item in self.price_series.iter().filter(|item| item.visible) {
-            let map = self.series_map(item, rect);
-            let range = self.series_range(item);
-            // One neighbour at each edge keeps clipped segments continuous during scrolling.
-            let start = range.start.saturating_sub(1);
-            let end = (range.end + 1).min(item.bars.len());
-            let mut previous = None;
-            for bar in &item.bars[start..end] {
-                let Some(index) = super::sync::index_at(main, bar.time) else {
-                    continue;
-                };
-                let point = Pos2::new(
-                    self.state.time_scale().idx_to_coord_precise(
-                        index as f32,
-                        rect.left(),
-                        rect.width(),
-                    ),
-                    map.price_to_y(bar.close),
-                );
-                if !point.is_finite() {
-                    previous = None;
-                    continue;
-                }
-                if let Some(from) = previous {
-                    plot.line_segment(
-                        [from, point],
-                        Stroke::new(item.options.width, item.options.color),
-                    );
-                }
-                previous = Some(point);
-            }
-            for line in &item.lines {
-                crate::chart::rendering::render_price_line(
-                    &plot,
-                    rect,
-                    &map,
-                    line,
+        let range = self.series_range(item);
+        // One neighbour at each edge keeps clipped segments continuous during scrolling.
+        let start = range.start.saturating_sub(1);
+        let end = (range.end + 1).min(item.bars.len());
+        let mut previous = None;
+        let half_width = self.state.time_scale().bar_spacing() * 0.4;
+        for bar in &item.bars[start..end] {
+            let Some(index) = super::sync::index_at(main, bar.time) else {
+                continue;
+            };
+            let point = Pos2::new(
+                self.state.time_scale().idx_to_coord_precise(
+                    index as f32,
                     rect.left(),
-                    false,
-                    rect.right(),
-                );
+                    rect.width(),
+                ),
+                map.price_to_y(bar.close),
+            );
+            if !point.is_finite() {
+                previous = None;
+                continue;
             }
-            for marker in &item.markers {
-                let Some(index) = super::sync::index_at(main, marker.time) else {
-                    continue;
-                };
-                let at = item
-                    .bars
-                    .partition_point(|bar| bar.time <= marker.time)
-                    .saturating_sub(1);
-                if let Some(bar) = item.bars.get(at) {
-                    let coords = crate::chart::coords::ChartMapping {
-                        start_idx: 0,
-                        right_offset: self.get_chart_mapping().right_offset - index as f32,
-                        price: map,
-                        ..self.get_chart_mapping()
+            match item.options.kind {
+                SeriesKind::Line => {
+                    if let Some(from) = previous {
+                        plot.line_segment(
+                            [from, point],
+                            Stroke::new(item.options.width, item.options.color),
+                        );
+                    }
+                }
+                SeriesKind::Columns { base } => {
+                    let base = map.price_to_y(base);
+                    let (top, bottom) = if point.y <= base {
+                        (point.y.min(base - 1.0), base)
+                    } else {
+                        (base, point.y.max(base + 1.0))
                     };
-                    let bar = Bar {
-                        time: marker.time,
-                        ..*bar
-                    };
-                    crate::chart::renderers::render_markers(
-                        &RenderContext::new(&plot, rect),
-                        std::slice::from_ref(marker),
-                        &[bar],
-                        &map,
-                        &coords,
+                    plot.rect_filled(
+                        Rect::from_x_y_ranges(
+                            point.x - half_width..=point.x + half_width,
+                            top..=bottom,
+                        ),
+                        0.0,
+                        item.options.color,
                     );
                 }
+            }
+            previous = Some(point);
+        }
+        let style = &item.options.style;
+        let price_line = self
+            .series_last_bar(item)
+            .filter(|_| self.config.show_price_line && style.price_line_visible)
+            .map(|bar| {
+                PriceLine::new(
+                    bar.close,
+                    style.price_line_color.unwrap_or(item.options.color),
+                )
+                .with_width(style.price_line_width)
+                .with_style(style.price_line_style)
+                .with_axis_label(false)
+            });
+        let base_line = base_line(&map).filter(|_| style.base_line_visible);
+        let lines = item.lines.iter().map(|(_, line)| line);
+        for line in base_line.iter().chain(&price_line).chain(lines) {
+            crate::chart::rendering::render_price_line(
+                plot,
+                rect,
+                &map,
+                line,
+                rect.left(),
+                false,
+                rect.right(),
+            );
+        }
+        if let Some(marks) = &item.change_marks {
+            marks.paint(plot, |time, close| {
+                let index = super::sync::index_at(main, time)?;
+                let x = self.state.time_scale().idx_to_coord_precise(
+                    index as f32,
+                    rect.left(),
+                    rect.width(),
+                );
+                Some(Pos2::new(x, map.price_to_y(close)))
+            });
+        }
+        if item.marker_options.z_order == MarkerZOrder::Normal || self.in_pane(item.id) {
+            self.paint_series_markers(plot, rect, item, map);
+        }
+    }
+
+    /// Paints the markers of `item` with `map`, each at the time and price of its bar.
+    pub(super) fn paint_series_markers(
+        &self,
+        plot: &egui::Painter,
+        rect: Rect,
+        item: &PriceSeries,
+        map: PriceMap,
+    ) {
+        for marker in &item.markers {
+            let Some(index) = super::sync::index_at(self.state.shown(), marker.time) else {
+                continue;
+            };
+            let at = item
+                .bars
+                .partition_point(|bar| bar.time <= marker.time)
+                .saturating_sub(1);
+            if let Some(bar) = item.bars.get(at) {
+                let coords = crate::chart::coords::ChartMapping {
+                    start_idx: 0,
+                    right_offset: self.get_chart_mapping().right_offset - index as f32,
+                    price: map,
+                    ..self.get_chart_mapping()
+                };
+                let bar = Bar {
+                    time: marker.time,
+                    ..*bar
+                };
+                crate::chart::renderers::render_markers(
+                    &RenderContext::new(plot, rect),
+                    std::slice::from_ref(marker),
+                    &[bar],
+                    &map,
+                    &coords,
+                );
             }
         }
     }
 
-    pub(super) fn paint_secondary_legend(
+    /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
+    /// over `rect`.
+    pub(super) fn paint_secondary_legend<'a>(
         &self,
         ui: &egui::Ui,
         painter: &egui::Painter,
         rect: Rect,
         top: f32,
+        items: impl Iterator<Item = &'a PriceSeries>,
     ) {
         let plot = painter.with_clip_rect(painter.clip_rect().intersect(rect));
         let main = self.state.shown();
-        for (row, item) in self
-            .price_series
-            .iter()
-            .filter(|item| item.visible)
-            .enumerate()
-        {
+        for (row, item) in items.enumerate() {
             if self.config.show_indicator_labels || self.config.show_indicator_last_val {
                 let selected_time = ui
                     .input(|input| input.pointer.hover_pos())
@@ -565,9 +799,8 @@ impl Chart {
             };
             let clipped = painter.with_clip_rect(painter.clip_rect().intersect(axis));
             let Some(item) = self
-                .price_series
-                .iter()
-                .find(|item| item.visible && item.options.scale == key)
+                .main_pane_series()
+                .find(|item| item.options.scale == key)
             else {
                 continue;
             };
@@ -580,7 +813,7 @@ impl Chart {
             let ctx = RenderContext::new(&clipped, label_rect);
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
-            for (value, color, mapping) in self.secondary_axis_values(key, rect) {
+            for (value, colors, mapping) in self.secondary_axis_values(key, rect) {
                 tags.push(crate::chart::rendering::axes::render_axis_value(
                     &clipped,
                     label_rect,
@@ -589,12 +822,18 @@ impl Chart {
                     mapping
                         .transform()
                         .label(mapping.transform().to_scale(value), 2),
-                    (crate::chart::rendering::axes::tag_text_color(color), color),
+                    colors,
                     &tags,
                 ));
             }
             crate::chart::renderers::render_price_labels_at_pos(
-                &ctx, &map, colors, position, &tags, slot,
+                &ctx,
+                &map,
+                colors,
+                &self.config.price_axis,
+                position,
+                &tags,
+                slot,
             );
             measured = measured.max(crate::chart::rendering::axes::price_axis_width(
                 &clipped,
@@ -640,7 +879,8 @@ mod tests {
     }
 
     /// Percent compares returns, not absolute prices: 100 -> 110 and 200 -> 220
-    /// coincide at +10%; 200 -> 240 extends the shared range to 20% plus 10% margins.
+    /// coincide at +10%; 200 -> 240 extends the shared range to 20%, plus an eighth of that on
+    /// each side for the 10% of the pane above and below.
     #[test]
     fn comparisons_share_percent_ranges_with_individual_visible_references() {
         let ctx = egui::Context::default();
@@ -653,7 +893,7 @@ mod tests {
         assert!((map.price_to_y(220.0) - chart.last_price_map.price_to_y(110.0)).abs() < 1e-4);
         let range = chart.state.price_scale().range();
         assert!(
-            (range.min + 2.0).abs() < 1e-10 && (range.max - 22.0).abs() < 1e-10,
+            (range.min + 2.5).abs() < 1e-10 && (range.max - 22.5).abs() < 1e-10,
             "{range:?}"
         );
         chart.state.time_scale_mut().set_bar_spacing(100.0);
@@ -788,6 +1028,87 @@ mod tests {
         assert_eq!(chart.bars(second), &data[1..]);
     }
 
+    /// Columns of 200 and 220 over a base of 150 fit 150 to 220 in the middle 80% of the pane,
+    /// 141.25 to 228.75; a provider's 0 to 1,000 fits -125 to 1,125, and the main series' 50 to
+    /// 60 fits 48.75 to 61.25.
+    /// The price line, the base line of a percentage scale at the first visible close and the
+    /// last value label follow the series style.
+    #[test]
+    fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+        let id = chart.add_series(SeriesOptions {
+            scale: SeriesScale::Separate(2),
+            color: Color32::MAGENTA,
+            kind: SeriesKind::Columns { base: 150.0 },
+            ..Default::default()
+        });
+        chart.set_data(id, bars(&[200.0, 220.0]));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+        let range = chart.series_price_scale(id).unwrap().range();
+        assert!((range.min - 141.25).abs() < 1e-10 && (range.max - 228.75).abs() < 1e-10);
+        let map = chart.series_map(&chart.price_series[0], chart.last_rendered_price_rect);
+        let columns: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Rect(column)
+                    if column.fill == Color32::MAGENTA
+                        && chart.last_rendered_price_rect.contains_rect(column.rect) =>
+                {
+                    Some(column.rect.y_range())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            columns,
+            [200.0, 220.0]
+                .map(|close| { egui::Rangef::new(map.price_to_y(close), map.price_to_y(150.0)) })
+        );
+
+        let style = chart.series_style_mut(id).unwrap();
+        style.autoscale = Some(crate::model::AutoscaleProvider::new(|_, _| {
+            Some((0.0, 1000.0))
+        }));
+        style.price_line_visible = true;
+        style.price_line_color = Some(Color32::GOLD);
+        style.price_line_style = LineStyle::Solid;
+        style.base_line_visible = true;
+        style.last_value_visible = false;
+        chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Percentage;
+        chart.series_style_mut(SeriesId::MAIN).unwrap().autoscale =
+            Some(crate::model::AutoscaleProvider::new(|bars, default| {
+                assert_eq!(bars.len(), 2);
+                assert_eq!(default, Some((100.0, 110.0)));
+                Some((50.0, 60.0))
+            }));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.series_map(&chart.price_series[0], chart.last_rendered_price_rect);
+        let range = chart.series_price_scale(id).unwrap().range();
+        let fitted = (
+            map.transform().to_price(range.min),
+            map.transform().to_price(range.max),
+        );
+        assert!((fitted.0 + 125.0).abs() < 1e-9 && (fitted.1 - 1125.0).abs() < 1e-9);
+        let range = chart.state.price_scale().range();
+        assert!((range.min - 48.75).abs() < 1e-10 && (range.max - 61.25).abs() < 1e-10);
+        for (price, color) in [
+            (220.0, Color32::GOLD),
+            (200.0, DESIGN_TOKENS.semantic.extended.gray),
+        ] {
+            assert!(painted.iter().any(|shape| matches!(shape,
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == color && points[0].y == map.price_to_y(price)
+            )));
+        }
+        assert_eq!(
+            chart
+                .secondary_axis_values(SeriesScale::Separate(2), chart.last_rendered_price_rect)
+                .count(),
+            0
+        );
+    }
+
     /// Every scale is fitted once across all its visible members; hidden and differently
     /// assigned values cannot stretch it. Labels reserve space only for visible axes.
     #[test]
@@ -809,9 +1130,9 @@ mod tests {
             frame(&ctx, &mut chart, 0.0, vec![]);
             let range = chart.series_price_scale_mut(id).unwrap().range();
             let expected = if key == SeriesScale::Right {
-                (88.0, 232.0)
+                (85.0, 235.0)
             } else {
-                (198.0, 222.0)
+                (197.5, 222.5)
             };
             assert!(
                 (range.min - expected.0).abs() < 1e-10 && (range.max - expected.1).abs() < 1e-10,
@@ -825,7 +1146,7 @@ mod tests {
             frame(&ctx, &mut chart, 0.1, vec![]);
             assert!(chart.series_axis_keys().is_empty());
             let range = chart.state.price_scale().range();
-            assert!((range.min - 99.0).abs() < 1e-10 && (range.max - 111.0).abs() < 1e-10);
+            assert!((range.min - 98.75).abs() < 1e-10 && (range.max - 111.25).abs() < 1e-10);
             // Secondary bars can occupy whitespace beyond the main history.
             let future = bars(&[200.0, 220.0])
                 .into_iter()

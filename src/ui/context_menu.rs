@@ -1526,7 +1526,8 @@ mod tests {
             let options = &mut chart.chart_options;
             options.crosshair.vert_line_color = ink;
             options.crosshair.horz_line_color = ink;
-            options.crosshair.label_background_color = ink;
+            options.crosshair.vert_label_background_color = ink;
+            options.crosshair.horz_label_background_color = ink;
             options.tooltip.enabled = true;
             options.tooltip.on_long_press = false;
             options.tooltip.background_color = ink;
