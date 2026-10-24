@@ -70,15 +70,19 @@ impl Chart {
         price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
-        pane: Option<super::SeriesId>,
+        pane: Option<super::PaneId>,
     ) {
+        // New drawings belong to the pane's first member, or to an empty pane itself.
+        let mut owner = None;
         let members: Vec<_> = if let Some(pane) = pane {
-            self.pane_layout
-                .panes
-                .iter()
-                .find(|p| p.id == pane)
-                .map(|p| p.studies.iter().map(|id| Some(id.0)).collect())
-                .unwrap_or_default()
+            let pane = self.pane_layout.panes.iter().find(|p| p.id == pane);
+            owner = pane.map(|p| p.members.first().map_or(p.id.0, |id| id.0));
+            pane.map(|p| {
+                std::iter::once(Some(p.id.0))
+                    .chain(p.members.iter().map(|id| Some(id.0)))
+                    .collect()
+            })
+            .unwrap_or_default()
         } else {
             std::iter::once(None)
                 .chain(
@@ -90,7 +94,7 @@ impl Chart {
                 )
                 .collect()
         };
-        drawing_manager.set_pane(pane.map(|id| id.0), members.clone(), price_rect);
+        drawing_manager.set_pane(owner, members.clone(), price_rect);
         let rect_min_x = price_rect.min.x;
 
         let rect_width = price_rect.width();

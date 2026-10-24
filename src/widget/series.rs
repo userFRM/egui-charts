@@ -181,8 +181,8 @@ impl Chart {
     }
 
     /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
-    /// main pane if [`Indicator::is_overlay`], otherwise in a pane below it. Returns the study's
-    /// id, which stays valid when other studies are removed.
+    /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
+    /// study's id, which stays valid when other studies are removed.
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
@@ -196,12 +196,16 @@ impl Chart {
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);
+        let overlay = indicator.is_overlay();
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
         self.pending_from.push(None);
         self.next_refresh.push(f64::NEG_INFINITY);
+        if !overlay {
+            self.add_study_pane(id);
+        }
         id
     }
 

@@ -338,16 +338,24 @@ impl Chart {
         let previous_axis_width = self.measured_axis_width;
         self.last_rendered_indicator_panes.clear();
         self.sync_panes();
-        // Pane studies share the available height and the lowest time axis.
-        let has_panes = self
-            .studies
-            .indicators()
-            .iter()
-            .any(|study| !study.is_overlay() && study.is_visible());
+        for pane in &mut self.pane_layout.panes {
+            pane.rect = Rect::NOTHING;
+        }
+        // Panes share the available height and the lowest time axis.
+        let has_panes = self.has_panes();
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
-            self.show_internal(ui, None, footprint)
+            let response = self.show_internal(ui, None, footprint);
+            if let Some(main) = self
+                .pane_layout
+                .panes
+                .iter_mut()
+                .find(|pane| pane.id == super::PaneId::MAIN)
+            {
+                main.rect = response.rect;
+            }
+            response
         };
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
@@ -1682,7 +1690,13 @@ impl Chart {
                 legend_bottom = bottom;
             }
         }
-        self.paint_secondary_legend(ui, &painter, price_rect, legend_bottom + 4.0);
+        self.paint_secondary_legend(
+            ui,
+            &painter,
+            price_rect,
+            legend_bottom + 4.0,
+            self.main_pane_series(),
+        );
 
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync

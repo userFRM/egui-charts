@@ -373,7 +373,7 @@ impl ChartLayout {
                         && charts[index]
                             .pane_layout
                             .maximized
-                            .is_none_or(|pane| pane == super::SeriesId::MAIN)
+                            .is_none_or(|pane| pane == super::PaneId::MAIN)
                     {
                         let button = ui.put(
                             Rect::from_min_size(
