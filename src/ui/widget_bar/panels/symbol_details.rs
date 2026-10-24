@@ -102,7 +102,16 @@ impl SymbolDetailsPanel {
             self.details = None;
             self.error = None;
             self.request_details(instrument.symbol.clone());
-            if !self.notes.contains_key(&instrument.symbol) {
+            // Notes not read yet and not being read, such as after a failed read, are read again.
+            let loading = self.requests.values().any(
+                |request| matches!(request, Request::Load(symbol) if *symbol == instrument.symbol),
+            );
+            if !loading
+                && self
+                    .notes
+                    .get(&instrument.symbol)
+                    .is_none_or(|notes| notes.written.is_none())
+            {
                 self.load_notes(instrument.symbol.clone());
             }
         }
@@ -486,6 +495,11 @@ mod tests {
         restored.notes.get_mut("BAD").unwrap().text = "lost".into();
         restored.poll(&ctx);
         assert!(store.saves.lock().unwrap().is_empty());
+        assert!(restored.error.is_some());
+        // They are read again when the symbol comes back.
+        restored.set_instrument(&Instrument::new("MSFT"));
+        restored.set_instrument(&Instrument::new("BAD"));
+        restored.poll(&ctx);
         assert!(restored.error.is_some());
     }
 }
