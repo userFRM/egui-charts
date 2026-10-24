@@ -334,6 +334,8 @@ impl DemoApp {
                 1,
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
+        // A host's own call to action sits at the right end; the demo only reports it.
+        top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
         let mut menus = ChartMenus::default();
         menus.host_entries.push(
             HostMenuEntry::new("research", "Open in research")
@@ -506,6 +508,7 @@ impl DemoApp {
             .set_storage(app.template_storage.clone());
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
+        app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
@@ -1245,6 +1248,10 @@ impl DemoApp {
                 self.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Save);
                 return;
             }
+            TopToolbarAction::ToggleTrading => {
+                self.trading.toggle_ticket(self.chart.symbol().to_owned());
+                return;
+            }
             TopToolbarAction::Layout(action) => {
                 self.handle_layout_action(action);
                 return;
@@ -1282,14 +1289,17 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            TopToolbarAction::TakeScreenshot => {
+            TopToolbarAction::TakeScreenshot | TopToolbarAction::Publish => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                self.screenshot_requested = Some((
-                    ScreenshotTarget::File(None),
-                    Default::default(),
-                    self.export_generation,
-                ));
+                // The demo has no sharing service, so a published image goes to the clipboard.
+                let target = if action == TopToolbarAction::Publish {
+                    ScreenshotTarget::Clipboard
+                } else {
+                    ScreenshotTarget::File(None)
+                };
+                self.screenshot_requested =
+                    Some((target, Default::default(), self.export_generation));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -1309,6 +1319,7 @@ impl DemoApp {
             TopToolbarAction::ThemeToggle => self.toggle_theme(ctx),
             TopToolbarAction::Layout(_)
             | TopToolbarAction::Save
+            | TopToolbarAction::ToggleTrading
             | TopToolbarAction::Host(_)
             | TopToolbarAction::None => {}
         }
@@ -2061,6 +2072,8 @@ impl DemoApp {
         // Right-click context actions resolve after the chart is shown. Order entries rest with
         // the rest of trading during replay.
         self.menus
+            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
+        self.top_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());

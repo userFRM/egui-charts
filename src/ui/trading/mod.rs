@@ -136,6 +136,21 @@ impl Trading {
         self.ticket.open(&request);
     }
 
+    /// Opens the order ticket for `symbol`, or closes it when it is open, as the toolbar's Trade
+    /// button does.
+    pub fn toggle_ticket(&mut self, symbol: String) {
+        if self.ticket.open {
+            self.ticket.open = false;
+        } else {
+            self.open_ticket(OrderRequest::new(
+                symbol,
+                OrderSide::Buy,
+                self.quantity,
+                OrderType::Market,
+            ));
+        }
+    }
+
     /// Handles the Buy or Sell button: a market order of [`quantity`](Self::quantity) at once
     /// with [`one_click`](Self::one_click), otherwise the ticket for one.
     pub fn trade(&mut self, symbol: String, side: OrderSide) {

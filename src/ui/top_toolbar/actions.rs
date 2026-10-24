@@ -35,6 +35,13 @@ pub enum TopToolbarAction {
     Redo,
     /// Capture a chart screenshot
     TakeScreenshot,
+    /// Ask the host to publish the chart: capture it with
+    /// [`Chart::export_image`](crate::widget::Chart::export_image) and share or post the image
+    /// through the host's own service.
+    Publish,
+    /// Open or close the order ticket, for example with
+    /// [`Trading::toggle_ticket`](crate::ui::trading::Trading::toggle_ticket).
+    ToggleTrading,
     /// Open settings dialog
     OpenSettings,
     /// Save current chart layout
