@@ -19,7 +19,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("log", "Toggle logarithmic scale", "Settings"),
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
-        ("samples", "Show API samples", "Settings"),
+        ("samples", "Toggle API samples", "Settings"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
