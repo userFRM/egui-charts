@@ -14,8 +14,8 @@
 //! Use [`to_tpo_profiles`] to transform OHLCV bars into per-session
 //! [`TPOProfile`]s.
 
-use crate::model::Bar;
 use crate::model::bar::{bar_level_keys, level_grid};
+use crate::model::{Bar, BarClock, SessionProvider};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
@@ -83,7 +83,8 @@ pub struct TPOConfig {
     /// Tick size for price grouping (e.g., 0.25 for ES futures). [`to_tpo_profiles`]
     /// widens it to bound the rows; see [`TPOProfile::tick_size`].
     pub tick_size: f64,
-    /// Duration of each period in minutes (typically 30)
+    /// Duration of each period in minutes (typically 30), raised to the bar interval when
+    /// shorter so that every bar takes a period of its own
     pub period_minutes: u32,
     /// Duration of initial balance in minutes (typically 60)
     pub initial_balance_minutes: u32,
@@ -103,10 +104,17 @@ pub struct TPOConfig {
     pub show_single_prints: bool,
     /// Highlight opening range
     pub show_opening_range: bool,
-    /// Split by session (RTH vs ETH)
+    /// Split each session where it moves between extended and regular hours, giving separate
+    /// pre-market, regular and post-market profiles
     pub split_sessions: bool,
     /// Custom letters sequence; an empty string uses the default letters
     pub custom_letters: Option<String>,
+    /// Sessions to combine: the profiles whose sessions open within one range form a single
+    /// profile. Adding a range over adjacent sessions merges them, removing it splits them back,
+    /// and a range over many sessions builds a composite profile.
+    pub composites: Vec<RangeInclusive<DateTime<Utc>>>,
+    /// Draw only the newest session's profile instead of every visible one
+    pub latest_session_only: bool,
 }
 
 impl Default for TPOConfig {
@@ -125,6 +133,8 @@ impl Default for TPOConfig {
             show_opening_range: true,
             split_sessions: false,
             custom_letters: None,
+            composites: Vec::new(),
+            latest_session_only: false,
         }
     }
 }
@@ -218,6 +228,17 @@ impl TPOProfile {
         self.letters.iter().map(|l| l.period_idx).max().unwrap_or(0) + 1
     }
 
+    /// Add the letters of a later session on the same rows, keeping this session's open and
+    /// initial balance. The statistical levels need recalculating.
+    fn merge(&mut self, later: TPOProfile) {
+        for (key, count) in later.price_tpo_count {
+            *self.price_tpo_count.entry(key).or_insert(0) += count;
+        }
+        self.letters.extend(later.letters);
+        self.profile_high = self.profile_high.max(later.profile_high);
+        self.profile_low = self.profile_low.min(later.profile_low);
+    }
+
     /// Get the letters at a specific price level
     pub fn letters_at(&self, price: f64, tick_size: f64) -> Vec<&TPOLetter> {
         let price_key = price_to_key(price, tick_size);
@@ -275,9 +296,13 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
 
 /// Transform bars into TPO profiles
 ///
-/// A session is one UTC date. Its periods are whole multiples of
-/// `config.period_minutes` since its first bar, so a gap leaves empty periods,
-/// and each period places one letter on every row its bars touched.
+/// Sessions are the trading days of `clock`: the exchange sessions it carries,
+/// or calendar days in its time zone, split further at the moves between
+/// extended and regular hours with `config.split_sessions` and combined over
+/// `config.composites`. A session's periods are whole multiples of
+/// `config.period_minutes`, or of the clock's interval when longer, since its
+/// first bar, so a gap leaves empty periods, and each period places one letter
+/// on every row its bars touched.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
 /// rows (see [`TPOProfile::tick_size`]). Bars with a non-finite high or low or
@@ -286,10 +311,11 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
 /// # Arguments
 /// * `bars` - Source OHLCV bars
 /// * `config` - TPO configuration
+/// * `clock` - Interval and calendar of the bars, such as the chart's `Chart::bar_clock`
 ///
 /// # Returns
 /// Vector of TPO profiles, one per session
-pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
+pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Vec<TPOProfile> {
     if bars.is_empty() {
         return Vec::new();
     }
@@ -308,7 +334,23 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
     // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
-    let period_minutes = i64::from(config.period_minutes.max(1));
+    let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
+    let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
+    let sessions = clock.sessions();
+    let mut starts: Vec<_> = sessions
+        .session_breaks(bars)
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect();
+    if config.split_sessions {
+        let extended: Vec<_> = bars
+            .iter()
+            .map(|bar| sessions.is_extended(bar.time))
+            .collect();
+        starts.extend((1..bars.len()).filter(|&i| extended[i] != extended[i - 1]));
+        starts.sort_unstable();
+    }
+    let mut starts = starts.into_iter().peekable();
     let tick_size = level_grid(bars, config.tick_size);
     let keys = bars.iter().filter_map(|bar| bar_level_keys(bar, tick_size));
     let Some((first_key, last_key)) = keys.reduce(|(low, high), (l, h)| (low.min(l), high.max(h)))
@@ -320,16 +362,16 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
 
     let mut touched = RangeInclusive::new(usize::MAX, 0);
 
-    for bar in bars {
+    for (i, bar) in bars.iter().enumerate() {
         let Some((low_key, high_key)) = bar_level_keys(bar, tick_size) else {
             continue;
         };
 
-        // Check if we need to start a new session (new day)
-        let session_date = bar.time.date_naive();
-        let is_new_session = current_session_start
-            .map(|s| s.date_naive() != session_date)
-            .unwrap_or(true);
+        // A session starting at a skipped bar starts at the next usable one.
+        let mut is_new_session = current_profile.is_none();
+        while starts.next_if(|&start| start <= i).is_some() {
+            is_new_session = true;
+        }
         let bar_period = match current_session_start {
             Some(start) if !is_new_session => {
                 ((bar.time - start).num_minutes().max(0) / period_minutes) as usize
@@ -357,10 +399,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
 
         if is_new_session {
             // Save the current profile
-            if let Some(mut profile) = current_profile.take() {
-                calculate_profile_stats(&mut profile, config);
-                profiles.push(profile);
-            }
+            profiles.extend(current_profile.take());
 
             // Start new profile
             current_profile = Some(TPOProfile::new(bar.time, tick_size));
@@ -413,11 +452,29 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig) -> Vec<TPOProfile> {
             period_idx,
             period_ts,
         );
-        calculate_profile_stats(&mut profile, config);
         profiles.push(profile);
     }
 
-    profiles
+    let mut combined: Vec<TPOProfile> = Vec::with_capacity(profiles.len());
+    let composite = |profile: &TPOProfile| {
+        let open = &profile.session_date;
+        config
+            .composites
+            .iter()
+            .position(|range| range.contains(open))
+    };
+    for profile in profiles {
+        match combined.last_mut() {
+            Some(last) if composite(last).is_some() && composite(last) == composite(&profile) => {
+                last.merge(profile)
+            }
+            _ => combined.push(profile),
+        }
+    }
+    for profile in &mut combined {
+        calculate_profile_stats(profile, config);
+    }
+    combined
 }
 
 /// Emit the union of a period's ranges once per row, then clear its endpoints.
@@ -604,6 +661,7 @@ impl TPOProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Timeframe;
     use chrono::{Duration, TimeZone};
 
     fn create_test_bars() -> Vec<Bar> {
@@ -652,7 +710,7 @@ mod tests {
             initial_balance_minutes: 60,
             ..Default::default()
         };
-        let profiles = to_tpo_profiles(&bars, &config);
+        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
 
         let profile = &profiles[0];
 
@@ -724,7 +782,7 @@ mod tests {
                 .iter()
                 .map(|&(m, low, high)| bar_at(start, m, low, high, low, high))
                 .collect();
-            let profiles = to_tpo_profiles(&bars, &config);
+            let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
             let mut letters = Vec::new();
             let mut counts = Vec::new();
             for (i, profile) in profiles.iter().enumerate() {
@@ -753,6 +811,119 @@ mod tests {
     }
 
     #[test]
+    fn sessions_follow_the_clock_and_combine_over_composites() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        // 18:00 to 17:00 New York, so a session spans the UTC midnight
+        let overnight = BarClock::new(Timeframe::Min30).with_session(
+            new_york.clone(),
+            Session::new([SessionWindow::new(
+                [Sun, Mon, Tue, Wed, Thu],
+                at(18, 0),
+                at(17, 0),
+            )]),
+            false,
+        );
+        let stock = BarClock::new(Timeframe::Min30).with_session(
+            new_york,
+            Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
+                .with_extended_windows([
+                    SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
+                    SessionWindow::new(weekdays, at(16, 0), at(20, 0)),
+                ]),
+            true,
+        );
+        // 2024-03-05 is a Tuesday, 13:00 UTC is 08:00 in New York
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 13, 0, 0).unwrap();
+        let both_days = start..=start + Duration::days(1);
+        // (case, clock, bar minutes from `start`, split, composites, profiles as (open, letters))
+        type Case<'a> = (
+            &'a str,
+            BarClock,
+            Vec<i64>,
+            bool,
+            Vec<RangeInclusive<DateTime<Utc>>>,
+            &'a [(i64, &'a str)],
+        );
+        let cases: [Case; 6] = [
+            (
+                "exchange day across UTC midnight",
+                overnight,
+                vec![600, 630, 690, 1950, 2040],
+                false,
+                vec![],
+                &[(600, "ABDt"), (2040, "A")],
+            ),
+            (
+                "pre-market, regular and post-market in one day",
+                stock.clone(),
+                (0..19).map(|i| i * 30).collect(),
+                false,
+                vec![],
+                &[(0, "ABCDEFGHIJKLMNOPQRS")],
+            ),
+            (
+                "split at extended hours",
+                stock,
+                (0..19).map(|i| i * 30).collect(),
+                true,
+                vec![],
+                &[(0, "ABC"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+            ),
+            (
+                "hourly bars take one period each",
+                BarClock::new(Timeframe::Hour1),
+                vec![0, 60, 120],
+                false,
+                vec![],
+                &[(0, "ABC")],
+            ),
+            (
+                "UTC days",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 1470],
+                false,
+                vec![],
+                &[(0, "AB"), (1440, "AB")],
+            ),
+            (
+                "UTC days merged",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 1470],
+                false,
+                vec![both_days],
+                &[(0, "ABAB")],
+            ),
+        ];
+        for (case, clock, minutes, split_sessions, composites, expected) in cases {
+            let bars: Vec<_> = minutes
+                .iter()
+                .map(|&m| bar_at(start, m, 100.0, 100.0, 100.0, 100.0))
+                .collect();
+            let config = TPOConfig {
+                tick_size: 1.0,
+                split_sessions,
+                composites,
+                ..Default::default()
+            };
+            let profiles: Vec<_> = to_tpo_profiles(&bars, &config, &clock)
+                .iter()
+                .map(|profile| {
+                    let open = (profile.session_date - start).num_minutes();
+                    let letters: String = profile.letters.iter().map(|l| l.letter).collect();
+                    assert_eq!(profile.tpo_count_at(100.0, 1.0), letters.len(), "{case}");
+                    (open, letters)
+                })
+                .collect();
+            let expected: Vec<_> = expected.iter().map(|&(m, l)| (m, l.to_owned())).collect();
+            assert_eq!(profiles, expected, "{case}");
+        }
+    }
+
+    #[test]
     fn custom_letters_name_the_periods() {
         // Bars at minutes 0 and 45 fall in periods 0 and 1; an empty sequence means the default letters
         let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
@@ -763,7 +934,7 @@ mod tests {
                 custom_letters: custom.map(String::from),
                 ..Default::default()
             };
-            let profiles = to_tpo_profiles(&bars, &config);
+            let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
             let named: Vec<_> = profiles[0]
                 .letters
                 .iter()
@@ -791,7 +962,7 @@ mod tests {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profile = &to_tpo_profiles(&bars, &config)[0];
+        let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
 
         // Independently find the heaviest level and confirm POC matches it.
         let heaviest = profile
@@ -819,7 +990,7 @@ mod tests {
             value_area_pct: 0.70,
             ..Default::default()
         };
-        let profile = &to_tpo_profiles(&bars, &config)[0];
+        let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
 
         // POC sits inside the value area.
         assert!(profile.is_in_value_area(profile.poc_price));
@@ -876,7 +1047,7 @@ mod tests {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profiles = to_tpo_profiles(&bars, &config);
+        let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min1.into());
         assert_eq!(profiles.len(), 1);
         let profile = &profiles[0];
         assert_eq!(profile.poc_price, 100.0);
@@ -892,7 +1063,7 @@ mod tests {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profile = &to_tpo_profiles(&bars, &config)[0];
+        let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min1.into())[0];
         // 1e6 ticks widen to rows of 1,000 ticks: 0, 1,000, ..., 1e6
         assert_eq!((profile.tick_size, profile.letters.len()), (1_000.0, 1_001));
     }

@@ -7,6 +7,7 @@ use crate::model::percent_change;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::QuoteSide;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
 /// Symbol information for display
@@ -181,155 +182,172 @@ impl SymbolHeader {
 
     /// Show the symbol header
     pub fn show(&self, ui: &mut Ui) -> Response {
-        let config = &self.config.resolved(ui);
-        let (response, painter) = ui.allocate_painter(
-            Vec2::new(ui.available_width(), config.height),
-            Sense::hover(),
-        );
-        let rect = response.rect;
+        self.show_with_quote_action(ui).0
+    }
 
-        // Background - REMOVED: Let parent Frame's fill show through
-        // painter.rect_filled(rect, CornerRadius::ZERO, config.bg_color);
+    /// Show the symbol header and return the Sell or Buy box the user clicked, for
+    /// [`Trading::trade`](crate::ui::trading::Trading::trade).
+    pub fn show_with_quote_action(&self, ui: &mut Ui) -> (Response, Option<QuoteSide>) {
+        let width = ui.available_width();
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let config = &self.config.resolved(ui);
+                let response =
+                    ui.allocate_response(Vec2::new(width, config.height), Sense::hover());
+                let painter = ui.painter().clone();
+                let rect = response.rect;
 
-        let mut x = rect.min.x + DESIGN_TOKENS.spacing.sm;
-        let center_y = rect.center().y;
+                let mut x = rect.min.x + DESIGN_TOKENS.spacing.sm;
+                let center_y = rect.center().y;
 
-        // Symbol name (bold, larger)
-        let symbol_galley = painter.layout_no_wrap(
-            self.symbol_info.symbol.clone(),
-            egui::FontId::proportional(typography::LG),
-            config.text_color,
-        );
-        painter.galley(
-            Pos2::new(x, center_y - symbol_galley.size().y / 2.0),
-            symbol_galley.clone(),
-            Color32::TRANSPARENT,
-        );
-        x += symbol_galley.size().x + DESIGN_TOKENS.spacing.sm;
+                // Symbol name (bold, larger)
+                let symbol_galley = painter.layout_no_wrap(
+                    self.symbol_info.symbol.clone(),
+                    egui::FontId::proportional(typography::LG),
+                    config.text_color,
+                );
+                painter.galley(
+                    Pos2::new(x, center_y - symbol_galley.size().y / 2.0),
+                    symbol_galley.clone(),
+                    Color32::TRANSPARENT,
+                );
+                x += symbol_galley.size().x + DESIGN_TOKENS.spacing.sm;
 
-        // Company name • Exchange • Timeframe, skipping empty fields
-        let info = &self.symbol_info;
-        let info_text = [&info.company_name, &info.exchange, &info.timeframe]
-            .into_iter()
-            .filter(|field| !field.is_empty())
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(" • ");
-        if config.show_company_name && !info_text.is_empty() {
-            let info_galley = painter.layout_no_wrap(
-                info_text,
-                egui::FontId::proportional(typography::MD),
-                config.label_color,
-            );
-            painter.galley(
-                Pos2::new(x, center_y - info_galley.size().y / 2.0),
-                info_galley.clone(),
-                Color32::TRANSPARENT,
-            );
-            x += info_galley.size().x + DESIGN_TOKENS.spacing.md;
-        }
+                // Company name • Exchange • Timeframe, skipping empty fields
+                let info = &self.symbol_info;
+                let info_text = [&info.company_name, &info.exchange, &info.timeframe]
+                    .into_iter()
+                    .filter(|field| !field.is_empty())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" • ");
+                if config.show_company_name && !info_text.is_empty() {
+                    let info_galley = painter.layout_no_wrap(
+                        info_text,
+                        egui::FontId::proportional(typography::MD),
+                        config.label_color,
+                    );
+                    painter.galley(
+                        Pos2::new(x, center_y - info_galley.size().y / 2.0),
+                        info_galley.clone(),
+                        Color32::TRANSPARENT,
+                    );
+                    x += info_galley.size().x + DESIGN_TOKENS.spacing.md;
+                }
 
-        // Separator
-        self.draw_separator(
-            &painter,
-            config,
-            x,
-            rect.min.y + DESIGN_TOKENS.spacing.xs,
-            rect.max.y - DESIGN_TOKENS.spacing.xs,
-        );
-        x += DESIGN_TOKENS.spacing.md;
+                // Separator
+                self.draw_separator(
+                    &painter,
+                    config,
+                    x,
+                    rect.min.y + DESIGN_TOKENS.spacing.xs,
+                    rect.max.y - DESIGN_TOKENS.spacing.xs,
+                );
+                x += DESIGN_TOKENS.spacing.md;
 
-        // Last close and change; the chart legend shows the bar's OHLC.
-        let price_color = if self.ohlc.is_bullish() {
-            config.bullish_color
-        } else {
-            config.bearish_color
-        };
+                // Last close and change; the chart legend shows the bar's OHLC.
+                let price_color = if self.ohlc.is_bullish() {
+                    config.bullish_color
+                } else {
+                    config.bearish_color
+                };
 
-        let change_text = format!(
-            "{:.2} {}{:.2} ({}{:.2}%)",
-            self.ohlc.close,
-            if self.ohlc.change >= 0.0 { "+" } else { "" },
-            self.ohlc.change,
-            if self.ohlc.change_percent >= 0.0 {
-                "+"
-            } else {
-                ""
-            },
-            self.ohlc.change_percent
-        );
-        let change_galley = painter.layout_no_wrap(
-            change_text,
-            egui::FontId::proportional(typography::MD),
-            price_color,
-        );
-        painter.galley(
-            Pos2::new(x, center_y - change_galley.size().y / 2.0),
-            change_galley.clone(),
-            Color32::TRANSPARENT,
-        );
-        x += change_galley.size().x + DESIGN_TOKENS.spacing.md;
+                let change_text = format!(
+                    "{:.2} {}{:.2} ({}{:.2}%)",
+                    self.ohlc.close,
+                    if self.ohlc.change >= 0.0 { "+" } else { "" },
+                    self.ohlc.change,
+                    if self.ohlc.change_percent >= 0.0 {
+                        "+"
+                    } else {
+                        ""
+                    },
+                    self.ohlc.change_percent
+                );
+                let change_galley = painter.layout_no_wrap(
+                    change_text,
+                    egui::FontId::proportional(typography::MD),
+                    price_color,
+                );
+                painter.galley(
+                    Pos2::new(x, center_y - change_galley.size().y / 2.0),
+                    change_galley.clone(),
+                    Color32::TRANSPARENT,
+                );
+                x += change_galley.size().x + DESIGN_TOKENS.spacing.md;
 
-        // Separator
-        self.draw_separator(
-            &painter,
-            config,
-            x,
-            rect.min.y + DESIGN_TOKENS.spacing.xs,
-            rect.max.y - DESIGN_TOKENS.spacing.xs,
-        );
-        x += DESIGN_TOKENS.spacing.md;
+                // Separator
+                self.draw_separator(
+                    &painter,
+                    config,
+                    x,
+                    rect.min.y + DESIGN_TOKENS.spacing.xs,
+                    rect.max.y - DESIGN_TOKENS.spacing.xs,
+                );
+                x += DESIGN_TOKENS.spacing.md;
 
-        // Bid/Ask boxes
-        if config.show_bid_ask && self.quote.bid > 0.0 {
-            // SELL box (red background)
-            x = self.draw_quote_box(
-                &painter,
-                x,
-                center_y,
-                self.quote.bid,
-                "SELL",
-                config.bearish_color,
-            );
-            x += DESIGN_TOKENS.spacing.xs;
-            // BUY box (green background)
-            x = self.draw_quote_box(
-                &painter,
-                x,
-                center_y,
-                self.quote.ask,
-                "BUY",
-                config.bullish_color,
-            );
-            x += DESIGN_TOKENS.spacing.md;
+                // Bid/Ask boxes
+                let mut quote_action = None;
+                if config.show_bid_ask && self.quote.bid > 0.0 {
+                    // SELL box (red background)
+                    let sell = self.draw_quote_box(
+                        &painter,
+                        x,
+                        center_y,
+                        self.quote.bid,
+                        "SELL",
+                        config.bearish_color,
+                    );
+                    x = sell.right() + DESIGN_TOKENS.spacing.xs;
+                    // BUY box (green background)
+                    let buy = self.draw_quote_box(
+                        &painter,
+                        x,
+                        center_y,
+                        self.quote.ask,
+                        "BUY",
+                        config.bullish_color,
+                    );
+                    x = buy.right() + DESIGN_TOKENS.spacing.md;
+                    for (rect, side) in [(sell, QuoteSide::Sell), (buy, QuoteSide::Buy)] {
+                        let id = response.id.with(side == QuoteSide::Buy);
+                        if ui.interact(rect, id, Sense::click()).clicked() {
+                            quote_action = Some(side);
+                        }
+                    }
 
-            // Separator
-            self.draw_separator(
-                &painter,
-                config,
-                x,
-                rect.min.y + DESIGN_TOKENS.spacing.xs,
-                rect.max.y - DESIGN_TOKENS.spacing.xs,
-            );
-            x += DESIGN_TOKENS.spacing.md;
-        }
+                    // Separator
+                    self.draw_separator(
+                        &painter,
+                        config,
+                        x,
+                        rect.min.y + DESIGN_TOKENS.spacing.xs,
+                        rect.max.y - DESIGN_TOKENS.spacing.xs,
+                    );
+                    x += DESIGN_TOKENS.spacing.md;
+                }
 
-        // Volume
-        if config.show_volume {
-            let vol_text = format!("Vol {}", self.format_volume(self.ohlc.volume));
-            let vol_galley = painter.layout_no_wrap(
-                vol_text,
-                egui::FontId::proportional(typography::MD),
-                config.label_color,
-            );
-            painter.galley(
-                Pos2::new(x, center_y - vol_galley.size().y / 2.0),
-                vol_galley,
-                Color32::TRANSPARENT,
-            );
-        }
-
-        response
+                // Volume
+                if config.show_volume {
+                    let vol_text = format!("Vol {}", self.format_volume(self.ohlc.volume));
+                    let vol_galley = painter.layout_no_wrap(
+                        vol_text,
+                        egui::FontId::proportional(typography::MD),
+                        config.label_color,
+                    );
+                    let width = vol_galley.size().x;
+                    painter.galley(
+                        Pos2::new(x, center_y - vol_galley.size().y / 2.0),
+                        vol_galley,
+                        Color32::TRANSPARENT,
+                    );
+                    x += width;
+                }
+                ui.set_min_width(x - rect.left() + DESIGN_TOKENS.spacing.sm);
+                (response, quote_action)
+            })
+            .inner
     }
 
     fn draw_separator(
@@ -354,7 +372,7 @@ impl SymbolHeader {
         price: f64,
         label: &str,
         bg_color: Color32,
-    ) -> f32 {
+    ) -> Rect {
         let text = format!("{price:.2} {label}");
         let galley = painter.layout_no_wrap(
             text,
@@ -377,7 +395,7 @@ impl SymbolHeader {
             Color32::TRANSPARENT,
         );
 
-        x + box_width
+        box_rect
     }
 
     fn format_volume(&self, vol: f64) -> String {
@@ -396,6 +414,80 @@ impl SymbolHeader {
 #[cfg(test)]
 mod tests {
     use super::OhlcData;
+
+    #[test]
+    fn quote_buttons_remain_clickable_in_narrow_headers() {
+        use super::*;
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [800.0, 320.0] {
+                for (label, expected) in [("SELL", QuoteSide::Sell), ("BUY", QuoteSide::Buy)] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut header = SymbolHeader::new(SymbolInfo {
+                        symbol: "SYM".into(),
+                        company_name: "A long company name".into(),
+                        ..Default::default()
+                    });
+                    header.quote = QuoteData {
+                        bid: 100.0,
+                        ask: 101.0,
+                    };
+                    let mut selected = None;
+                    let mut target = None;
+                    let mut pressed = false;
+                    for pass in 0..30 {
+                        let mut events = vec![];
+                        if let Some(pos) = target {
+                            events.push(egui::Event::PointerMoved(pos));
+                            events.push(egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: !pressed,
+                                modifiers: Default::default(),
+                            });
+                            pressed = !pressed;
+                        } else if pass > 2 {
+                            events.push(egui::Event::PointerMoved(egui::pos2(width / 2.0, 20.0)));
+                            events.push(egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(-60.0, 0.0),
+                                modifiers: Default::default(),
+                            });
+                        }
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(width, 200.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                selected = header.show_with_quote_action(ui).1;
+                            },
+                        );
+                        if pass > 14 && target.is_none() {
+                            target = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text().ends_with(label) => {
+                                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                                    shape.clip_rect.contains_rect(rect).then_some(rect.center())
+                                }
+                                _ => None,
+                            });
+                        }
+                        output.drop_without_applying_deltas();
+                        if selected.is_some() {
+                            break;
+                        }
+                    }
+                    assert_eq!(selected, Some(expected), "{label} at {width}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn ohlc_change_percent_follows_the_sign_of_the_change() {

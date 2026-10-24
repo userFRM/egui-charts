@@ -467,15 +467,16 @@ impl Chart {
         shared_time_axis: Option<Rect>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG image loader once per context so the embedded
-        // icons used by the toolbars and panels decode without the host app
-        // having to wire egui_extras itself.
+        // Register the SVG and icon image loaders once per context so the
+        // embedded icons used by the toolbars and panels decode without the
+        // host app having to wire egui_extras itself.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
                 egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
             }
         }
@@ -927,6 +928,15 @@ impl Chart {
         let clipped_price_ctx = RenderContext::new(&clipped_painter, price_rect);
         let clipped_volume_ctx = RenderContext::new(&clipped_painter, volume_rect);
 
+        let mut bar_clock = self.bar_clock();
+        // TPO days follow the instrument's zone, as the session breaks do, also without its hours.
+        if let Some(zone) = self
+            .instrument()
+            .filter(|instrument| instrument.session.is_none())
+            .and_then(|instrument| instrument.time_zone.as_ref())
+        {
+            bar_clock = bar_clock.with_timezone(zone.tz());
+        }
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -938,6 +948,10 @@ impl Chart {
             full_data: &self.state.data().bars,
             revision: self.state.revision(),
             start_idx,
+            clock: &bar_clock,
+            tick_size: self
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
         };
 
         let render_params = rendering::ChartTypeParams::new(
@@ -1044,6 +1058,29 @@ impl Chart {
                     max,
                 );
             }
+        }
+        // TPO studies draw the chart type's profiles beside the bars.
+        for config in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.is_overlay())
+            .filter_map(|study| study.tpo())
+            .filter(|_| !self.chart_type.is_time_independent())
+        {
+            rendering::candles::tpo::render_live_tpo(
+                &clipped_painter,
+                price_rect,
+                &self.state.data().bars,
+                start_idx..start_idx + visible_data.len(),
+                self.state.revision(),
+                &price_map,
+                config,
+                &bar_clock,
+                idx_to_coord,
+                chart_rect.min.x,
+                self.config.bullish_color,
+                self.config.bearish_color,
+            );
         }
         renderers::IndicatorRenderer::render(
             &price_ctx,
@@ -1238,6 +1275,8 @@ impl Chart {
                 pending_values.push((line.price, line.color));
             }
         }
+        #[cfg(feature = "ui")]
+        pending_values.extend(std::mem::take(&mut self.trading_tags));
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
@@ -2598,6 +2637,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tpo_days_follow_the_instrument_zone_without_trading_hours() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe, TimezoneId};
+        // Half-hourly bars from 02:00 to 08:00 UTC, across midnight in New York at 05:00 UTC
+        let start: chrono::DateTime<chrono::Utc> = "2024-03-05T02:00:00Z".parse().unwrap();
+        let bars = (0..13)
+            .map(|i| {
+                let time = start + chrono::Duration::minutes(30 * i);
+                Bar::new(time, 100.0, 102.0, 99.0, 101.0, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        chart.set_instrument(Some(Instrument::new("FX").with_time_zone(new_york)));
+        let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        // One initial balance bar beside each profile
+        let initial_balance = crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance;
+        let profiles = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::Rect(rect)
+                    if rect.fill == initial_balance && rect.rect.width() == 2.0)
+            })
+            .count();
+        assert_eq!(profiles, 2);
     }
 
     #[test]

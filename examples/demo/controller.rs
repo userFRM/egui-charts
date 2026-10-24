@@ -29,6 +29,8 @@ use egui_charts::services::StoreKind;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
 #[path = "live.rs"]
 mod live;
+#[path = "paper.rs"]
+mod paper;
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -245,6 +247,9 @@ pub struct DemoApp {
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
+    // Session-only paper account, traded through the library's order ticket.
+    trading: egui_charts::ui::trading::Trading,
+    paper: Arc<paper::PaperAccount>,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     // Text pasted for a watchlist import, while its window is open.
@@ -436,6 +441,8 @@ impl DemoApp {
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
+            trading: Default::default(),
+            paper: Arc::default(),
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
@@ -482,9 +489,8 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.template_storage.clone());
-        app.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.alerts.set_service(app.alert_host.clone());
+        app.trading.set_service(app.paper.clone());
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
@@ -982,6 +988,7 @@ impl eframe::App for DemoApp {
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
+        self.trading.poll(&ctx, &mut self.toasts);
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -1965,8 +1972,19 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(side) = self.chart.take_quote_action() {
-                    self.notify(format!("{side:?} quote selected; synthetic data, no order submitted"));
+                // Trading follows the live stream, so it rests while replay rewinds the chart.
+                if let Some(side) = self.chart.take_quote_action().filter(|_| self.replay.is_none()) {
+                    let side = match side {
+                        egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
+                        egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                    };
+                    self.trading.trade(self.chart.symbol().to_owned(), side);
+                }
+                if self.replay.is_none() {
+                    if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
+                        self.paper.set_price(self.chart.symbol(), bar.close);
+                    }
+                    self.trading.show(ui, &mut self.chart);
                 }
             });
         self.replay_control.set_dock_rect(chart.response.rect);
@@ -1992,7 +2010,12 @@ impl DemoApp {
         if let Some(time) = replay_click {
             self.handle_replay_bar_click(ui.ctx(), time);
         }
-        // Right-click context actions resolve after the chart is shown.
+        // Right-click context actions resolve after the chart is shown. Order entries rest with
+        // the rest of trading during replay.
+        self.menus
+            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
+        self.menus
+            .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(action);
         }
@@ -2037,7 +2060,7 @@ impl DemoApp {
             ContextMenuAction::CopyPrice(price) => {
                 log::info!("[demo] copy price {price}");
             }
-            // Sell limit and buy stop need a broker, which the demo does not have.
+            ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
     }

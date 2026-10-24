@@ -231,6 +231,20 @@ impl BarClock {
         self.timeframe
     }
 
+    /// The trading days of this clock's bars: its exchange sessions, or calendar days in its
+    /// time zone without them.
+    pub(crate) fn sessions(&self) -> super::ExchangeSessionProvider {
+        let sessions = match (&self.session, self.timezone) {
+            (Some(session), _) => session.clone(),
+            (None, Some(zone)) => super::ExchangeSessionProvider::new(
+                super::TimezoneId::named(zone.name()).unwrap_or_else(super::TimezoneId::utc),
+                None,
+            ),
+            (None, None) => super::ExchangeSessionProvider::local(None),
+        };
+        sessions.with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
+    }
+
     /// Whether `a` and `b` fall in the same bar, so a feed may stamp a bar with any instant
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
