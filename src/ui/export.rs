@@ -2,7 +2,7 @@
 //!
 //! This module provides widgets and traits for exporting charts to multiple formats:
 //! - PNG images
-//! - CSV of the bar data
+//! - CSV of the bar data and visible study plots
 //! - Clipboard copy
 //!
 //! # Example
@@ -48,7 +48,7 @@ pub enum ExportFormat {
     Png,
     /// Copy to system clipboard
     Clipboard,
-    /// CSV export of the bar data (time and OHLCV)
+    /// CSV export of loaded bars and visible study plots
     Csv,
 }
 
@@ -105,18 +105,22 @@ pub enum ExportResponse {
 ///
 /// let config = ExportConfig {
 ///     format: ExportFormat::Png,
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExportConfig {
     /// Export format (PNG, CSV or Clipboard)
     pub format: ExportFormat,
+    /// Size, header and background options for PNG and clipboard exports.
+    pub image: crate::widget::export::ImageExportOptions,
 }
 
 impl Default for ExportConfig {
     fn default() -> Self {
         Self {
             format: ExportFormat::Png,
+            image: Default::default(),
         }
     }
 }
@@ -125,6 +129,7 @@ impl Default for ExportConfig {
 ///
 /// The dialog offers:
 /// - Format selection (PNG, CSV, Clipboard)
+/// - Image dimensions, title, timestamp and transparent background
 /// - File save path entry
 ///
 /// The dialog only collects the request; the host performs the export. Use
@@ -329,6 +334,48 @@ impl ExportDialog {
                 .labelled_by(label.id);
                 ui.end_row();
 
+                if !self.config.format.is_data_format() {
+                    ui.label("Image size");
+                    let mut changed = false;
+                    ui.horizontal(|ui| {
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.image.size[0])
+                                    .range(100..=7680)
+                                    .suffix(" px"),
+                            )
+                            .changed();
+                        ui.label("×");
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.image.size[1])
+                                    .range(100..=4320)
+                                    .suffix(" px"),
+                            )
+                            .changed();
+                    });
+                    ui.end_row();
+                    ui.label("Include");
+                    ui.vertical(|ui| {
+                        changed |= ui
+                            .checkbox(&mut self.config.image.include_title, "Chart title")
+                            .changed();
+                        changed |= ui
+                            .checkbox(&mut self.config.image.include_timestamp, "Export timestamp")
+                            .changed();
+                        changed |= ui
+                            .checkbox(
+                                &mut self.config.image.transparent_background,
+                                "Transparent background",
+                            )
+                            .changed();
+                    });
+                    ui.end_row();
+                    if changed {
+                        self.reset_status();
+                    }
+                }
+
                 if self.config.format != ExportFormat::Clipboard {
                     let hint = format!(
                         "File path, such as chart_export.{}",
@@ -357,7 +404,7 @@ impl ExportDialog {
         if self.config.format.is_data_format() {
             ui.add_space(theme.spacing.md);
             ui.label(
-                RichText::new("Exports the bar data: time, open, high, low, close, and volume.")
+                RichText::new("Exports loaded bars and visible study values, using the chart time zone and price precision.")
                     .size(theme.text.small)
                     .color(theme.ui.text_secondary),
             );
@@ -534,6 +581,7 @@ pub trait Exportable {
     fn export_png(&self) -> Result<Vec<u8>, String> {
         self.export(&ExportConfig {
             format: ExportFormat::Png,
+            ..Default::default()
         })
     }
 }

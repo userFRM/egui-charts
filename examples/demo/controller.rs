@@ -17,6 +17,8 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
+#[path = "export.rs"]
+mod export;
 #[path = "replay.rs"]
 mod replay;
 #[path = "templates.rs"]
@@ -127,7 +129,7 @@ enum ScreenshotTarget {
 }
 
 /// A captured screenshot and where it goes.
-type Screenshot = (Arc<egui::ColorImage>, ScreenshotTarget);
+type Screenshot = (Result<Arc<egui::ColorImage>, String>, ScreenshotTarget);
 
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
@@ -222,9 +224,14 @@ pub struct DemoApp {
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
 
-    // A pending screenshot request the egui backend fulfils next frame.
-    screenshot_requested: Option<ScreenshotTarget>,
-    // egui's capture callback sends each screenshot here; the next frame delivers it.
+    // Pending offscreen image options and delivery destination.
+    screenshot_requested: Option<(
+        ScreenshotTarget,
+        egui_charts::widget::export::ImageExportOptions,
+    )>,
+    export_renderer: Option<eframe::egui_wgpu::RenderState>,
+    image_jobs: usize,
+    // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
     saved_drawings: std::collections::HashMap<String, String>,
@@ -399,6 +406,8 @@ impl DemoApp {
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
+            export_renderer: cc.wgpu_render_state.clone(),
+            image_jobs: 0,
             screenshots: mpsc::channel(),
             saved_drawings: cc
                 .storage
@@ -825,34 +834,25 @@ impl DemoApp {
         config: egui_charts::ui::export::ExportConfig,
         save_path: Option<std::path::PathBuf>,
     ) {
-        // Image exports go through egui's screenshot request, which hands the
-        // captured image to `target`.
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        // Capture the next frame after the dialog and any previous notice are gone.
-        self.export_dialog.close();
-        self.toasts.clear();
-        self.screenshot_requested = Some(target);
+        self.screenshot_requested = Some((target, config.image));
         ctx.request_repaint();
     }
 
     fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
         let from_dialog = save_path.is_some();
-        let mut out = String::from("time,open,high,low,close,volume\n");
-        for b in &self.bars {
-            out.push_str(&format!(
-                "{},{},{},{},{},{}\n",
-                b.time.to_rfc3339(),
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume
-            ));
-        }
+        let out = match self.chart.export_csv() {
+            Ok(csv) => csv,
+            Err(error) => {
+                self.export_dialog.mark_error(error.to_string());
+                self.notify(format!("Export failed: {error}"));
+                return;
+            }
+        };
         let path = save_path.unwrap_or_else(|| {
             let filename = format!("{}_export.csv", self.state.symbol);
             #[cfg(not(target_arch = "wasm32"))]
@@ -1142,7 +1142,8 @@ impl DemoApp {
             TopToolbarAction::TakeScreenshot => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                self.screenshot_requested = Some(ScreenshotTarget::File(None));
+                self.screenshot_requested =
+                    Some((ScreenshotTarget::File(None), Default::default()));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -2028,27 +2029,50 @@ impl DemoApp {
         }
     }
 
-    fn request_screenshot(&self, ctx: &egui::Context, target: ScreenshotTarget) {
-        let (sender, repaint) = (self.screenshots.0.clone(), ctx.clone());
-        ctx.request_screenshot(move |image| {
-            // The receiver lives as long as the app, so this fails only during shutdown.
-            let _ = sender.send((image, target));
-            // egui does not repaint when the capture arrives.
-            repaint.request_repaint();
-        });
-    }
-
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if let Some(target) = self.screenshot_requested.take() {
-            self.toasts.clear();
-            self.request_screenshot(ctx, target);
+        if let Some((target, options)) = self.screenshot_requested.take() {
+            let result = self
+                .export_renderer
+                .as_ref()
+                .ok_or_else(|| "Image export requires the GPU renderer".to_owned())
+                .and_then(|renderer| {
+                    let frame = self.chart.export_image(ctx, &options)?;
+                    export::render_image(
+                        renderer,
+                        frame,
+                        target,
+                        self.screenshots.0.clone(),
+                        ctx.clone(),
+                    )
+                });
+            match result {
+                Ok(()) => self.image_jobs += 1,
+                Err(error) => {
+                    self.export_dialog.mark_error(error.clone());
+                    self.notify(format!("Export failed: {error}"));
+                }
+            }
         }
-
-        // Deliver the screenshots captured since the last frame.
+        if self.image_jobs > 0 {
+            if let Some(renderer) = &self.export_renderer {
+                let _ = renderer.device.poll(eframe::wgpu::PollType::Poll);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         while let Ok((image, target)) = self.screenshots.1.try_recv() {
+            self.image_jobs = self.image_jobs.saturating_sub(1);
+            let image = match image {
+                Ok(image) => image,
+                Err(error) => {
+                    self.export_dialog.mark_error(error.clone());
+                    self.notify(format!("Export failed: {error}"));
+                    continue;
+                }
+            };
             match target {
                 ScreenshotTarget::Clipboard => {
                     ctx.copy_image((*image).clone());
+                    self.export_dialog.mark_success();
                     self.notify("Image sent to clipboard");
                 }
                 ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
@@ -2073,7 +2097,7 @@ impl DemoApp {
         let (w, h) = (image.size[0] as u32, image.size[1] as u32);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for px in &image.pixels {
-            rgba.extend_from_slice(&[px.r(), px.g(), px.b(), px.a()]);
+            rgba.extend_from_slice(&px.to_srgba_unmultiplied());
         }
         let result = image::RgbaImage::from_raw(w, h, rgba)
             .ok_or_else(|| "Screenshot buffer size mismatch".to_string())
@@ -2092,9 +2116,11 @@ impl DemoApp {
             });
         match result {
             Ok(()) => {
+                self.export_dialog.mark_success();
                 self.notify(format!("Export successful: {}", path.display()));
             }
             Err(error) => {
+                self.export_dialog.mark_error(error.clone());
                 self.notify(format!("Export failed: {error}"));
             }
         }
