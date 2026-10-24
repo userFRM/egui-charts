@@ -1068,82 +1068,113 @@ mod tests {
                 _ => None,
             })
         }
-        let ctx = egui::Context::default();
-        let mut toolbar = DrawingToolbar::new();
-        let anchor = Rect::from_min_size(Pos2::new(10., 100.), Vec2::splat(40.));
-        let mut previous = "Search icons, emoji and stickers";
-        for (query, glyph) in [
-            ("star", "icon:star"),
-            ("grinning", "😀"),
-            ("idea", "sticker:idea"),
-            ("", "sticker:idea"),
-        ] {
-            toolbar.toggle_category(&ctx, "Icons/Emojis", anchor);
-            frame(&mut toolbar, &ctx, vec![]);
-            let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
-            let input = label(&shapes, previous).expect("the flyout must have a search field");
-            click(&mut toolbar, &ctx, input.center());
-            let modifiers = Modifiers {
-                ctrl: true,
-                command: true,
-                ..Modifiers::NONE
-            };
-            frame(
-                &mut toolbar,
-                &ctx,
-                [true, false]
-                    .map(|pressed| egui::Event::Key {
-                        key: Key::A,
-                        physical_key: None,
-                        pressed,
-                        repeat: false,
-                        modifiers,
-                    })
-                    .to_vec(),
-            );
-            frame(&mut toolbar, &ctx, vec![egui::Event::Text(query.into())]);
-            if query.is_empty() {
-                frame(
-                    &mut toolbar,
-                    &ctx,
-                    [true, false]
-                        .map(|pressed| egui::Event::Key {
-                            key: Key::Backspace,
-                            physical_key: None,
-                            pressed,
-                            repeat: false,
-                            modifiers: Modifiers::NONE,
-                        })
-                        .to_vec(),
-                );
-            }
-            let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
-            if query == "star" {
-                assert!(label(&shapes, "Icons: shapes").is_some());
-                assert!(label(&shapes, "Emoji: symbols").is_some());
-                assert!(label(&shapes, "Emoji: faces").is_none());
-            }
-            if query.is_empty() {
-                assert!(
-                    label(&shapes, "Recent").unwrap().top()
-                        < label(&shapes, "Icons: signals").unwrap().top()
-                );
-            }
-            let cell = shapes
-                .iter()
-                .find_map(|s| match s {
-                    egui::Shape::Rect(r) if r.rect.size() == Vec2::splat(40.0) => {
-                        Some(r.rect.center())
+        for dark in [false, true] {
+            for (width, height) in [(240.0, 320.0), (320.0, 400.0), (1440.0, 900.0)] {
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height));
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.state.glyph_picker.size = 48.0;
+                let anchor = Rect::from_min_size(Pos2::new(10., 100.), Vec2::splat(40.));
+                let mut previous = "Search icons, emoji and stickers";
+                for (query, glyph) in [
+                    ("star", "icon:star"),
+                    ("grinning", "😀"),
+                    ("idea", "sticker:idea"),
+                    ("", "sticker:idea"),
+                ] {
+                    toolbar.toggle_category(&ctx, "Icons/Emojis", anchor);
+                    frame(&mut toolbar, &ctx, vec![]);
+                    let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
+                    let input =
+                        label(&shapes, previous).expect("the flyout must have a search field");
+                    assert!(
+                        screen.contains_rect(input),
+                        "search field outside {screen:?}: {input:?}"
+                    );
+                    click(&mut toolbar, &ctx, input.center());
+                    let modifiers = Modifiers {
+                        ctrl: true,
+                        command: true,
+                        ..Modifiers::NONE
+                    };
+                    frame(
+                        &mut toolbar,
+                        &ctx,
+                        [true, false]
+                            .map(|pressed| egui::Event::Key {
+                                key: Key::A,
+                                physical_key: None,
+                                pressed,
+                                repeat: false,
+                                modifiers,
+                            })
+                            .to_vec(),
+                    );
+                    frame(&mut toolbar, &ctx, vec![egui::Event::Text(query.into())]);
+                    if query.is_empty() {
+                        frame(
+                            &mut toolbar,
+                            &ctx,
+                            [true, false]
+                                .map(|pressed| egui::Event::Key {
+                                    key: Key::Backspace,
+                                    physical_key: None,
+                                    pressed,
+                                    repeat: false,
+                                    modifiers: Modifiers::NONE,
+                                })
+                                .to_vec(),
+                        );
                     }
-                    _ => None,
-                })
-                .unwrap();
-            let action = click(&mut toolbar, &ctx, cell);
-            assert_eq!(
-                format!("{action:?}"),
-                format!("Some(InsertGlyph {{ icon_name: {glyph:?}, size: 32.0 }})")
-            );
-            previous = query;
+                    let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
+                    if query == "star" {
+                        assert!(label(&shapes, "Icons: shapes").is_some());
+                        assert!(label(&shapes, "Emoji: symbols").is_some());
+                        assert!(label(&shapes, "Emoji: faces").is_none());
+                    }
+                    if query.is_empty() {
+                        assert!(
+                            label(&shapes, "Recent").unwrap().top()
+                                < label(&shapes, "Icons: signals").unwrap().top()
+                        );
+                    }
+                    let cell = shapes
+                        .iter()
+                        .find_map(|s| match s {
+                            egui::Shape::Rect(r) if r.rect.size() == Vec2::splat(40.0) => {
+                                Some(r.rect.center())
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(
+                        screen.contains(cell),
+                        "first glyph outside {screen:?}: {cell:?}"
+                    );
+                    let action = click(&mut toolbar, &ctx, cell);
+                    assert_eq!(
+                        action,
+                        Some(DrawingToolbarAction::InsertGlyph {
+                            icon_name: glyph,
+                            size: 48.0
+                        })
+                    );
+                    previous = query;
+                }
+            }
         }
     }
 
