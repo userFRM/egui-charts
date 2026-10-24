@@ -40,7 +40,8 @@ pub(crate) mod state;
 
 // Axis composition for hosts that allocate their own pane and input regions.
 pub use renderers::{
-    RenderContext, render_axis_currency, render_crosshair_full, render_event_band,
+    RenderContext, alert_shortcut_price, render_alert_levels, render_axis_currency,
+    render_crosshair_full, render_event_band,
 };
 #[cfg(feature = "icons")]
 pub use rendering::axes::{axis_settings_button, crosshair_price_action};

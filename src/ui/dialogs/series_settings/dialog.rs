@@ -5,10 +5,7 @@ use egui::{Context, Ui, Vec2};
 
 use super::actions::SeriesSettingsAction;
 use super::config::SeriesSettingsConfig;
-use super::tabs::{
-    AlertsTab, CanvasTab, EventsTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab,
-    TradingTab,
-};
+use super::tabs::{CanvasTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab};
 use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::DialogFooter;
@@ -138,9 +135,6 @@ impl SeriesSettingsDialog {
                                 SeriesSettingsTab::StatusLine => StatusLineTab::show(ui, settings),
                                 SeriesSettingsTab::ScalesAndLines => ScalesTab::show(ui, settings),
                                 SeriesSettingsTab::Canvas => CanvasTab::show(ui, settings),
-                                SeriesSettingsTab::Trading => TradingTab::show(ui, settings),
-                                SeriesSettingsTab::Alerts => AlertsTab::show(ui, settings),
-                                SeriesSettingsTab::Events => EventsTab::show(ui, settings),
                             }
                         });
                 },
@@ -220,7 +214,9 @@ mod tests {
                                 if matches!(text.galley.text(), "Border" | "Wick")
                             )
                         });
+                        let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Alerts" | "Events" | "Coming soon")));
                         output.drop_without_applying_deltas();
+                        assert!(!inactive, "placeholder settings must not be offered");
                         if frame > 0 {
                             if kind == ChartType::Renko {
                                 assert!(

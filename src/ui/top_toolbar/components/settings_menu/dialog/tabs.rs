@@ -593,16 +593,39 @@ impl SettingsDialog {
         });
     }
 
-    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
-        ui.label("Trading overlays are supplied by the host application.");
-    }
+    pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
+        ui.horizontal(|ui| {
+            ui.add_space(0.0);
+            ui.vertical(|ui| {
+                self.draw_section_header(ui, "ALERT SETTINGS", style);
 
-    pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
-        ui.label("Alert display is managed by the host application.");
-    }
+                self.draw_setting_row_with_controls(ui, "Color", style, |ui, dialog| {
+                    if let Some(color) =
+                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert")
+                            .show(ui)
+                            .inner
+                    {
+                        dialog.settings.alerts.alert_color = color;
+                    }
+                });
 
-    pub(super) fn draw_events_tab(&mut self, ui: &mut Ui, _style: &SettingsDialogStyle) {
-        ui.label("Event markers are supplied by the host application.");
+                ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.section_spacing);
+                self.draw_section_header(ui, "VISIBILITY", style);
+
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.alerts.show_alerts,
+                    "Show alerts",
+                    style.val_text,
+                );
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.alerts.show_alert_labels,
+                    "Show alert labels",
+                    style.val_text,
+                );
+            });
+        });
     }
 
     pub(super) fn draw_section_header(

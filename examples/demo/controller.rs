@@ -19,15 +19,15 @@ mod live;
 use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::selection::SeriesId;
-use egui_charts::model::{Alert, AlertCondition, AlertFrequency};
+use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction};
 use egui_charts::ui::dialogs::{
-    AlertData, AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction,
-    DrawingPropertiesDialog, DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction,
-    SeriesSettingsAction, SeriesSettingsDialog,
+    AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
+    DrawingProps, KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction,
+    SeriesSettingsDialog,
 };
 use egui_charts::ui::dialogs::{DrawingContextMenuAction, DrawingLineStyle};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
@@ -179,6 +179,7 @@ pub struct DemoApp {
 
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
+    alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -313,6 +314,7 @@ impl DemoApp {
             open_panel: None,
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
+            alert_host: Arc::default(),
             replay: None,
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -320,8 +322,8 @@ impl DemoApp {
             screenshots: mpsc::channel(),
             toasts: Toasts::new(),
         };
-        app.alerts
-            .set_service(Arc::new(crate::panel_alerts::DemoAlerts::default()));
+        app.alerts.set_service(app.alert_host.clone());
+        app.alert_dialog.set_storage(app.alert_host.clone());
         app.apply_session();
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
         app
@@ -551,33 +553,56 @@ impl DemoApp {
 
     // --- alerts ------------------------------------------------------------
 
-    fn add_price_alert(&mut self, data: AlertData) {
-        if let AlertData::Price {
-            symbol,
-            price,
-            condition,
-            message,
-            repeating,
-        } = data
-        {
-            let mut alert = Alert::new(symbol, condition_from_label(&condition, price));
-            alert.message = message;
-            alert.frequency = if repeating {
-                AlertFrequency::EveryTime
-            } else {
-                AlertFrequency::Once
-            };
-            self.alerts.save(alert);
-        } else {
-            self.notify(
-                "This session store accepts price alerts; other conditions need a host evaluator",
-            );
-        }
+    fn open_alert(&mut self, price: Option<f64>) {
+        use egui_charts::model::AlertSource;
+        self.alert_dialog.sources = self
+            .chart
+            .indicators()
+            .flat_map(|(id, study)| {
+                study
+                    .line_names()
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(output, name)| {
+                        (
+                            AlertSource::Study {
+                                id: id.0.to_string(),
+                                output,
+                            },
+                            format!("{}: {name}", study.name()),
+                        )
+                    })
+            })
+            .chain(
+                self.chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| {
+                        use egui_charts::drawings::DrawingToolType::*;
+                        d.completed
+                            && matches!(
+                                d.tool_type,
+                                HorizontalLine | HorizontalRay | TrendLine | Ray | ExtendedLine
+                            )
+                    })
+                    .map(|d| {
+                        (
+                            AlertSource::Drawing(d.id.to_string()),
+                            format!("Drawing {}", d.id),
+                        )
+                    }),
+            )
+            .collect();
+        let price = price
+            .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
+            .unwrap_or(0.0);
+        self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
         self.alerts
-            .save(Alert::new(symbol, AlertCondition::CrossingUp(price)));
+            .save(Alert::new(symbol, AlertCondition::Crossing(price)));
     }
 
     // --- selection / context helpers --------------------------------------
@@ -719,7 +744,7 @@ impl DemoApp {
 
         // Alert creation.
         match self.alert_dialog.show(ctx) {
-            AlertDialogAction::Create(data) => self.add_price_alert(data),
+            AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
         }
 
@@ -1117,7 +1142,7 @@ impl DemoApp {
             TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
             TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
-            TopToolbarAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            TopToolbarAction::CreateAlert => self.open_alert(None),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
@@ -1309,12 +1334,20 @@ impl DemoApp {
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
                     != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
+                let mode = if dm.options.magnet_mode {
+                    egui_charts::config::CrosshairMode::Magnet
+                } else {
+                    egui_charts::config::CrosshairMode::Normal
+                };
+                self.chart.set_crosshair_mode(mode);
             }
             DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
                 dm.options.strong_magnet =
                     kind != egui_charts::ui::drawing_toolbar::MagnetType::Weak;
                 dm.update_snap_options();
+                self.chart
+                    .set_crosshair_mode(egui_charts::config::CrosshairMode::Magnet);
             }
             DrawingToolbarAction::ToggleEraserMode => {
                 let on = !dm.eraser_mode;
@@ -1458,28 +1491,7 @@ impl DemoApp {
     }
 
     fn build_data_window(&self) -> DataWindowInfo {
-        let bars = self.chart.state().shown();
-        let index = self
-            .chart
-            .get_hover_bar_idx()
-            .filter(|index| index.is_finite() && index.round() >= 0.0)
-            .map(|index| index.round() as usize)
-            .filter(|index| *index < bars.len())
-            .unwrap_or_else(|| bars.len().saturating_sub(1));
-        let last = bars.get(index);
-        let mut info = DataWindowInfo::new(self.state.symbol.clone())
-            .with_timeframe(self.state.timeframe.as_str().to_string());
-        if let Some(instrument) = self.chart.instrument() {
-            info = info.with_instrument(instrument);
-        }
-        if let Some(b) = last {
-            info = info.with_ohlcv(b.open, b.high, b.low, b.close, b.volume);
-            info = info.with_timestamp(self.chart.format_time(b.time));
-            if let Some(previous) = index.checked_sub(1).and_then(|index| bars.get(index)) {
-                info = info.with_prev_close(previous.close);
-            }
-        }
-        info
+        DataWindowInfo::from_chart(&self.chart)
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -1518,7 +1530,11 @@ impl DemoApp {
 
     fn show_alerts_panel(&mut self, ui: &mut egui::Ui) {
         match self.alerts.show(ui) {
-            AlertPanelAction::CreateAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            AlertPanelAction::CreateAlert => self.open_alert(None),
+            AlertPanelAction::EditAlert(alert) => {
+                self.open_alert(None);
+                self.alert_dialog.edit(*alert);
+            }
             AlertPanelAction::ExportLog(csv) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let path = std::env::temp_dir().join("alerts.csv");
@@ -1694,6 +1710,20 @@ impl DemoApp {
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
+                if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
+                let mapping = self.chart.get_chart_mapping();
+                if self.settings_state.alerts.show_alerts {
+                    let decimals = self.chart.instrument().and_then(egui_charts::scales::instrument_price_precision).map(usize::from).unwrap_or(2);
+                    let currency = self.chart.instrument().and_then(|i| i.currency.as_deref()).unwrap_or("");
+                    if let Some(alert) = egui_charts::chart::render_alert_levels(
+                        ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
+                        self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        |price| format!("{price:.decimals$} {currency}"),
+                    ) { self.alerts.save(alert); }
+                }
+                if let Some(price) = egui_charts::chart::alert_shortcut_price(ui, &mapping) {
+                    self.quick_price_alert(self.chart.symbol().to_owned(), price);
+                }
                 if let Some(id) = self.chart.take_indicator_settings_request() {
                     self.open_indicator_settings(id);
                 }
@@ -1750,7 +1780,7 @@ impl DemoApp {
         match action {
             SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => self.indicator_dialog.open(),
-            SeriesContextMenuAction::AddAlert => self.alert_dialog.open(self.state.symbol.clone()),
+            SeriesContextMenuAction::AddAlert => self.open_alert(None),
             _ => {}
         }
     }
@@ -1949,16 +1979,6 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
-}
-
-fn condition_from_label(label: &str, price: f64) -> AlertCondition {
-    match label {
-        "Crossing" => AlertCondition::Crossing(price),
-        "Crossing Up" => AlertCondition::CrossingUp(price),
-        "Crossing Down" => AlertCondition::CrossingDown(price),
-        "Less Than" => AlertCondition::Below(price),
-        _ => AlertCondition::Above(price),
-    }
 }
 
 fn line_style_from_dialog(style: DrawingLineStyle) -> egui_charts::drawings::LineStyle {
@@ -2183,6 +2203,125 @@ mod tests {
     }
 
     #[test]
+    fn alt_a_creates_a_host_alert_at_the_hovered_price_and_dragging_submits_its_new_level() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let frame = |app: &mut DemoApp, events: Vec<egui::Event>, covered: bool| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_chart(ui, egui::Color32::BLACK);
+                    if covered {
+                        egui::Window::new("Settings overlay")
+                            .fixed_pos(
+                                app.chart.get_chart_mapping().rect.center()
+                                    - egui::vec2(50.0, 50.0),
+                            )
+                            .show(ui.ctx(), |ui| {
+                                ui.label("Settings");
+                            });
+                    }
+                },
+            )
+            .drop_without_applying_deltas();
+            app.alerts.poll(&ctx, &mut app.toasts);
+        };
+        frame(&mut app, vec![], false);
+        frame(&mut app, vec![], false);
+        let map = app.chart.get_chart_mapping();
+        let point = egui::pos2(map.rect.center().x, map.rect.center().y);
+        let range = map.price.range();
+        let expected = (range.min + range.max) / 2.0;
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::ALT,
+                },
+            ],
+            false,
+        );
+        assert_eq!(app.alerts.alerts().len(), 1);
+        assert_eq!(
+            app.alerts.alerts()[0].condition,
+            AlertCondition::Crossing(expected)
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            false,
+        );
+        let target = point + egui::vec2(0.0, 45.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let scale = app.chart.get_time_scale_state();
+        frame(&mut app, vec![button(point, true)], false);
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 5.0))],
+            false,
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(target)], false);
+        frame(&mut app, vec![button(target, false)], false);
+        let AlertCondition::Crossing(level) = app.alerts.alerts()[0].condition else {
+            panic!("expected crossing");
+        };
+        let expected_drag =
+            expected - 45.0 / f64::from(map.rect.height()) * (range.max - range.min);
+        assert!(
+            (level - expected_drag).abs() < 1e-6,
+            "{level} expected {expected_drag}"
+        );
+        assert_eq!(
+            app.chart.get_time_scale_state(),
+            scale,
+            "dragging an alert must not pan the chart"
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(point)], true);
+        frame(&mut app, vec![], true);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::ALT,
+            }],
+            true,
+        );
+        assert_eq!(
+            app.alerts.alerts().len(),
+            1,
+            "a covering window owns the hovered point"
+        );
+    }
+
+    /// External chart modes and completed drawings are reflected before the toolbar is painted.
+    #[test]
     fn drawing_toolbar_follows_chart_modes_and_completed_tools() {
         use egui_charts::config::CrosshairStyle;
         use egui_charts::drawings::DrawingToolType;
@@ -2275,7 +2414,9 @@ mod tests {
                         "width {width}, scale {scale}"
                     );
                     assert!(
-                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5
+                        (time_scale.right_offset() - (65.0 - 6.1 * 0.5 - 1.0) / 6.1).abs() < 1e-5,
+                        "width {width}, scale {scale}: offset {}",
+                        time_scale.right_offset()
                     );
                 }
             }
@@ -2561,6 +2702,30 @@ mod tests {
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.chart.set_feed_paused(true);
             app.chart.set_chart_type(kind);
+            use egui_charts::studies::{CustomIndicator, IndicatorValue, SMA};
+            let average = app.chart.add_indicator(Box::new(SMA::new(2)));
+            let study = app.chart.indicator_mut(average).unwrap();
+            let mut settings = study.settings();
+            settings.precision = Some(3);
+            study.apply_settings(&[], settings).unwrap();
+            let gap = app.chart.add_indicator(Box::new(
+                CustomIndicator::new("Gap", |bars| {
+                    vec![IndicatorValue::Multiple(vec![f64::NAN, 42.125]); bars.len()]
+                })
+                .with_overlay(false)
+                .with_line_cnt(2)
+                .with_line_names(vec!["Missing".into(), "Hidden plot".into()]),
+            ));
+            let study = app.chart.indicator_mut(gap).unwrap();
+            let mut settings = study.settings();
+            settings.plots[1].visible = false;
+            study.apply_settings(&[], settings).unwrap();
+            let hidden = app
+                .chart
+                .add_indicator(Box::new(CustomIndicator::new("Invisible", |bars| {
+                    vec![IndicatorValue::Single(123.0); bars.len()]
+                })));
+            app.chart.set_indicator_visible(hidden, false);
             let frame = |app: &mut DemoApp, events| {
                 ctx.run_ui(
                     egui::RawInput {
@@ -2599,6 +2764,46 @@ mod tests {
                 "{kind:?}"
             );
             assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+            });
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let studies_visible = kind == ChartType::Candles;
+            assert_eq!(
+                text.iter().any(|text| text == "SMA: SMA(2)"),
+                studies_visible,
+                "{text:?}"
+            );
+            if studies_visible {
+                // The two-bar average is the sum of these closes divided by two.
+                assert!(
+                    text.contains(&format!(
+                        "{:.3}",
+                        (bars[index - 1].close + bars[index].close) / 2.0
+                    )),
+                    "{text:?}"
+                );
+                assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
+                assert!(text.iter().any(|text| text == "∅"), "{text:?}");
+            }
+            assert!(
+                !text
+                    .iter()
+                    .any(|text| text == "Invisible" || text.contains("Hidden plot")),
+                "{text:?}"
+            );
+            let latest = bars.last().unwrap().close;
+            frame(&mut app, vec![egui::Event::PointerGone]);
+            assert_eq!(app.build_data_window().close, latest);
+            app.open_chart_settings_dialog();
             let mut settings = app.settings_state.clone();
             settings.timezone = "Europe/Paris".to_owned();
             let view = app.chart.get_time_scale_state();

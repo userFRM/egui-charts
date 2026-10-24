@@ -31,7 +31,7 @@ use std::collections::HashSet;
 
 /// Modal settings dialog with tabbed interface.
 ///
-/// Edits chart display settings. Host-managed trading, alerts and events have no editable controls.
+/// Edits chart display settings and host alert-overlay visibility, labels and colour.
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -70,6 +70,7 @@ struct ColorPickerStates {
     crosshair: ColorPickerState,
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
+    alert: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -103,6 +104,7 @@ impl SettingsDialog {
                 crosshair: ColorPickerState::new(settings.crosshair.color),
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
+                alert: ColorPickerState::new(settings.alerts.alert_color),
             },
             margin_top_str: format!("{}", settings.margins.top_percent),
             margin_bottom_str: format!("{}", settings.margins.bottom_percent),
@@ -165,6 +167,8 @@ impl SettingsDialog {
         self.color_picker_states.watermark.sel_color = self.settings.watermark.color;
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
 
+        self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
+
         self.margin_top_str = format!("{}", self.settings.margins.top_percent);
         self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);
         self.margin_right_str = format!("{}", self.settings.margins.right_bars);
@@ -219,7 +223,6 @@ impl SettingsDialog {
         } else {
             match self.active_tab {
                 SettingsTab::Symbol => 616.0,
-                SettingsTab::Events => 560.0,
                 SettingsTab::Alerts => 500.0,
                 _ => 840.0,
             }
@@ -300,9 +303,7 @@ impl SettingsDialog {
                                     self.draw_scales_and_lines_tab(ui, style)
                                 }
                                 SettingsTab::Canvas => self.draw_canvas_tab(ui, style),
-                                SettingsTab::Trading => self.draw_trading_tab(ui, style),
                                 SettingsTab::Alerts => self.draw_alerts_tab(ui, style),
-                                SettingsTab::Events => self.draw_events_tab(ui, style),
                             }
                         });
                 },
@@ -616,7 +617,9 @@ mod tests {
                         }
                         _ => None,
                     });
+                    let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Events")));
                     output.drop_without_applying_deltas();
+                    assert!(!inactive, "inactive settings must not be offered");
                     assert_eq!(dialog.settings, settings);
                     assert_eq!(
                         dialog.color_picker_states.background.sel_color,

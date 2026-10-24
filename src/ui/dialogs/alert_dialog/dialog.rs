@@ -1,58 +1,42 @@
-//! Alert creation dialog - modal popup for creating alerts.
+//! Typed alert editing. Hosts supply output identifiers, watchlists and optional preset storage.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
 use egui::{Context, Ui};
 
-use super::actions::{AlertData, AlertDialogAction};
-use super::config::AlertDialogConfig;
-use super::fields;
-use super::tabs::AlertTab;
-use crate::ext::UiExt;
+use super::{AlertDialogAction, AlertDialogConfig};
+use crate::data::{FeedError, inbox::Inbox};
+use crate::model::{
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource,
+};
+use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_header};
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::status_message::{MessageKind, status_message};
-use crate::ui_kit::tab_bar::TabBar;
 
-/// Form data for price alerts
-#[derive(Clone, Debug, Default)]
-pub struct PriceAlertFormData {
-    pub symbol: String,
-    pub price: String,
-    pub condition: String,
-    pub message: String,
-    pub repeating: bool,
-}
-
-/// Form data for indicator alerts
-#[derive(Clone, Debug, Default)]
-pub struct IndicatorAlertFormData {
-    pub symbol: String,
-    pub indicator_a: String,
-    pub indicator_b: String,
-    pub use_threshold: bool,
-    pub threshold: String,
-    pub condition: String,
-    pub message: String,
-    pub repeating: bool,
-}
-
-/// Form data for volume alerts
-#[derive(Clone, Debug, Default)]
-pub struct VolumeAlertFormData {
-    pub symbol: String,
-    pub multiplier: String,
-    pub lookback: String,
-    pub message: String,
-}
-
-/// Alert creation dialog
+/// A dialog that creates or edits the same alert type the host stores and evaluates.
 pub struct AlertDialog {
+    /// Layout dimensions.
     pub config: AlertDialogConfig,
+    /// Whether the modal is visible.
     pub is_open: bool,
-    pub active_tab: AlertTab,
-    pub price_form: PriceAlertFormData,
-    pub indicator_form: IndicatorAlertFormData,
-    pub volume_form: VolumeAlertFormData,
+    /// Staged edits. Cancel never submits them.
+    pub alert: Alert,
+    /// Host-provided study outputs and drawings, as stable identifiers and display names.
+    pub sources: Vec<(AlertSource, String)>,
+    /// Host-provided watchlist identifiers and display names.
+    pub watchlists: Vec<(String, String)>,
+    expires: String,
+    preset_name: String,
+    presets: BTreeMap<String, Alert>,
+    storage: Option<Arc<dyn Storage>>,
+    inbox: Arc<Inbox>,
+    pending: bool,
+    loaded: bool,
+    error: Option<String>,
 }
 
 impl Default for AlertDialog {
@@ -62,491 +46,647 @@ impl Default for AlertDialog {
 }
 
 impl AlertDialog {
+    /// An initially closed dialog, without host catalogs or storage.
     pub fn new() -> Self {
         Self {
             config: AlertDialogConfig::default(),
             is_open: false,
-            active_tab: AlertTab::Price,
-            price_form: PriceAlertFormData {
-                condition: "Crossing".to_string(),
-                ..Default::default()
-            },
-            indicator_form: IndicatorAlertFormData {
-                condition: "Greater Than".to_string(),
-                ..Default::default()
-            },
-            volume_form: VolumeAlertFormData {
-                multiplier: "2".to_string(),
-                lookback: "20".to_string(),
-                ..Default::default()
-            },
+            alert: Alert::new("", AlertCondition::Crossing(0.0)),
+            sources: Vec::new(),
+            watchlists: Vec::new(),
+            expires: String::new(),
+            preset_name: String::new(),
+            presets: BTreeMap::new(),
+            storage: None,
+            inbox: Arc::default(),
+            pending: false,
+            loaded: false,
+            error: None,
         }
     }
 
-    /// Open the dialog with default symbol
-    pub fn open(&mut self, symbol: String) {
-        self.is_open = true;
-        self.price_form.symbol = symbol.clone();
-        self.indicator_form.symbol = symbol.clone();
-        self.volume_form.symbol = symbol;
+    /// Load presets from the host storage service. A failed load never permits overwriting it.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.inbox = Arc::default();
+        self.presets.clear();
+        self.error = None;
+        self.loaded = false;
+        self.pending = true;
+        storage.load(StoreKind::AlertPresets, "presets", self.inbox.reply(1));
+        self.storage = Some(storage);
     }
 
-    /// Close the dialog
+    /// Open a fresh price alert at the last or hovered price, discarding earlier cancelled edits.
+    pub fn open(&mut self, symbol: String, price: f64) {
+        self.edit(Alert::new(symbol, AlertCondition::Crossing(price)));
+    }
+
+    /// Stage an existing alert, retaining its host identifier and status when saved.
+    pub fn edit(&mut self, alert: Alert) {
+        self.expires = alert.expires.map(|t| t.to_rfc3339()).unwrap_or_default();
+        self.alert = alert;
+        self.is_open = true;
+    }
+
+    /// Dismiss without saving.
     pub fn close(&mut self) {
         self.is_open = false;
     }
 
-    /// Sync dialog open/close state from an external flag.
-    ///
-    /// Opening requires symbol context, so only close is synced here.
+    /// Follow an external close flag.
     pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if !should_be_open && self.is_open {
+        if !should_be_open {
             self.close();
         }
     }
 
-    /// Show the dialog
+    fn poll(&mut self, ctx: &Context) {
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        for (key, answer) in self.inbox.drain().answers {
+            self.pending = false;
+            if key == 1 {
+                let result = *answer
+                    .downcast::<Result<Option<String>, FeedError>>()
+                    .expect("preset load");
+                match result {
+                    Ok(document) => {
+                        let result = document
+                            .map(|doc| serde_json::from_str::<PresetDocument>(&doc))
+                            .transpose();
+                        match result {
+                            Ok(doc) if doc.as_ref().is_none_or(|doc| doc.version == 1) => {
+                                self.presets = doc.map(|doc| doc.presets).unwrap_or_default();
+                                self.loaded = true;
+                            }
+                            Ok(_) => self.error = Some("Unsupported alert preset version".into()),
+                            Err(error) => self.error = Some(error.to_string()),
+                        }
+                    }
+                    Err(error) => self.error = Some(error.to_string()),
+                }
+            } else if let Err(error) = *answer
+                .downcast::<Result<(), FeedError>>()
+                .expect("preset save")
+            {
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn save_preset(&mut self) {
+        self.presets
+            .insert(self.preset_name.trim().into(), self.alert.clone());
+        let document = PresetDocument {
+            version: 1,
+            presets: self.presets.clone(),
+        };
+        match serde_json::to_string(&document) {
+            Ok(document) => {
+                if let Some(storage) = &self.storage {
+                    self.pending = true;
+                    self.error = None;
+                    storage.save(
+                        StoreKind::AlertPresets,
+                        "presets",
+                        document,
+                        self.inbox.reply(2),
+                    );
+                }
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    /// Poll preset replies and render the modal. Submit `Create` through the host alerts service.
     pub fn show(&mut self, ctx: &Context) -> AlertDialogAction {
+        self.poll(ctx);
         if !self.is_open {
             return AlertDialogAction::None;
         }
-
         let mut action = AlertDialogAction::None;
-
+        let title = if self.alert.id.is_some() {
+            "Edit Alert"
+        } else {
+            "Create Alert"
+        };
         let mut open = true;
         Modal::new("create_alert", "")
             .width(self.config.width + 32.0)
-            .height(self.config.height + 32.0)
+            .height(self.config.height + 130.0)
             .show(ctx, &mut open, |ui| {
-                action = self.render_contents(ui);
+                if dialog_header(ui, title) {
+                    self.close();
+                    action = AlertDialogAction::Cancel;
+                }
+                ui.separator();
+                let mut expiry = Ok(None);
+                let mut valid = false;
+                egui::ScrollArea::vertical()
+                    .max_height(
+                        (ui.available_height() - 65.0)
+                            .min(self.config.height)
+                            .max(0.0),
+                    )
+                    .show(ui, |ui| {
+                        self.form(ui);
+                        expiry = if self.expires.trim().is_empty() {
+                            Ok(None)
+                        } else {
+                            DateTime::parse_from_rfc3339(self.expires.trim())
+                                .map(|t| Some(t.with_timezone(&Utc)))
+                        };
+                        valid = self.alert.is_valid() && expiry.is_ok();
+                        if !valid {
+                            status_message(
+                                ui,
+                                MessageKind::Error,
+                                "Check the subject, levels, lookback and expiry (RFC 3339)",
+                            );
+                        }
+                        if let Some(error) = &self.error {
+                            status_message(ui, MessageKind::Error, error);
+                        }
+                    });
+                let (save, cancel) = DialogFooter::new("Save alert")
+                    .secondary("Cancel")
+                    .primary_enabled(valid)
+                    .show(ui);
+                if cancel {
+                    self.close();
+                    action = AlertDialogAction::Cancel;
+                }
+                if save {
+                    self.alert.expires = expiry.unwrap();
+                    action = AlertDialogAction::Create(Box::new(self.alert.clone()));
+                    self.close();
+                }
             });
         if !open {
-            self.is_open = false;
+            self.close();
             action = AlertDialogAction::Cancel;
         }
-
         action
     }
 
-    fn render_contents(&mut self, ui: &mut Ui) -> AlertDialogAction {
-        let mut action = AlertDialogAction::None;
-
-        // Title bar
-        if dialog_header(ui, "Create Alert") {
-            action = AlertDialogAction::Cancel;
-            self.is_open = false;
-        }
-        ui.separator();
-
-        // Tabs
-        ui.space_sm();
-        TabBar::new(&AlertTab::all(), &mut self.active_tab).show(ui);
-
-        // Content area
-        egui::ScrollArea::vertical()
-            .max_height((ui.available_height() - 80.0).max(0.0))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.space_lg();
-                match self.active_tab {
-                    AlertTab::Price => self.render_price_form(ui),
-                    AlertTab::Indicator => self.render_indicator_form(ui),
-                    AlertTab::Volume => self.render_volume_form(ui),
-                }
-                ui.space_lg();
-            });
-
-        let form = self.collect_form_data();
-        let (create, cancel) = DialogFooter::new("Create")
-            .secondary("Cancel")
-            .primary_enabled(form.is_ok())
-            .show_with_left(ui, |ui| {
-                if let Err(error) = &form {
-                    status_message(ui, MessageKind::Error, error);
-                }
-            });
-        if cancel {
-            action = AlertDialogAction::Cancel;
-            self.is_open = false;
-        } else if create && let Ok(data) = form {
-            action = AlertDialogAction::Create(data);
-            self.is_open = false;
-        }
-
-        action
-    }
-
-    fn input_width(&self, ui: &Ui) -> f32 {
+    fn form(&mut self, ui: &mut Ui) {
         let label_width = ui
             .painter()
             .layout_no_wrap(
-                match self.active_tab {
-                    AlertTab::Price => "Condition:",
-                    AlertTab::Indicator => "Compare to:",
-                    AlertTab::Volume => "Multiplier:",
-                }
-                .into(),
+                "Expiry (optional)".into(),
                 egui::TextStyle::Body.resolve(ui.style()),
                 ui.visuals().text_color(),
             )
             .size()
             .x;
-        (ui.available_width() - label_width - self.config.row_spacing).max(0.0)
-    }
-
-    fn render_price_form(&mut self, ui: &mut Ui) {
-        let input_width = self.input_width(ui);
-        FormGrid::new("price_alert_form")
-            .spacing(self.config.row_spacing, self.config.row_spacing)
-            .show(ui, |ui| {
-                ui.label("Symbol:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.price_form.symbol)
-                        .desired_width(input_width),
-                );
-                ui.end_row();
-
-                ui.label("Price:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.price_form.price)
-                        .desired_width(input_width),
-                );
-                ui.end_row();
-
-                ui.label("Condition:");
-                ui.combo_str_select_width(
-                    "price_condition",
-                    &mut self.price_form.condition,
-                    &[
-                        "Crossing",
-                        "Crossing Up",
-                        "Crossing Down",
-                        "Greater Than",
-                        "Less Than",
-                    ],
-                    input_width,
-                );
-                ui.end_row();
-
-                ui.label("Message:");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.price_form.message)
-                        .desired_width(input_width)
-                        .desired_rows(2),
-                );
-                ui.end_row();
-
-                ui.label("Options:");
-                ui.checkbox(&mut self.price_form.repeating, "Only trigger once");
-                ui.end_row();
-            });
-    }
-
-    fn render_indicator_form(&mut self, ui: &mut Ui) {
-        let input_width = self.input_width(ui);
-        FormGrid::new("indicator_alert_form")
-            .spacing(self.config.row_spacing, self.config.row_spacing)
-            .show(ui, |ui| {
-                ui.label("Symbol:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.indicator_form.symbol)
-                        .desired_width(input_width),
-                );
-                ui.end_row();
-
-                ui.label("Indicator A:");
-                ui.combo_str_select_width(
-                    "indicator_a",
-                    &mut self.indicator_form.indicator_a,
-                    &["SMA(20)", "EMA(20)", "RSI(14)", "MACD", "Volume"],
-                    input_width,
-                );
-                ui.end_row();
-
-                ui.label("Compare to:");
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.radio_value(&mut self.indicator_form.use_threshold, false, "Indicator");
-                    ui.radio_value(&mut self.indicator_form.use_threshold, true, "Value");
+        ui.spacing_mut().text_edit_width =
+            (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
+        FormGrid::new("alert_details").show(ui, |ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.alert.name);
+            ui.end_row();
+            ui.label("Symbol");
+            ui.text_edit_singleline(&mut self.alert.symbol);
+            ui.end_row();
+            ui.label("Watchlist");
+            egui::ComboBox::from_id_salt("alert_watchlist")
+                .width(ui.spacing().text_edit_width)
+                .truncate()
+                .selected_text(
+                    self.alert
+                        .watchlist
+                        .as_ref()
+                        .and_then(|id| {
+                            self.watchlists
+                                .iter()
+                                .find(|(key, _)| key == id)
+                                .map(|(_, name)| name.as_str())
+                        })
+                        .unwrap_or(self.alert.watchlist.as_deref().unwrap_or("One symbol")),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.alert.watchlist, None, "One symbol");
+                    for (id, name) in &self.watchlists {
+                        ui.selectable_value(&mut self.alert.watchlist, Some(id.clone()), name);
+                    }
                 });
-                ui.end_row();
-
-                if self.indicator_form.use_threshold {
-                    ui.label("Value:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.indicator_form.threshold)
-                            .desired_width(input_width),
-                    );
-                    ui.end_row();
-                } else {
-                    ui.label("Indicator B:");
-                    ui.combo_str_select_width(
-                        "indicator_b",
-                        &mut self.indicator_form.indicator_b,
-                        &["SMA(50)", "EMA(50)", "Price", "Volume MA"],
-                        input_width,
-                    );
-                    ui.end_row();
+            ui.end_row();
+            ui.label("Frequency");
+            egui::ComboBox::from_id_salt("alert_frequency")
+                .selected_text(self.alert.frequency.to_string())
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (AlertFrequency::Once, "Only once"),
+                        (AlertFrequency::EveryTime, "Every time"),
+                        (AlertFrequency::OncePerBar, "Once per bar"),
+                        (AlertFrequency::OncePerBarClose, "Once per bar close"),
+                    ] {
+                        ui.selectable_value(&mut self.alert.frequency, value, label);
+                    }
+                });
+            ui.end_row();
+            ui.label("Expiry (optional)");
+            ui.text_edit_singleline(&mut self.expires);
+            ui.end_row();
+            ui.label("Message");
+            ui.text_edit_multiline(&mut self.alert.message);
+            ui.end_row();
+        });
+        ui.separator();
+        ui.label("All conditions must hold on the same bar");
+        ui.push_id("first", |ui| {
+            rule_form(
+                ui,
+                &mut self.alert.source,
+                &mut self.alert.condition,
+                &self.sources,
+            )
+        });
+        let mut remove = None;
+        for (index, rule) in self.alert.additional_conditions.iter_mut().enumerate() {
+            ui.push_id(index, |ui| {
+                ui.separator();
+                rule_form(ui, &mut rule.source, &mut rule.condition, &self.sources);
+                if ui.button("Remove condition").clicked() {
+                    remove = Some(index);
                 }
-
-                ui.label("Condition:");
-                ui.combo_str_select_width(
-                    "indicator_condition",
-                    &mut self.indicator_form.condition,
-                    &[
-                        "Greater Than",
-                        "Less Than",
-                        "Crossing",
-                        "Crossing Up",
-                        "Crossing Down",
-                    ],
-                    input_width,
-                );
-                ui.end_row();
-
-                ui.label("Message:");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.indicator_form.message)
-                        .desired_width(input_width)
-                        .desired_rows(2),
-                );
-                ui.end_row();
-
-                ui.label("Options:");
-                ui.checkbox(&mut self.indicator_form.repeating, "Only trigger once");
-                ui.end_row();
             });
-    }
-
-    fn render_volume_form(&mut self, ui: &mut Ui) {
-        let input_width = self.input_width(ui);
-        FormGrid::new("volume_alert_form")
-            .spacing(self.config.row_spacing, self.config.row_spacing)
-            .show(ui, |ui| {
-                ui.label("Symbol:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.volume_form.symbol)
-                        .desired_width(input_width),
-                );
-                ui.end_row();
-
-                ui.label("Multiplier:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.volume_form.multiplier)
-                        .desired_width(input_width),
-                );
-                ui.end_row();
-
-                ui.label("Lookback:");
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    let unit_width = ui
-                        .painter()
-                        .layout_no_wrap(
-                            "bars".into(),
-                            egui::TextStyle::Body.resolve(ui.style()),
-                            ui.visuals().text_color(),
-                        )
-                        .size()
-                        .x;
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.volume_form.lookback)
-                            .desired_width((input_width - unit_width - 4.0).max(0.0)),
-                    );
-                    ui.label("bars");
+        }
+        if let Some(index) = remove {
+            self.alert.additional_conditions.remove(index);
+        }
+        if ui.button("Add condition").clicked() {
+            self.alert.additional_conditions.push(AlertRule {
+                source: self.alert.source.clone(),
+                condition: self.alert.condition.clone(),
+            });
+        }
+        if self.storage.is_some() {
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Preset");
+                ui.text_edit_singleline(&mut self.preset_name);
+                if ui
+                    .add_enabled(
+                        self.loaded
+                            && !self.pending
+                            && self.alert.is_valid()
+                            && !self.preset_name.trim().is_empty(),
+                        egui::Button::new("Save preset"),
+                    )
+                    .clicked()
+                {
+                    if self.expires.trim().is_empty() {
+                        self.alert.expires = None;
+                        self.save_preset();
+                    } else if let Ok(t) = DateTime::parse_from_rfc3339(self.expires.trim()) {
+                        self.alert.expires = Some(t.with_timezone(&Utc));
+                        self.save_preset();
+                    }
+                }
+            });
+            let mut apply = None;
+            egui::ComboBox::from_id_salt("alert_presets")
+                .selected_text("Apply preset")
+                .show_ui(ui, |ui| {
+                    for (name, alert) in &self.presets {
+                        if ui.selectable_label(false, name).clicked() {
+                            apply = Some(alert.clone());
+                        }
+                    }
                 });
-                ui.end_row();
-
-                ui.label("Message:");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.volume_form.message)
-                        .desired_width(input_width)
-                        .desired_rows(2),
-                );
-                ui.end_row();
-            });
-    }
-
-    fn collect_form_data(&self) -> Result<AlertData, &'static str> {
-        match self.active_tab {
-            AlertTab::Price => {
-                let price = fields::level(&self.price_form.price).ok_or("Enter a price")?;
-                Ok(AlertData::Price {
-                    symbol: self.price_form.symbol.clone(),
-                    price,
-                    condition: self.price_form.condition.clone(),
-                    message: self.price_form.message.clone(),
-                    repeating: self.price_form.repeating,
-                })
-            }
-            AlertTab::Indicator => {
-                let form = &self.indicator_form;
-                let indicator_a =
-                    fields::indicator(&form.indicator_a).ok_or("Choose Indicator A")?;
-                let (indicator_b, threshold) = if form.use_threshold {
-                    let threshold = fields::level(&form.threshold).ok_or("Enter a threshold")?;
-                    (None, Some(threshold))
-                } else {
-                    let indicator_b =
-                        fields::indicator(&form.indicator_b).ok_or("Choose Indicator B")?;
-                    (Some(indicator_b), None)
-                };
-                Ok(AlertData::Indicator {
-                    symbol: form.symbol.clone(),
-                    indicator_a,
-                    indicator_b,
-                    threshold,
-                    condition: form.condition.clone(),
-                    message: form.message.clone(),
-                    repeating: form.repeating,
-                })
-            }
-            AlertTab::Volume => {
-                let multiplier = fields::multiplier(&self.volume_form.multiplier)
-                    .ok_or("Enter a multiplier above 0")?;
-                let lookback = fields::lookback(&self.volume_form.lookback)
-                    .ok_or("Enter a lookback of at least 1 bar")?;
-                Ok(AlertData::Volume {
-                    symbol: self.volume_form.symbol.clone(),
-                    multiplier,
-                    lookback,
-                    message: self.volume_form.message.clone(),
-                })
+            if let Some(mut preset) = apply {
+                preset.id.clone_from(&self.alert.id);
+                preset.status = self.alert.status;
+                self.edit(preset);
             }
         }
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PresetDocument {
+    version: u32,
+    presets: BTreeMap<String, Alert>,
+}
+
+fn source_picker(
+    ui: &mut Ui,
+    id: &str,
+    source: &mut AlertSource,
+    sources: &[(AlertSource, String)],
+) {
+    let label = sources
+        .iter()
+        .find(|(value, _)| value == source)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| format!("{source:?}"));
+    egui::ComboBox::from_id_salt(id)
+        .width(ui.available_width().min(200.0))
+        .truncate()
+        .selected_text(label)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(source, AlertSource::Price, "Price");
+            ui.selectable_value(source, AlertSource::Volume, "Volume");
+            for (value, name) in sources {
+                ui.selectable_value(source, value.clone(), name);
+            }
+        });
+}
+
+fn rule_form(
+    ui: &mut Ui,
+    source: &mut AlertSource,
+    condition: &mut AlertCondition,
+    sources: &[(AlertSource, String)],
+) {
+    ui.add_enabled_ui(
+        !matches!(condition, AlertCondition::VolumeAboveAverage { .. }),
+        |ui| source_picker(ui, "source", source, sources),
+    );
+    let level = condition.level().unwrap_or(0.0);
+    let choices = [
+        (AlertCondition::Crossing(level), "Crossing"),
+        (AlertCondition::CrossingUp(level), "Crossing up"),
+        (AlertCondition::CrossingDown(level), "Crossing down"),
+        (AlertCondition::Above(level), "Greater than"),
+        (AlertCondition::Below(level), "Less than"),
+        (
+            AlertCondition::EnteringChannel {
+                lower: level,
+                upper: level + 1.0,
+            },
+            "Entering channel",
+        ),
+        (
+            AlertCondition::ExitingChannel {
+                lower: level,
+                upper: level + 1.0,
+            },
+            "Exiting channel",
+        ),
+        (
+            AlertCondition::MovingBy {
+                value: 1.0,
+                bars: 1,
+            },
+            "Moving by value",
+        ),
+        (
+            AlertCondition::MovingByPercent {
+                percent: 1.0,
+                bars: 1,
+            },
+            "Moving by percent",
+        ),
+        (
+            AlertCondition::Compare {
+                other: AlertSource::Price,
+                comparison: AlertComparison::Crossing,
+            },
+            "Compare outputs",
+        ),
+        (
+            AlertCondition::VolumeAboveAverage {
+                multiplier: 2.0,
+                bars: 20,
+            },
+            "Volume above average",
+        ),
+    ];
+    let selected = choices
+        .iter()
+        .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
+        .map(|(_, name)| *name)
+        .unwrap_or("Condition");
+    egui::ComboBox::from_id_salt("condition")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for (value, label) in choices {
+                if ui.selectable_label(label == selected, label).clicked() && label != selected {
+                    if matches!(value, AlertCondition::VolumeAboveAverage { .. }) {
+                        *source = AlertSource::Volume;
+                    }
+                    *condition = value;
+                }
+            }
+        });
+    ui.horizontal_wrapped(|ui| match condition {
+        AlertCondition::Crossing(v)
+        | AlertCondition::CrossingUp(v)
+        | AlertCondition::CrossingDown(v)
+        | AlertCondition::Above(v)
+        | AlertCondition::Below(v) => {
+            ui.label("Level");
+            ui.add(egui::DragValue::new(v).speed(0.01));
+        }
+        AlertCondition::EnteringChannel { lower, upper }
+        | AlertCondition::ExitingChannel { lower, upper } => {
+            ui.label("Lower / upper");
+            ui.add(egui::DragValue::new(lower));
+            ui.add(egui::DragValue::new(upper));
+        }
+        AlertCondition::MovingBy { value, bars }
+        | AlertCondition::MovingByPercent {
+            percent: value,
+            bars,
+        } => {
+            ui.label("Change / bars");
+            ui.add(egui::DragValue::new(value));
+            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX));
+        }
+        AlertCondition::VolumeAboveAverage { multiplier, bars } => {
+            ui.label("Multiplier / preceding bars");
+            ui.add(egui::DragValue::new(multiplier).speed(0.1));
+            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX));
+        }
+        AlertCondition::Compare { other, comparison } => {
+            source_picker(ui, "other", other, sources);
+            egui::ComboBox::from_id_salt("comparison")
+                .selected_text(comparison.to_string())
+                .show_ui(ui, |ui| {
+                    for value in [
+                        AlertComparison::Crossing,
+                        AlertComparison::CrossingUp,
+                        AlertComparison::CrossingDown,
+                        AlertComparison::Above,
+                        AlertComparison::Below,
+                    ] {
+                        ui.selectable_value(comparison, value, value.to_string());
+                    }
+                });
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Reply;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Store(Mutex<Option<String>>);
+    impl Storage for Store {
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(Vec::new()));
+        }
+        fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().clone()));
+        }
+        fn save(&self, _: StoreKind, _: &str, doc: String, reply: Reply<()>) {
+            *self.0.lock().unwrap() = Some(doc);
+            reply.send(Ok(()));
+        }
+        fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
+            reply.send(Ok(()));
+        }
+    }
 
     #[test]
-    fn form_controls_fill_the_dialog_width_on_every_tab() {
-        for tab in AlertTab::all() {
+    fn form_controls_fill_the_dialog_width_for_each_source() {
+        for source in [
+            AlertSource::Price,
+            AlertSource::Study {
+                id: "study".into(),
+                output: 0,
+            },
+            AlertSource::Volume,
+        ] {
             for width in [360.0, 560.0] {
                 let ctx = Context::default();
                 let mut dialog = AlertDialog::new();
-                dialog.active_tab = tab;
+                dialog.alert.source = source.clone();
                 let mut form_width = 0.0;
                 for _ in 0..3 {
                     ctx.run_ui(Default::default(), |ui| {
                         ui.set_width(width);
-                        let form = ui.vertical(|ui| match tab {
-                            AlertTab::Price => dialog.render_price_form(ui),
-                            AlertTab::Indicator => dialog.render_indicator_form(ui),
-                            AlertTab::Volume => dialog.render_volume_form(ui),
-                        });
+                        let form = ui.vertical(|ui| dialog.form(ui));
                         form_width = form.response.rect.width();
                     })
                     .drop_without_applying_deltas();
                 }
                 assert!(
                     (form_width - width).abs() < 16.0,
-                    "{tab:?}: {form_width} at {width}"
+                    "{source:?}: {form_width} at {width}"
                 );
             }
         }
-        for size in [egui::vec2(1440.0, 900.0), egui::vec2(600.0, 360.0)] {
+    }
+
+    #[test]
+    fn alert_form_and_actions_fit_narrow_windows_in_both_themes() {
+        for dark in [false, true] {
             let ctx = Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
             let mut dialog = AlertDialog::new();
-            dialog.open("BTCUSD".into());
-            dialog.active_tab = AlertTab::Indicator;
-            for frame in 0..3 {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.show(ui.ctx());
-                    },
-                );
-                let visible = |label| {
-                    output.shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.text() == label
-                    && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
-                ))
-                };
-                let footer = visible("Create");
-                let message = visible("Message:");
-                output.drop_without_applying_deltas();
-                if frame > 0 {
-                    assert!(footer, "footer is reachable at {size:?}");
-                    if size.y == 900.0 {
-                        assert!(message, "the default height fits the tallest form");
+            dialog.set_storage(Arc::new(Store::default()));
+            dialog.open("SAMPLE".into(), 100.0);
+            dialog
+                .watchlists
+                .push(("list".into(), "A long host watchlist name".repeat(4)));
+            dialog.alert.watchlist = Some("list".into());
+            dialog.alert.frequency = AlertFrequency::OncePerBarClose;
+            dialog.sources.push((
+                AlertSource::Drawing("7".into()),
+                "A long drawing name".repeat(4),
+            ));
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Volume,
+                condition: AlertCondition::VolumeAboveAverage {
+                    multiplier: 2.0,
+                    bars: 20,
+                },
+            });
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Compare {
+                    other: AlertSource::Drawing("7".into()),
+                    comparison: AlertComparison::Crossing,
+                },
+            });
+            for size in [
+                egui::vec2(1440.0, 900.0),
+                egui::vec2(600.0, 360.0),
+                egui::vec2(320.0, 450.0),
+            ] {
+                for invalid in [false, true] {
+                    dialog.expires = if invalid { "invalid" } else { "" }.into();
+                    for frame in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    size,
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                dialog.show(ui.ctx());
+                            },
+                        );
+                        let save = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Save alert" => {
+                                Some((
+                                    shape.clip_rect,
+                                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                                ))
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        if frame > 0 {
+                            let (clip, button) = save.expect("save action is painted");
+                            assert!(
+                                clip.contains_rect(button),
+                                "save action is clipped: {button:?}"
+                            );
+                        }
                     }
+                    let rect = ctx
+                        .memory(|m| m.area_rect(egui::Id::unique("create_alert")))
+                        .unwrap();
+                    assert!(
+                        rect.left() >= 0.0
+                            && rect.right() <= size.x
+                            && rect.top() >= 0.0
+                            && rect.bottom() <= size.y,
+                        "dark={dark}, invalid={invalid}, size={size:?}: {rect:?}"
+                    );
                 }
             }
         }
     }
 
     #[test]
-    fn create_needs_a_valid_form() {
-        use AlertTab::{Indicator, Price, Volume};
-        type Edit = fn(&mut AlertDialog);
-        const PRICE: Result<(), &str> = Err("Enter a price");
-        const THRESHOLD: Result<(), &str> = Err("Enter a threshold");
-        const INDICATOR_A: Result<(), &str> = Err("Choose Indicator A");
-        const INDICATOR_B: Result<(), &str> = Err("Choose Indicator B");
-        const MULTIPLIER: Result<(), &str> = Err("Enter a multiplier above 0");
-        const LOOKBACK: Result<(), &str> = Err("Enter a lookback of at least 1 bar");
-        let rows: [(AlertTab, Edit, Result<(), &str>); 14] = [
-            (Price, |d| d.price_form.price = "NaN".into(), PRICE),
-            (Price, |d| d.price_form.price = "inf".into(), PRICE),
-            (Price, |d| d.price_form.price = "1e400".into(), PRICE),
-            (Price, |d| d.price_form.price.clear(), PRICE),
-            (Price, |d| d.price_form.price = "-12.5".into(), Ok(())),
-            (
-                Indicator,
-                |d| d.indicator_form.threshold = "1,5".into(),
-                THRESHOLD,
-            ),
-            (Indicator, |d| d.indicator_form.threshold.clear(), THRESHOLD),
-            (
-                Indicator,
-                |d| d.indicator_form.indicator_a.clear(),
-                INDICATOR_A,
-            ),
-            (
-                Indicator,
-                |d| d.indicator_form.use_threshold = false,
-                INDICATOR_B,
-            ),
-            (
-                Indicator,
-                |d| {
-                    d.indicator_form.use_threshold = false;
-                    d.indicator_form.indicator_b = "SMA(50)".into();
-                },
-                Ok(()),
-            ),
-            (
-                Volume,
-                |d| d.volume_form.multiplier = "-2".into(),
-                MULTIPLIER,
-            ),
-            (
-                Volume,
-                |d| d.volume_form.multiplier = "NaN".into(),
-                MULTIPLIER,
-            ),
-            (Volume, |d| d.volume_form.lookback = "0".into(), LOOKBACK),
-            (Volume, |_| {}, Ok(())),
-        ];
-        for (index, (tab, edit, expected)) in rows.into_iter().enumerate() {
-            let mut dialog = AlertDialog::new();
-            dialog.active_tab = tab;
-            dialog.price_form.price = "100".into();
-            dialog.indicator_form.use_threshold = true;
-            dialog.indicator_form.threshold = "1".into();
-            dialog.indicator_form.indicator_a = "SMA(20)".into();
-            edit(&mut dialog);
-            assert_eq!(
-                dialog.collect_form_data().map(drop),
-                expected,
-                "row {index}"
-            );
-        }
+    fn presets_survive_a_new_dialog_and_unknown_versions_cannot_be_overwritten() {
+        let store = Arc::new(Store::default());
+        let ctx = Context::default();
+        let mut dialog = AlertDialog::new();
+        dialog.set_storage(store.clone());
+        dialog.poll(&ctx);
+        dialog.open("EURUSD".into(), 1.125);
+        dialog.alert.name = "Breakout".into();
+        dialog.alert.frequency = AlertFrequency::OncePerBarClose;
+        dialog.preset_name = "Close".into();
+        dialog.save_preset();
+        dialog.poll(&ctx);
+        let expected = dialog.alert.clone();
+        let mut restored = AlertDialog::new();
+        restored.set_storage(store.clone());
+        restored.poll(&ctx);
+        assert_eq!(restored.presets["Close"], expected);
+        *store.0.lock().unwrap() = Some(r#"{"version":2,"presets":{}}"#.into());
+        restored.set_storage(store);
+        restored.poll(&ctx);
+        assert!(!restored.loaded);
+        assert!(restored.error.is_some());
+        restored.open("AAPL".into(), 123.0);
+        assert_eq!(restored.alert.condition, AlertCondition::Crossing(123.0));
+        assert!(restored.alert.name.is_empty());
     }
 }

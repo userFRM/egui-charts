@@ -320,7 +320,7 @@ impl Chart {
                 .calculate_layout_rects(response.rect)
                 .price_rect
                 .width();
-            // Fitting the labels must not reveal a different set of bars.
+            // After the first layout, fitting labels keeps the visible bar range.
             if previous_axis_width > 0.0 && old_width > 0.0 && new_width > 0.0 {
                 let scale = self.state.time_scale_mut();
                 scale.set_bar_spacing(scale.bar_spacing() * new_width / old_width);
@@ -475,10 +475,7 @@ impl Chart {
                         .or(input.pointer.hover_pos())
                         .is_some_and(|pos| {
                             axis_corner.contains(pos)
-                                || self.axis_hover.is_some_and(|(_, tag)| {
-                                    Rect::from_min_size(tag.min, Vec2::new(21.0, tag.height()))
-                                        .contains(pos)
-                                })
+                                || self.axis_hover.is_some_and(|(_, tag)| tag.contains(pos))
                         })
             });
         if navigation_interaction || axis_interaction {
@@ -1330,6 +1327,8 @@ impl Chart {
         } else {
             self.cursor_modes.move_pointer(None);
         }
+        let hover_rect =
+            Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));
         let hover_pos = self
             .axis_hover
             .filter(|(_, tag)| {
@@ -1341,7 +1340,11 @@ impl Chart {
                 })
             })
             .map(|(pos, _)| pos)
-            .or_else(|| shown.hover_pos().filter(|pos| price_rect.contains(*pos)));
+            .or_else(|| {
+                ui.input(|input| input.pointer.hover_pos())
+                    .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
+            });
+        let mut study_action = None;
         {
             let visible_data = self.state.visible_data();
             let selected = hover_pos
@@ -1399,15 +1402,15 @@ impl Chart {
                 if let Some(action) = quote_action {
                     self.quote_action = Some(action);
                 }
-                if let Some(index) = study_settings {
-                    self.indicator_settings_request = self.study_ids.get(index).copied();
-                }
+                study_action = study_settings;
             }
         }
 
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
-            self.last_hover_bar_idx = Some(coords.x_to_idx_f32(hover_pos.x) as f64);
+            self.last_hover_bar_idx = coords
+                .local_idx_at_x(hover_pos.x, visible_data.len())
+                .map(|local| (start_idx + local) as f64);
 
             if !menu_open {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
@@ -1430,19 +1433,72 @@ impl Chart {
                 if held_values || self.drawings.eraser_mode {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
+                let index = coords
+                    .local_idx_at_x(hover_pos.x, visible_data.len())
+                    .map(|local| start_idx + local);
+                let snapped = if price_rect.contains(hover_pos) {
+                    index.map_or(hover_pos, |index| {
+                        self.snap_crosshair(hover_pos, &price_map, index)
+                    })
+                } else {
+                    hover_pos
+                };
+                crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                let mut main_options = crosshair_options;
+                if volume_rect.contains(hover_pos) {
+                    main_options.horz_line_visible = false;
+                    if main_options.style == crate::config::CrosshairStyle::Dot {
+                        main_options.style = crate::config::CrosshairStyle::Arrow;
+                    }
+                }
                 crosshair_tags = rendering::render_crosshair_with_options(
                     &price_ctx,
-                    hover_pos,
+                    snapped,
                     visible_data,
                     &price_map,
                     &coords,
-                    &crosshair_options,
+                    &main_options,
                     time_axis_top,
                     axis_edge,
                     last_price_tag,
                     formatter.as_ref(),
                     bar_seconds,
                 );
+
+                if volume_rect.contains(hover_pos) {
+                    let map = crate::scales::PriceMap::new(
+                        crate::scales::PriceTransform::default(),
+                        crate::scales::PriceRange::new(0.0, max_volume.max(1.0)),
+                        volume_rect.top(),
+                        volume_rect.bottom(),
+                        false,
+                    )
+                    .with_price_precision(Some(
+                        self.instrument()
+                            .and_then(|instrument| instrument.volume_decimals)
+                            .unwrap_or(0),
+                    ));
+                    let mut pos = hover_pos;
+                    if let Some(index) = index {
+                        pos.x = coords.idx_to_x(index);
+                        if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet
+                        {
+                            pos.y = map.price_to_y(self.state.shown()[index].volume);
+                        }
+                    }
+                    let mut options = crosshair_options.resolved(ui.ctx());
+                    options.vert_line_visible = false;
+                    let context = RenderContext::new(&painter, volume_rect);
+                    renderers::render_crosshair_lines(
+                        &context,
+                        pos,
+                        &options,
+                        volume_rect.bottom(),
+                    );
+                    crosshair_tags[0] = renderers::render_crosshair_price_tag(
+                        &context, pos, &map, &options, axis_edge, None,
+                    );
+                }
 
                 if tooltip_options.on_long_press
                     && ui.input(|input| input.any_touches() && input.pointer.primary_down())
@@ -1500,6 +1556,7 @@ impl Chart {
                         visible_data,
                         formatter.as_ref(),
                         bar_seconds,
+                        &self.study_values_at(start_idx + local_idx),
                         self.instrument(),
                     );
                 }
@@ -1539,12 +1596,15 @@ impl Chart {
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
         if show_price_axis {
-            if let Some((pos, tag)) = self.axis_hover {
+            if let Some((pos, tag)) = self
+                .axis_hover
+                .filter(|(pos, _)| price_rect.contains(*pos) && !volume_rect.contains(*pos))
+            {
                 let price = if self.chart_options.crosshair.mode
                     == crate::config::CrosshairMode::Magnet
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
-                    renderers::snap_to_nearest_ohlc(pos.y, &price_map, &visible_data[index])
+                    price_map.y_to_price(self.snap_crosshair(pos, &price_map, start_idx + index).y)
                 } else {
                     price_map.y_to_price(pos.y)
                 };
@@ -1674,6 +1734,9 @@ impl Chart {
         // Focus ring for keyboard accessibility
         crate::styles::focus::draw_focus_ring(ui, &shown, 0.0);
 
+        if let Some(action) = study_action {
+            self.apply_study_action(action);
+        }
         shown
     }
 }
@@ -2493,6 +2556,15 @@ mod tests {
                         })
                         .collect();
                     let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                    let study = chart.add_indicator(Box::new(
+                        crate::studies::CustomIndicator::new("Fixture", |bars| {
+                            vec![crate::studies::IndicatorValue::Single(0.12345); bars.len()]
+                        }),
+                    ));
+                    let study = chart.indicator_mut(study).unwrap();
+                    let mut settings = study.settings();
+                    settings.precision = Some(3);
+                    study.apply_settings(&[], settings).unwrap();
                     chart.set_timeframe(Timeframe::Sec1);
                     chart.chart_options.time_scale.timezone = TimezoneMode::nyse();
                     chart.set_instrument(Some(
@@ -2516,6 +2588,34 @@ mod tests {
                             _ => None,
                         })
                         .collect();
+                    let values: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    match mode {
+                        crate::config::TooltipMode::Floating => {
+                            assert_eq!(
+                                values.iter().filter(|text| **text == "Fixture").count(),
+                                2,
+                                "{values:?}"
+                            );
+                            assert_eq!(
+                                values
+                                    .windows(2)
+                                    .filter(|pair| *pair == ["Fixture", "0.123"])
+                                    .count(),
+                                2,
+                                "{values:?}"
+                            );
+                        }
+                        _ => assert!(
+                            values.iter().any(|text| text.contains("Fixture: 0.123")),
+                            "{values:?}"
+                        ),
+                    }
                     assert_eq!(
                         times.len(),
                         2,
