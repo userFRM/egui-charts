@@ -110,7 +110,7 @@ impl Default for ChopZone {
 impl Indicator for ChopZone {
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[4],
+            color: self.colors[0],
             width: 1.0,
             pattern: crate::studies::PlotPattern::Solid,
             plot_type: crate::studies::PlotType::Columns,

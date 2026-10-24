@@ -38,10 +38,10 @@ pub struct WoodiesCCI {
     turbo_length: usize,
     cci_length: usize,
     values: IndicatorValues,
-    /// Colors: [columns, CCI Turbo, CCI 14]
+    /// Colors: [columns, CCI Turbo, CCI 14]; the columns colour is used after five values above
+    /// zero or a mixed run below zero.
     colors: Vec<Color32>,
-    /// Column colours: after five values above zero or a mixed run below zero, and otherwise.
-    up_color: Color32,
+    /// Column colour otherwise.
     down_color: Color32,
     visible: bool,
 }
@@ -55,7 +55,6 @@ impl WoodiesCCI {
             cci_length: cci_length.max(1),
             values: IndicatorValues::new(),
             colors: vec![extended.success, extended.success, extended.error],
-            up_color: extended.success,
             down_color: extended.error,
             visible: true,
         }
@@ -130,11 +129,11 @@ impl Indicator for WoodiesCCI {
             below += usize::from(value < 0.0);
         }
         Some(if above == 5 {
-            self.up_color
+            self.colors[0]
         } else if below == 5 || value >= 0.0 {
             self.down_color
         } else {
-            self.up_color
+            self.colors[0]
         })
     }
 
@@ -214,7 +213,8 @@ mod tests {
 
     /// A CCI of length 2 has the sign of the close change, so the closes set the run of signs. A
     /// column is green after five values above zero, red after five below, and otherwise green below
-    /// zero and red at or above it; a non-finite bar is not part of the run.
+    /// zero and red at or above it; a non-finite bar is not part of the run. The green is the
+    /// columns colour.
     #[test]
     fn columns_are_coloured_by_the_five_previous_values() {
         let closes = [
@@ -275,9 +275,15 @@ mod tests {
             Some(g),
             Some(r),
         ];
-        let colours: Vec<_> = (0..bars.len())
-            .map(|bar| study.plot_color(0, bar))
-            .collect();
-        assert_eq!(colours, expected);
+        let colours = |study: &WoodiesCCI| -> Vec<_> {
+            (0..bars.len())
+                .map(|bar| study.plot_color(0, bar))
+                .collect()
+        };
+        assert_eq!(colours(&study), expected);
+        // The columns colour set in the settings replaces the green.
+        study.set_color(0, Color32::BLUE);
+        let recoloured = expected.map(|c| c.map(|c| if c == g { Color32::BLUE } else { c }));
+        assert_eq!(colours(&study), recoloured);
     }
 }

@@ -378,6 +378,37 @@ mod tests {
         }
     }
 
+    /// Confirming the settings dialog without an edit hands each plot's colour back through
+    /// `set_colors`, which must leave every drawn colour as it was.
+    #[test]
+    fn unchanged_settings_keep_every_colour() {
+        use crate::studies::ConfiguredStudy;
+
+        let bars: Vec<Bar> = (0..300)
+            .map(|i| {
+                let c = 100.0 + 10.0 * (i as f64 / 9.0).sin();
+                let time = Utc.timestamp_opt(i * 3600, 0).unwrap();
+                Bar::new(time, c - 0.5, c + 1.0, c - 1.0, c, 1000.0 + i as f64)
+            })
+            .collect();
+        let colours = |study: &ConfiguredStudy| -> Vec<_> {
+            (0..study.line_cnt())
+                .flat_map(|line| {
+                    let style = study.plot_style(line).color;
+                    (0..bars.len()).map(move |bar| study.plot_color(line, bar).unwrap_or(style))
+                })
+                .collect()
+        };
+        for name in IndicatorFactory::new().list() {
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(&name).unwrap());
+            study.calculate(&bars);
+            let before = colours(&study);
+            study.apply_settings(&[], study.settings()).unwrap();
+            study.calculate(&bars);
+            assert_eq!(colours(&study), before, "{name}");
+        }
+    }
+
     /// Each registered name is a study of its own: on one series, no two names give the same
     /// values on every bar, even with their lines in another order.
     #[test]
