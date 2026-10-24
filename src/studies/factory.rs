@@ -385,11 +385,15 @@ mod tests {
         use crate::model::Bar;
         use chrono::{TimeZone, Utc};
 
-        // Two bars per session over more than 52 weeks distinguish session and calendar studies.
-        let bars: Vec<Bar> = (0..400)
+        // Two bars per session over more than 52 weeks distinguish session and calendar studies;
+        // 800 bars warm up the longest study, and a step every 160 bars opens a price gap.
+        let bars: Vec<Bar> = (0..800)
             .map(|i: i64| {
                 let x = i as f64;
-                let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
+                let close = 100.0
+                    + (x * 0.13).sin() * 8.0
+                    + (x * 0.029).cos() * 5.0
+                    + (i / 160) as f64 * 6.0;
                 let open = close - (x * 0.7).sin() * 1.5;
                 Bar {
                     time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
