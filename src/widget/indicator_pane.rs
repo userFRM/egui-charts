@@ -76,6 +76,8 @@ pub struct IndicatorPaneConfig {
     pub show_zones: bool,
     /// Zone line levels and colors
     pub zones: Vec<(f64, Color32, &'static str)>,
+    /// Fill between the lowest and highest zone with the first plot colour at 20% opacity.
+    pub fill_between_zones: bool,
     /// Show legend
     pub show_legend: bool,
     /// Show the study name in its legend.
@@ -95,6 +97,7 @@ impl Default for IndicatorPaneConfig {
             y_range: None,
             show_zones: false,
             zones: Vec::new(),
+            fill_between_zones: false,
             show_legend: true,
             show_name: true,
             inputs: String::new(),
@@ -108,14 +111,14 @@ impl IndicatorPaneConfig {
     /// Create config for RSI indicator
     pub fn rsi() -> Self {
         Self {
-            height: indicator_sizing::OSCILLATOR_HEIGHT,
+            height: 138.0,
             y_range: Some((0.0, 100.0)),
             show_zones: true,
             zones: vec![
-                (70.0, DESIGN_TOKENS.semantic.extended.bearish, "Overbought"),
-                (50.0, DESIGN_TOKENS.semantic.extended.chart_text, "Neutral"),
-                (30.0, DESIGN_TOKENS.semantic.extended.bullish, "Oversold"),
+                (70.0, Color32::from_gray(128), "Overbought"),
+                (30.0, Color32::from_gray(128), "Oversold"),
             ],
+            fill_between_zones: true,
             show_legend: true,
             show_name: true,
             inputs: String::new(),
@@ -131,6 +134,7 @@ impl IndicatorPaneConfig {
             y_range: None, // Auto-scale
             show_zones: true,
             zones: vec![(0.0, DESIGN_TOKENS.semantic.extended.chart_text, "Zero Line")],
+            fill_between_zones: false,
             show_legend: true,
             show_name: true,
             inputs: String::new(),
@@ -149,6 +153,7 @@ impl IndicatorPaneConfig {
                 (80.0, DESIGN_TOKENS.semantic.extended.bearish, "Overbought"),
                 (20.0, DESIGN_TOKENS.semantic.extended.bullish, "Oversold"),
             ],
+            fill_between_zones: false,
             show_legend: true,
             show_name: true,
             inputs: String::new(),
@@ -315,7 +320,7 @@ impl IndicatorPane {
 
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
-            self.draw_zone_fills(painter, chart_rect, y_min, y_max, bullish, bearish);
+            self.draw_zone_fills(painter, chart_rect, y_min, y_max, indicator);
         }
 
         // Draw horizontal grid lines and zone lines
@@ -405,7 +410,7 @@ impl IndicatorPane {
 
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
-            self.draw_zone_fills(painter, chart_rect, y_min, y_max, bullish, bearish);
+            self.draw_zone_fills(painter, chart_rect, y_min, y_max, indicator);
         }
 
         // Draw horizontal grid lines and zone lines
@@ -558,7 +563,7 @@ impl IndicatorPane {
             let plot_painter = &painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
             // Draw zone fills (colored bands)
             if self.config.show_zones && self.config.zones.len() >= 2 {
-                self.draw_zone_fills(plot_painter, chart_rect, y_min, y_max, bullish, bearish);
+                self.draw_zone_fills(plot_painter, chart_rect, y_min, y_max, indicator);
             }
 
             // Draw horizontal grid lines and zone lines
@@ -725,13 +730,37 @@ impl IndicatorPane {
         rect: Rect,
         y_min: f64,
         y_max: f64,
-        bullish: Color32,
-        bearish: Color32,
+        indicator: &dyn Indicator,
     ) {
-        // For RSI-style indicators, fill zones with semi-transparent colors
-        // Overbought zone (above 70) - bearish color
-        // Oversold zone (below 30) - bullish color
-
+        if self.config.fill_between_zones {
+            let lower = self
+                .config
+                .zones
+                .iter()
+                .map(|z| z.0)
+                .fold(f64::INFINITY, f64::min);
+            let upper = self
+                .config
+                .zones
+                .iter()
+                .map(|z| z.0)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if lower < upper {
+                let color = indicator.plot_style(0).color;
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(rect.left(), self.value_to_y(upper, rect, y_min, y_max)),
+                        Pos2::new(rect.right(), self.value_to_y(lower, rect, y_min, y_max)),
+                    )
+                    .intersect(rect),
+                    0.0,
+                    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+                );
+            }
+            return;
+        }
+        let colors = painter.ctx().active_theme().chart;
+        let (bullish, bearish) = (colors.candle_up, colors.candle_down);
         for (level, color, label) in &self.config.zones {
             let live_color = if *color == DESIGN_TOKENS.semantic.extended.bullish {
                 bullish
@@ -798,8 +827,16 @@ impl IndicatorPane {
                         Pos2::new(rect.min.x, y),
                         Pos2::new(rect.max.x, y),
                         Stroke::new(1.0_f32, live_color),
-                        5.0,
-                        3.0,
+                        if self.config.fill_between_zones {
+                            4.0
+                        } else {
+                            5.0
+                        },
+                        if self.config.fill_between_zones {
+                            4.0
+                        } else {
+                            3.0
+                        },
                     );
                 }
             }
@@ -1117,30 +1154,51 @@ impl IndicatorPane {
         width
     }
 
-    /// Builds the legend text (indicator name plus its current value) shown at
-    /// the pane's top-left.
-    fn legend_text(&self, indicator: &dyn Indicator) -> String {
-        let values = indicator.values();
-        let mut legend_parts = Vec::new();
+    /// Layout each value with its plot colour, using a swatch when text would be faint.
+    fn legend_job(
+        &self,
+        indicator: &dyn Indicator,
+        text_color: Color32,
+        background: Color32,
+    ) -> egui::text::LayoutJob {
+        let mut job = egui::text::LayoutJob::default();
+        let format =
+            |color| egui::TextFormat::simple(egui::FontId::proportional(typography::MD), color);
         if self.config.show_name {
-            legend_parts.push(indicator.name().to_string());
+            job.append(indicator.name(), 0.0, format(text_color));
         }
         if !self.config.inputs.is_empty() {
-            legend_parts.push(self.config.inputs.clone());
+            if !job.text.is_empty() {
+                job.append(" ", 0.0, format(text_color));
+            }
+            job.append(&self.config.inputs, 0.0, format(text_color));
         }
         if self.config.show_values
-            && let Some(bar) = self.bar_index.or_else(|| values.len().checked_sub(1))
+            && let Some(bar) = self
+                .bar_index
+                .or_else(|| indicator.values().len().checked_sub(1))
         {
             for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
             {
-                if let Some(value) = values.value(line, bar) {
+                if let Some(value) = indicator.values().value(line, bar) {
+                    if !job.text.is_empty() {
+                        job.append(" ", 0.0, format(text_color));
+                    }
+                    let color = indicator.plot_style(line).color;
+                    let readable = crate::theme::contrast(color, background) >= 4.5;
+                    if !readable {
+                        job.append("■ ", 0.0, format(color));
+                    }
                     let precision = indicator.precision().unwrap_or(2);
-                    legend_parts.push(format!("{value:.precision$}"));
+                    job.append(
+                        &format!("{value:.precision$}"),
+                        0.0,
+                        format(if readable { color } else { text_color }),
+                    );
                 }
             }
         }
-
-        legend_parts.join(" ")
+        job
     }
 
     /// Reserves three controls after the legend, keeping them inside short panes.
@@ -1153,11 +1211,8 @@ impl IndicatorPane {
         if !self.config.show_legend {
             return None;
         }
-        let galley = painter.layout_no_wrap(
-            self.legend_text(indicator),
-            egui::FontId::proportional(typography::MD),
-            Color32::WHITE,
-        );
+        let theme = painter.ctx().active_theme();
+        let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
         let x =
             (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
                 .min(rect.right() - 60.0)
@@ -1179,16 +1234,16 @@ impl IndicatorPane {
         if !self.config.show_legend {
             return;
         }
-        painter.text(
-            Pos2::new(
-                rect.left() + DESIGN_TOKENS.spacing.sm,
-                rect.top() + 12.0_f32.min(rect.height() / 2.0),
-            ),
-            egui::Align2::LEFT_CENTER,
-            self.legend_text(indicator),
-            egui::FontId::proportional(typography::MD),
+        let galley = painter.layout_job(self.legend_job(
+            indicator,
             text_color,
+            painter.ctx().active_theme().chart.bg,
+        ));
+        let pos = Pos2::new(
+            rect.left() + DESIGN_TOKENS.spacing.sm,
+            rect.top() + 12.0_f32.min(rect.height() / 2.0) - galley.size().y / 2.0,
         );
+        painter.galley(pos, galley, text_color);
     }
 
     fn value_to_y(&self, value: f64, rect: Rect, y_min: f64, y_max: f64) -> f32 {
@@ -1212,5 +1267,117 @@ impl IndicatorPane {
         };
 
         nice * magnitude
+    }
+}
+
+#[cfg(all(test, feature = "studies"))]
+mod tests {
+    use super::*;
+    use crate::studies::{CustomIndicator, IndicatorValue};
+
+    #[test]
+    fn rsi_default_paints_only_the_middle_band_and_two_guides() {
+        let config = IndicatorPaneConfig::rsi();
+        assert_eq!(config.height, 138.0);
+        assert_eq!(
+            config.zones.iter().map(|z| z.0).collect::<Vec<_>>(),
+            vec![70.0, 30.0]
+        );
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
+        let pane = IndicatorPane::with_config(config);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+        let study = crate::studies::RSI::default();
+        assert_eq!(study.colors(), vec![Color32::from_rgb(41, 98, 255)]);
+        assert_eq!(study.plot_style(0).width, 2.0);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            pane.draw_zone_fills(ui.painter(), rect, 0.0, 100.0, &study);
+            pane.draw_horizontal_lines(
+                ui.painter(),
+                rect,
+                0.0,
+                100.0,
+                Color32::BLACK,
+                Color32::GREEN,
+                Color32::RED,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        let bands: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bands.len(), 1);
+        assert!((bands[0].rect.top() - 30.0).abs() < 0.001);
+        assert!((bands[0].rect.bottom() - 70.0).abs() < 0.001);
+        assert_eq!(
+            bands[0].fill,
+            Color32::from_rgba_unmultiplied(41, 98, 255, 51)
+        );
+        let guides: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == Color32::from_gray(128) =>
+                {
+                    Some(points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!guides.is_empty());
+        for guide in guides {
+            assert!((guide[0].y - 30.0).abs() < 0.001 || (guide[0].y - 70.0).abs() < 0.001);
+            assert!((guide[1].x - guide[0].x - 4.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn legend_values_identify_each_plot_without_low_contrast_text() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let colors = vec![Color32::BLUE, Color32::YELLOW, Color32::GREEN];
+            let mut study = CustomIndicator::new("Lines", |_| {
+                vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
+            })
+            .with_colors(colors.clone())
+            .with_line_cnt(3);
+            study.calculate(&[]);
+            let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                pane.draw_legend(ui.painter(), ui.max_rect(), &study, theme.ui.text);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let text = shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .unwrap();
+            let sections = &text.galley.job.sections;
+            for (i, color) in colors.iter().enumerate() {
+                let value = format!("{:.2}", (i + 1) as f64);
+                let section = sections
+                    .iter()
+                    .find(|s| {
+                        text.galley.job.text[s.byte_range.start.0..s.byte_range.end.0]
+                            .contains(&value)
+                    })
+                    .unwrap();
+                assert!(crate::theme::contrast(section.format.color, theme.chart.bg) >= 4.5);
+                assert!(
+                    sections.iter().any(|s| s.format.color == *color),
+                    "missing plot colour {color:?}"
+                );
+            }
+            assert_eq!(sections[0].format.color, theme.ui.text);
+        }
     }
 }

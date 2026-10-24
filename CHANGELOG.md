@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Pane legends identify each visible output with its plot colour. Values below 4.5:1 contrast use a coloured swatch and normal text, retaining the study name and legend controls. ([#580](https://github.com/userFRM/egui-charts/issues/580))
+- RSI defaults to a two-pixel blue line, a 20% fill between its two grey 4/4 dashed guides and a 138 px pane when space permits. Other pane presets retain their zone fills. Migration: `IndicatorPaneConfig` literals add `fill_between_zones` or use `..Default::default()`. ([#726](https://github.com/userFRM/egui-charts/issues/726))
+
 - Changing the demo interval from either toolbar refreshes the top interval button along with the chart legend and range toolbar. ([#670](https://github.com/userFRM/egui-charts/issues/670))
 
 ### Added
