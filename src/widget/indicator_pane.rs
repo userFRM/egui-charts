@@ -666,7 +666,6 @@ impl IndicatorPane {
                 );
             }
             draw(plot_painter, PrimitivePass::Series);
-            draw(plot_painter, PrimitivePass::Above);
 
             if let (Some(view), Some(side)) = (&view, axis)
                 && indicator.scale() != crate::studies::StudyScale::None

@@ -458,11 +458,16 @@ mod tests {
         );
     }
 
-    /// Draws a dot at each value of its study and claims the whole plot for the pointer.
+    /// Draws a dot at each value of its study, fills a corner of the plot above everything, and
+    /// claims the whole plot for the pointer.
     struct Dots;
 
     impl Primitive for Dots {
         fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+            if pass == PrimitivePass::Above {
+                let corner = egui::Rect::from_min_size(view.mapping.rect.min, egui::vec2(9.0, 9.0));
+                painter.rect_filled(corner, 0.0, ABOVE);
+            }
             for index in view
                 .visible
                 .clone()
@@ -502,8 +507,24 @@ mod tests {
             ),
             Dots,
         );
+        let mut drawing = crate::drawings::Drawing::with_color(
+            1,
+            crate::drawings::DrawingToolType::HorizontalLine,
+            [255, 0, 0, 255],
+        );
+        drawing.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 10.0)];
+        drawing.pane = Some(id.0);
+        chart.drawings_mut().drawings.push(drawing);
         frame(&ctx, &mut chart, 0.0, vec![]);
         let shapes = shapes(&ctx, &mut chart, 0.1, vec![]);
+        // The last pass of a study pane is above the pane's drawings.
+        let red = |shape: &Shape| match shape {
+            Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED),
+            Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+            _ => false,
+        };
+        let above = |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == ABOVE);
+        assert!(shapes.iter().position(red).unwrap() < shapes.iter().position(above).unwrap());
         assert!(
             shapes
                 .iter()

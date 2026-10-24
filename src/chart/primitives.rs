@@ -71,7 +71,8 @@ pub enum PrimitivePass {
     Below,
     /// Above the series and studies of the pane, below drawings.
     Series,
-    /// Above the series, studies and drawings of the pane, below the crosshair and legend.
+    /// Above the series, studies and drawings of the pane. In the main pane it stays below the
+    /// crosshair and legend.
     Above,
 }
 

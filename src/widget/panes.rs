@@ -558,7 +558,7 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect, id));
+                    drawing_response = Some((pane_response, chart_rect, pane_coords, id));
                     // Store the pane info for hit testing by platform
                     self.last_rendered_indicator_panes
                         .push(RenderedIndicatorPane {
@@ -572,7 +572,9 @@ impl Chart {
                         });
                 }
             }
-            if !collapsed && let Some((pane_response, chart_rect, study_id)) = drawing_response {
+            if !collapsed
+                && let Some((pane_response, chart_rect, pane_coords, study_id)) = drawing_response
+            {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
@@ -633,6 +635,18 @@ impl Chart {
                 self.cursor_modes = cursors;
                 self.history
                     .finish_drawing_action(&mut self.drawings, history);
+                // The last pass of the pane's primitives, above its drawings.
+                let painter = ui.painter().with_clip_rect(chart_rect);
+                for item in self.primitives.iter().filter(|item| {
+                    self.pane_layout.panes[pane_idx]
+                        .studies
+                        .contains(&item.series)
+                        && self.is_series_visible(item.series)
+                }) {
+                    let view = self.primitive_view(item.series, pane_coords);
+                    item.get()
+                        .draw(&painter, &view, super::PrimitivePass::Above);
+                }
             }
             ui.allocate_space(panel_rect.size());
             pane_rects.push((pane_idx, pane_id, panel_rect, collapsed));
