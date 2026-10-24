@@ -4,14 +4,14 @@
 //! cargo run --release --example bare_chart --no-default-features --features widget
 //! ```
 //!
-//! On `wasm32` it fills a canvas it adds to the page; `scripts/web-size.sh` builds it for the web.
+//! On `wasm32` it fills a canvas it adds to the page, in the dark theme, whose Roboto is the one
+//! font of its web build; `scripts/web-size.sh` builds it for the web.
 //!
 //! The prices are generated sample data. `benches/bare_chart.rs` runs this example's
 //! frame headlessly to measure its cost, and `benches/frame_time.rs` draws its sample bars.
 
 use chrono::{TimeZone, Utc};
 use egui_charts::model::{Bar, BarData};
-use egui_charts::theme::Theme;
 use egui_charts::widget::{Chart, SeriesId};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -62,7 +62,13 @@ fn main() {
             .start(
                 canvas,
                 Default::default(),
-                Box::new(|_| Ok(Box::new(WebApp(BareChart::new())))),
+                Box::new(|cc| {
+                    egui_charts::theme::apply_to_egui(
+                        &cc.egui_ctx,
+                        &egui_charts::theme::Theme::dark(),
+                    );
+                    Ok(Box::new(WebApp(BareChart::new())))
+                }),
             )
             .await
             .expect("the chart starts");
@@ -85,11 +91,6 @@ impl BareChart {
 
     /// One frame: a sample tick moves the forming bar, and every 60th tick opens a new one.
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
-        if self.ticks == 0 {
-            // The theme installs the one font the app bundles.
-            egui_charts::theme::apply_to_egui(ui.ctx(), &Theme::dark());
-            ui.set_style(ui.ctx().global_style());
-        }
         self.ticks += 1;
         let n = self.chart.bars(SeriesId::MAIN).len();
         let bar = if self.ticks.is_multiple_of(60) {
