@@ -1,6 +1,6 @@
 //! Grid presets and synchronization switches for a chart layout.
 
-use crate::icons::icons;
+use crate::icons::{Icon, icons};
 use crate::ui::model::ChartLayoutMode;
 use crate::ui_kit::buttons::IconButton;
 use crate::widget::ChartSyncOptions;
@@ -35,7 +35,7 @@ impl ChartGridSelector {
 
     /// Shows the trigger and returns a changed grid or tab preset.
     pub fn show(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
-        let button = IconButton::new(&icons::LAYOUT_GRID)
+        let button = IconButton::new(layout_icon(self.current))
             .tooltip("Chart layout")
             .show(ui);
         let mut selected = None;
@@ -74,6 +74,31 @@ impl ChartGridSelector {
         ui.checkbox(&mut self.sync.sync_date_range, "Date range");
         ui.checkbox(&mut self.sync.sync_drawings, "Drawings on the same symbol");
         selected
+    }
+}
+
+/// The trigger glyph of `layout`: its cells, as the layout tiles the charts.
+fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
+    use ChartLayoutMode as M;
+    match layout {
+        M::Single => &icons::LAYOUT_SINGLE,
+        M::TwoHorizontal => &icons::LAYOUT_TWO_HORIZONTAL,
+        M::TwoVertical => &icons::LAYOUT_TWO_VERTICAL,
+        M::Three => &icons::LAYOUT_THREE,
+        M::Four => &icons::LAYOUT_FOUR,
+        M::Five => &icons::LAYOUT_FIVE,
+        M::Six => &icons::LAYOUT_SIX,
+        M::Seven => &icons::LAYOUT_SEVEN,
+        M::Eight => &icons::LAYOUT_EIGHT,
+        M::Nine => &icons::LAYOUT_NINE,
+        M::Ten => &icons::LAYOUT_TEN,
+        M::Eleven => &icons::LAYOUT_ELEVEN,
+        M::Twelve => &icons::LAYOUT_TWELVE,
+        M::Thirteen => &icons::LAYOUT_THIRTEEN,
+        M::Fourteen => &icons::LAYOUT_FOURTEEN,
+        M::Fifteen => &icons::LAYOUT_FIFTEEN,
+        M::Sixteen => &icons::LAYOUT_SIXTEEN,
+        M::Tabs => &icons::LAYOUT_TABS,
     }
 }
 
