@@ -160,7 +160,11 @@ mod tests {
         let texture = egui::TextureId::User(7);
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
-        for align in [Align2::LEFT_TOP, Align2::CENTER_CENTER, Align2::RIGHT_BOTTOM] {
+        for align in [
+            Align2::LEFT_TOP,
+            Align2::CENTER_CENTER,
+            Align2::RIGHT_BOTTOM,
+        ] {
             chart.set_watermark(Some(
                 Watermark::default()
                     .with_image(
@@ -170,9 +174,7 @@ mod tests {
                         ))
                         .max_size(Vec2::new(100.0, 50.0)),
                     )
-                    .with_line(
-                        WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold),
-                    )
+                    .with_line(WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold))
                     .with_line(WatermarkLine::new("Apple Inc", 20.0, plain))
                     .with_align(align)
                     .with_padding(10.0),
