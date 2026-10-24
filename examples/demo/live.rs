@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription, SubscriptionId,
-    aggregate_trades, resample,
+    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
+    SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{Bar, BarClock, Instrument, Level1Quote, Tick, Timeframe, TradeSide};
 use std::collections::VecDeque;
@@ -11,6 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
+use egui_charts::ui::widget_bar::WatchlistQuote;
 
 const RETAINED_TRADES: usize = 100_000;
 
@@ -23,6 +24,8 @@ struct Simulation {
     price_ticks: i64,
     random: u64,
     id: u64,
+    /// The id of the first execution not yet handed to the time and sales panel.
+    tape: u64,
     trades: VecDeque<Tick>,
     history: Vec<Bar>,
     next_trade: DateTime<Utc>,
@@ -49,6 +52,7 @@ impl LiveFeed {
             price_ticks: (spec.start_price / tick_size).round() as i64,
             random: 0x5eed_u64.wrapping_mul(spec.seed),
             id: 0,
+            tape: 0,
             trades: VecDeque::new(),
             history: Vec::new(),
             next_trade: start - TimeDelta::days(7),
@@ -79,6 +83,7 @@ impl LiveFeed {
             price_ticks: sim.price_ticks,
             random: sim.random,
             id: sim.id,
+            tape: sim.tape,
             trades: sim.trades.clone(),
             history: sim.history.clone(),
             next_trade: sim.next_trade,
@@ -174,6 +179,61 @@ impl LiveFeed {
         instrument
     }
 
+    /// The executions the subscription received since the last call, at most the latest 10,000,
+    /// for the time and sales panel. A new symbol starts with its retained executions.
+    pub(super) fn drain_tape(&self) -> Vec<Tick> {
+        let mut sim = self.state();
+        let Some(extended_hours) = sim.subscription.as_ref().map(|sub| sub.extended_hours) else {
+            return Vec::new();
+        };
+        let start = sim
+            .trades
+            .partition_point(|trade| trade.id < Some(sim.tape))
+            .max(sim.trades.len().saturating_sub(10_000));
+        let tape = sim
+            .trades
+            .range(start..)
+            .filter_map(|trade| sim.shown_trade(trade, extended_hours))
+            .collect();
+        sim.tape = sim.id;
+        tape
+    }
+
+    /// The last displayed trade and previous session close, on the chart's session and price basis.
+    pub(super) fn day_change(&self) -> Option<(f64, f64)> {
+        let sim = self.state();
+        let extended = sim.subscription.as_ref()?.extended_hours;
+        let (time, last) = sim
+            .trades
+            .iter()
+            .rev()
+            .find_map(|trade| sim.shown_trade(trade, extended))
+            .map(|trade| (trade.ts, trade.price))
+            .or_else(|| {
+                sim.shown_history(extended)
+                    .last()
+                    .map(|bar| (bar.time, bar.close))
+            })?;
+        let midnight = time.date_naive().and_hms_opt(0, 0, 0)?.and_utc();
+        let prev_close = match sim
+            .trades
+            .iter()
+            .rev()
+            .filter(|trade| trade.ts < midnight)
+            .find_map(|trade| sim.shown_trade(trade, extended))
+        {
+            Some(trade) => trade.price,
+            None => {
+                sim.shown_history(extended)
+                    .iter()
+                    .rev()
+                    .find(|bar| bar.time < midnight)?
+                    .close
+            }
+        };
+        Some((last, prev_close))
+    }
+
     pub(super) fn paused(&self) -> bool {
         self.state().paused
     }
@@ -219,6 +279,27 @@ impl LiveFeed {
         );
         to_trade.min(to_second)
     }
+}
+
+/// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
+/// which stands for the previous close. `None` for symbols outside the catalog.
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<WatchlistQuote> {
+    let spec = DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))?;
+    let (tick_size, price_decimals) = if spec.start_price < 10.0 {
+        (0.0001, 4)
+    } else {
+        (0.01, 2)
+    };
+    let t = now.timestamp_millis() as f64 / 1000.0;
+    let phase = spec.seed as f64;
+    let swing = 0.02 * (t / 900.0 + phase).sin() + 0.002 * (t / 7.0 + 2.0 * phase).sin();
+    Some(WatchlistQuote {
+        last: (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size,
+        prev_close: spec.start_price,
+        price_decimals: Some(price_decimals),
+    })
 }
 
 impl Simulation {
@@ -425,6 +506,41 @@ impl Datafeed for LiveFeed {
             sim.subscription = None;
         }
     }
+
+    /// Synthetic statistics and profile derived from the catalog entry of `symbol`.
+    fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
+        let Some(spec) = DemoSymbol::catalog()
+            .iter()
+            .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+        else {
+            reply.send(Err(FeedError::SymbolNotFound(symbol.into())));
+            return;
+        };
+        let decimals = if spec.start_price < 10.0 { 4 } else { 2 };
+        let price = |factor: f64| format!("{:.*}", decimals, spec.start_price * factor);
+        let volume = 0.5 + (spec.seed % 10) as f64 * 0.35;
+        let kind = match spec.exchange {
+            "Crypto" => "Cryptocurrency",
+            "Index" => "Index",
+            "Forex" => "Currency pair",
+            "Synthetic" => "Fund",
+            _ => "Stock",
+        };
+        let pair = |label: &str, value: String| (label.to_owned(), value);
+        reply.send(Ok(SymbolDetails::new(
+            vec![
+                pair(
+                    "52-week range",
+                    format!("{} - {}", price(0.82), price(1.17)),
+                ),
+                pair("Average volume (30D)", format!("{volume:.2}M")),
+            ],
+            vec![
+                pair("Type", kind.into()),
+                pair("Source", "Synthetic data generated by the demo".into()),
+            ],
+        )));
+    }
 }
 
 #[cfg(test)]
@@ -556,6 +672,13 @@ mod tests {
             }
             let expected = feed.snapshot(Timeframe::Min1, chart.bar_clock(), extended);
             assert_eq!(chart.bars(SeriesId::MAIN), expected);
+            let last = expected.last().unwrap();
+            let previous = expected
+                .iter()
+                .rev()
+                .find(|bar| bar.time.date_naive() < last.time.date_naive())
+                .unwrap();
+            assert_eq!(feed.day_change(), Some((last.close, previous.close)));
             let hours = egui_charts::model::ExchangeSessionProvider::new(
                 egui_charts::model::TimezoneId::utc(),
                 Some(sample_session()),

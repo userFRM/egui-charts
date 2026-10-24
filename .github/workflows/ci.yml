@@ -75,6 +75,68 @@ jobs:
       - name: Run doc tests (all features)
         run: cargo test --doc --all-features
 
+  bare-chart:
+    name: Bare chart size and frame cost
+    # Pinned image and compiler: the figures move with the code, the lockfile, the MSRV and the runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Valgrind
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+      - name: Build
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: >-
+          cargo build --release --locked --no-default-features --features widget
+          --example bare_chart --bench bare_chart --message-format=json-render-diagnostics > build.json
+      - name: Compare with benches/bare_chart.baseline
+        run: |
+          bench=$(jq -r 'select(.target.kind == ["bench"] and .executable) | .executable' build.json)
+          size=$(stat -c %s target/release/examples/bare_chart)
+          # Wall-clock frame times vary between hosted runners, so the checked frame cost is the
+          # instruction count of 300 frames, less that of start-up and warm-up alone.
+          ir() { BARE_CHART_FRAMES=$1 valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
+                 "$bench" 2>&1 | sed -n 's/.*I *refs: *//p' | tr -d ,; }
+          ir0=$(ir 0); ir300=$(ir 300)
+          [[ $ir0 =~ ^[0-9]+$ && $ir300 =~ ^[0-9]+$ ]] || { echo "::error::Cachegrind reported no instruction count"; exit 1; }
+          instr=$(( (ir300 - ir0) / 300 ))
+          wall=$("$bench")
+          fail=0
+          # Name, baseline key, this build, tolerance in percent.
+          check() {
+            local base change
+            base=$(sed -n "s/^$2=//p" benches/bare_chart.baseline)
+            change=$(awk -v b="$base" -v v="$3" 'BEGIN { if (b > 0) printf "%+.2f%%", (v - b) * 100 / b; else print "n/a" }')
+            echo "| $1 | ${base:-none} | $3 | $change | +$4% |" >> "$GITHUB_STEP_SUMMARY"
+            if [[ $change == n/a ]] || awk -v c="$change" -v t="$4" 'BEGIN { exit !(c + 0 > t) }'; then
+              echo "::error title=Bare chart::$1 grew from ${base:-none} to $3 ($change), above the +$4% tolerance"
+              fail=1
+            fi
+          }
+          {
+            echo "### Bare chart (\`--no-default-features --features widget\`)"
+            echo
+            echo '| Figure | Baseline | This build | Change | Tolerance |'
+            echo '|---|---:|---:|---:|---:|'
+          } >> "$GITHUB_STEP_SUMMARY"
+          check "Stripped size of \`examples/bare_chart\`, bytes" size_bytes "$size" 1
+          check "Instructions per frame of \`benches/bare_chart.rs\`" frame_instructions "$instr" 2
+          {
+            echo
+            echo "Frame time, not checked: $wall. Runner: $(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo)."
+            echo
+            echo "To accept these figures, commit them to \`benches/bare_chart.baseline\` and say why in the pull request:"
+            echo
+            echo "    size_bytes=$size"
+            echo "    frame_instructions=$instr"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$fail"
+
   native-demo:
     name: Native demo (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -330,6 +330,13 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Market Profile settings of a study whose session profiles the chart builds with
+    /// [`to_tpo_profiles`](crate::model::to_tpo_profiles) and draws on the price pane, beside
+    /// each session's bars, as it does for the TPO chart type. `None` by default.
+    fn tpo(&self) -> Option<&crate::model::TPOConfig> {
+        None
+    }
+
     /// Shapes attached to study values, empty by default.
     fn markers(&self) -> &[IndicatorMarker] {
         &[]

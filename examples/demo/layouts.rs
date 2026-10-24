@@ -179,6 +179,8 @@ impl DemoApp {
 
     fn refresh_active_chart(&mut self) {
         self.last_chart_click = None;
+        self.time_and_sales.clear();
+        self.watchlist.set_selected(self.chart.symbol());
         self.state.symbol = self.chart.symbol().to_owned();
         self.state.timeframe = self.chart.timeframe().unwrap_or(Timeframe::Min1);
         self.state.chart_type = self.chart.chart_type();
@@ -505,6 +507,11 @@ mod tests {
                     ("Object Tree", Some(super::super::SidePanel::ObjectTree)),
                     ("Alerts", Some(super::super::SidePanel::Alerts)),
                     ("Data Window", Some(super::super::SidePanel::DataWindow)),
+                    ("Watchlist", Some(super::super::SidePanel::Watchlist)),
+                    (
+                        "Time and sales",
+                        Some(super::super::SidePanel::TimeAndSales),
+                    ),
                     ("Session notes", None),
                     ("Keyboard shortcuts", None),
                 ] {
@@ -548,8 +555,9 @@ mod tests {
         app.extra_charts[0].live.set_paused(true);
         app.layout.sync.sync_time_axis = false;
         app.layout.set_active(0);
+        app.open_panel = Some(super::super::SidePanel::TimeAndSales);
         let frame = |app: &mut DemoApp, events| {
-            ctx.run_ui(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -559,8 +567,16 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-            )
-            .drop_without_applying_deltas();
+            );
+            let has_old_trade = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == "987.65")
+            });
+            output.drop_without_applying_deltas();
+            assert!(
+                !has_old_trade,
+                "switching charts must clear the previous tape"
+            );
         };
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
@@ -572,6 +588,12 @@ mod tests {
             modifiers,
         };
         for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+            app.time_and_sales.push(egui_charts::model::Tick::new(
+                chrono::Utc::now(),
+                987.65,
+                1.0,
+                None,
+            ));
             frame(
                 &mut app,
                 vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],

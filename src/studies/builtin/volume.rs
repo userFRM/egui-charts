@@ -56,17 +56,18 @@ impl Default for Volume {
 }
 
 impl Volume {
-    /// SMA volume with `period` bars (zero becomes one), overlaid by default.
+    /// Volume with an SMA of `period` bars (zero becomes one) that is off until enabled,
+    /// overlaid by default.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
             average: VolumeAverage::Simple,
-            show_average: true,
+            show_average: false,
             color_rule: VolumeColorRule::Open,
             overlay: true,
             colors: [
-                Color32::from_rgba_unmultiplied(38, 198, 218, 153),
-                Color32::from_rgba_unmultiplied(236, 64, 122, 153),
+                Color32::from_rgba_unmultiplied(38, 166, 154, 153),
+                Color32::from_rgba_unmultiplied(239, 83, 80, 153),
                 Color32::from_rgb(233, 30, 99),
             ],
             visible: true,
@@ -108,9 +109,6 @@ impl Indicator for Volume {
 
     fn name(&self) -> &str {
         "Volume"
-    }
-    fn precision(&self) -> Option<usize> {
-        Some(3)
     }
     fn desc(&self) -> &str {
         "Volume with an optional SMA or EMA; unchanged prices count as up"
@@ -269,13 +267,15 @@ mod tests {
                 study
                     .set_input("color_rule", crate::studies::InputValue::Choice(rule))
                     .unwrap();
+                study
+                    .set_input(
+                        "show_average",
+                        crate::studies::InputValue::Toggle(average.is_some()),
+                    )
+                    .unwrap();
                 if let Some(average) = average {
                     study
                         .set_input("average", crate::studies::InputValue::Choice(average))
-                        .unwrap();
-                } else {
-                    study
-                        .set_input("show_average", crate::studies::InputValue::Toggle(false))
                         .unwrap();
                 }
                 study.calculate(&bars);
@@ -286,9 +286,9 @@ mod tests {
                     assert_eq!(
                         study.colors()[line],
                         if *is_up {
-                            Color32::from_rgba_unmultiplied(38, 198, 218, 153)
+                            Color32::from_rgba_unmultiplied(38, 166, 154, 153)
                         } else {
-                            Color32::from_rgba_unmultiplied(236, 64, 122, 153)
+                            Color32::from_rgba_unmultiplied(239, 83, 80, 153)
                         }
                     );
                     match expected[i] {
@@ -310,6 +310,10 @@ mod tests {
                 }
             }
         }
+        assert!(
+            !Volume::default().plot_style(2).visible,
+            "the average starts off"
+        );
         let mut study =
             crate::studies::ConfiguredStudy::new(Box::new(Volume::new(2).with_average(None)));
         for enabled in [false, true, false, true] {

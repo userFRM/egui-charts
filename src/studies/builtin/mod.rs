@@ -88,6 +88,9 @@ pub use median::Median;
 pub use volatility_stop::VolatilityStop;
 pub use williams_alligator::WilliamsAlligator;
 
+mod time_price_opportunity;
+pub use time_price_opportunity::TimePriceOpportunity;
+
 mod bollinger_bands;
 mod ema;
 mod macd;

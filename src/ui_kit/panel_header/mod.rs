@@ -53,12 +53,15 @@ impl<'a> PanelHeader<'a> {
         let theme = ui.active_theme();
         let size = vec2(ui.available_width(), ROW_HEIGHT + 2.0 * theme.spacing.sm);
         let response = ui
-            .allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+            .allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
                 ui.set_min_height(size.y);
-                ui.label(RichText::new(self.title).strong().size(theme.text.title));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = theme.spacing.sm;
-                    actions(ui);
+                ui.spacing_mut().item_spacing.x = theme.spacing.sm;
+                actions(ui);
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(self.title).strong().size(theme.text.title))
+                            .truncate(),
+                    );
                 });
             })
             .response;

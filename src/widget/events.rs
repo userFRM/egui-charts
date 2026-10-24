@@ -24,6 +24,12 @@ pub enum ChartEvent {
     EventsDropped(usize),
     /// The UTC plot edges changed; `None` means there is no data to map.
     VisibleRangeChanged(Option<VisibleTimeRange>),
+    /// The visible logical range changed, as [`Chart::visible_logical_range`] returns it,
+    /// including changes of bar spacing alone; `None` means there is no data.
+    VisibleLogicalRangeChanged(Option<crate::model::LogicalRange>),
+    /// The time axis changed size, as [`Chart::time_scale_size`] returns it, including its
+    /// first non-zero size.
+    TimeScaleResized(egui::Vec2),
     /// The local cursor moved or its mapped value changed; `None` means it left the plots.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
@@ -53,6 +59,8 @@ pub(super) struct HostEvents {
     queue: std::collections::VecDeque<ChartEvent>,
     dropped: usize,
     range: Option<VisibleTimeRange>,
+    logical_range: Option<crate::model::LogicalRange>,
+    time_scale_size: egui::Vec2,
     pointer: Option<ChartPointer>,
     click_frames: [Option<u64>; 2],
     pub volume_map: Option<crate::scales::PriceMap>,
@@ -189,6 +197,17 @@ impl Chart {
             self.host_events.range = range;
             self.host_events
                 .push(ChartEvent::VisibleRangeChanged(range));
+        }
+        let logical_range = self.visible_logical_range();
+        if logical_range != self.host_events.logical_range {
+            self.host_events.logical_range = logical_range;
+            self.host_events
+                .push(ChartEvent::VisibleLogicalRangeChanged(logical_range));
+        }
+        let size = self.time_scale_size();
+        if size != self.host_events.time_scale_size {
+            self.host_events.time_scale_size = size;
+            self.host_events.push(ChartEvent::TimeScaleResized(size));
         }
         let position = ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
             ui.rect_contains_pointer(egui::Rect::from_min_max(
@@ -464,7 +483,8 @@ mod tests {
                     series: SeriesId::MAIN,
                     bars: 0
                 },
-                ChartEvent::VisibleRangeChanged(None)
+                ChartEvent::VisibleRangeChanged(None),
+                ChartEvent::VisibleLogicalRangeChanged(None),
             ]
         );
     }

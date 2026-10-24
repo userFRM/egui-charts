@@ -1,6 +1,6 @@
 //! Widget bar
 //!
-//! Contains alerts, object tree, and other panels.
+//! Contains alerts, object tree, watchlist, symbol details, time and sales, and other panels.
 
 pub mod actions;
 pub mod panels;

@@ -127,6 +127,13 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
+    /// Key statistics and the company or contract profile of `symbol`, for the symbol details
+    /// panel. The default answers [`FeedError::NotSupported`], and the panel then shows neither.
+    fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
     /// The order book of subscription `id` was lost to a gap, an unusable update or a book deeper
     /// than the limit: push a new snapshot with [`Sink::push_depth_snapshot`], and keep pushing
     /// deltas while it is fetched. The snapshot may be older than the latest delta: the chart
@@ -204,6 +211,27 @@ impl TradePage {
         Self {
             trades,
             end_of_history,
+        }
+    }
+}
+
+/// Facts about one symbol as labelled values, already formatted for display, in the order to
+/// show them. Supply only what is known: the panel shows a section only when it has values.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct SymbolDetails {
+    /// Key statistics, such as `("Market capitalization", "2.95T USD")`.
+    pub statistics: Vec<(String, String)>,
+    /// The company or contract profile, such as `("Sector", "Technology")`.
+    pub profile: Vec<(String, String)>,
+}
+
+impl SymbolDetails {
+    /// Details made of `statistics` and `profile`.
+    pub fn new(statistics: Vec<(String, String)>, profile: Vec<(String, String)>) -> Self {
+        Self {
+            statistics,
+            profile,
         }
     }
 }

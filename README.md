@@ -129,7 +129,7 @@ The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the 
 
 ## Studies
 
-A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 157 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
+A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 158 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
 
 | Group | Examples |
 |---|---|
@@ -162,7 +162,7 @@ Magnet snapping is not applied yet. `drawings::persistence` saves drawings to JS
 
 ## Order flow
 
-The Market Profile (TPO) chart type, fixed range and anchored volume profiles, and cumulative volume delta, estimated from each bar's prices. A `Datafeed` can already push trades and order book depth; a footprint chart ([#231](https://github.com/userFRM/egui-charts/issues/231)) and a liquidity heatmap of the order book ([#235](https://github.com/userFRM/egui-charts/issues/235)) are planned.
+The Market Profile (TPO) chart type and study, fixed range and anchored volume profiles, and cumulative volume delta, estimated from each bar's prices. A `Datafeed` can already push trades and order book depth; a footprint chart ([#231](https://github.com/userFRM/egui-charts/issues/231)) and a liquidity heatmap of the order book ([#235](https://github.com/userFRM/egui-charts/issues/235)) are planned.
 
 ## Themes
 
@@ -191,7 +191,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-dark.svg">
-  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading, with no feature yet: every build has the Broker trait, and order panels and depth of market are planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
+  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading: every build has the Broker trait; the ui feature adds order tickets and order and position lines. Depth of market is planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
 </picture>
 
 | Layer | What it gives | Feature |
@@ -200,7 +200,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 | Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
 | Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, drawings, studies on the chart, theme | `widget` |
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
-| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, dialogs, and the `ui_kit` widgets they are built from | `ui` |
+| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
 The default feature is `ui`, which enables `icons`, `widget` and `studies`.
 

@@ -62,6 +62,7 @@ mod types;
 pub use actions::ObjectTreeAction;
 pub use config::ObjectTreeConfig;
 pub use data_window::show_data_window;
+pub(crate) use data_window::{format_price, price_decimals};
 pub use panel::ObjectTreePanel;
 pub use state::ObjectTreeState;
 pub use types::{DataWindowInfo, DrawingProperties, SourceItem, SourceType};
