@@ -206,7 +206,11 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let theme = Theme::light();
+        let dark = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "dark_theme"))
+            .unwrap_or(false);
+        let theme = if dark { Theme::dark() } else { Theme::light() };
         let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
@@ -958,6 +962,7 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "dark_theme", &self.theme.dark);
         eframe::set_value(
             storage,
             "interval_preferences",
@@ -2186,6 +2191,50 @@ fn apply_settings_state(
 mod tests {
     use super::*;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[derive(Default)]
+    struct AppStorage(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for AppStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn theme_selection_survives_restart_and_initializes_the_chart() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        for dark in [true, false] {
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+            assert_eq!(app.theme.dark, dark);
+            app.save(&mut storage);
+            drop(app);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let restored = DemoApp::new(&cc);
+            assert_eq!(restored.theme.dark, dark);
+            assert_eq!(
+                restored.chart.config().background_color,
+                restored.theme.chart.bg
+            );
+            assert_eq!(
+                restored.chart.config().bearish_color,
+                restored.theme.chart.candle_down
+            );
+        }
+    }
 
     /// Native integrations send clipboard events instead of key events. Only our session
     /// clipboard pastes a drawing, and the pasted copy is an ordinary undoable addition.

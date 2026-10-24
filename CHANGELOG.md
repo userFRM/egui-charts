@@ -146,6 +146,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo restores its selected light or dark theme before building the chart and saves the selection through application storage. The existing full theme switch continues to update active and saved chart layouts. ([#283](https://github.com/userFRM/egui-charts/issues/283))
+
 - Series settings Reset to defaults uses the active theme's candle colours, clears custom borders and wicks and retains the selected chart type. Opening and accepting settings continues to preserve the chart's current colours. ([#578](https://github.com/userFRM/egui-charts/issues/578))
 
 
