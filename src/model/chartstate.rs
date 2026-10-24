@@ -330,22 +330,12 @@ impl ChartState {
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
     ) -> PriceTransform {
-        self.fit_price_scale_with_series(indicators, true, std::iter::empty())
+        self.fit_price_scale_with_series(indicators, true, [], std::iter::empty())
     }
 
-    /// Fits visible series and studies together; additional values are already in scale units.
+    /// Fits visible series and studies together, also to `prices` on this scale;
+    /// `series_values` are already in scale units.
     pub(crate) fn fit_price_scale_with_series<'a>(
-        &mut self,
-        indicators: impl IntoIterator<Item = &'a dyn Indicator>,
-        main_visible: bool,
-        series_values: impl IntoIterator<Item = f64>,
-    ) -> PriceTransform {
-        self.fit_price_scale_with_prices(indicators, main_visible, [], series_values)
-    }
-
-    /// Fits as [`fit_price_scale_with_series`](Self::fit_price_scale_with_series), also to
-    /// `prices`, which are prices on this scale rather than scale units.
-    pub(crate) fn fit_price_scale_with_prices<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_visible: bool,
