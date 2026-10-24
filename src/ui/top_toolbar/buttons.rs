@@ -39,7 +39,12 @@ impl<'a> ToolbarIconButton<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let icon_size = self.config.small_icon_size;
+        // Match glyph ink bounds while preserving the host's configured icon scale.
+        let icon_size = match self.icon.name() {
+            "ui/settings.svg" => Vec2::new(24.0, 22.0),
+            "ui/camera.svg" | "ui/compare-add.svg" => Vec2::splat(23.0),
+            _ => Vec2::splat(24.0),
+        } * (self.config.small_icon_size / 24.0);
         let btn_size = self.config.btn_size;
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(btn_size), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, self.config.rounding);
@@ -61,8 +66,8 @@ impl<'a> ToolbarIconButton<'a> {
         let is_active = response.is_pointer_button_down_on();
 
         // Render icon at exact position (with visibility check)
-        let icon_pos = rect.center() - Vec2::splat(icon_size / 2.0);
-        let icon_rect = Rect::from_min_size(icon_pos, Vec2::splat(icon_size));
+        let icon_pos = rect.center() - icon_size / 2.0;
+        let icon_rect = Rect::from_min_size(icon_pos, icon_size);
         if ui.is_rect_visible(icon_rect) {
             let icon_color = if is_active || is_hovered {
                 ui.visuals().widgets.hovered.fg_stroke.color
@@ -70,7 +75,7 @@ impl<'a> ToolbarIconButton<'a> {
                 ui.visuals().text_color()
             };
             self.icon
-                .as_image_tinted(Vec2::splat(icon_size), icon_color)
+                .as_image_tinted(icon_size, icon_color)
                 .paint_at(ui, icon_rect);
         }
 
