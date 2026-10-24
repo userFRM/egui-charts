@@ -624,7 +624,9 @@ mod tests {
         chart.set_data(SeriesId::MAIN, bars.clone());
         let mut chart_id = None;
         for clear_globally in [false, true] {
-            chart.set_theme_override(Some(local.clone()));
+            if clear_globally {
+                chart.set_theme_override(Some(local.clone()));
+            }
             for clear in [false, true] {
                 if clear {
                     if clear_globally {
