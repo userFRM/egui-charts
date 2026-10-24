@@ -472,6 +472,7 @@ impl DemoApp {
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         // Source playback stays on its own interval when the display interval changes.
+        self.configure_replay_intervals();
         self.push_replay_window_to_chart();
     }
 
@@ -1809,13 +1810,11 @@ impl DemoApp {
     }
 
     fn advance_replay(&mut self) {
-        let advanced = match self.replay.as_mut() {
-            Some(replay) => replay.update(),
-            None => return,
+        let Some(replay) = self.replay.as_mut() else {
+            return;
         };
-        if advanced > 0 {
-            self.push_replay_window_to_chart();
-        }
+        replay.update();
+        self.push_replay_window_to_chart();
     }
 
     fn keyboard_dialog_open(&self) -> bool {
@@ -2152,6 +2151,13 @@ mod tests {
             "transport must display the cursor chosen after chart rendering"
         );
         assert_eq!(app.extra_charts[0].chart.replay_time(), Some(cutoff));
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Three);
+        app.advance_replay();
+        assert_eq!(
+            app.extra_charts[1].chart.replay_time(),
+            Some(cutoff),
+            "new slots join paused replay"
+        );
         app.set_replay_interval(Timeframe::Min1);
         assert_eq!(
             app.chart.replay_time(),
@@ -2159,25 +2165,71 @@ mod tests {
             "finer source must retain the cutoff"
         );
         app.handle_replay_control(ReplayControlAction::NextBar);
+        app.set_replay_interval(Timeframe::Hour1);
         let saved = app.replay.as_ref().unwrap().session().unwrap();
         let cutoff = app.chart.replay_time().unwrap();
         assert_eq!(app.extra_charts[0].chart.replay_time(), Some(cutoff));
         assert_eq!(app.state.timeframe, Timeframe::Hour1);
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        assert!(
+            app.extra_charts[1].chart.bars(SeriesId::MAIN).len() > 11,
+            "new slots retain history beyond their copied prefix"
+        );
+        assert!(app.replay.as_mut().unwrap().restore_session(&saved));
+        app.push_replay_window_to_chart();
         app.stop_replay();
         assert!(app.extra_charts[0].chart.replay_time().is_none());
         let mut storage = AppStorage::default();
         eframe::App::save(&mut app, &mut storage);
-        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
         assert_eq!(
             restored.replay_session,
-            Some((saved.clone(), Timeframe::Min1))
+            Some((saved.clone(), Timeframe::Hour1))
         );
-        restored.start_replay();
-        restored.set_replay_interval(Timeframe::Min1);
-        assert!(restored.replay.as_mut().unwrap().restore_session(&saved));
-        restored.push_replay_window_to_chart();
+        restored.replay_start.open(None);
+        let mut resume = egui::Pos2::ZERO;
+        for pass in 0..5 {
+            let events = if pass >= 3 {
+                vec![
+                    egui::Event::PointerMoved(resume),
+                    egui::Event::PointerButton {
+                        pos: resume,
+                        button: egui::PointerButton::Primary,
+                        pressed: pass == 3,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| restored.show_replay_start(ui.ctx()),
+            );
+            if pass == 2 {
+                resume = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Resume saved session" => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(ctx.content_rect().contains(resume));
+            }
+            output.drop_without_applying_deltas();
+        }
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
     }

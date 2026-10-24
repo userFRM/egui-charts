@@ -214,7 +214,8 @@ impl Chart {
         {
             link.reload_pending = true;
         }
-        if self.timeframe != Some(timeframe) {
+        let changed = self.timeframe != Some(timeframe);
+        if changed {
             self.pending_scroll_time = None;
         }
         self.timeframe = Some(timeframe);
@@ -222,6 +223,9 @@ impl Chart {
             study.set_timeframe(timeframe);
         }
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        if changed {
+            self.apply_replay_window();
+        }
     }
 
     /// Requests regular hours (`false`, the default) or regular and extended hours (`true`).

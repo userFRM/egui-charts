@@ -304,6 +304,13 @@ mod tests {
             a.bars(comparison).is_empty(),
             "exit cannot resurrect a removed series"
         );
+        b.set_timeframe(Timeframe::Min5);
+        assert!(
+            b.bars(SeriesId::MAIN).is_empty(),
+            "a paused cutoff must follow interval changes"
+        );
+        b.set_timeframe(Timeframe::Min1);
+        assert_eq!(b.bars(SeriesId::MAIN), &minutes[..2]);
         b.set_data(SeriesId::MAIN, minutes[..3].to_vec());
         assert_eq!(b.bars(SeriesId::MAIN), &minutes[..2]);
         b.set_replay_time(None);

@@ -173,6 +173,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Replay reapplies its cutoff on interval changes, includes newly added layout slots while paused, and restores checkpoints from their saved source interval. ([#213](https://github.com/userFRM/egui-charts/issues/213))
+
 - Starting a feed reload no longer reports `DataLoaded` before history arrives. Successful pages and explicit data replacements still notify the host. ([#201](https://github.com/userFRM/egui-charts/issues/201))
 
 - The basic chart example reserves its click readout above the plot and requests repaint after a host click event, keeping the feedback visible. ([#201](https://github.com/userFRM/egui-charts/issues/201))

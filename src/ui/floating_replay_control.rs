@@ -604,6 +604,13 @@ mod tests {
             let mut bar = FloatingReplayControl::new();
             bar.sync_from(true, false, 1.0, 150, 300);
             bar.set_symbol("SAMPLE");
+            bar.set_update_intervals(
+                crate::model::Timeframe::Hour1,
+                vec![
+                    crate::model::Timeframe::Hour1,
+                    crate::model::Timeframe::Min1,
+                ],
+            );
             for width in [900.0, 320.0, 600.0] {
                 let dock = Rect::from_min_max(pos2(0.0, 80.0), pos2(width, 560.0));
                 bar.set_dock_rect(dock);

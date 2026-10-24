@@ -29,9 +29,8 @@ impl DemoApp {
         self.live.set_paused(true);
         self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
         self.replay_interval = self.state.timeframe;
-        let ts = self.bars.iter().map(|bar| bar.time).collect();
-        let mut replay =
-            ReplayController::new(self.bars.clone(), ts).with_symbol(self.state.symbol.clone());
+        let mut replay = ReplayController::new(self.bars.clone(), Vec::new())
+            .with_symbol(self.state.symbol.clone());
         replay.handle_action(ReplayAction::EnterReplayMode);
         self.replay = Some(replay);
         self.state.replay_active = true;
@@ -41,7 +40,7 @@ impl DemoApp {
         self.push_replay_window_to_chart();
     }
 
-    fn configure_replay_intervals(&mut self) {
+    pub(super) fn configure_replay_intervals(&mut self) {
         let mut intervals = vec![self.state.timeframe];
         if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
             intervals.push(Timeframe::Min1);
@@ -86,6 +85,26 @@ impl DemoApp {
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| self.layout.sync_group(slot) == self.layout.sync_group(source))
             .collect();
+        for (index, extra) in self.extra_charts.iter_mut().enumerate() {
+            let slot = if index >= source { index + 1 } else { index };
+            if slots.contains(&slot) && !self.replay_slots.contains(&slot) {
+                // A copied slot may contain only the visible replay prefix.
+                let bars = extra.live.snapshot(
+                    extra.chart.timeframe().unwrap_or_default(),
+                    extra.chart.bar_clock(),
+                    extra.chart.extended_hours(),
+                );
+                extra.chart.set_data(SeriesId::MAIN, bars);
+                extra.chart.set_replay_time(Some(time));
+                let clock = source_clock(&extra.chart, self.replay_interval);
+                let bars = extra.live.snapshot(
+                    self.replay_interval,
+                    clock.clone(),
+                    extra.chart.extended_hours(),
+                );
+                extra.chart.set_replay_source(bars, clock);
+            }
+        }
         let mut charts: Vec<_> = self
             .extra_charts
             .iter_mut()
@@ -117,9 +136,8 @@ impl DemoApp {
             return;
         }
         let cutoff = self.chart.replay_time();
-        let ts = bars.iter().map(|bar| bar.time).collect();
         let mut next =
-            ReplayController::new(bars.clone(), ts).with_symbol(self.state.symbol.clone());
+            ReplayController::new(bars.clone(), Vec::new()).with_symbol(self.state.symbol.clone());
         if let Some(cutoff) = cutoff
             && !next.seek_cutoff(cutoff, &clock)
         {
@@ -171,20 +189,24 @@ impl DemoApp {
                     if session.symbol != self.state.symbol {
                         self.switch_symbol(&session.symbol);
                     }
-                    self.start_replay();
-                    self.set_replay_interval(interval);
-                    if !self
-                        .replay
-                        .as_mut()
-                        .is_some_and(|replay| replay.restore_session(&session))
-                    {
-                        self.stop_replay();
+                    let clock = source_clock(&self.chart, interval);
+                    let bars = self
+                        .live
+                        .snapshot(interval, clock, self.chart.extended_hours());
+                    let mut replay = ReplayController::new(bars, Vec::new())
+                        .with_symbol(self.state.symbol.clone());
+                    if !replay.restore_session(&session) {
                         self.replay_session = Some((session, interval));
                         self.notify(
                             "Saved replay needs source history that is no longer available",
                         );
+                        return;
                     }
+                    self.start_replay();
+                    self.replay = Some(replay);
+                    self.replay_interval = interval;
                     self.push_replay_window_to_chart();
+                    self.set_replay_interval(interval);
                 }
             }
             choice => {
