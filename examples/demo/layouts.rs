@@ -101,35 +101,21 @@ impl DemoApp {
             .with_visible_candles(0)
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
-        chart.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
+        chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
+        if let Some(scale) = source.series_scale(SeriesId::MAIN) {
+            chart.set_series_scale(SeriesId::MAIN, scale);
+        } else {
+            chart.remove_series(SeriesId::MAIN);
+        }
         chart.set_instrument(Some(live.instrument()));
         chart.set_extended_hours(source.extended_hours());
         chart.set_chart_type_params(source.chart_type_params().clone());
         *chart.price_scale_mut() = source.state().price_scale().clone();
         let (spacing, offset) = source.get_time_scale_state();
         chart.apply_synced_time_scale(spacing, offset);
-        let mut copied_comparisons = Vec::new();
+        let copied_comparisons = super::comparison::copy(&mut chart, source, comparisons);
         for (id, indicator) in source.indicators() {
-            let copy = if let Some((symbol, _, feed)) =
-                comparisons.iter().find(|(_, current, _)| *current == id)
-            {
-                let feed = Arc::new(feed.fork());
-                let copy = chart.add_indicator(Box::new(super::comparison::Comparison::new(
-                    symbol.clone(),
-                    feed.clone(),
-                    indicator.colors()[0],
-                )));
-                if let Some(study) = chart.indicator_mut(copy) {
-                    study
-                        .apply_settings(&[], indicator.settings())
-                        .expect("existing comparison style");
-                }
-                chart.set_indicator_visible(copy, indicator.is_visible());
-                copied_comparisons.push((symbol.clone(), copy, feed));
-                copy
-            } else {
-                chart.add_indicator(indicator.clone_box())
-            };
+            let copy = chart.add_indicator(indicator.clone_box());
             if let Some(inputs) = source.indicator_inputs(id) {
                 chart.set_indicator_inputs(copy, inputs);
             }

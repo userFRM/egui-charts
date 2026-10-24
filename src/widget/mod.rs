@@ -134,9 +134,11 @@ mod navigation;
 pub(crate) mod pan_zoom;
 mod pane_layout;
 mod panes;
+mod price_series;
 mod readout;
 mod selection;
 mod series;
+pub use price_series::SeriesOptions;
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -215,6 +217,10 @@ pub struct Chart {
     applied_config_scale_mode: crate::scales::PriceScaleMode,
     /// Whether the main price series and its volume are drawn.
     pub(crate) main_series_visible: bool,
+    main_series_present: bool,
+    main_series_scale: crate::model::SeriesScale,
+    price_series: Vec<price_series::PriceSeries>,
+    series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
@@ -596,6 +602,21 @@ impl Chart {
         } else {
             0.0
         };
+        let series_axes = self.series_axis_keys();
+        let series_left = series_axes
+            .iter()
+            .filter(|key| **key != crate::model::SeriesScale::Right)
+            .count() as f32
+            * self
+                .measured_axis_width
+                .max(self.config.right_axis_width)
+                .max(self.config.left_axis_width);
+        let series_right = if series_axes.contains(&crate::model::SeriesScale::Right) {
+            self.measured_axis_width.max(self.config.right_axis_width)
+        } else {
+            0.0
+        };
+        let study_axes = study_axes + series_left;
         let left_axis = if self.config.show_left_axis {
             self.config.left_axis_width.max(self.measured_axis_width)
         } else {
@@ -605,7 +626,7 @@ impl Chart {
             self.config.right_axis_width.max(self.measured_axis_width)
         } else {
             0.0
-        };
+        } + series_right;
         let study_axes = study_axes
             .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
         let left_axis = left_axis + study_axes;

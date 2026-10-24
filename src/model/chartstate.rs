@@ -58,7 +58,7 @@ pub struct ChartState {
     elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
-    /// The main (right) price scale.
+    /// The main series' price scale.
     price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
     zoom_history: Vec<ZoomState>,
@@ -313,12 +313,12 @@ impl ChartState {
         (start, end)
     }
 
-    /// Returns the main (right) price scale.
+    /// Returns the main series' price scale.
     pub fn price_scale(&self) -> &PriceScale {
         &self.price_scale
     }
 
-    /// Returns the main (right) price scale for changing its options or range.
+    /// Returns the main series' price scale for changing its options or range.
     pub fn price_scale_mut(&mut self) -> &mut PriceScale {
         &mut self.price_scale
     }
@@ -329,6 +329,16 @@ impl ChartState {
     pub fn fit_price_scale<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
+    ) -> PriceTransform {
+        self.fit_price_scale_with_series(indicators, true, std::iter::empty())
+    }
+
+    /// Fits visible series and studies together; additional values are already in scale units.
+    pub(crate) fn fit_price_scale_with_series<'a>(
+        &mut self,
+        indicators: impl IntoIterator<Item = &'a dyn Indicator>,
+        main_visible: bool,
+        series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
@@ -386,9 +396,11 @@ impl ChartState {
             });
         let (min, max) = visible
             .iter()
+            .filter(|_| main_visible)
             .flat_map(|bar| [bar.low, bar.high])
             .chain(study_values)
             .map(|value| transform.to_scale(value))
+            .chain(series_values)
             .filter(|value| value.is_finite())
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
                 (min.min(value), max.max(value))

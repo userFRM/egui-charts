@@ -44,13 +44,14 @@ use egui_charts::ui::replay::{ReplayAction, ReplayController};
 use egui_charts::ui::timeframe_toolbar::{
     DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
 };
+#[cfg(test)]
+use egui_charts::ui::top_toolbar::CompareAction;
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
     IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
-use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
@@ -488,80 +489,6 @@ impl DemoApp {
         self.regenerate_bars();
         // A symbol change invalidates an in-flight replay.
         self.stop_replay();
-    }
-
-    fn sync_comparisons(&mut self) {
-        self.comparisons
-            .retain(|(_, id, _)| self.chart.indicators().any(|(current, _)| current == *id));
-        self.compare_dialog.compared_symbols = self
-            .comparisons
-            .iter()
-            .filter_map(|(symbol, id, _)| {
-                let (_, study) = self.chart.indicators().find(|(current, _)| current == id)?;
-                let spec = DemoSymbol::find(symbol);
-                let mut entry =
-                    CompareSymbol::new(symbol, spec.company_name, spec.exchange, study.colors()[0]);
-                entry.visible = study.is_visible();
-                Some(entry)
-            })
-            .collect();
-    }
-
-    fn handle_comparison(&mut self, action: CompareAction) {
-        match action {
-            CompareAction::AddSymbol(symbol) => {
-                if self
-                    .comparisons
-                    .iter()
-                    .any(|(current, _, _)| *current == symbol)
-                    || !DemoSymbol::catalog()
-                        .iter()
-                        .any(|spec| spec.symbol == symbol)
-                {
-                    return;
-                }
-                let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
-                let colors = [
-                    self.theme.ui.info,
-                    self.theme.ui.warning,
-                    self.theme.ui.success,
-                ];
-                let color = colors[self.comparisons.len() % colors.len()];
-                let id = self
-                    .chart
-                    .add_indicator(Box::new(comparison::Comparison::new(
-                        symbol.clone(),
-                        feed.clone(),
-                        color,
-                    )));
-                self.comparisons.push((symbol, id, feed));
-            }
-            CompareAction::RemoveSymbol(symbol) => {
-                if let Some((_, id, _)) = self
-                    .comparisons
-                    .iter()
-                    .find(|(current, _, _)| *current == symbol)
-                {
-                    self.chart.remove_series(*id);
-                }
-            }
-            CompareAction::ToggleVisibility(symbol) => {
-                if let Some((_, id, _)) = self
-                    .comparisons
-                    .iter()
-                    .find(|(current, _, _)| *current == symbol)
-                {
-                    let visible = self
-                        .chart
-                        .indicators()
-                        .find(|(current, _)| current == id)
-                        .is_some_and(|(_, study)| study.is_visible());
-                    self.chart.set_indicator_visible(*id, !visible);
-                }
-            }
-            CompareAction::None | CompareAction::Close => {}
-        }
-        self.sync_comparisons();
     }
 
     fn regenerate_bars(&mut self) {
@@ -1034,9 +961,10 @@ impl eframe::App for DemoApp {
         for extra in &mut self.extra_charts {
             extra.live.set_symbol(extra.chart.symbol());
             let delay = extra.live.advance(chrono::Utc::now());
-            for (_, _, feed) in &extra.comparisons {
+            for (_, id, feed) in &extra.comparisons {
                 feed.set_paused(extra.live.paused());
                 feed.advance(chrono::Utc::now());
+                comparison::refresh(&mut extra.chart, *id, feed);
             }
             if !extra.live.paused() {
                 ctx.request_repaint_after(delay);
@@ -2937,20 +2865,20 @@ mod tests {
             }
             let comparisons: Vec<_> = app
                 .chart
-                .indicators()
-                .filter(|(_, study)| study.name() == "AAPL")
+                .series()
+                .filter(|(_, series)| series.name == "AAPL")
                 .collect();
             assert_eq!(
                 comparisons.len(),
                 count,
                 "{label} must change actual chart membership"
             );
-            if let Some((_, study)) = comparisons.first() {
-                assert_eq!(study.is_visible(), visible);
-                assert!(study.values().line(0).iter().any(|value| value.is_finite()));
+            if let Some((id, _)) = comparisons.first() {
+                assert_eq!(app.chart.is_series_visible(*id), visible);
+                assert!(!app.chart.bars(*id).is_empty());
             }
             if label == "AAPL" {
-                let colour = comparisons[0].1.colors()[0];
+                let colour = comparisons[0].1.color;
                 let mut painted = false;
                 for _ in 0..3 {
                     let output = ctx.run_ui(Default::default(), |ui| {
@@ -2969,11 +2897,7 @@ mod tests {
                     ["Volume"]
                 );
                 app.load_study_template(&template);
-                assert!(
-                    app.chart
-                        .indicators()
-                        .any(|(_, study)| study.name() == "AAPL")
-                );
+                assert!(app.chart.series().any(|(_, series)| series.name == "AAPL"));
             }
             assert_eq!(app.compare_dialog.compared_symbols.len(), count);
             assert_eq!(app.chart.symbol(), main_symbol);

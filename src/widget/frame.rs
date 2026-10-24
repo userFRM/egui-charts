@@ -445,6 +445,7 @@ impl Chart {
         let chart_rect = layout.price_rect;
         let time_axis_top = shared_time_axis.map_or(chart_rect.bottom(), |axis| axis.top());
 
+        self.handle_secondary_axes(ui, rect, chart_rect);
         let chart_width = chart_rect.width();
 
         // CRITICAL: Apply TimeScale width configuration BEFORE any zoom operations
@@ -685,13 +686,16 @@ impl Chart {
         }
 
         // Fit the price scale, then apply this frame's price zoom
-        let transform = self.state.fit_price_scale(
+        let series_values = self.fit_secondary_series();
+        let transform = self.state.fit_price_scale_with_series(
             self.studies
                 .indicators()
                 .iter()
                 .zip(&self.study_autoscale)
                 .filter(|(study, autoscale)| time_based && **autoscale && !study.is_volume())
                 .map(|(study, _)| study.as_ref()),
+            self.main_series_visible,
+            series_values,
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
@@ -901,6 +905,8 @@ impl Chart {
             }
         }
 
+        self.paint_secondary_series(&painter, price_rect);
+
         if let Some(bubbles) = self
             .feed_link
             .as_ref()
@@ -1093,7 +1099,7 @@ impl Chart {
             )));
         }
         let mut pending_values = Vec::new();
-        for line in &self.price_lines {
+        for line in self.price_lines.iter().filter(|_| self.main_series_visible) {
             rendering::render_price_line(
                 &painter,
                 price_rect,
@@ -1218,7 +1224,23 @@ impl Chart {
                 }
             }
         }
-        let mut independent_axis_width = 0.0_f32;
+        if show_price_axis {
+            for (value, color, map) in
+                self.secondary_axis_values(self.main_series_scale, price_rect)
+            {
+                tags.push(rendering::axes::render_axis_value(
+                    &painter,
+                    price_rect,
+                    axis_edge,
+                    map.price_to_y(value),
+                    map.transform().label(map.transform().to_scale(value), 2),
+                    (rendering::axes::tag_text_color(color), color),
+                    &tags,
+                ));
+            }
+        }
+        let mut independent_axis_width =
+            self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
         if show_price_axis {
             let axes = studies.indicators().iter().filter(|study| {
                 study.is_visible()
@@ -1237,8 +1259,14 @@ impl Chart {
                 .padding
                 .max(0.0)
                 .min(rect.width().min(rect.height()).max(0.0) / 2.0);
-            let slot_width =
-                (edge - rect.left() - padding).max(0.0) / axes.clone().count().max(1) as f32;
+            let series_left = self
+                .series_axis_keys()
+                .iter()
+                .filter(|key| **key != crate::model::SeriesScale::Right)
+                .count();
+            let slot_width = (edge - rect.left() - padding).max(0.0)
+                / (axes.clone().count() + series_left).max(1) as f32;
+            edge -= series_left as f32 * slot_width;
             for study in axes {
                 let mapping = crate::chart::renderers::study_mapping(study.as_ref(), &coords);
                 let axis = Rect::from_min_max(
@@ -1473,6 +1501,7 @@ impl Chart {
                     .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
             });
         let mut study_action = None;
+        let mut legend_bottom = price_rect.top() + 8.0;
         {
             let visible_data = self.state.visible_data();
             let selected = hover_pos
@@ -1522,7 +1551,7 @@ impl Chart {
                 legend.show_volume = self.main_series_visible
                     && self.chart_type.supports_volume()
                     && self.config.show_legend_volume;
-                let (quote_action, study_settings) = ui
+                let (quote_action, study_settings, bottom) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(ui, price_rect, &colors)
                     })
@@ -1531,8 +1560,10 @@ impl Chart {
                     self.quote_action = Some(action);
                 }
                 study_action = study_settings;
+                legend_bottom = bottom;
             }
         }
+        self.paint_secondary_legend(ui, &painter, price_rect, legend_bottom + 4.0);
 
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
