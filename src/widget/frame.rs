@@ -3046,12 +3046,12 @@ mod tests {
     fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
         use crate::model::{Bar, BarData};
         use chrono::{TimeZone, Utc};
-        let bars = (0..100_000)
+        let bars = (0..65_536)
             .map(|i| {
                 let t = Utc.timestamp_opt(1_600_000_000 + i * 60, 0).unwrap();
                 let (low, high) = match i {
-                    54_321 => (100.0, 1000.0),
-                    77_777 => (1.0, 101.0),
+                    34_321 => (100.0, 1000.0),
+                    47_777 => (1.0, 101.0),
                     _ => (100.0, 101.0 + (i % 7) as f64),
                 };
                 Bar::new(t, 100.0, high, low, 101.0, 1.0)
@@ -3059,31 +3059,34 @@ mod tests {
             .collect();
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
-        chart.config.show_volume = false;
-        let mut options = chart.chart_options().clone();
+                let mut options = chart.chart_options().clone();
         options.time_scale.min_bar_spacing = 0.0;
         chart.set_chart_options(options);
         frame(&ctx, &mut chart, 0.0, Vec::new());
-        chart.apply_synced_time_scale(chart.get_rendered_price_rect().width() / 100_000.0, 0.0);
+        chart.apply_synced_time_scale(chart.get_rendered_price_rect().width() / 65_536.0, 0.0);
         frame(&ctx, &mut chart, 0.1, Vec::new());
-        let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
         let color = chart.config().bullish_color;
-        let ys: Vec<f32> = painted
-            .iter()
-            .flat_map(|shape| match shape {
-                Shape::Rect(rect) if rect.fill == color => vec![rect.rect.min.y, rect.rect.max.y],
-                Shape::LineSegment { points, stroke } if stroke.color == color => {
-                    points.iter().map(|point| point.y).collect()
-                }
-                Shape::Mesh(mesh) => mesh
-                    .vertices
-                    .iter()
-                    .filter(|vertex| vertex.color == color)
-                    .map(|vertex| vertex.pos.y)
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect();
+        let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
+            shapes(&ctx, chart, t, Vec::new())
+                .iter()
+                .flat_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == color => {
+                        vec![rect.rect.min.y, rect.rect.max.y]
+                    }
+                    Shape::LineSegment { points, stroke } if stroke.color == color => {
+                        points.iter().map(|point| point.y).collect()
+                    }
+                    Shape::Mesh(mesh) => mesh
+                        .vertices
+                        .iter()
+                        .filter(|vertex| vertex.color == color)
+                        .map(|vertex| vertex.pos.y)
+                        .collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        let ys = painted_ys(&mut chart, 0.2);
         // About one bar per pixel column, each still reaching the highest and lowest price.
         assert!(ys.len() < 20_000, "{} points", ys.len());
         let map = chart.get_chart_mapping();
@@ -3091,6 +3094,20 @@ mod tests {
         let bottom = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         assert!((top - map.price_to_y(1000.0)).abs() < 1.0, "{top}");
         assert!((bottom - map.price_to_y(1.0)).abs() < 1.0, "{bottom}");
+
+        // A live bar opening a group, then updating it, is drawn in it, with its volume.
+        let time = Utc.timestamp_opt(1_600_000_000 + 65_536 * 60, 0).unwrap();
+        for (t, high) in [(0.3, 1500.0), (0.5, 2000.0)] {
+            chart.update(
+                crate::widget::SeriesId::MAIN,
+                Bar::new(time, 100.0, high, 100.0, 101.0, 1.0),
+            );
+            frame(&ctx, &mut chart, t, Vec::new());
+            let ys = painted_ys(&mut chart, t + 0.1);
+            let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
+            let y = chart.get_chart_mapping().price_to_y(high);
+            assert!((top - y).abs() < 1.0, "{high}: {top} against {y}");
+        }
     }
 
     #[test]

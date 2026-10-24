@@ -85,6 +85,7 @@ pub(super) struct Group {
 
 /// The groups of the main bars at the frame's factor, rebuilt when the bars, the factor or the
 /// price source change, so a frame that only pans or hovers does not read every bar in view.
+/// Appending or updating the last bar keeps the revision, so it rebuilds the last group only.
 #[derive(Default)]
 pub(super) struct Groups {
     key: Option<(u64, usize, PriceSource)>,
@@ -95,20 +96,21 @@ pub(super) struct Groups {
 impl Groups {
     /// The groups of `factor` bars of `bars`, at `revision`, with extremes of `source`.
     pub fn update(&mut self, bars: &[Bar], revision: u64, factor: usize, source: PriceSource) {
-        if self.key == Some((revision, factor, source)) {
-            return;
-        }
+        let kept = if self.key == Some((revision, factor, source)) {
+            self.groups.len().saturating_sub(1)
+        } else {
+            0
+        };
         self.key = Some((revision, factor, source));
+        self.groups.truncate(kept);
         if factor == 1 {
-            self.groups = Vec::new();
             return;
         }
         let value = |bar: &Bar| source.compute(bar.open, bar.high, bar.low, bar.close);
-        self.groups = bars
-            .chunks(factor)
-            .enumerate()
-            .map(|(index, chunk)| {
-                let first = index * factor;
+        let rest = bars.get(kept * factor..).unwrap_or_default();
+        self.groups
+            .extend(rest.chunks(factor).enumerate().map(|(index, chunk)| {
+                let first = (kept + index) * factor;
                 let mut group = Group {
                     bar: chunk[0].clone(),
                     peak: first,
@@ -134,8 +136,7 @@ impl Groups {
                 }
                 group.bar.close = chunk[chunk.len() - 1].close;
                 group
-            })
-            .collect();
+            }));
     }
 
     /// Bars per group: 1 while bars are drawn one by one.
