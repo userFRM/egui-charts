@@ -73,7 +73,11 @@ pub(super) fn show(
             pos2(x - HALF_WIDTH, y),
             pos2(x + HALF_WIDTH + width, y + down * height),
         );
-        while placed.iter().any(|other| other.intersects(rect)) {
+        // Touching is not covering: a buy and a sell at one price both keep their tips on it.
+        while placed
+            .iter()
+            .any(|other| other.intersect(rect).is_positive())
+        {
             rect = rect.translate(vec2(0.0, down * (height + GAP)));
         }
         placed.push(rect);

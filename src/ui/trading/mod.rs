@@ -856,10 +856,10 @@ mod tests {
     }
 
     /// Each fill of the chart's symbol is an arrow with its tip on the fill's price, on the bar
-    /// its time falls in, and a second fill there stacks below the first; a fill of another
-    /// symbol is not drawn, and hovering an arrow describes its fill. A partial fill, the fill
-    /// that completes an order and a rejection each raise a notification, the rejection with the
-    /// broker's reason. The display options hide the fills, the orders and the positions.
+    /// its time falls in, a second buy there stacks below the first and a sell stays on the price
+    /// above them; a fill of another symbol is not drawn, and hovering an arrow describes its
+    /// fill. A partial fill, the fill that completes an order and a rejection each raise a
+    /// notification, the rejection with the broker's reason. The display options hide the fills, the orders and the positions.
     #[test]
     fn fills_are_drawn_on_their_bar_and_announced() {
         use crate::theme::ThemeExt;
@@ -883,6 +883,8 @@ mod tests {
                 fill("1", OrderSide::Buy, 2.0),
                 AccountEvent::Order(order("2", "OTHER", OrderStatus::Filled, 3.0)),
                 fill("2", OrderSide::Sell, 3.0),
+                AccountEvent::Order(order("5", "SYM", OrderStatus::Filled, 3.0)),
+                fill("5", OrderSide::Sell, 3.0),
                 AccountEvent::Order(order(
                     "3",
                     "SYM",
@@ -905,6 +907,7 @@ mod tests {
                 "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
                 "Filled: Buy 2 SYM at 95.00",
                 "Filled: Sell 3 OTHER at 95.00",
+                "Filled: Sell 3 SYM at 95.00",
                 "Order rejected: Insufficient margin",
             ]
         );
@@ -956,8 +959,9 @@ mod tests {
             }
             let x = chart.index_to_x(95.0).unwrap();
             let y = chart.get_chart_mapping().price_to_y(95.0);
-            // An arrow is 12 points tall, and stacked arrows 3 points apart.
-            let expected = [egui::pos2(x, y), egui::pos2(x, y + 15.0)];
+            // An arrow is 12 points tall, and stacked arrows 3 points apart; the sell arrow above
+            // the price touches the buy arrows below it without covering them.
+            let expected = [egui::pos2(x, y), egui::pos2(x, y + 15.0), egui::pos2(x, y)];
             assert_eq!(tips, if drawn { &expected[..] } else { &[] });
             assert_eq!(hovered, drawn, "hovering an arrow describes its fill");
             assert_eq!(chart.trading_tags.is_empty(), !drawn);
