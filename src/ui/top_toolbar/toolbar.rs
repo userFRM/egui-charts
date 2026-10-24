@@ -1131,64 +1131,72 @@ mod tests {
             }
         }
         // The same flags apply to the default menu, independently of the strip.
-        for (control, hidden, retained) in [
-            (Control::QuickSearch, "Quick Search", "Toggle Theme"),
-            (Control::Theme, "Toggle Theme", "Quick Search"),
-        ] {
-            let ctx = egui::Context::default();
-            let mut toolbar = TopToolbar::new();
-            toolbar.set_control_visible(control, false);
-            let frame = |toolbar: &mut TopToolbar, events| {
-                let mut output = ctx.run_ui(
-                    RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        toolbar.show_with_state(ui, &State);
-                    },
-                );
-                let labels = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                output.textures_delta.clear();
-                output.drop_without_applying_deltas();
-                labels
-            };
-            frame(&mut toolbar, vec![]);
-            let pos = pos2(32.0, 27.0);
-            for pressed in [true, false] {
-                frame(
-                    &mut toolbar,
-                    vec![
-                        Event::PointerMoved(pos),
-                        Event::PointerButton {
-                            pos,
-                            button: PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                );
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [320.0, 1440.0] {
+                for (control, hidden, retained) in [
+                    (Control::QuickSearch, "Quick Search", "Toggle Theme"),
+                    (Control::Theme, "Toggle Theme", "Quick Search"),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut toolbar = TopToolbar::new();
+                    toolbar.set_control_visible(control, false);
+                    let frame = |toolbar: &mut TopToolbar, events| {
+                        let mut output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    vec2(width, 900.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                toolbar.show_with_state(ui, &State);
+                            },
+                        );
+                        let labels = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        output.textures_delta.clear();
+                        output.drop_without_applying_deltas();
+                        labels
+                    };
+                    frame(&mut toolbar, vec![]);
+                    let pos = pos2(32.0, 27.0);
+                    for pressed in [true, false] {
+                        frame(
+                            &mut toolbar,
+                            vec![
+                                Event::PointerMoved(pos),
+                                Event::PointerButton {
+                                    pos,
+                                    button: PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                },
+                            ],
+                        );
+                    }
+                    let labels = frame(&mut toolbar, vec![]);
+                    assert!(
+                        !labels.iter().any(|label| label == hidden),
+                        "hidden menu row: {labels:?}"
+                    );
+                    assert!(
+                        labels.iter().any(|label| label == retained),
+                        "missing retained menu row: {labels:?}"
+                    );
+                    toolbar.set_control_visible(control, true);
+                    let labels = frame(&mut toolbar, vec![]);
+                    assert!(labels.iter().any(|label| label == hidden));
+                }
             }
-            let labels = frame(&mut toolbar, vec![]);
-            assert!(
-                !labels.iter().any(|label| label == hidden),
-                "hidden menu row: {labels:?}"
-            );
-            assert!(
-                labels.iter().any(|label| label == retained),
-                "missing retained menu row: {labels:?}"
-            );
-            toolbar.set_control_visible(control, true);
-            let labels = frame(&mut toolbar, vec![]);
-            assert!(labels.iter().any(|label| label == hidden));
         }
     }
 }

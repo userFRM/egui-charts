@@ -622,48 +622,62 @@ mod tests {
             .with_theme(local.clone())
             .build();
         chart.set_data(SeriesId::MAIN, bars.clone());
-        for time in [0.0, 0.1] {
-            let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, time, vec![]);
-            assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Text(text)
-                if text.galley.text().parse::<f64>().is_ok()
-                    && text.galley.job.sections.iter().any(|section| section.format.font_id.size == 19.0))));
-            assert_eq!(ctx.active_theme(), global);
-            assert_eq!(ctx.global_style().visuals, original_style.visuals);
-            assert_eq!(ctx.global_style().spacing, original_style.spacing);
-        }
         let mut chart_id = None;
-        for update_theme in [false, true] {
-            if update_theme {
-                chart.set_theme(&ctx, &global);
-            }
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(800.0, 600.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        let response = chart.show(ui);
-                        if let Some(id) = chart_id {
-                            assert_eq!(response.id, id, "theme changes must retain chart UI state");
-                            assert!(response.has_focus());
-                        } else {
-                            chart_id = Some(response.id);
-                            response.request_focus();
+        for clear_globally in [false, true] {
+            chart.set_theme_override(Some(local.clone()));
+            for clear in [false, true] {
+                if clear {
+                    if clear_globally {
+                        chart.set_theme(&ctx, &global);
+                    } else {
+                        chart.set_theme_override(None);
+                    }
+                }
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let response = chart.show(ui);
+                            if let Some(id) = chart_id {
+                                assert_eq!(
+                                    response.id, id,
+                                    "theme changes must retain chart UI state"
+                                );
+                                assert!(response.has_focus());
+                            } else {
+                                chart_id = Some(response.id);
+                                response.request_focus();
+                            }
+                        });
+                    },
+                );
+                let sizes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok() => {
+                            Some(text.galley.job.sections[0].format.font_id.size)
                         }
-                    });
-                },
-            )
-            .drop_without_applying_deltas();
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!sizes.is_empty());
+                assert_eq!(sizes.contains(&local.text.label), !clear, "{sizes:?}");
+                if clear {
+                    assert!(sizes.contains(&global.text.label), "{sizes:?}");
+                }
+                assert_eq!(ctx.active_theme(), global);
+                assert_eq!(ctx.global_style().visuals, original_style.visuals);
+                assert_eq!(ctx.global_style().spacing, original_style.spacing);
+                output.drop_without_applying_deltas();
+            }
         }
-        chart.set_theme_override(None);
-        let shapes = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
-        assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Text(text)
-            if text.galley.text().parse::<f64>().is_ok()
-                && text.galley.job.sections.iter().all(|section| section.format.font_id.size != 19.0))));
     }
 
     #[cfg(feature = "serde")]
