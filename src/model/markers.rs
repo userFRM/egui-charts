@@ -205,6 +205,7 @@ impl LineStyle {
 
     /// The dash pattern of one-pixel lines such as price, grid and crosshair lines, or `None`
     /// for solid. Their dots are one pixel long.
+    #[cfg(feature = "widget")]
     #[inline]
     pub(crate) fn hairline_pattern(&self) -> Option<(f32, f32)> {
         match self {
