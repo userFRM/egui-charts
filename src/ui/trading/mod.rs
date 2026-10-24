@@ -57,7 +57,7 @@ pub struct Trading {
     /// orders use. Positive, in the symbol's trading units.
     pub quantity: f64,
     /// Buy and Sell place a market order of [`quantity`](Self::quantity) at once instead of
-    /// opening the ticket. Off by default; turn it on only at the user's request.
+    /// opening the ticket. Off by default; the user turns it on in the ticket.
     pub one_click: bool,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
@@ -244,10 +244,13 @@ impl Trading {
             rules: &self.rules,
         };
         let anchor = chart.get_rendered_price_rect().right_top() + egui::vec2(-8.0, 8.0);
-        if let Some(request) = self
-            .ticket
-            .show(ui.ctx(), anchor, &market, &mut self.presets)
-        {
+        if let Some(request) = self.ticket.show(
+            ui.ctx(),
+            anchor,
+            &market,
+            &mut self.presets,
+            &mut self.one_click,
+        ) {
             self.place(request);
         }
     }

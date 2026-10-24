@@ -253,6 +253,7 @@ impl OrderTicket {
         anchor: egui::Pos2,
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
+        one_click: &mut bool,
     ) -> Option<OrderRequest> {
         let mut open = self.open;
         let mut submitted = None;
@@ -264,7 +265,9 @@ impl OrderTicket {
             .pivot(egui::Align2::RIGHT_TOP)
             .default_pos(anchor)
             .open(&mut open)
-            .show(ctx, |ui| submitted = self.form(ui, market, presets));
+            .show(ctx, |ui| {
+                submitted = self.form(ui, market, presets, one_click)
+            });
         self.open = open && submitted.is_none();
         submitted
     }
@@ -274,6 +277,7 @@ impl OrderTicket {
         ui: &mut Ui,
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
+        one_click: &mut bool,
     ) -> Option<OrderRequest> {
         let theme = ui.ctx().active_theme();
         let side_color = |side| match side {
@@ -480,6 +484,8 @@ impl OrderTicket {
                 self.preset_name.clear();
             }
         });
+        ui.checkbox(one_click, "One-click trading")
+            .on_hover_text("Buy and Sell place a market order at once, without this ticket");
 
         let mut submitted = None;
         match request {
