@@ -298,7 +298,12 @@ impl<'a> Legend<'a> {
             .data_mut(|data| data.get_temp::<bool>(id).unwrap_or(false));
         let has_rows = self.show_volume || self.studies.iter().any(|study| study.is_overlay());
         if !collapsed {
-            if self.show_volume {
+            if self.show_volume
+                && !self
+                    .studies
+                    .iter()
+                    .any(|study| study.is_volume() && study.is_overlay())
+            {
                 layout.field(
                     "Vol ",
                     self.instrument
@@ -325,46 +330,84 @@ impl<'a> Legend<'a> {
                 .enumerate()
                 .filter(|(_, study)| study.is_overlay())
             {
+                if study.is_volume() && !self.show_volume {
+                    continue;
+                }
                 let row_start = layout.pos;
-                if self.show_indicator_titles {
+                if study.is_volume() {
                     layout.text(
-                        study.name().to_owned(),
+                        "Volume".to_owned(),
                         typography::MD,
-                        colors.text,
+                        theme.ui.text,
                         bounds.width(),
                     );
-                }
-                if self.show_indicator_inputs
-                    && let Some(inputs) = self
-                        .study_inputs
-                        .get(index)
-                        .filter(|inputs| !inputs.is_empty())
-                {
-                    layout.text(
-                        (*inputs).to_owned(),
-                        typography::MD,
-                        theme.ui.text_muted,
-                        bounds.width(),
-                    );
-                }
-                let study_colors = study.colors();
-                let precision = study.precision().unwrap_or(precision);
-                for index in (0..study.line_cnt()).filter(|index| {
-                    self.show_indicator_values
-                        && study.is_visible()
-                        && study.plot_style(*index).visible
-                }) {
-                    let value = study
-                        .values()
-                        .value(index, self.bar_index)
-                        .unwrap_or(f64::NAN);
-                    let text = if value.is_finite() {
-                        format!("{value:.precision$}")
-                    } else {
-                        "∅".to_owned()
-                    };
-                    let color = study_colors.get(index).copied().unwrap_or(colors.text);
-                    layout.text(text, typography::MD, color, bounds.width());
+                    if self.show_indicator_inputs && study.plot_style(2).visible {
+                        layout.text(
+                            study.line_names().get(2).cloned().unwrap_or_default(),
+                            typography::MD,
+                            Color32::from_gray(112),
+                            bounds.width(),
+                        );
+                    }
+                    if study.is_visible() {
+                        let up = study.values().value(0, self.bar_index);
+                        if let Some(value) = up.or_else(|| study.values().value(1, self.bar_index))
+                        {
+                            let label = crate::scales::PriceFormatter::format(
+                                &crate::scales::VolumeFormatter {
+                                    precision: study.precision().unwrap_or(3),
+                                },
+                                value,
+                            );
+                            layout.text(
+                                label,
+                                typography::MD,
+                                colors.bar_color(up.is_some()),
+                                bounds.width(),
+                            );
+                        }
+                    }
+                } else {
+                    if self.show_indicator_titles {
+                        layout.text(
+                            study.name().to_owned(),
+                            typography::MD,
+                            colors.text,
+                            bounds.width(),
+                        );
+                    }
+                    if self.show_indicator_inputs
+                        && let Some(inputs) = self
+                            .study_inputs
+                            .get(index)
+                            .filter(|inputs| !inputs.is_empty())
+                    {
+                        layout.text(
+                            (*inputs).to_owned(),
+                            typography::MD,
+                            theme.ui.text_muted,
+                            bounds.width(),
+                        );
+                    }
+                    let study_colors = study.colors();
+                    let precision = study.precision().unwrap_or(precision);
+                    for index in (0..study.line_cnt()).filter(|index| {
+                        self.show_indicator_values
+                            && study.is_visible()
+                            && study.plot_style(*index).visible
+                    }) {
+                        let value = study
+                            .values()
+                            .value(index, self.bar_index)
+                            .unwrap_or(f64::NAN);
+                        let text = if value.is_finite() {
+                            format!("{value:.precision$}")
+                        } else {
+                            "∅".to_owned()
+                        };
+                        let color = study_colors.get(index).copied().unwrap_or(colors.text);
+                        layout.text(text, typography::MD, color, bounds.width());
+                    }
                 }
                 let controls = layout.reserve(Vec2::new(60.0, 20.0)).intersect(bounds);
                 let row = Rect::from_min_max(row_start, controls.right_bottom()).intersect(bounds);

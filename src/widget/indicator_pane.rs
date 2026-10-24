@@ -679,6 +679,9 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
+        if indicator.is_volume() {
+            return super::volume::range(indicator, visible_range);
+        }
         if let Some((min, max)) = self.config.y_range {
             return (min, max);
         }
@@ -956,6 +959,29 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
     ) {
+        if indicator.is_volume() {
+            let count = visible_range.end.saturating_sub(visible_range.start);
+            if count == 0 {
+                return;
+            }
+            let spacing = rect.width() / count as f32;
+            let coords = IndicatorCoordParams::new(
+                spacing,
+                0.0,
+                visible_range.end.saturating_sub(1),
+                visible_range.start,
+            );
+            super::volume::paint(
+                painter,
+                rect,
+                indicator,
+                visible_range,
+                &coords.to_mapping(rect, y_min, y_max),
+                y_min,
+                y_max,
+            );
+            return;
+        }
         let values = indicator.values();
         let colors = indicator.colors();
         let line_cnt = indicator.line_cnt();
@@ -1025,6 +1051,18 @@ impl IndicatorPane {
         y_max: f64,
         coords: &IndicatorCoordParams,
     ) {
+        if indicator.is_volume() {
+            super::volume::paint(
+                painter,
+                rect,
+                indicator,
+                visible_range,
+                &coords.to_mapping(rect, y_min, y_max),
+                y_min,
+                y_max,
+            );
+            return;
+        }
         let values = indicator.values();
         let colors = indicator.colors();
         let line_cnt = indicator.line_cnt();
@@ -1115,11 +1153,19 @@ impl IndicatorPane {
         .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
         let mut tags = vec![crosshair_tag];
         if self.config.show_values {
-            crate::chart::rendering::axes::render_study_tags(
-                painter, chart_rect, &map, indicator, axis_edge, &mut tags,
-            );
+            if indicator.is_volume() {
+                super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
+            } else {
+                crate::chart::rendering::axes::render_study_tags(
+                    painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+                );
+            }
         }
-        let mut width = crate::chart::rendering::axes::price_axis_width(painter, &map, &[]);
+        let mut width = if indicator.is_volume() {
+            0.0
+        } else {
+            crate::chart::rendering::axes::price_axis_width(painter, &map, &[])
+        };
         for tag in tags.iter().flatten() {
             width = width.max(tag.width() + 5.0 + 8.0);
         }
@@ -1132,12 +1178,24 @@ impl IndicatorPane {
         for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = mark.label;
+                let label = if indicator.is_volume() {
+                    crate::scales::PriceFormatter::format(
+                        &crate::scales::VolumeFormatter {
+                            precision: indicator.precision().unwrap_or(3),
+                        },
+                        mark.price,
+                    )
+                } else {
+                    mark.label
+                };
                 let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),
                     text_color,
                 );
+                if indicator.is_volume() {
+                    width = width.max(galley.size().x + 5.0 + 8.0);
+                }
                 let bounds = align.anchor_size(Pos2::new(label_x, y), galley.size());
                 if tags.iter().flatten().any(|tag| tag.intersects(bounds)) {
                     continue;
@@ -1178,8 +1236,9 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
-            {
+            for line in (0..indicator.line_cnt()).filter(|line| {
+                indicator.plot_style(*line).visible && (!indicator.is_volume() || *line < 2)
+            }) {
                 if let Some(value) = indicator.values().value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
@@ -1195,8 +1254,16 @@ impl IndicatorPane {
                         job.append(" ", 0.0, format(text_color));
                     }
                     let precision = indicator.precision().unwrap_or(2);
+                    let label = if indicator.is_volume() {
+                        crate::scales::PriceFormatter::format(
+                            &crate::scales::VolumeFormatter { precision },
+                            value,
+                        )
+                    } else {
+                        format!("{value:.precision$}")
+                    };
                     job.append(
-                        &format!("{value:.precision$}"),
+                        &label,
                         0.0,
                         format(if readable { color } else { text_color }),
                     );

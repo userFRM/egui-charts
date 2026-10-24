@@ -131,11 +131,16 @@ impl Indicator for ConfiguredStudy {
         style
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
-        self.settings
+        let mut plot = self
+            .settings
             .plots
             .get(line)
             .copied()
-            .unwrap_or_else(|| self.study.plot_style(line))
+            .unwrap_or_else(|| self.study.plot_style(line));
+        if self.study.is_volume() {
+            plot.visible &= self.study.plot_style(line).visible;
+        }
+        plot
     }
     fn settings(&self) -> StudySettings {
         self.settings.clone()
@@ -185,6 +190,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn plot_label(&self) -> Option<(usize, String)> {
         self.study.plot_label()
+    }
+    fn is_volume(&self) -> bool {
+        self.study.is_volume()
     }
     fn is_overlay(&self) -> bool {
         self.study.is_overlay()

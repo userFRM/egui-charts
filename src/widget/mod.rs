@@ -132,6 +132,7 @@ mod panes;
 mod readout;
 mod selection;
 mod series;
+mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 mod sync;
 use feed::FeedLink;
@@ -242,6 +243,10 @@ pub struct Chart {
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    #[cfg(feature = "studies")]
+    volume_setting: bool,
+    #[cfg(feature = "studies")]
+    volume_study: Option<SeriesId>,
     /// Id of each study in `studies`.
     pub(crate) study_ids: Vec<SeriesId>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
@@ -566,10 +571,7 @@ impl Chart {
         } else {
             Rect::NOTHING
         };
-        let volume_rect = if self.main_series_visible
-            && self.config.show_volume
-            && self.chart_type.supports_volume()
-        {
+        let volume_rect = if self.shows_volume() {
             let inset = self
                 .config
                 .volume_baseline_inset

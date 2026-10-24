@@ -81,7 +81,10 @@ where
     F: Fn(f64) -> f32,
 {
     let values = indicator.values();
-    let plot = indicator.plot_style(line_idx);
+    let mut plot = indicator.plot_style(line_idx);
+    if indicator.is_volume() && plot.plot_type == PlotType::Histogram {
+        plot.width = coords.bar_spacing * 0.8;
+    }
     let end = visible_range.end.min(values.len());
     for bar in visible_range.start..end {
         let Some(value) = values.value(line_idx, bar) else {

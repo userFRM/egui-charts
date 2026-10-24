@@ -295,6 +295,8 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        #[cfg(feature = "studies")]
+        self.sync_volume_study(ui.ctx());
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -522,9 +524,7 @@ impl Chart {
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
         let time_based = !self.chart_type.is_time_independent();
-        let show_volume = self.main_series_visible
-            && self.config.show_volume
-            && self.chart_type.supports_volume();
+        let show_volume = self.shows_volume();
         let is_drawing_interaction = time_based
             && (self.drawings.active_tool.is_some()
                 || self.drawings.dragging_handle.is_some()
@@ -627,7 +627,7 @@ impl Chart {
         let volume_rect = layout.volume_rect;
 
         // Get visible range
-        let (start_idx, _end_idx) = self.state.visible_range();
+        let (start_idx, end_idx) = self.state.visible_range();
         self.start_idx = start_idx;
 
         // Capture near_live status for button
@@ -658,7 +658,7 @@ impl Chart {
                 .indicators()
                 .iter()
                 .zip(&self.study_autoscale)
-                .filter(|(_, autoscale)| time_based && **autoscale)
+                .filter(|(study, autoscale)| time_based && **autoscale && !study.is_volume())
                 .map(|(study, _)| study.as_ref()),
         );
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
@@ -825,7 +825,10 @@ impl Chart {
 
         let render_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width, self.config.wick_width),
-            rendering::VolumeSettings::new(self.config.show_volume, max_volume),
+            rendering::VolumeSettings::new(
+                self.config.show_volume && !cfg!(feature = "studies"),
+                max_volume,
+            ),
             &self.chart_type_params,
             rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
             rendering::CoordMapping::new(chart_rect.min.x),
@@ -834,7 +837,7 @@ impl Chart {
 
         if self.main_series_visible {
             if let Some((flow, config)) = footprint.filter(|_| time_based) {
-                if show_volume {
+                if show_volume && !cfg!(feature = "studies") {
                     rendering::candles::volume::render_volume_bars(
                         &clipped_volume_ctx,
                         visible_data,
@@ -882,6 +885,25 @@ impl Chart {
             &hidden_studies
         };
         // Draw indicators
+        for study in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_volume() && study.is_overlay() && study.is_visible())
+        {
+            if self.main_series_visible {
+                let rect = super::volume::overlay_rect(price_rect, &self.config);
+                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
+                super::volume::paint(
+                    &painter,
+                    rect,
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    &coords,
+                    min,
+                    max,
+                );
+            }
+        }
         renderers::IndicatorRenderer::render(
             &price_ctx,
             studies.indicators(),
@@ -1113,7 +1135,7 @@ impl Chart {
                     .as_ref()
                     .filter(|_| show_price_axis)
                     .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
-                (show_volume && show_price_axis)
+                (show_volume && show_price_axis && !cfg!(feature = "studies"))
                     .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
                 axis_edge,
                 countdown.as_deref(),
@@ -1156,6 +1178,29 @@ impl Chart {
                 .iter()
                 .filter(|study| study.is_overlay())
             {
+                if study.is_volume() {
+                    if self.main_series_visible {
+                        let rect = super::volume::overlay_rect(price_rect, &self.config);
+                        let (min, max) =
+                            super::volume::range(study.as_ref(), &(start_idx..end_idx));
+                        let map = crate::scales::PriceMap::new(
+                            crate::scales::PriceTransform::default(),
+                            crate::scales::PriceRange::new(min, max),
+                            rect.top(),
+                            rect.bottom(),
+                            false,
+                        );
+                        super::volume::tags(
+                            &painter,
+                            price_rect,
+                            &map,
+                            study.as_ref(),
+                            axis_edge,
+                            &mut tags,
+                        );
+                    }
+                    continue;
+                }
                 rendering::axes::render_study_tags(
                     &painter,
                     price_rect,
@@ -1464,7 +1509,18 @@ impl Chart {
                 if volume_rect.contains(hover_pos) {
                     let map = crate::scales::PriceMap::new(
                         crate::scales::PriceTransform::default(),
-                        crate::scales::PriceRange::new(0.0, max_volume.max(1.0)),
+                        crate::scales::PriceRange::new(
+                            0.0,
+                            studies
+                                .indicators()
+                                .iter()
+                                .find(|study| {
+                                    study.is_volume() && study.is_overlay() && study.is_visible()
+                                })
+                                .map_or(max_volume.max(1.0), |study| {
+                                    super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                                }),
+                        ),
                         volume_rect.top(),
                         volume_rect.bottom(),
                         false,
@@ -1889,7 +1945,14 @@ mod tests {
                 output.textures_delta.clear();
                 assert!(
                     output.shapes.iter().any(|shape| match &shape.shape {
-                        Shape::Rect(rect) => rect.fill == theme.chart.volume_up(),
+                        Shape::Rect(rect) =>
+                            rect.fill
+                                == egui::Color32::from_rgba_unmultiplied(
+                                    38,
+                                    198,
+                                    218,
+                                    theme.chart.volume_alpha
+                                ),
                         _ => false,
                     }),
                     "footprint keeps the volume histogram"
@@ -1992,7 +2055,7 @@ mod tests {
                 ("1 close", 7),
                 ("110.00", 8),
                 ("O 100.00", 3),
-                ("Vol 1", 5),
+                (if hidden == 10 { "Vol 1" } else { "Volume" }, 5),
             ] {
                 assert_eq!(
                     texts.contains(&text),
@@ -2764,8 +2827,8 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         use egui::Color32;
 
-        // Volume uses muted teal and salmon independently of candle colours.
-        // A second opacity proves that painting reads the applied theme on every frame.
+        // Volume uses cyan and pink independently of candle colours.
+        // A second opacity checks that the default study inherits the applied theme.
         for (mut theme, alpha, candle_width, kind, height_fraction, inset, expected) in [
             (
                 Theme::dark(),
@@ -2774,7 +2837,7 @@ mod tests {
                 ChartType::Candles,
                 0.12,
                 12.0,
-                [[23, 100, 92, 153], [143, 50, 48, 153]],
+                [[23, 119, 131, 153], [142, 38, 73, 153]],
             ),
             (
                 Theme::dark(),
@@ -2783,7 +2846,7 @@ mod tests {
                 ChartType::Heikin,
                 0.12,
                 12.0,
-                [[8, 33, 31, 51], [48, 17, 16, 51]],
+                [[8, 40, 44, 51], [47, 13, 24, 51]],
             ),
             (
                 Theme::light(),
@@ -2792,7 +2855,7 @@ mod tests {
                 ChartType::Line,
                 0.25,
                 0.0,
-                [[19, 83, 77, 128], [120, 42, 40, 128]],
+                [[19, 99, 109, 128], [118, 32, 61, 128]],
             ),
             (
                 Theme::high_contrast(),
@@ -2801,7 +2864,7 @@ mod tests {
                 ChartType::Area,
                 0.4,
                 6.0,
-                [[19, 83, 77, 128], [120, 42, 40, 128]],
+                [[19, 99, 109, 128], [118, 32, 61, 128]],
             ),
         ] {
             let ctx = egui::Context::default();

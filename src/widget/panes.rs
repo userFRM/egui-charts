@@ -151,6 +151,13 @@ impl Chart {
             } else {
                 String::new()
             };
+            if self.config.show_indicator_inputs
+                && indicator.is_volume()
+                && indicator.plot_style(2).visible
+                && config.inputs.is_empty()
+            {
+                config.inputs = indicator.line_names().get(2).cloned().unwrap_or_default();
+            }
             config.show_legend =
                 config.show_name || config.show_values || !config.inputs.is_empty();
             config.height = if collapsed {

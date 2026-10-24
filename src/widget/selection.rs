@@ -87,6 +87,15 @@ impl Chart {
                 if !indicator.is_visible() || !indicator.is_overlay() {
                     return;
                 }
+                let volume_coords = indicator.is_volume().then(|| {
+                    super::volume::mapping(
+                        coords,
+                        super::volume::overlay_rect(coords.rect, &self.config),
+                        indicator,
+                        &visible_range,
+                    )
+                });
+                let coords = volume_coords.as_ref().unwrap_or(coords);
                 let config = SelectionDotConfig {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
                     ..Default::default()
@@ -182,6 +191,23 @@ pub(super) fn hit_test_main_chart(
 
     // 1. Overlay indicators (drawn on top of the series).
     for (idx, indicator) in studies.indicators().iter().enumerate() {
+        let volume_mapping = if indicator.is_volume() {
+            if !indicator.is_overlay() || !indicator.is_visible() {
+                continue;
+            }
+            let Some(volume) = volume_coords else {
+                continue;
+            };
+            Some(super::volume::mapping(
+                coords,
+                volume.rect,
+                indicator.as_ref(),
+                &visible_range,
+            ))
+        } else {
+            None
+        };
+        let coords = volume_mapping.as_ref().unwrap_or(coords);
         if let Some(hit) = hit_test_indicator(
             click_pos,
             indicator.as_ref(),
@@ -198,7 +224,11 @@ pub(super) fn hit_test_main_chart(
     }
 
     // 2. Volume is painted over the price series.
-    if let Some(volume_coords) = volume_coords
+    if !studies
+        .indicators()
+        .iter()
+        .any(|study| study.is_volume() && study.is_overlay())
+        && let Some(volume_coords) = volume_coords
         && let Some(hit) = hit_test_volume(
             click_pos,
             bars,
