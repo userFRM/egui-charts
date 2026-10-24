@@ -476,6 +476,41 @@ impl IndicatorRenderer {
                     price_scale.price_to_y(0.0),
                 );
             }
+            if matches!(
+                plot.plot_type,
+                PlotType::Circles
+                    | PlotType::Crosses
+                    | PlotType::TriangleUp
+                    | PlotType::TriangleDown
+            ) {
+                for i in source_start..source_end {
+                    let (Some(display_bar), Some(value)) =
+                        (i.checked_add_signed(offset), values.value(line_idx, i))
+                    else {
+                        continue;
+                    };
+                    let Some(text) = indicator.plot_text(line_idx, i) else {
+                        continue;
+                    };
+                    let at = Pos2::new(coords.idx_to_x(display_bar), price_scale.price_to_y(value));
+                    if !at.is_finite() {
+                        continue;
+                    }
+                    // Clear of the shape, whose half-size is the stroke width plus 2.
+                    let (gap, anchor) = if plot.plot_type == PlotType::TriangleUp {
+                        (plot.width + 4.0, egui::Align2::CENTER_TOP)
+                    } else {
+                        (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
+                    };
+                    painter.text(
+                        at + egui::vec2(0.0, gap),
+                        anchor,
+                        text,
+                        egui::FontId::proportional(11.0),
+                        indicator.plot_color(line_idx, i).unwrap_or(plot.color),
+                    );
+                }
+            }
         }
         let painter = context.painter.with_clip_rect(context.rect);
         for marker in indicator

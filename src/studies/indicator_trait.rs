@@ -169,6 +169,13 @@ pub trait Indicator: Send {
         None
     }
 
+    /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
+    /// under an upward triangle and over the other shapes, in the shape's colour.
+    fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let _ = (line, bar);
+        None
+    }
+
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
     fn fills(&self) -> Vec<super::StudyFill> {
         Vec::new()
