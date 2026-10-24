@@ -492,12 +492,21 @@ impl Chart {
         if self.symbol.is_empty() {
             return;
         }
-        self.feed.loading_history = true;
         let reply = link.reply(Request::Resolve);
         link.feed.resolve(&self.symbol, reply);
+        if supports(self.legend_instrument.as_ref(), timeframe) {
+            self.request_latest(link);
+        } else {
+            self.rule_out(link);
+        }
+    }
+
+    /// Asks for the latest page of history.
+    fn request_latest(&mut self, link: &mut FeedLink) {
+        self.feed.loading_history = true;
         let request = HistoryRequest {
             symbol: self.symbol.clone(),
-            timeframe,
+            timeframe: self.timeframe.unwrap_or_default(),
             clock: link.clock.clone(),
             before: None,
             count: link.initial_bars,
@@ -510,13 +519,35 @@ impl Chart {
         link.feed.history(request, reply);
     }
 
+    /// Shows no bars for an interval the instrument rules out, and drops any history requested
+    /// for it before the instrument was known.
+    fn rule_out(&mut self, link: &mut FeedLink) {
+        let history = |request: &Request| matches!(request, Request::History { .. });
+        link.pending.retain(|(_, request, _)| !history(request));
+        link.retries.retain(|(_, request, _)| !history(request));
+        self.replace_main_data(Vec::new());
+        self.feed.loading_history = false;
+        self.feed.last_error = Some(FeedError::NotSupported);
+    }
+
     /// Subscribes to live updates once the symbol resolved, and asks for the recent trades.
+    /// An interval the instrument rules out gets neither.
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         self.state
             .price_scale_mut()
             .set_price_precision(crate::scales::instrument_price_precision(&instrument));
+        let timeframe = self.timeframe.unwrap_or_default();
+        let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
         link.rebuild_bubbles();
+        if !supports(link.instrument.as_ref(), timeframe) {
+            self.rule_out(link);
+            return;
+        }
+        // The previous answer for the symbol ruled the interval out; this one allows it.
+        if withheld {
+            self.request_latest(link);
+        }
         let sink = link
             .inbox
             .subscribe(self.symbol.clone(), link.clock.clone(), TRADE_CAPACITY);
@@ -524,7 +555,7 @@ impl Chart {
         let subscription = Subscription {
             id: sink.id,
             symbol: self.symbol.clone(),
-            timeframe: self.timeframe.unwrap_or_default(),
+            timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
             sink,
@@ -630,6 +661,13 @@ impl Chart {
         });
         link.feed.history(request, reply);
     }
+}
+
+/// Whether `instrument` allows asking for bars of `timeframe`. An unknown instrument allows any.
+fn supports(instrument: Option<&Instrument>, timeframe: Timeframe) -> bool {
+    instrument
+        .and_then(|instrument| instrument.supported_timeframes.as_ref())
+        .is_none_or(|supported| supported.contains(&timeframe))
 }
 
 /// The result an answer carries; the key it came under names its type.
@@ -827,6 +865,56 @@ mod tests {
             frames.run(&mut chart);
             previous = Some(id);
         }
+    }
+
+    /// A daily-only instrument: the minute page asked for before it was known is dropped, no
+    /// intraday history is asked for once it is known, and an answer allowing the interval again
+    /// asks for it.
+    #[test]
+    fn intervals_the_instrument_rules_out_are_not_requested() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        let daily = || {
+            Instrument::new("A").with_supported_timeframes([
+                Timeframe::Day1,
+                Timeframe::Week1,
+                Timeframe::Month1,
+            ])
+        };
+        let ruled_out = |chart: &Chart| {
+            let state = chart.feed_state(SeriesId::MAIN).unwrap();
+            chart.bars(SeriesId::MAIN).is_empty()
+                && !state.loading_history
+                && state.last_error == Some(FeedError::NotSupported)
+        };
+        frames.run(&mut chart);
+        assert!(feed.calls().contains(&history("A", Timeframe::Min1, None)));
+        feed.resolve().send(Ok(daily()));
+        feed.page().send(page(bars(10), false));
+        frames.run(&mut chart);
+        assert!(ruled_out(&chart));
+        assert!(
+            feed.calls().is_empty(),
+            "no subscription for a ruled-out interval"
+        );
+
+        chart.set_timeframe(Timeframe::Min5);
+        frames.run(&mut chart);
+        assert_eq!(feed.calls(), [Call::Resolve("A".into())]);
+        feed.resolve().send(Ok(daily()));
+        frames.run(&mut chart);
+        assert!(ruled_out(&chart));
+        assert!(feed.calls().is_empty());
+
+        chart.reload_feed();
+        frames.run(&mut chart);
+        assert_eq!(feed.calls(), [Call::Resolve("A".into())]);
+        feed.resolve().send(Ok(Instrument::new("A")));
+        frames.run(&mut chart);
+        let calls = feed.calls();
+        assert_eq!(calls[0], history("A", Timeframe::Min5, None));
+        assert!(matches!(calls[1], Call::Subscribe(..)), "{calls:?}");
     }
 
     /// Resolving an exchange zone must realign history, live aggregation and the countdown

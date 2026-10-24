@@ -118,9 +118,8 @@ impl Chart {
                     pending_price_zoom = Some(delta_y);
                 } else {
                     let zoom_scale = (-delta_y / 100.0).clamp(-0.5, 0.5);
-                    // Zoom centered on mouse position by default
-                    // With Ctrl/Cmd held: anchor at right edge (for "zoom to latest" behavior)
-                    let zoom_point_x = hp.x - chart_rect_min_x; // Always use mouse position
+                    // Zoom around the pointer, or the right edge while the right bar stays on scroll
+                    let zoom_point_x = self.zoom_anchor(hp.x - chart_rect_min_x, chart_width);
 
                     log::debug!(
                         "[ZOOM INPUT] mouse_x={:.1}, chart_min_x={:.1}, anchor_x={:.1}, chart_width={:.1}",
@@ -190,9 +189,10 @@ impl Chart {
                 self.pending_scroll_time = None;
 
                 // Use hover position or center of chart as zoom anchor
-                let zoom_point_x = hover_pos
-                    .map(|p| p.x - chart_rect_min_x)
-                    .unwrap_or(chart_width / 2.0);
+                let zoom_point_x = self.zoom_anchor(
+                    hover_pos.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
+                    chart_width,
+                );
 
                 log::debug!(
                     "[PINCH ZOOM] zoom_delta={zoom_delta:.4}, zoom_scale={zoom_scale:.4}, anchor_x={zoom_point_x:.1}"
@@ -810,13 +810,19 @@ mod tests {
 
     /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or
     /// Cmd on macOS) held, which egui leaves out of its smoothed scroll delta.
+    /// While the right bar stays on scroll, the zoom keeps the right offset.
     #[test]
     fn wheel_zooms_the_time_axis_with_and_without_the_zoom_modifier() {
-        for modifiers in [Modifiers::NONE, Modifiers::COMMAND] {
+        for (modifiers, right_bar_stays) in [
+            (Modifiers::NONE, false),
+            (Modifiers::COMMAND, false),
+            (Modifiers::NONE, true),
+        ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            chart.chart_options.time_scale.right_bar_stays_on_scroll = right_bar_stays;
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            let spacing = chart.state.time_scale().bar_spacing();
+            let (spacing, offset) = chart.get_time_scale_state();
             let center = chart.last_rendered_price_rect.center();
             frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(center)]);
             let wheel = Event::MouseWheel {
@@ -830,10 +836,16 @@ mod tests {
             for i in 3..10 {
                 frame(&ctx, &mut chart, i as f64 * 0.02, Vec::new());
             }
-            let zoomed = chart.state.time_scale().bar_spacing();
+            let (zoomed, moved) = chart.get_time_scale_state();
             assert!(
                 zoomed > spacing,
                 "{modifiers:?}: spacing {spacing} -> {zoomed}"
+            );
+            // Zooming around the centre moves the right edge unless the right bar stays.
+            assert_eq!(
+                moved == offset,
+                right_bar_stays,
+                "offset {offset} -> {moved}"
             );
         }
     }

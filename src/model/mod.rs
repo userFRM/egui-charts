@@ -72,7 +72,7 @@ pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{Instrument, Session, SessionWindow, SymbolType, TimezoneId};
+pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType, TimezoneId};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
