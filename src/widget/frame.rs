@@ -421,13 +421,6 @@ impl Chart {
         response
     }
 
-    /// Resolve the timeframe used to pick a session-break granularity.
-    ///
-    /// The chart's timeframe is the primary source. Without one, the cadence
-    /// is inferred from the visible bars by taking the median gap between
-    /// consecutive timestamps and snapping it to the nearest preset, so session
-    /// breaks work even when the host never set a timeframe. Falls back to the
-    /// default (1-minute) when there are too few bars to measure.
     /// Pulses at the last price of a line-based chart as its `last_price_animation` asks, and
     /// keeps repainting while a visible pulse runs.
     fn paint_last_price_pulse(
@@ -485,6 +478,13 @@ impl Chart {
         }
     }
 
+    /// Resolve the timeframe used to pick a session-break granularity.
+    ///
+    /// The chart's timeframe is the primary source. Without one, the cadence
+    /// is inferred from the visible bars by taking the median gap between
+    /// consecutive timestamps and snapping it to the nearest preset, so session
+    /// breaks work even when the host never set a timeframe. Falls back to the
+    /// default (1-minute) when there are too few bars to measure.
     fn resolve_session_timeframe(
         &self,
         visible_data: &[crate::model::Bar],
