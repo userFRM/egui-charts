@@ -60,7 +60,7 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
-use egui_charts::ui::top_toolbar::{ToolbarEntry, TopToolbar, TopToolbarAction};
+use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
@@ -327,12 +327,6 @@ impl DemoApp {
                 1,
                 egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
             );
-        top_toolbar.host_entries = vec![
-            ToolbarEntry::new("research", "Research")
-                .with_icon(&egui_charts::icons::icons::QUICK_SEARCH),
-            ToolbarEntry::new("host-tools", "Host tools")
-                .with_items(vec![ToolbarEntry::new("copy-symbol", "Copy symbol")]),
-        ];
         let mut menus = ChartMenus::default();
         menus.host_entries.push(
             HostMenuEntry::new("research", "Open in research")
@@ -1141,9 +1135,13 @@ impl DemoApp {
                                 }
                                 ui.separator();
                             }
+                            // Host actions live in the menu so the default strip keeps the
+                            // built-in controls only.
                             for (label, action) in [
                                 ("Quick search", TopToolbarAction::OpenQuickSearch),
                                 ("Switch theme", TopToolbarAction::ThemeToggle),
+                                ("Research", TopToolbarAction::Host("research".into())),
+                                ("Copy symbol", TopToolbarAction::Host("copy-symbol".into())),
                             ] {
                                 if ui.button(label).clicked() {
                                     menu_action = action;
