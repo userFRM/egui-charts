@@ -64,7 +64,8 @@ pub enum SettingsTab {
     ScalesAndLines,
     /// Canvas appearance (background, grid, crosshair, watermark, margins)
     Canvas,
-    /// Positions, orders, executions and execution labels
+    /// Buy and Sell buttons, instant orders, fill sounds, notifications, and the positions,
+    /// orders and executions drawn on the chart
     Trading,
     /// Alert display settings
     Alerts,
