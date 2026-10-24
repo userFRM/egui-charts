@@ -918,12 +918,15 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = crate::widget::test_frames::chart(&[100.0; 10], &[110.0; 10]);
-            let mut menus = ChartMenus::default();
-            menus.host_entries = vec![
-                HostMenuEntry::new("ticket", "Send to ticket")
-                    .when(|context| matches!(context.target, RightClickTarget::Background { .. })),
-                HostMenuEntry::new("research", "Open in research"),
-            ];
+            let mut menus = ChartMenus {
+                host_entries: vec![
+                    HostMenuEntry::new("ticket", "Send to ticket").when(|context| {
+                        matches!(context.target, RightClickTarget::Background { .. })
+                    }),
+                    HostMenuEntry::new("research", "Open in research"),
+                ],
+                ..Default::default()
+            };
             let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
                 let mut action = None;
                 let right_click = chart.right_click.take();

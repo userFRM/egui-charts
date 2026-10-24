@@ -73,7 +73,10 @@ impl ToolbarEntry {
                     *action = TopToolbarAction::Host(self.id.clone());
                 }
             } else {
-                egui::Popup::menu(&response).show(|ui| self.show_items(ui, action));
+                egui::Popup::menu(&response).show(|ui| {
+                    ui.set_width(crate::tokens::DESIGN_TOKENS.sizing.dialog.submenu_width);
+                    self.show_items(ui, action);
+                });
             }
         });
     }
@@ -176,6 +179,11 @@ mod tests {
                 };
                 let research = at(&labels, "Research");
                 let tools = at(&labels, "Host tools");
+                let interval = at(&labels, "1D");
+                assert!(
+                    (research.y - interval.y).abs() <= 1.0,
+                    "host buttons share the toolbar centre: {research:?} versus {interval:?}"
+                );
                 assert!(
                     research.x < tools.x && tools.x < width,
                     "registration order and reserved width"

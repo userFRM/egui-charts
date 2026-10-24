@@ -288,12 +288,16 @@ impl TopToolbar {
             ui.add_space((ui.available_width() - actions_width).max(0.0));
             let mut host_action = TopToolbarAction::None;
             let width = ui
-                .horizontal(|ui| {
-                    for entry in &self.host_entries {
-                        entry.show(ui, &mut host_action);
-                    }
-                    actions(ui);
-                })
+                .allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), self.config.height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        for entry in &self.host_entries {
+                            entry.show(ui, &mut host_action);
+                        }
+                        actions(ui);
+                    },
+                )
                 .response
                 .rect
                 .width();
