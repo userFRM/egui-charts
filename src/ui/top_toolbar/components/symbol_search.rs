@@ -225,6 +225,12 @@ impl SymbolSearchDialog {
         self.filtered_symbols.clear();
     }
 
+    /// Open symbol search with text supplied by the host's keyboard dispatcher.
+    pub fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.search_query = query;
+    }
+
     /// Closes the symbol search dialog
     pub fn close(&mut self) {
         self.is_open = false;
@@ -281,6 +287,7 @@ impl SymbolSearchDialog {
         let mut sel_symbol = None;
         let mut should_close = false;
         let search_id = egui::Id::unique("symbol_search_input");
+        let focus_search = std::mem::take(&mut self.focus_search);
         let search_focused = ctx.memory(|m| m.has_focus(search_id));
         let (up, down) = ctx.input(|input| {
             (
@@ -311,6 +318,10 @@ impl SymbolSearchDialog {
                         icons::QUICK_SEARCH
                             .as_image_tinted(Vec2::splat(24.0), theme.ui.text_secondary),
                     );
+                    let search_id = egui::Id::unique("symbol_search_input");
+                    if focus_search {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .id(search_id)
@@ -326,12 +337,13 @@ impl SymbolSearchDialog {
                     {
                         should_close = true;
                     }
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
+                        response.request_focus();
+                    }
                     if response.changed() {
                         self.sel_idx = 0;
                         self.update_filtered_symbols(all_symbols);
-                    }
-                    if std::mem::take(&mut self.focus_search) {
-                        response.request_focus();
                     }
                 });
                 ui.add_space(16.0);

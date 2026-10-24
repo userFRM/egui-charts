@@ -29,7 +29,7 @@ pub enum PlotType {
 }
 
 /// Editable presentation of one output line.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PlotStyle {
     /// Plot colour.
     pub color: Color32,
@@ -44,7 +44,7 @@ pub struct PlotStyle {
 }
 
 /// Host-serializable presentation settings of an applied study.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct StudySettings {
     /// One style per declared output line.
     pub plots: Vec<PlotStyle>,

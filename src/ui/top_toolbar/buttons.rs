@@ -179,10 +179,20 @@ impl<'a> IconTextButton<'a> {
                 self.label
             },
             match self.label {
-                "Indicators" => crate::config::KeyboardAction::OpenIndicatorSearch.shortcut(),
-                "Alert" => crate::config::KeyboardAction::CreateAlert.shortcut(),
+                "Indicators" => Some(crate::config::KeyboardAction::OpenIndicatorSearch),
+                "Alert" => Some(crate::config::KeyboardAction::CreateAlert),
                 _ => None,
-            },
+            }
+            .and_then(|action| {
+                ui.ctx()
+                    .data(|data| {
+                        data.get_temp::<crate::widget::ShortcutMap>(
+                            egui::Id::NULL.with("chart_shortcuts"),
+                        )
+                    })
+                    .unwrap_or_default()
+                    .shortcut(action)
+            }),
         )
     }
 }

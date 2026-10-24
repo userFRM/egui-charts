@@ -8,7 +8,7 @@ use crate::scales::TimezoneMode;
 
 /// Time Scale Options.
 /// Controls bar spacing, scrolling constraints, and time display.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TimeScaleOptions {
     /// The margin space in bars from the right side of the chart, kept
     /// whenever the view returns to the live edge.

@@ -743,6 +743,15 @@ mod tests {
                             .is_visible()
                     ),
                 }
+                if action != "settings" {
+                    assert!(chart.undo());
+                    assert!(
+                        chart
+                            .indicators()
+                            .any(|(id, indicator)| id == study && indicator.is_visible())
+                    );
+                    assert!(chart.redo());
+                }
             }
         }
     }

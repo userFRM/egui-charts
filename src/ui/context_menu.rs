@@ -476,7 +476,10 @@ impl ChartContextMenu {
     }
 
     /// Build the menu items based on current state
-    fn build_menu_items(&self) -> Vec<MenuEntry<ContextMenuAction>> {
+    fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Vec<MenuEntry<ContextMenuAction>> {
         let price_str = format_price(self.click_price);
         let symbol = &self.symbol;
 
@@ -484,7 +487,7 @@ impl ChartContextMenu {
             // Reset chart view at top
             MenuEntry::Item(
                 MenuItem::new("Reset chart view", ContextMenuAction::ResetChart)
-                    .with_shortcut(KeyboardAction::ResetChart.shortcut()),
+                    .with_shortcut(shortcuts.shortcut(KeyboardAction::ResetChart)),
             ),
             MenuEntry::Separator,
             // Clipboard section
@@ -506,7 +509,7 @@ impl ChartContextMenu {
                     },
                 )
                 .with_icon(&embedded_icons::ALERTS)
-                .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
             ));
         }
         if !symbol.is_empty() && !self.hidden.contains(&Control::Trading) {
@@ -581,10 +584,20 @@ impl ChartContextMenu {
 
     /// Show the context menu
     pub fn show(&mut self, ctx: &Context, theme: &Theme) {
+        self.show_with_shortcuts(ctx, theme, &crate::widget::ShortcutMap::default());
+    }
+
+    /// Show menu hints from the same bindings used by chart input.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        theme: &Theme,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items();
+        let entries = self.build_menu_items(shortcuts);
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("chart_ctx_menu");
         if let Some(action) = show_menu(
@@ -702,10 +715,13 @@ impl ChartMenus {
         }
 
         let theme = ctx.active_theme();
-        self.chart.show(ctx, &theme);
-        self.series.show(ctx, &theme);
-        self.drawing.show(ctx, &theme);
-        let axis_action = self.axes.show(ctx, chart);
+        self.chart
+            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
+        self.series
+            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
+        self.drawing
+            .show_with_shortcuts(ctx, &theme, chart.shortcuts());
+        let axis_action = chart.user_action(|chart| self.axes.show(ctx, chart));
         chart.menu_open = self.chart.is_open()
             || self.series.is_open()
             || self.drawing.is_open()
@@ -875,6 +891,15 @@ mod tests {
                     size,
                 );
                 assert!(!chart.menu_open);
+                let config = chart.config().clone();
+                let options = chart.chart_options().clone();
+                let scale = *chart.state().price_scale().options();
+                assert!(chart.undo(), "axis choices enter chart history");
+                assert!(!chart.can_undo(), "one action per axis choice");
+                assert!(chart.redo());
+                assert_eq!(chart.config(), &config);
+                assert_eq!(chart.chart_options(), &options);
+                assert_eq!(chart.state().price_scale().options(), &scale);
                 if short {
                     assert!(chart.config().show_high_low);
                 } else if ratio {
@@ -1048,7 +1073,7 @@ mod tests {
         let ctx = Context::default();
         ctx.set_os(egui::os::OperatingSystem::Nix);
         let shortcut = ChartContextMenu::new()
-            .build_menu_items()
+            .build_menu_items(&crate::widget::ShortcutMap::default())
             .into_iter()
             .find_map(|entry| match entry {
                 MenuEntry::Item(item) if item.action == ContextMenuAction::ResetChart => {
@@ -1061,6 +1086,6 @@ mod tests {
             KeyboardAction::from_key_press(shortcut.logical_key, &shortcut.modifiers),
             Some(KeyboardAction::ResetChart)
         );
-        assert_eq!(ctx.format_shortcut(&shortcut), "Ctrl+R");
+        assert_eq!(ctx.format_shortcut(&shortcut), "Alt+R");
     }
 }

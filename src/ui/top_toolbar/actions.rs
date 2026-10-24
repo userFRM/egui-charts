@@ -7,10 +7,10 @@ use super::components::layout_menu::LayoutAction;
 pub enum TopToolbarAction {
     /// No action taken
     None,
+    /// Open the command palette for actions, settings, drawing tools and studies.
+    OpenQuickSearch,
     /// Open symbol search dialog
     OpenSymbolSearch,
-    /// Open the host command palette.
-    OpenQuickSearch,
     /// Open compare/add symbol dialog
     OpenCompare,
     /// Chart interval chosen in the interval menu, a preset or a custom interval

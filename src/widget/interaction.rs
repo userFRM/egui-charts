@@ -1,7 +1,7 @@
 //! User interaction handling for the chart widget.
 //!
 //! Implements tracking mode (auto-scroll to latest bar) and keyboard shortcuts
-//! (arrow keys for pan, +/- for zoom, Home for jump-to-latest, F for fit-all).
+//! through the chart's shared, configurable shortcut map.
 //! These methods are called by the main widget paint loop.
 
 use egui::{Response, Ui};
@@ -65,18 +65,8 @@ impl Chart {
         }
     }
 
-    /// Process keyboard shortcuts when the chart has focus.
-    ///
-    /// | Key | Action |
-    /// |-----|--------|
-    /// | Left/Right | Pan by configured `pan_amount` bars |
-    /// | +/- | Zoom in/out by `zoom_step` centered on chart |
-    /// | Home | Scroll to latest (real-time) data |
-    /// | F | Fit all data into the viewport |
-    /// | PageUp/PageDown | Zoom in/out by `3x zoom_step` |
-    ///
-    /// Shortcuts are only active when `chart_options.keyboard.enabled` is `true`
-    /// and the chart response has focus.
+    /// Dispatch configured shortcuts, retaining arrow-key focus on the chart.
+    /// Hosts call [`Self::dispatch_shortcuts`] before their toolbars and after dialogs.
     pub fn handle_keyboard_shortcuts(
         &mut self,
         ui: &Ui,
@@ -84,107 +74,23 @@ impl Chart {
         chart_width: f32,
         chart_rect_min_x: f32,
     ) {
-        if !self.chart_options.keyboard.enabled || !response.has_focus() {
-            return;
+        self.keyboard.chart_id = Some(response.id);
+        if response.has_focus() {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    response.id,
+                    egui::EventFilter {
+                        horizontal_arrows: self.chart_options.keyboard.enabled,
+                        vertical_arrows: self.chart_options.keyboard.enabled,
+                        ..Default::default()
+                    },
+                );
+            });
         }
-
-        ui.memory_mut(|memory| {
-            memory.set_focus_lock_filter(
-                response.id,
-                egui::EventFilter {
-                    horizontal_arrows: true,
-                    ..Default::default()
-                },
-            );
-        });
-
-        ui.input(|i| {
-            use egui::Key;
-
-            // Every shortcut below moves the view, which cancels a pending `scroll_to_time`
-            let view_keys = [
-                Key::ArrowLeft,
-                Key::ArrowRight,
-                Key::Plus,
-                Key::Equals,
-                Key::Minus,
-                Key::Home,
-                Key::F,
-                Key::PageUp,
-                Key::PageDown,
-            ];
-            if view_keys.into_iter().any(|key| i.key_pressed(key)) {
-                self.pending_scroll_time = None;
-            }
-
-            // Pan left (Left arrow)
-            if i.key_pressed(Key::ArrowLeft) {
-                self.state
-                    .time_scale_mut()
-                    .scroll_bars(-self.chart_options.keyboard.pan_amount);
-            }
-
-            // Pan right (Right arrow)
-            if i.key_pressed(Key::ArrowRight) {
-                self.state
-                    .time_scale_mut()
-                    .scroll_bars(self.chart_options.keyboard.pan_amount);
-            }
-
-            // Zoom in (+)
-            if i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    self.chart_options.keyboard.zoom_step,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Zoom out (-)
-            if i.key_pressed(Key::Minus) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    -self.chart_options.keyboard.zoom_step,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Scroll to real-time / latest data (Home)
-            if i.key_pressed(Key::Home) {
-                self.state.time_scale_mut().scroll_to_realtime();
-            }
-
-            // Fit content (F) - zoom to show all data
-            if i.key_pressed(Key::F) {
-                self.state.time_scale_mut().fit_content();
-            }
-
-            // Page Up (zoom in more)
-            if i.key_pressed(Key::PageUp) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    self.chart_options.keyboard.zoom_step * 3.0,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-
-            // Page Down (zoom out more)
-            if i.key_pressed(Key::PageDown) {
-                let zoom_point_x = chart_width / 2.0;
-                self.state.time_scale_mut().zoom(
-                    -self.chart_options.keyboard.zoom_step * 3.0,
-                    zoom_point_x,
-                    chart_rect_min_x,
-                    chart_width,
-                );
-            }
-        });
+        // These bounds are current even on the first frame or after resizing.
+        self.last_rendered_price_rect.min.x = chart_rect_min_x;
+        self.last_rendered_price_rect.max.x = chart_rect_min_x + chart_width;
+        self.dispatch_shortcuts(ui.ctx());
     }
 
     /// Request keyboard focus when the user actually interacts with the chart
@@ -218,78 +124,90 @@ mod tests {
 
     #[test]
     fn horizontal_arrows_pan_repeatedly_and_tab_leaves_the_chart() {
-        let ctx = Context::default();
-        let mut chart = chart(&[100.0], &[101.0]);
-        let mut chart_id = egui::Id::NULL;
-        chart.config.show_right_axis = false;
-        chart.config.show_ohlc_info = false;
-        let mut next_id = egui::Id::NULL;
-        for (pass, key) in [
-            None,
-            None,
-            Some(Key::ArrowLeft),
-            Some(Key::ArrowLeft),
-            Some(Key::ArrowRight),
-            Some(Key::Tab),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let before = chart.state.time_scale().right_offset();
-            let output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        Vec2::new(1000.0, 500.0),
-                    )),
-                    events: key
-                        .map(|key| Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers: Modifiers::NONE,
-                        })
-                        .into_iter()
-                        .collect(),
-                    ..Default::default()
-                },
-                |ui| {
-                    ui.horizontal(|ui| {
-                        let _ = ui.button("Before");
-                        ui.allocate_ui(Vec2::new(700.0, 400.0), |ui| {
-                            let response = chart.show(ui);
-                            chart_id = response.id;
-                            if pass == 0 {
-                                response.request_focus();
-                            }
+        for enabled in [true, false] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[101.0]);
+            chart.chart_options.keyboard.enabled = enabled;
+            let mut chart_id = egui::Id::NULL;
+            chart.config.show_right_axis = false;
+            chart.config.show_ohlc_info = false;
+            let mut next_id = egui::Id::NULL;
+            for (pass, key) in [
+                None,
+                None,
+                Some(Key::ArrowLeft),
+                Some(Key::ArrowLeft),
+                Some(Key::ArrowRight),
+                Some(Key::Tab),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let before = chart.state.time_scale().right_offset();
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(1000.0, 500.0),
+                        )),
+                        events: key
+                            .map(|key| Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Modifiers::NONE,
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            let _ = ui.button("Before");
+                            ui.allocate_ui(Vec2::new(700.0, 400.0), |ui| {
+                                let response = chart.show(ui);
+                                chart_id = response.id;
+                                if pass == 0 {
+                                    response.request_focus();
+                                }
+                            });
+                            next_id = ui.button("After").id;
                         });
-                        next_id = ui.button("After").id;
-                    });
-                },
-            );
-            output.drop_without_applying_deltas();
-            if pass >= 2 && key != Some(Key::Tab) {
-                let expected = if key == Some(Key::ArrowLeft) {
-                    -chart.chart_options.keyboard.pan_amount
-                } else {
-                    chart.chart_options.keyboard.pan_amount
-                };
-                assert_eq!(
-                    chart.state.time_scale().right_offset(),
-                    before - expected,
-                    "pass {pass}"
+                    },
                 );
-                assert!(
-                    ctx.memory(|memory| memory.has_focus(chart_id)),
-                    "pass {pass}"
-                );
+                output.drop_without_applying_deltas();
+                if pass >= 2 && key != Some(Key::Tab) {
+                    let expected = if !enabled {
+                        0.0
+                    } else if key == Some(Key::ArrowLeft) {
+                        -chart.chart_options.keyboard.pan_amount
+                    } else {
+                        chart.chart_options.keyboard.pan_amount
+                    };
+                    assert_eq!(
+                        chart.state.time_scale().right_offset(),
+                        before - expected,
+                        "pass {pass}"
+                    );
+                    if enabled {
+                        assert!(
+                            ctx.memory(|memory| memory.has_focus(chart_id)),
+                            "pass {pass}"
+                        );
+                    } else if pass == 2 {
+                        assert!(
+                            !ctx.memory(|memory| memory.has_focus(chart_id)),
+                            "disabled arrows must keep native focus navigation"
+                        );
+                    }
+                }
             }
+            assert!(!ctx.memory(|memory| memory.has_focus(chart_id)));
+            assert!(
+                ctx.memory(|memory| memory.focused().is_some()),
+                "expected keyboard focus after Tab, next {next_id:?}"
+            );
         }
-        assert!(!ctx.memory(|memory| memory.has_focus(chart_id)));
-        assert!(
-            ctx.memory(|memory| memory.focused().is_some()),
-            "expected keyboard focus after Tab, next {next_id:?}"
-        );
     }
 }

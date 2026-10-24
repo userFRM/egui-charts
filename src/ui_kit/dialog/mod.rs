@@ -107,8 +107,12 @@ impl DialogFrame {
             window.fixed_size(inner)
         };
 
+        let input_blocked = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let auto_height = self.auto_height;
         window.show(ctx, |ui| {
+            ui.data_mut(|d| {
+                d.insert_temp(ui.layer_id().id.with("dialog_input_blocked"), input_blocked)
+            });
             // A non-resizable window shrinks to its content, so hold the preferred size here.
             ui.set_min_size(inner);
             ui.set_max_width(inner.x);
@@ -138,7 +142,11 @@ pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
 }
 
 fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
-    if ui.ctx().any_popup_open()
+    if ui
+        .data(|d| d.get_temp::<bool>(ui.layer_id().id.with("dialog_input_blocked")))
+        .unwrap_or(false)
+        || egui::Popup::is_any_open(ui.ctx())
+        || ui.ctx().any_popup_open()
         || ui.ctx().top_layer_id() != Some(ui.layer_id())
         || ui.ctx().memory(|m| m.focused()).is_some()
     {

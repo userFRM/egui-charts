@@ -171,9 +171,6 @@ impl Chart {
             );
         }
 
-        // Handle keyboard shortcuts for drawing manipulation
-        selection::handle_keyboard_shortcuts(ui, drawing_manager, response.has_focus());
-
         drawing_manager.update_all_screen_coords(bar_to_x, price_to_y);
 
         // Render existing drawings against the chart's bars
@@ -337,9 +334,9 @@ mod tests {
                     "drag: magnet {magnet}, price {price}, visible {visible}: {after:?}"
                 );
                 assert!(chart.drawings().dragging_handle.is_none());
-                assert!(chart.drawings_mut().undo());
+                assert!(chart.undo());
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], before);
-                assert!(chart.drawings_mut().redo());
+                assert!(chart.redo());
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], after);
             }
         }

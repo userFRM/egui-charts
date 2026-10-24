@@ -1244,6 +1244,7 @@ impl Chart {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
 
+            let drawing_history = self.history.start_drawing_action(&mut self.drawings);
             // Temporarily take cursor_modes and the drawings to avoid borrow conflict
             let mut cursor_modes = std::mem::take(&mut self.cursor_modes);
             let mut drawings = std::mem::take(&mut self.drawings);
@@ -1265,6 +1266,8 @@ impl Chart {
             // Put them back
             self.drawings = drawings;
             self.cursor_modes = cursor_modes;
+            self.history
+                .finish_drawing_action(&mut self.drawings, drawing_history);
         }
 
         if !time_based
@@ -2974,6 +2977,15 @@ mod tests {
                 mode,
                 "button {button}"
             );
+            assert!(chart.undo(), "button {button}: navigation edit is undoable");
+            assert_eq!(chart.get_time_scale_state(), (20.0, -20.0));
+            assert_eq!(chart.state.price_scale().is_manual(), initial_manual);
+            assert_eq!(chart.state.price_scale().options().mode, initial_mode);
+            assert!(chart.redo());
+            assert!((chart.get_time_scale_state().0 - spacing).abs() < 1e-4);
+            assert!((f64::from(chart.get_time_scale_state().1) - offset).abs() < 1e-4);
+            assert_eq!(chart.state.price_scale().is_manual(), manual);
+            assert_eq!(chart.state.price_scale().options().mode, mode);
         }
     }
 

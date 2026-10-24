@@ -409,6 +409,74 @@ mod tests {
     use super::*;
 
     #[test]
+    fn keyboard_cycles_charts_and_layout_switches_keep_history_closed() {
+        use super::super::TopToolbarAction;
+        use eframe::App;
+        use egui::{Event, Key, Modifiers};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        app.extra_charts[0].live.set_paused(true);
+        app.layout.sync.sync_time_axis = false;
+        app.layout.set_active(0);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+            frame(
+                &mut app,
+                vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
+            );
+            assert_eq!(app.layout_slot, expected);
+            frame(&mut app, vec![]);
+            let before = app.chart.get_time_scale_state();
+            let other = app.extra_charts[0].chart.get_time_scale_state();
+            frame(&mut app, vec![key(Key::ArrowRight, Modifiers::NONE)]);
+            assert_ne!(app.chart.get_time_scale_state(), before);
+            assert_eq!(app.extra_charts[0].chart.get_time_scale_state(), other);
+        }
+        app.chart
+            .user_action(|chart| chart.config_mut().show_grid = false);
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::Layout(LayoutAction::SaveAs("Copy".into())),
+        );
+        app.chart
+            .user_action(|chart| chart.config_mut().show_grid = true);
+        assert!(
+            app.chart.undo(),
+            "switching layouts must close the old chart's action"
+        );
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::Layout(LayoutAction::Open("Unnamed".into())),
+        );
+        assert!(app.chart.undo());
+        assert!(app.chart.config().show_grid);
+    }
+
+    #[test]
     fn chart_slots_and_layout_tabs_keep_independent_state() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));

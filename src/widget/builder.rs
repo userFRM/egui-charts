@@ -84,6 +84,7 @@ impl Chart {
             config: ChartConfig::default(),
             start_idx: 0,
             chart_options,
+            keyboard: super::keyboard::KeyboardState::default(),
             kinetic_scroll: KineticScrollState::new(),
             scroll_start_pos: None,
             scroll_start_offset: None,
@@ -115,6 +116,7 @@ impl Chart {
             // 0 and 1 are the main and volume series.
             next_series: 2,
             drawings: DrawingManager::new(),
+            history: super::history::ChartHistory::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,

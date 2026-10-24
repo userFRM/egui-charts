@@ -124,7 +124,9 @@ pub mod builder;
 mod crosshair;
 mod feed;
 mod frame;
+mod history;
 pub(crate) mod interaction;
+pub mod keyboard;
 pub mod layout;
 mod navigation;
 pub(crate) mod pan_zoom;
@@ -138,6 +140,7 @@ use feed::FeedLink;
 pub use sync::VisibleTimeRange;
 pub(crate) mod tool_interaction;
 
+pub use keyboard::{ShortcutMap, ShortcutRequest};
 pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 
 /// Interactive financial chart widget for egui.
@@ -190,6 +193,12 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 ///
 /// # Architecture
 ///
+/// User drawing interactions and shortcuts share [`Chart::undo`] / [`Chart::redo`] with
+/// host toolbar, menu and dialog edits wrapped in [`Chart::user_action`]. Direct programmatic
+/// setters and feed/data updates do not enter this history. Use [`Chart::can_undo`] and
+/// [`Chart::can_redo`] for toolbar availability, and [`Chart::take_history_changed`] to
+/// synchronize host controls and data after restoring an interval or settings.
+///
 /// `Chart` owns a [`ChartState`] (data + coordinate systems) and a
 /// [`ChartConfig`] (visual styling). Rendering is delegated to specialized
 /// modules in `crate::chart::rendering`, while interaction logic lives in
@@ -203,6 +212,8 @@ pub struct Chart {
     pub(crate) main_series_visible: bool,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
+    pub(crate) keyboard: keyboard::KeyboardState,
+    history: history::ChartHistory,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)
@@ -617,6 +628,13 @@ impl Chart {
         self.zoom_mode_active = active;
     }
 
+    /// Restore the view preceding the last box zoom. Drawing and chart edit history is unchanged.
+    pub fn zoom_back(&mut self) -> bool {
+        self.pending_scroll_time = None;
+        self.tracking_mode_active = false;
+        self.state.pop_zoom_state()
+    }
+
     /// Returns `true` if a box-zoom was completed in the most recent frame.
     ///
     /// Use this to auto-deactivate zoom mode in your toolbar after the user
@@ -711,7 +729,8 @@ impl Chart {
     ///
     /// Use this to apply settings produced by a dialog in place, e.g.
     /// `settings.apply_to_config(chart.config_mut())`, without rebuilding the
-    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame.
+    /// whole [`ChartConfig`]. Changes take effect on the next rendered frame. Wrap a host UI
+    /// submission in [`Self::user_action`] to include it in chart history.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
         &mut self.config
     }
@@ -751,7 +770,8 @@ impl Chart {
     }
 
     /// The chart's drawings and drawing tools, to set the active tool or to save and load the
-    /// drawings.
+    /// drawings. Direct host edits do not enter chart history; wrap UI-originated edits in
+    /// [`Self::user_action`]. The manager's own history is for standalone drawing use.
     pub fn drawings_mut(&mut self) -> &mut DrawingManager {
         &mut self.drawings
     }

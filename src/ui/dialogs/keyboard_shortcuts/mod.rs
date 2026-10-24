@@ -7,10 +7,10 @@ use egui::{
     ScrollArea, Stroke, Ui, WidgetInfo,
 };
 
-use crate::config::KeyboardAction;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::widget::ShortcutMap;
 
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,10 +55,20 @@ impl KeyboardShortcutsDialog {
 
     /// Show the dialog. Returns the action taken.
     pub fn show(&mut self, ctx: &Context) -> KeyboardShortcutsAction {
+        self.show_with_shortcuts(ctx, &ShortcutMap::default())
+    }
+
+    /// Show only the host's bound shortcuts, using the same map as its chart.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        shortcuts: &ShortcutMap,
+    ) -> KeyboardShortcutsAction {
         if !self.is_open {
             return KeyboardShortcutsAction::None;
         }
 
+        let blocked_now = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let mut action = KeyboardShortcutsAction::None;
 
         DialogFrame::with_width(
@@ -66,7 +76,7 @@ impl KeyboardShortcutsDialog {
             DESIGN_TOKENS.sizing.dialog.default_width,
         )
         .show(ctx, |ui| {
-            action = self.render_contents(ui);
+            action = self.render_contents(ui, shortcuts);
         });
 
         // Escape belongs to an open popup or a focused text field first. egui closes both on
@@ -76,7 +86,10 @@ impl KeyboardShortcutsDialog {
         let blocked = ctx
             .data(|d| d.get_temp::<bool>(blocked_id))
             .unwrap_or(false);
-        if !blocked && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        if !blocked
+            && !blocked_now
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
             self.is_open = false;
             action = KeyboardShortcutsAction::Close;
         }
@@ -86,7 +99,7 @@ impl KeyboardShortcutsDialog {
         action
     }
 
-    fn render_contents(&mut self, ui: &mut Ui) -> KeyboardShortcutsAction {
+    fn render_contents(&mut self, ui: &mut Ui, shortcuts: &ShortcutMap) -> KeyboardShortcutsAction {
         let mut action = KeyboardShortcutsAction::None;
         let theme = ui.active_theme();
 
@@ -102,7 +115,7 @@ impl KeyboardShortcutsDialog {
         );
         ui.add_space(theme.spacing.lg);
 
-        let categories = KeyboardAction::all_by_category();
+        let categories = shortcuts.by_category();
         let font = FontId::proportional(theme.text.body);
         let widest = ui.fonts_mut(|f| {
             categories
@@ -115,7 +128,8 @@ impl KeyboardShortcutsDialog {
                 })
                 .fold(0.0, f32::max)
         });
-        let label_w = ((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0;
+        let label_w = (((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0)
+            .min((ui.available_width() - theme.spacing.sm) / 2.0);
 
         ui.scope(|ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
@@ -135,14 +149,16 @@ impl KeyboardShortcutsDialog {
                         );
                         egui::Grid::new(("shortcuts", idx))
                             .num_columns(2)
-                            .spacing([0.0, theme.spacing.sm])
+                            .spacing([theme.spacing.sm, theme.spacing.sm])
                             // With the spacing, a 24 px row pitch.
                             .min_row_height(theme.spacing.xxl + theme.spacing.sm)
                             .min_col_width(label_w)
+                            .max_col_width(label_w)
                             .show(ui, |ui| {
                                 for action in actions {
                                     ui.label(RichText::new(action.label()).size(theme.text.body));
-                                    ui.horizontal(|ui| key_badges(ui, &theme, action.shortcuts()));
+                                    let keys: Vec<_> = shortcuts.keys_for(*action).collect();
+                                    ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
                                 }
                             });
@@ -189,12 +205,46 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                 theme.spacing.xs as i8,
             ))
             .show(ui, |ui| {
-                ui.label(
-                    RichText::new(text)
-                        .size(theme.text.small)
-                        .color(theme.ui.text),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(text)
+                            .size(theme.text.small)
+                            .color(theme.ui.text),
+                    )
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 )
                 .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_popup_opened_this_frame_gets_escape_before_the_dialog() {
+        let ctx = Context::default();
+        let mut dialog = KeyboardShortcutsDialog::new();
+        dialog.open();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                egui::Popup::open_id(ui.ctx(), Id::NULL.with("test popup"));
+                assert_eq!(dialog.show(ui.ctx()), KeyboardShortcutsAction::None);
+                assert!(dialog.is_open);
+                assert!(ui.input(|i| i.key_pressed(Key::Escape)));
+            },
+        )
+        .drop_without_applying_deltas();
     }
 }
