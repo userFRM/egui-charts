@@ -1338,7 +1338,13 @@ impl Chart {
                 })
                 .with_style(crate::model::LineStyle::Dotted)
                 .with_axis_label(show_price_axis && self.config.show_symbol_last_val);
-            let countdown = self.current_bar_countdown();
+            // Only a countdown drawn on the axis needs the once-a-second repaint.
+            let countdown = self.current_bar_countdown().filter(|_| {
+                line.axis_label
+                    && price_map
+                        .range()
+                        .contains(price_map.transform().to_scale(last.close))
+            });
             if countdown.is_some()
                 && (self.server_time_offset.is_some() || self.feed_link.is_some())
             {
@@ -3186,32 +3192,46 @@ mod tests {
     }
 
     #[test]
-    fn first_frame_is_settled_and_an_idle_chart_requests_no_repaint() {
+    fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown() {
         // A host that repaints only on input or new data shows this frame until the next event.
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
-        chart.set_visible_bars(50);
-        let mut run = || {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                ..Default::default()
+        use std::time::Duration;
+        for (server_time, axis, delay) in [
+            (false, true, Duration::MAX),
+            (true, true, Duration::from_secs(1)),
+            (true, false, Duration::MAX),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+            chart.set_visible_bars(50);
+            chart.set_timeframe(crate::model::Timeframe::Min1);
+            chart.config.show_right_axis = axis;
+            let last = chart.state.data().bars.last().unwrap().time;
+            chart.set_server_time(server_time.then(|| last + chrono::Duration::seconds(30)));
+            let mut run = || {
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| {
+                    chart.show(ui);
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                output.drop_without_applying_deltas();
+                (shapes, delay)
             };
-            let mut output = ctx.run_ui(input, |ui| {
-                chart.show(ui);
-            });
-            let shapes = std::mem::take(&mut output.shapes);
-            let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
-            output.drop_without_applying_deltas();
-            (shapes, delay)
-        };
-        let (first, _) = run();
-        for _ in 0..3 {
-            let (shapes, delay) = run();
-            assert!(
-                shapes == first,
-                "the first frame must draw the settled chart"
-            );
-            assert_eq!(delay, std::time::Duration::MAX);
+            let (first, _) = run();
+            for _ in 0..3 {
+                let (shapes, actual) = run();
+                // A drawn countdown changes its text as the clock runs.
+                if delay == Duration::MAX {
+                    assert!(
+                        shapes == first,
+                        "the first frame must draw the settled chart"
+                    );
+                }
+                assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
+            }
         }
     }
 
