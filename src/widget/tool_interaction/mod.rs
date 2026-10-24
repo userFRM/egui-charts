@@ -581,6 +581,7 @@ mod tests {
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]).iter().any(|s| {
                 matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color)
                     || matches!(s, Shape::Circle(c) if c.fill == color)
+                    || matches!(s, Shape::Mesh(m) if m.vertices.iter().any(|v| v.color == color))
             });
             frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(on_line)]);
             for (time, pressed) in [(0.3, true), (0.4, false)] {

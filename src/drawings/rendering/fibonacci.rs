@@ -3,6 +3,7 @@
 //! Includes: retracement, extension, arc, time zones, channel, circles,
 //! speed fan, spiral, wedge, and trend-based fib time.
 
+use super::style::circle_sides;
 use crate::drawings::domain::{Drawing, FibonacciConfig};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -180,7 +181,7 @@ impl Drawing {
             let radius = base_radius * ratio;
 
             // Draw arc segments (approximate with line segments)
-            let segments = 32;
+            let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
             let mut prev_point: Option<Pos2> = None;
             for i in 0..=segments {
                 let angle = std::f32::consts::PI * (1.0 - i as f32 / segments as f32);
