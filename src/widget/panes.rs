@@ -9,46 +9,9 @@ use crate::chart::indicators::{
 };
 use crate::chart::selection::ChartElementId;
 use crate::chart::series::calculate_dot_interval;
-use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::{CustomIndicator, Indicator};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Response, Sense, Ui};
-
-/// Draws the background, grid, axis and crosshair of a pane without a visible study.
-#[derive(Clone, Default)]
-struct PaneFrame(IndicatorValues);
-
-impl Indicator for PaneFrame {
-    fn name(&self) -> &str {
-        ""
-    }
-
-    fn calculate(&mut self, _data: &[Bar]) {}
-
-    fn values(&self) -> &IndicatorValues {
-        &self.0
-    }
-
-    fn colors(&self) -> Vec<Color32> {
-        Vec::new()
-    }
-
-    fn set_colors(&mut self, _colors: Vec<Color32>) {}
-
-    fn is_overlay(&self) -> bool {
-        false
-    }
-
-    fn line_names(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn set_visible(&mut self, _visible: bool) {}
-
-    fn clone_box(&self) -> Box<dyn Indicator> {
-        Box::new(self.clone())
-    }
-}
+use egui::{Pos2, Rect, Response, Sense, Ui};
 
 impl Chart {
     /// Turns the heights requested for the `expanded` panes into stretch factors that give each
@@ -273,7 +236,10 @@ impl Chart {
         let mut pending_indicator_action = None;
         let mut pending_pane_collapse = None;
         let current_selection = self.selection.selected_id();
-        let frame = PaneFrame::default();
+        // Draws the background, grid, axis and crosshair of a pane without a visible study.
+        let frame = CustomIndicator::new("", |_| Vec::new())
+            .with_overlay(false)
+            .with_line_cnt(0);
 
         for ((pane_idx, pane_id, collapsed), panel_rect) in
             panes.iter().copied().zip(rects.iter().copied())

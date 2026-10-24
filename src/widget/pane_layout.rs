@@ -205,14 +205,18 @@ impl Chart {
         }
     }
 
-    /// Appends a pane holding the study `id`, at the study's preferred height.
-    pub(super) fn add_study_pane(&mut self, id: SeriesId) {
-        let height = self
-            .study_ids
+    /// The pane height the study `id` prefers, if it declares a usable one.
+    fn study_pane_height(&self, id: SeriesId) -> Option<f32> {
+        self.study_ids
             .iter()
             .position(|study| *study == id)
             .and_then(|idx| self.studies.indicators()[idx].pane().height)
-            .filter(|height| height.is_finite() && *height >= 40.0);
+            .filter(|height| height.is_finite() && *height >= 40.0)
+    }
+
+    /// Appends a pane holding the study `id`, at the study's preferred height.
+    pub(super) fn add_study_pane(&mut self, id: SeriesId) {
+        let height = self.study_pane_height(id);
         self.add_pane();
         let pane = self.pane_layout.panes.last_mut().expect("pane was added");
         pane.height = height;
@@ -354,12 +358,7 @@ impl Chart {
         let pane = self.add_pane();
         let moved = self.move_series_to_pane(series, pane);
         if moved {
-            let height = self
-                .study_ids
-                .iter()
-                .position(|study| *study == series)
-                .and_then(|idx| self.studies.indicators()[idx].pane().height)
-                .filter(|height| height.is_finite() && *height >= 40.0);
+            let height = self.study_pane_height(series);
             if let Some(item) = self
                 .pane_layout
                 .panes
