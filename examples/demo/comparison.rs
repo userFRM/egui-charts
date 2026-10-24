@@ -3,7 +3,7 @@
 use super::{DemoApp, DemoSymbol, LiveFeed};
 use egui_charts::model::{BarClock, Timeframe};
 use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
-use egui_charts::widget::{Chart, SeriesId};
+use egui_charts::widget::{Chart, SeriesId, SeriesOptions};
 use std::sync::Arc;
 
 pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
@@ -54,6 +54,38 @@ impl DemoApp {
                 Some(entry)
             })
             .collect();
+    }
+
+    /// Feeds another symbol as a host series in a pane of its own, above the price pane.
+    pub(super) fn add_series_pane(&mut self) {
+        let Some(symbol) = DemoSymbol::catalog()
+            .iter()
+            .map(|spec| spec.symbol)
+            .find(|symbol| {
+                *symbol != self.chart.symbol()
+                    && !self
+                        .comparisons
+                        .iter()
+                        .any(|(current, _, _)| current == symbol)
+            })
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
+        let id = self.chart.add_series(SeriesOptions {
+            name: symbol.clone(),
+            color: self.theme.ui.info,
+            ..Default::default()
+        });
+        refresh(&mut self.chart, id, &feed);
+        let pane = self.chart.add_pane();
+        self.chart.move_series_to_pane(id, pane);
+        // Half the price pane's default share of the height.
+        self.chart.set_pane_stretch_factor(pane, 1.5);
+        self.chart.move_pane(pane, 0);
+        self.comparisons.push((symbol, id, feed));
+        self.sync_comparisons();
     }
 
     pub(super) fn handle_comparison(&mut self, action: CompareAction) {

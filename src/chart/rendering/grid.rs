@@ -3,14 +3,14 @@
 
 use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
-use crate::scales::{PriceMap, PriceMarkGenerator};
+use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 /// Renders horizontal price grid lines using smart mark generation
 /// Lines anchor to "nice" price values and adapt density based on zoom
 pub fn render_grid(painter: &Painter, rect: Rect, price_map: &PriceMap, grid_color: Color32) {
-    let marks = PriceMarkGenerator::new().generate_marks(price_map);
+    let marks = price_map.marks();
 
     for mark in marks {
         let stroke_width = if grid_color.is_opaque() {

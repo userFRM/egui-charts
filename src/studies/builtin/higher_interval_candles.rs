@@ -375,6 +375,7 @@ mod tests {
                     [&study as &dyn Indicator],
                     false,
                     std::iter::empty(),
+                    std::iter::empty(),
                 );
                 let fitted = state.price_scale().range();
                 assert!(
