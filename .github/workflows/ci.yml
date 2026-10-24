@@ -111,10 +111,10 @@ jobs:
           check() {
             local base change
             base=$(sed -n "s/^$2=//p" benches/bare_chart.baseline)
-            change=$(awk -v b="$base" -v v="$3" 'BEGIN { if (b > 0) printf "%+.2f", (v - b) * 100 / b; else print "n/a" }')
-            echo "| $1 | ${base:-none} | $3 | $change% | +$4% |" >> "$GITHUB_STEP_SUMMARY"
-            if [[ $change == n/a ]] || awk -v c="$change" -v t="$4" 'BEGIN { exit !(c > t) }'; then
-              echo "::error title=Bare chart::$1 grew from ${base:-none} to $3 ($change%), above the +$4% tolerance"
+            change=$(awk -v b="$base" -v v="$3" 'BEGIN { if (b > 0) printf "%+.2f%%", (v - b) * 100 / b; else print "n/a" }')
+            echo "| $1 | ${base:-none} | $3 | $change | +$4% |" >> "$GITHUB_STEP_SUMMARY"
+            if [[ $change == n/a ]] || awk -v c="$change" -v t="$4" 'BEGIN { exit !(c + 0 > t) }'; then
+              echo "::error title=Bare chart::$1 grew from ${base:-none} to $3 ($change), above the +$4% tolerance"
               fail=1
             fi
           }
