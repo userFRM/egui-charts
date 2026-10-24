@@ -114,6 +114,14 @@ struct PaintedDrawing {
     shapes: Vec<egui::epaint::ClippedShape>,
 }
 
+/// Draft text stays separate from the drawing until the editor commits it.
+pub(crate) struct TextEditState {
+    pub id: usize,
+    pub draft: String,
+    pub focus: bool,
+    pub opened_frame: Option<u64>,
+}
+
 /// Central coordinator for chart drawings.
 ///
 /// `DrawingManager` owns the list of completed drawings and the in-progress
@@ -164,6 +172,10 @@ pub struct DrawingManager {
     preview_point: bool,
     /// Next available drawing ID (monotonically increasing).
     next_id: usize,
+
+    /// Pane used to project and drag screen-anchored annotations.
+    pane_rect: Rect,
+    pub(crate) text_editor: Option<TextEditState>,
 
     // Services
     selection: SelectionService,
@@ -219,6 +231,8 @@ impl DrawingManager {
             curr_drawing: None,
             preview_point: false,
             next_id: 0,
+            pane_rect: Rect::NOTHING,
+            text_editor: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),
@@ -535,6 +549,12 @@ impl DrawingManager {
                         for (point, before) in drawing.points.iter_mut().zip(&old.points) {
                             *point = *before + (snapped - origin);
                         }
+                        if let Some([x, y]) = old.screen_anchor {
+                            drawing.screen_anchor = Some([
+                                x + (snapped.x - origin.x) / self.pane_rect.width(),
+                                y + (snapped.y - origin.y) / self.pane_rect.height(),
+                            ]);
+                        }
                     }
                 }
             }
@@ -550,6 +570,14 @@ impl DrawingManager {
                     }
                 } else {
                     HandleService::update_handle(drawing, handle, snapped, x_to_bar, y_to_price);
+                }
+                if drawing.screen_anchor.is_some()
+                    && let Some(pos) = drawing.points.first()
+                {
+                    drawing.screen_anchor = Some([
+                        (pos.x - self.pane_rect.left()) / self.pane_rect.width(),
+                        (pos.y - self.pane_rect.top()) / self.pane_rect.height(),
+                    ]);
                 }
             }
         }
@@ -776,7 +804,8 @@ impl DrawingManager {
     /// Moves the completed current drawing to the drawing list and queues it to be saved.
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
-        if let Some(drawing) = self.curr_drawing.take() {
+        if let Some(mut drawing) = self.curr_drawing.take() {
+            drawing.update_pane_coords(self.pane_rect);
             let icon = (drawing.tool_type == DrawingToolType::FontIcon)
                 .then(|| drawing.text.clone())
                 .flatten();
@@ -902,6 +931,7 @@ impl DrawingManager {
         };
         copy.stored_id = None;
         copy.created_at = None;
+        copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
         for point in &mut copy.chart_points {
             point.bar_idx += 3.0;
         }
@@ -920,6 +950,7 @@ impl DrawingManager {
             copy.id = self.take_id();
             copy.stored_id = None;
             copy.created_at = None;
+            copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
             copy.points.clear();
             copy.level_ys.clear();
             for point in &mut copy.chart_points {
@@ -1047,6 +1078,15 @@ impl DrawingManager {
         }
         if let Some(ref mut drawing) = self.curr_drawing {
             drawing.update_screen_coords(bar_to_x, price_to_y);
+        }
+    }
+
+    /// Projects anchored annotations into `pane` after chart-coordinate updates.
+    /// The chart calls this automatically; standalone managers call it before rendering.
+    pub fn update_pane_anchors(&mut self, pane: Rect) {
+        self.pane_rect = pane;
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            drawing.update_pane_coords(pane);
         }
     }
 

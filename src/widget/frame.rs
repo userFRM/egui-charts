@@ -534,6 +534,7 @@ impl Chart {
         let is_drawing_interaction = time_based
             && (self.drawings.active_tool.is_some()
                 || self.drawings.dragging_handle.is_some()
+                || self.drawings.text_editor.is_some()
                 || self.drawings.curr_drawing.is_some()
                 || ui
                     .input(|i| i.pointer.press_origin())
