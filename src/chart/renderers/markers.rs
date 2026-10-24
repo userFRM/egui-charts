@@ -313,9 +313,18 @@ mod tests {
     /// offset up from 125, below positions down from 375.
     #[test]
     fn markers_sit_outside_the_bar_on_either_scale_orientation() {
-        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 500.0));
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(160.0, 500.0));
         let t = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-        let bars = [Bar::new(t, 100.0, 105.0, 95.0, 100.0, 1.0)];
+        let bars = [0, 2].map(|seconds| {
+            Bar::new(
+                t + chrono::Duration::seconds(seconds),
+                100.0,
+                105.0,
+                95.0,
+                100.0,
+                1.0,
+            )
+        });
         for inverted in [false, true] {
             let map = PriceMap::new(
                 PriceTransform::default(),
@@ -324,7 +333,7 @@ mod tests {
                 500.0,
                 inverted,
             );
-            let coords = ChartMapping::new(rect, 10.0, 0, 0, 10.0, map);
+            let coords = ChartMapping::new(rect, 10.0, 12, 13, 2.0, map);
             for (position, want) in [
                 (MarkerPos::AboveBar, 105.0),
                 (MarkerPos::BelowBar, 395.0),
@@ -352,7 +361,7 @@ mod tests {
                     });
                     output.drop_without_applying_deltas();
                     let center = center.expect("a marker circle");
-                    assert_eq!(center.x, coords.idx_to_x(0) + seconds as f32 * 10.0);
+                    assert_eq!(center.x, coords.idx_to_x(12) + seconds as f32 * 5.0);
                     let y = center.y;
                     assert!(
                         (y - want).abs() < 1e-3,

@@ -288,8 +288,8 @@ impl DrawingStorage {
     /// Serialize to JSON, refusing what would lose a drawing on the next load:
     /// a non-finite number, which JSON cannot store and which would otherwise be
     /// written as `null`, an id an earlier drawing already has, a cursor tool
-    /// such as the eraser and fewer anchors than the tool draws with, which
-    /// [`Self::from_json`] skips.
+    /// such as the eraser, an unsupported timestamp and fewer anchors than the tool draws with.
+    /// [`Self::from_json`] skips these records.
     pub fn to_json(&self) -> Result<String, SaveError> {
         let mut ids = HashSet::new();
         for stored in &self.drawings {
@@ -307,6 +307,16 @@ impl DrawingStorage {
                 return Err(SaveError::NonFinite {
                     id: stored.id.clone(),
                     field,
+                });
+            }
+            if let Some(point) = stored
+                .points
+                .iter()
+                .position(|point| chrono::DateTime::from_timestamp_millis(point.ts_ms).is_none())
+            {
+                return Err(SaveError::UnmappedAnchor {
+                    id: stored.id.clone(),
+                    point,
                 });
             }
             if let Some((needed, anchors)) = stored.missing_anchors() {
@@ -487,7 +497,7 @@ pub enum SaveError {
         /// The anchors the tool needs.
         needed: usize,
     },
-    /// An anchor cannot be mapped to time, for example before any bars have been supplied.
+    /// An anchor has no time mapping or its timestamp is outside the supported range.
     UnmappedAnchor {
         /// Drawing id.
         id: String,
@@ -1056,7 +1066,11 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 11] = [
+        let cases: [(Spoil, &str); 12] = [
+            (
+                |s| first(s).points[0].ts_ms = i64::MAX,
+                "anchor 0 has no time mapping",
+            ),
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -1131,6 +1145,9 @@ mod tests {
                 Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
                 Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
                 Err(SaveError::Cursor { id }) => format!("{id}: a cursor"),
+                Err(SaveError::UnmappedAnchor { id, point }) => {
+                    format!("{id}: anchor {point} has no time mapping")
+                }
                 Err(SaveError::MissingAnchors {
                     id, tool, needed, ..
                 }) => {

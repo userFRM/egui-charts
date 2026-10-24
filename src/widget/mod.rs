@@ -120,6 +120,7 @@ pub use indicator_pane::{
 // Re-export from logic layer
 use crate::chart::state;
 
+mod anchors;
 pub mod builder;
 mod crosshair;
 mod feed;
@@ -214,7 +215,7 @@ pub struct Chart {
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
     pub(crate) keyboard: keyboard::KeyboardState,
-    pub(crate) history: history::ChartHistory,
+    history: history::ChartHistory,
     /// Starting index of visible range (for backward compatibility)
     pub(crate) start_idx: usize,
     /// Desired number of visible bars (from app state)

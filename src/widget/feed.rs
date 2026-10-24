@@ -161,10 +161,13 @@ impl Chart {
         if symbol != self.symbol {
             self.anchor_drawing_points();
             self.drawings.cancel_curr_drawing();
+            self.drawings.end_drag_handle();
             self.drawings.deselect();
             let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
             next.0.options = self.drawings.options.clone();
             next.0.active_tool = self.drawings.active_tool;
+            next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+            next.0.eraser_mode = self.drawings.eraser_mode;
             next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
             std::mem::swap(&mut self.drawings, &mut next.0);
             std::mem::swap(&mut self.marks, &mut next.1);

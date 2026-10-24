@@ -20,8 +20,8 @@ impl Chart {
     /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
     /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
-    /// The studies are updated from the first bar that changed on the next [`show`](Self::show), and near the live edge the view
-    /// follows a new last bar, as with [`update`](Self::update).
+    /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
+    /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
     ///
     /// Only [`SeriesId::MAIN`] holds bars; a call with another id is ignored with a warning.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {

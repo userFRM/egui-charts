@@ -838,11 +838,17 @@ mod tests {
         assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.5);
         // An index edited by the host gets a new time before the next mutation.
         chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 2.5;
+        chart.drawings_mut().stay_in_drawing_mode = true;
+        chart.drawings_mut().eraser_mode = true;
+        chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
         chart.set_symbol("B");
         assert!(chart.drawings().drawings.is_empty());
         assert!(chart.marks.is_empty());
+        assert!(chart.drawings().stay_in_drawing_mode);
+        assert!(chart.drawings().eraser_mode);
         chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
         chart.set_symbol("A");
+        assert!(chart.drawings().dragging_handle.is_none());
         chart.set_data(SeriesId::MAIN, bars(&[0, 60, 120, 180, 240, 300]));
         assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 2.5);
         assert_eq!(chart.marks.len(), 1);
@@ -889,6 +895,25 @@ mod tests {
                 PriceScaleMode::Normal
             );
             assert!(!chart.state.price_scale().is_manual());
+            chart.state.price_scale_mut().set_range(10.0, 20.0);
+            let range = chart.state.price_scale().range();
+            chart.user_action(|chart| {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            });
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(chart.undo());
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(
+                chart.state.price_scale().is_manual(),
+                "undo restores the range"
+            );
+            assert_eq!(chart.state.price_scale().range(), range);
         }
     }
 

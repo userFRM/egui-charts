@@ -9,7 +9,7 @@ use crate::scales::PriceScale;
 use crate::studies::Indicator;
 
 #[derive(Default)]
-pub(crate) struct ChartHistory {
+pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
@@ -49,7 +49,7 @@ struct Study {
 }
 
 impl ChartHistory {
-    pub(crate) fn visit_chart_points(
+    pub(super) fn visit_chart_points(
         &mut self,
         visit: &mut impl FnMut(&mut crate::drawings::ChartPoint),
     ) {
@@ -152,6 +152,7 @@ impl Chart {
     /// Begin a user action spanning a host handler that also borrows non-chart state.
     /// Pair with [`Self::end_user_action`]; prefer [`Self::user_action`] when possible.
     pub fn begin_user_action(&mut self) {
+        self.apply_config_scale_mode();
         if let Some(pending) = &mut self.history.pending {
             pending.depth += 1;
             return;
@@ -185,6 +186,7 @@ impl Chart {
             self.history.pending = Some(pending);
             return;
         }
+        self.apply_config_scale_mode();
         self.drawings.swap_history(&mut pending.standalone_drawings);
         let mut action = pending.before;
         action.drawings = pending.standalone_drawings;

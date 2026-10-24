@@ -1,14 +1,17 @@
 //! Time anchors behind editable chart coordinates.
 
-use crate::drawings::ChartPoint;
-use crate::widget::{
+use super::{
     Chart,
     sync::{index_at, time_at},
 };
+use crate::drawings::persistence::{
+    DrawingStorage, SaveError, SkippedDrawing, drawing_to_stored, stored_to_drawing,
+};
+use crate::drawings::{ChartPoint, DrawingManager};
 
 impl Chart {
     /// Captures edited indices before the bars or the rendered element sequence change.
-    pub(crate) fn anchor_drawing_points(&mut self) {
+    pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
         let mut anchor = |point: &mut ChartPoint| {
             if point
@@ -24,7 +27,7 @@ impl Chart {
     }
 
     /// Projects retained timestamps against the current rendered bars, including whitespace.
-    pub(crate) fn project_drawing_points(&mut self) {
+    pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
         let mut project = |point: &mut ChartPoint| {
             if let Some((time, _)) = point.time_anchor
@@ -45,10 +48,7 @@ impl Chart {
     /// Between bars time is interpolated; outside them the nearest distinct pair is extended
     /// (one second per index for a single bar). Empty charts can export retained time anchors;
     /// an index with no loaded mapping returns an error rather than clamping or inventing time.
-    pub fn save_drawings(
-        &self,
-    ) -> Result<super::persistence::DrawingStorage, super::persistence::SaveError> {
-        use super::persistence::{DrawingStorage, SaveError, drawing_to_stored};
+    pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         let mut storage = DrawingStorage::new(self.symbol());
         storage.timeframe = self
             .timeframe()
@@ -86,20 +86,18 @@ impl Chart {
     /// Can run before history arrives: timestamp anchors are projected when bars load.
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
-    pub fn load_drawings(
-        &mut self,
-        json: &str,
-    ) -> Result<Vec<super::persistence::SkippedDrawing>, serde_json::Error> {
-        use super::persistence::{DrawingStorage, stored_to_drawing};
+    pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, serde_json::Error> {
         let (storage, skipped) = DrawingStorage::from_json(json)?;
         if storage.symbol != self.symbol() {
             return Err(serde::de::Error::custom(
                 "drawing storage belongs to a different symbol",
             ));
         }
-        let mut manager = super::DrawingManager::new();
+        let mut manager = DrawingManager::new();
         manager.options = self.drawings.options.clone();
         manager.active_tool = self.drawings.active_tool;
+        manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+        manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         for stored in storage.drawings() {
             let drawing = stored_to_drawing(
@@ -172,10 +170,14 @@ mod tests {
             .extend([serde_json::json!({"id": "broken"}), bad_time]);
         let mut restored = Chart::new(BarData::new());
         restored.set_symbol("A");
+        restored.drawings_mut().stay_in_drawing_mode = true;
+        restored.drawings_mut().eraser_mode = true;
         let skipped = restored.load_drawings(&json.to_string()).unwrap();
         assert_eq!(skipped.iter().map(|s| s.index).collect::<Vec<_>>(), [1, 2]);
         assert!(restored.drawings().pending_sync.lock().unwrap().is_empty());
         assert!(!restored.can_undo());
+        assert!(restored.drawings().stay_in_drawing_mode);
+        assert!(restored.drawings().eraser_mode);
         // Timestamp-only drawings can be saved while history is still pending.
         assert_eq!(
             serde_json::to_value(&restored.save_drawings().unwrap().drawings[0].points).unwrap(),
