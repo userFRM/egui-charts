@@ -446,17 +446,15 @@ impl Chart {
                         if page.columns.len() > request.count {
                             page.columns.drain(..page.columns.len() - request.count);
                         }
-                        let oldest = page.columns.first().map(|c| c.time);
-                        link.depth_complete |= page.end_of_history
-                            || page.columns.is_empty()
-                            || request
-                                .before
-                                .is_some_and(|b| oldest.is_none_or(|t| t >= b));
-                        if let Some(history) = &mut link.depth_history
-                            && let Err(error) = history.merge_page(page.columns)
-                        {
-                            link.depth_complete = true;
-                            self.feed.last_error = Some(error);
+                        link.depth_complete |= page.end_of_history || page.columns.is_empty();
+                        if let Some(history) = &mut link.depth_history {
+                            if let Err(error) = history.merge_page(page.columns) {
+                                link.depth_complete = true;
+                                self.feed.last_error = Some(error);
+                            }
+                            link.depth_complete |= request.before.is_some_and(|before| {
+                                history.columns().next().is_none_or(|c| c.time >= before)
+                            });
                         }
                     }
                     Err(error) => self.request_failed(
@@ -779,8 +777,13 @@ impl Chart {
             return;
         };
         let before = history.columns().next().map(|c| c.time);
-        if before.is_some()
-            && (!self.older_bars_drawn || self.state.visible_range().0 >= SCROLL_BACK_MARGIN)
+        if let Some(before) = before
+            && (!self.older_bars_drawn
+                || self
+                    .state
+                    .shown()
+                    .get(self.state.visible_range().0)
+                    .is_none_or(|bar| bar.time > before))
         {
             return;
         }
@@ -1097,6 +1100,79 @@ mod tests {
             0
         );
         assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    }
+
+    #[test]
+    fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
+        for (name, offset, span, end, expected) in [
+            ("overlapping page", Some(899), 120, false, vec![900]),
+            ("final page", Some(899), 60, true, vec![899, 900]),
+            ("empty page", None, 60, false, vec![900]),
+            ("repeated page", Some(900), 60, false, vec![900]),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            let mut instrument = Instrument::new("A");
+            instrument.tick_size = Some(0.25);
+            feed.resolve().send(Ok(instrument));
+            let bars = bars(1000);
+            feed.page().send(page(bars.clone(), true));
+            frames.run(&mut chart);
+            let column = |index: usize, seconds| crate::data::DepthColumn {
+                time: bars[index].time,
+                span: TimeDelta::seconds(seconds),
+                bids: vec![(400, 2.0)],
+                asks: vec![],
+            };
+            chart.set_visible_logical_range(crate::model::LogicalRange {
+                left: 950.0,
+                right: 999.0,
+            });
+            feed.depth
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(DepthPage::new(vec![column(900, 60)], false)));
+            frames.run(&mut chart);
+            feed.calls();
+            chart.set_visible_logical_range(crate::model::LogicalRange {
+                left: 850.0,
+                right: 899.0,
+            });
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let calls = feed.calls();
+            assert_eq!(calls.len(), 1, "{name}: {calls:?}");
+            assert!(
+                matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
+                "{name}: {calls:?}"
+            );
+            feed.depth.lock().unwrap().remove(0).send(Ok(DepthPage::new(
+                offset.map(|i| column(i, span)).into_iter().collect(),
+                end,
+            )));
+            for _ in 0..3 {
+                frames.run(&mut chart);
+            }
+            assert!(feed.calls().is_empty(), "{name}: paging did not stop");
+            let held: Vec<_> = chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .map(|c| (c.time, c.span, c.bids.clone()))
+                .collect();
+            assert_eq!(
+                held,
+                expected
+                    .into_iter()
+                    .map(|i| (bars[i].time, TimeDelta::seconds(60), vec![(400, 2.0)]))
+                    .collect::<Vec<_>>(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
