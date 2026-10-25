@@ -32,8 +32,7 @@ pub enum LayoutAction {
     SelectGrid(crate::widget::ChartLayoutMode),
     /// Save the current layout under its name (Save layout, Ctrl+S).
     Save,
-    /// Save the current layout under a new name, which becomes current (Save layout as, Make a
-    /// copy).
+    /// Save the current layout under a new name, which becomes current (Save layout as).
     SaveAs(String),
     DownloadImage,
     CreateNew,
@@ -432,19 +431,14 @@ impl LayoutMenu {
         }
         let curr = self.curr_layout.clone().unwrap_or_default();
         let rename = ui.button("Rename…").clicked();
-        let copy = ui.button("Make a copy…").clicked();
         let save_as = ui.button("Save layout as…").clicked();
         if rename {
             self.editing = Some(true);
             self.new_name = curr.clone();
         }
-        if copy || save_as {
+        if save_as {
             self.editing = Some(false);
-            self.new_name = if copy {
-                format!("{curr} copy")
-            } else {
-                String::new()
-            };
+            self.new_name.clear();
         }
         for (label, value) in [
             ("New layout", LayoutAction::CreateNew),
@@ -461,7 +455,7 @@ impl LayoutMenu {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
             );
-            if save_as || rename || copy {
+            if save_as || rename {
                 response.request_focus();
             }
             let name = self.new_name.trim();
