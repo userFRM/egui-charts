@@ -1752,14 +1752,16 @@ impl DemoApp {
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         let chart_symbol = self.chart.symbol().to_owned();
         let symbols: Vec<String> = self.watchlist.symbols().map(str::to_owned).collect();
+        let mut selected = chart_symbol.clone();
         for symbol in symbols {
             if symbol.eq_ignore_ascii_case(&chart_symbol) {
-                self.watchlist.set_selected(&symbol);
+                selected.clone_from(&symbol);
             }
             if let Some(decimals) = live::price_decimals(&symbol) {
                 self.watchlist.set_price_decimals(&symbol, decimals);
             }
         }
+        self.watchlist.set_selected(&selected);
         self.quotes.publish(chrono::Utc::now());
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(

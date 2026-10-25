@@ -451,13 +451,20 @@ impl OrderTicket {
                 action
             }
             Tab::Dom => {
-                let ladder = self.ladder.show(
-                    ui,
-                    &self.symbol,
-                    market,
-                    &mut self.quantity,
-                    &mut self.time_in_force,
-                );
+                let height = ui.available_height().max(360.0);
+                let ladder = egui::ScrollArea::vertical()
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        ui.set_height(height);
+                        self.ladder.show(
+                            ui,
+                            &self.symbol,
+                            market,
+                            &mut self.quantity,
+                            &mut self.time_in_force,
+                        )
+                    })
+                    .inner;
                 // A new order from the ladder waits for confirmation without one-click trading.
                 match ladder {
                     Some(Action::Place(request)) if !*one_click => {
@@ -845,13 +852,13 @@ impl OrderTicket {
             let available = market.balance.unwrap_or_default();
             let row = info(
                 ui,
-                "Margin",
+                "Est. margin",
                 &format!("{} / {}", grouped(margin, 2), grouped(available, 2)),
                 "",
                 theme.ui.text,
             );
             let help =
-                Rect::from_center_size(pos2(row.left() + 58.0, row.center().y), vec2(14.0, 14.0));
+                Rect::from_center_size(pos2(row.left() + 82.0, row.center().y), vec2(14.0, 14.0));
             icons::WIDGET_BAR_HELP
                 .as_image_tinted(help.size(), theme.ui.text_muted)
                 .paint_at(ui, help);
@@ -861,8 +868,8 @@ impl OrderTicket {
                 Sense::hover(),
             )
             .on_hover_text(
-                "The funds the broker sets aside while the position is open: the trade value \
-                     divided by the leverage, against the funds the account has",
+                "Estimated margin: trade value divided by leverage, compared with account balance. \
+                 This does not include margin already used by other positions or working orders.",
             );
             let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
             ui.painter().rect_filled(bar, 2.0, theme.ui.border);
@@ -1160,10 +1167,6 @@ impl OrderTicket {
                 };
             }
         }
-        ui.add_enabled(false, egui::Button::new("+ Add level").frame(false))
-            .on_disabled_hover_text(
-                "This account interface accepts one take profit and one stop loss per order",
-            );
     }
 
     /// The full-width send button in the side's colour, or what keeps the order from being sent.
@@ -1607,105 +1610,109 @@ mod tests {
     }
 
     #[test]
-    fn short_tickets_scroll_to_the_submit_button() {
+    fn short_tickets_keep_order_controls_reachable() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let mut ticket = OrderTicket::default();
-            ticket.open(&OrderRequest::new(
-                "ES",
-                OrderSide::Buy,
-                1.0,
-                OrderType::StopLimit {
-                    stop: 100.0,
-                    limit: 101.0,
-                },
-            ));
-            let mut rules = TradingRules::new("ES");
-            rules.time_in_force.push(TimeInForce::GoodTillCancelled);
-            let market = Market {
-                last: Some(100.0),
-                bid: None,
-                ask: None,
-                tick: 0.25,
-                decimals: 2,
-                currency: "USD",
-                balance: None,
-                rules: &rules,
-                rules_ready: true,
-                capabilities: Capabilities {
-                    market: true,
-                    limit: true,
-                    stop: true,
-                    stop_limit: true,
-                    brackets: true,
-                    ..Capabilities::default()
-                },
-                book: None,
-                orders: &[],
-                positions: &[],
-                trades: &[],
-                last_fill: None,
-            };
-            let mut visible_submit = false;
-            for pass in 0..12 {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(320.0, 240.0),
-                        )),
-                        events: if pass > 2 {
-                            vec![
-                                egui::Event::PointerMoved(egui::pos2(160.0, 130.0)),
-                                egui::Event::MouseWheel {
-                                    unit: egui::MouseWheelUnit::Point,
-                                    source: egui::MouseWheelSource::Wheel,
-                                    phase: egui::TouchPhase::Move,
-                                    delta: egui::vec2(0.0, -400.0),
-                                    modifiers: Default::default(),
-                                },
-                            ]
-                        } else {
-                            vec![]
-                        },
-                        ..Default::default()
-                    },
-                    |ui| {
-                        ticket.show(ui, &market, &mut vec![], &mut false);
-                    },
-                );
-                for shape in &output.shapes {
-                    if let egui::Shape::Text(text) = &shape.shape
-                        && text.galley.text().starts_with("1 ES @")
-                    {
-                        let rect = text.galley.rect.translate(text.pos.to_vec2());
-                        visible_submit |= shape.clip_rect.contains_rect(rect)
-                            && ctx.content_rect().contains_rect(rect);
-                    }
-                }
-                output.drop_without_applying_deltas();
-            }
-            assert!(
-                visible_submit,
-                "the submit button must be reachable in a short window"
-            );
-            for price in [0.0, -1.0] {
+            for tab in [Tab::Order, Tab::Dom] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut ticket = OrderTicket::default();
                 ticket.open(&OrderRequest::new(
                     "ES",
                     OrderSide::Buy,
                     1.0,
-                    OrderType::Limit(price),
+                    OrderType::StopLimit {
+                        stop: 100.0,
+                        limit: 101.0,
+                    },
                 ));
-                ctx.run_ui(egui::RawInput::default(), |ui| {
-                    ticket.show(ui, &market, &mut vec![], &mut false);
-                })
-                .drop_without_applying_deltas();
-                assert_eq!(
-                    ticket.price, price,
-                    "an invalid entered price must not become the market price"
+                let mut rules = TradingRules::new("ES");
+                rules.time_in_force.push(TimeInForce::GoodTillCancelled);
+                let market = Market {
+                    last: Some(100.0),
+                    bid: None,
+                    ask: None,
+                    tick: 0.25,
+                    decimals: 2,
+                    currency: "USD",
+                    balance: None,
+                    rules: &rules,
+                    rules_ready: true,
+                    capabilities: Capabilities {
+                        market: true,
+                        limit: true,
+                        stop: true,
+                        stop_limit: true,
+                        brackets: true,
+                        ..Capabilities::default()
+                    },
+                    book: None,
+                    orders: &[],
+                    positions: &[],
+                    trades: &[],
+                    last_fill: None,
+                };
+                ticket.tab = tab;
+                let mut visible_submit = false;
+                for pass in 0..12 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(320.0, 240.0),
+                            )),
+                            events: if pass > 2 {
+                                vec![
+                                    egui::Event::PointerMoved(egui::pos2(160.0, 130.0)),
+                                    egui::Event::MouseWheel {
+                                        unit: egui::MouseWheelUnit::Point,
+                                        source: egui::MouseWheelSource::Wheel,
+                                        phase: egui::TouchPhase::Move,
+                                        delta: egui::vec2(0.0, -400.0),
+                                        modifiers: Default::default(),
+                                    },
+                                ]
+                            } else {
+                                vec![]
+                            },
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ticket.show(ui, &market, &mut vec![], &mut false);
+                        },
+                    );
+                    for shape in &output.shapes {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && (text.galley.text().starts_with("1 ES @")
+                                || text.galley.text() == "Buy Mkt")
+                        {
+                            let rect = text.galley.rect.translate(text.pos.to_vec2());
+                            visible_submit |= shape.clip_rect.contains_rect(rect)
+                                && ctx.content_rect().contains_rect(rect);
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                }
+                assert!(
+                    visible_submit,
+                    "the submit button must be reachable in a short window"
                 );
-                assert!(ticket.request(&market).is_err());
+                for price in [0.0, -1.0] {
+                    ticket.open(&OrderRequest::new(
+                        "ES",
+                        OrderSide::Buy,
+                        1.0,
+                        OrderType::Limit(price),
+                    ));
+                    ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ticket.show(ui, &market, &mut vec![], &mut false);
+                    })
+                    .drop_without_applying_deltas();
+                    assert_eq!(
+                        ticket.price, price,
+                        "an invalid entered price must not become the market price"
+                    );
+                    assert!(ticket.request(&market).is_err());
+                }
             }
         }
     }

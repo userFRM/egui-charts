@@ -25,7 +25,7 @@ const ROW: f32 = 22.0;
 pub(super) struct Ladder {
     /// The tick of the middle row, until the ladder has a price to centre on.
     centre: Option<i64>,
-    /// Keeps the ladder where the user scrolled it instead of re-centring on the last price.
+    /// Keeps the ladder where the user scrolled it instead of re-centring on the market.
     locked: bool,
     /// Scrolled distance short of a whole row.
     scroll: f32,
@@ -34,6 +34,9 @@ pub(super) struct Ladder {
     /// The previous observed sizes, and the last change at each level.
     sizes: [BTreeMap<i64, f64>; 2],
     changes: [BTreeMap<i64, f64>; 2],
+    observed: bool,
+    /// The order chosen from a price with more than one working order on the same side.
+    selected: Option<OrderId>,
 }
 
 /// Recent order identities associate fills with their symbol even after the order leaves the
@@ -216,8 +219,11 @@ impl Ladder {
             Sense::click(),
         );
 
-        // Scroll by whole rows; without the lock the last price stays in view.
-        if response.hovered() {
+        // Scroll by whole rows; without the lock the market stays in view.
+        // Keep the price under a press or drag stable through its release frame.
+        let interacting =
+            ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
+        if response.hovered() && !interacting {
             self.scroll += ui.input(|input| input.smooth_scroll_delta.y);
             let moved = (self.scroll / ROW).trunc();
             self.scroll -= moved * ROW;
@@ -226,20 +232,21 @@ impl Ladder {
             }
         }
         let last = market.last.filter(|last| last.is_finite()).map(ticks);
-        let middle = last.or_else(|| {
-            let book = market.book?;
-            let bid = book.best_bid()?.price;
-            let ask = book.best_ask()?.price;
-            Some(ticks((bid + ask) / 2.0))
-        });
+        let middle = market
+            .bid
+            .zip(market.ask)
+            .map(|(bid, ask)| ticks(bid / 2.0 + ask / 2.0))
+            .or(last);
         let top = |centre: i64| centre.saturating_add(rows / 2);
         let visible = |centre: i64, tick_index: i64| {
             (top(centre).saturating_sub(rows - 1)..=top(centre)).contains(&tick_index)
         };
         match (self.centre, middle) {
             (None, Some(middle)) => self.centre = Some(middle),
-            (Some(centre), Some(last)) if !self.locked && !visible(centre, last) => {
-                self.centre = Some(last);
+            (Some(centre), Some(middle))
+                if !self.locked && !interacting && !visible(centre, middle) =>
+            {
+                self.centre = Some(middle);
             }
             _ => {}
         }
@@ -269,6 +276,12 @@ impl Ladder {
             .iter()
             .map(|v| v.iter().sum::<f64>())
             .fold(0.0, f64::max);
+        // A missing snapshot is a feed gap, not a cancellation of every resting order.
+        if market.book.is_none() {
+            self.sizes = Default::default();
+            self.changes = Default::default();
+            self.observed = false;
+        }
         // Size changes are between observed book states; unchanged frames retain the last change.
         for side in 0..2 {
             let current: BTreeMap<_, _> = market
@@ -279,7 +292,7 @@ impl Ladder {
                 .collect();
             for (&level, &size) in &current {
                 let old = self.sizes[side].get(&level).copied().unwrap_or_default();
-                if size != old && !self.sizes[side].is_empty() {
+                if size != old && self.observed {
                     self.changes[side].insert(level, size - old);
                 }
             }
@@ -292,6 +305,7 @@ impl Ladder {
                 .retain(|level, _| current.contains_key(level) || row_of(*level).is_some());
             self.sizes[side] = current;
         }
+        self.observed = market.book.is_some();
         // Size and order count per visible row and side.
         let mut sizes = vec![[(0.0, None::<u32>); 2]; rows as usize];
         if let Some(book) = market.book {
@@ -492,10 +506,22 @@ impl Ladder {
         // The working orders in the margin of their side: drag one to move it, right-click it to
         // cancel it.
         let pointer = ui.input(|input| input.pointer.interact_pos());
+        let mut groups = BTreeMap::<_, Vec<_>>::new();
         for working in &orders {
-            let Some(at) = entry_price(&working.request.order_type) else {
-                continue;
-            };
+            if let Some(at) = entry_price(&working.request.order_type) {
+                groups
+                    .entry((ticks(at), working.request.side == OrderSide::Buy))
+                    .or_default()
+                    .push(*working);
+            }
+        }
+        for group in groups.values() {
+            let working = group
+                .iter()
+                .find(|order| self.selected.as_ref() == Some(&order.id))
+                .copied()
+                .unwrap_or(group[0]);
+            let at = entry_price(&working.request.order_type).expect("a priced order");
             let side = working.request.side;
             let margin = if side == OrderSide::Buy {
                 buy_margin
@@ -518,17 +544,45 @@ impl Ladder {
             painter.rect_filled(cell, 2.0, color.gamma_multiply(0.25));
             painter.rect_stroke(cell, 2.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
             let label = tag(&working.request.order_type);
-            text(ui, cell.center(), Align2::CENTER_CENTER, label, 10.0, color);
+            let shown = if group.len() > 1 {
+                format!("{label} +{}", group.len() - 1)
+            } else {
+                label.to_owned()
+            };
+            text(
+                ui,
+                cell.center(),
+                Align2::CENTER_CENTER,
+                &shown,
+                10.0,
+                color,
+            );
+            if group.len() > 1 {
+                egui::Popup::menu(&tag_response).show(|ui| {
+                    ui.label("Choose an order to drag or cancel");
+                    for order in group {
+                        let label = format!(
+                            "{} {} · {}",
+                            format_size(order.request.quantity - order.filled),
+                            tag(&order.request.order_type),
+                            order.id.0,
+                        );
+                        if ui.selectable_label(order.id == working.id, label).clicked() {
+                            self.selected = Some(order.id.clone());
+                        }
+                    }
+                });
+            }
             let tag_response = tag_response.on_hover_text(format!(
-                "{} {} @ {} {label}. Drag to move, right-click to cancel",
+                "{} {} @ {} {label} · {}. Drag to move, right-click to cancel. {} order(s) here; click to choose",
                 side.label(),
-                grouped(working.request.quantity, quantity_decimals),
-                grouped(at, market.decimals)
+                grouped(working.request.quantity - working.filled, quantity_decimals),
+                grouped(at, market.decimals),
+                working.id.0,
+                group.len(),
             ));
             if tag_response.secondary_clicked() {
-                action = Some(Action::Confirm(TradingLineAction::Cancel(
-                    (*working).clone(),
-                )));
+                action = Some(Action::Confirm(TradingLineAction::Cancel(working.clone())));
             }
             if tag_response.drag_stopped()
                 && market.capabilities.modify
@@ -557,7 +611,7 @@ impl Ladder {
                             _ => true,
                         }
                     {
-                        let modify = TradingLineAction::Modify((*working).clone(), changed);
+                        let modify = TradingLineAction::Modify(working.clone(), changed);
                         action = Some(Action::Confirm(modify));
                     }
                 }
@@ -639,9 +693,9 @@ impl Ladder {
         let lock_response = ui
             .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
             .on_hover_text(if self.locked {
-                "Re-centre the ladder on the last price"
+                "Re-centre the ladder on the market"
             } else {
-                "Keep the ladder from re-centring on the last price"
+                "Keep the ladder from re-centring on the market"
             });
         lock_response.widget_info(|| {
             egui::WidgetInfo::selected(egui::Role::Button, true, self.locked, "Lock the ladder")
@@ -687,7 +741,15 @@ impl Ladder {
             };
             boxed(&mut halves[0], &label, text_color);
             let pnl = position
-                .and_then(|position| position.unrealized_pnl)
+                .and_then(|position| {
+                    position.unrealized_pnl.or_else(|| {
+                        market.last.map(|last| {
+                            (last - position.average_price)
+                                * position.quantity
+                                * market.rules.point_value
+                        })
+                    })
+                })
                 .unwrap_or_default();
             let color = match pnl {
                 pnl if pnl > 0.0 => theme.ui.success,
@@ -818,6 +880,250 @@ fn boxed(ui: &mut Ui, label: &str, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Moving quotes must not move the price under a pressed cell or a dragged order.
+    #[test]
+    fn gestures_keep_their_price_while_the_book_moves() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, OrderStatus, TradingRules};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [340.0, 240.0] {
+                for (gesture, stacked) in [
+                    ("place", false),
+                    ("place-quote", false),
+                    ("modify", false),
+                    ("cancel", false),
+                    ("modify", true),
+                    ("cancel", true),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut ladder = Ladder::default();
+                    let rules = TradingRules::new("ES");
+                    let mut request =
+                        OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Limit(99.5));
+                    request.take_profit = Some(102.0);
+                    request.stop_loss = Some(98.0);
+                    let mut working = vec![Order::new(
+                        OrderId::new("bid"),
+                        request.clone(),
+                        OrderStatus::Working,
+                    )];
+                    if stacked {
+                        let mut second = working[0].clone();
+                        second.id = OrderId::new("second");
+                        second.request.quantity = 3.0;
+                        working.push(second);
+                    }
+                    let positions = [crate::model::Position::new("ES", 2.0, 99.0)];
+                    let mut frame = |events, last: f64| {
+                        let book = OrderBook {
+                            ts: chrono::Utc::now(),
+                            symbol: "ES".into(),
+                            bids: vec![OrderBookLevel {
+                                price: last - 0.25,
+                                size: 3.0,
+                                order_cnt: Some(2),
+                            }],
+                            asks: vec![OrderBookLevel {
+                                price: last + 0.25,
+                                size: 5.0,
+                                order_cnt: Some(4),
+                            }],
+                        };
+                        let market = Market {
+                            last: Some(if gesture == "place-quote" {
+                                100.0
+                            } else {
+                                last
+                            }),
+                            bid: Some(last - 0.25),
+                            ask: Some(last + 0.25),
+                            tick: 0.25,
+                            decimals: 2,
+                            currency: "USD",
+                            balance: None,
+                            capabilities: Capabilities {
+                                market: true,
+                                limit: true,
+                                stop: true,
+                                modify: true,
+                                ..Default::default()
+                            },
+                            rules: &rules,
+                            rules_ready: true,
+                            book: Some(&book),
+                            orders: &working,
+                            positions: &positions,
+                            trades: &[],
+                            last_fill: None,
+                        };
+                        let mut action = None;
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    vec2(width, 600.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                action =
+                                    ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day)
+                            },
+                        );
+                        let labels: BTreeMap<_, _> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some((
+                                    text.galley.text().to_owned(),
+                                    text.galley.rect.translate(text.pos.to_vec2()).center(),
+                                )),
+                                _ => None,
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        (action, labels)
+                    };
+                    let (_, labels) = frame(vec![], 100.0);
+                    assert!(labels.contains_key("2.00 USD"), "mark an unpriced position");
+                    let start = if gesture.starts_with("place") {
+                        pos2(labels["Bid size"].x, labels["99.50"].y)
+                    } else {
+                        labels[if stacked { "LIMIT +1" } else { "LIMIT" }]
+                    };
+                    if stacked {
+                        let click = |pos, pressed| egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        };
+                        frame(vec![egui::Event::PointerMoved(start)], 100.0);
+                        frame(vec![click(start, true)], 100.0);
+                        frame(vec![click(start, false)], 100.0);
+                        let (_, menu) = frame(vec![], 100.0);
+                        let choice = menu["3 LIMIT · second"];
+                        frame(vec![egui::Event::PointerMoved(choice)], 100.0);
+                        frame(vec![click(choice, true)], 100.0);
+                        frame(vec![click(choice, false)], 100.0);
+                        frame(vec![], 100.0);
+                    }
+                    let end = if gesture == "modify" {
+                        pos2(start.x, labels["99.00"].y)
+                    } else {
+                        start
+                    };
+                    let button = if gesture == "cancel" {
+                        egui::PointerButton::Secondary
+                    } else {
+                        egui::PointerButton::Primary
+                    };
+                    let click = |pos, pressed| egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    frame(vec![egui::Event::PointerMoved(start)], 100.0);
+                    assert!(frame(vec![click(start, true)], 100.0).0.is_none());
+                    assert!(
+                        frame(vec![egui::Event::PointerMoved(end)], 110.0)
+                            .0
+                            .is_none()
+                    );
+                    let (action, labels) = frame(vec![click(end, false)], 110.0);
+                    let pnl = if gesture == "place-quote" {
+                        "2.00 USD"
+                    } else {
+                        "22.00 USD"
+                    };
+                    assert!(labels.contains_key(pnl), "mark the moving position");
+                    let original = &working[usize::from(stacked)];
+                    request.quantity = original.request.quantity;
+                    let expected = match gesture {
+                        "place" | "place-quote" => Action::Place(OrderRequest::new(
+                            "ES",
+                            OrderSide::Buy,
+                            1.0,
+                            OrderType::Limit(99.5),
+                        )),
+                        "modify" => {
+                            request.order_type = OrderType::Limit(99.0);
+                            request.take_profit = Some(101.5);
+                            request.stop_loss = Some(97.5);
+                            Action::Confirm(TradingLineAction::Modify(original.clone(), request))
+                        }
+                        _ => Action::Confirm(TradingLineAction::Cancel(original.clone())),
+                    };
+                    assert_eq!(action, Some(expected), "{gesture} at {width}");
+                    let (_, labels) = frame(vec![], 110.0);
+                    assert!(
+                        labels.contains_key("110.00"),
+                        "follow the book even without a trade"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn size_changes_distinguish_empty_sides_from_missing_snapshots() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
+        let ctx = egui::Context::default();
+        let mut ladder = Ladder::default();
+        let rules = TradingRules::new("ES");
+        for (size, expected) in [
+            (Some(5.0), None),
+            (Some(0.0), Some(-5.0)),
+            (Some(3.0), Some(3.0)),
+            (None, None),
+            (Some(4.0), None),
+            (Some(2.0), Some(-2.0)),
+        ] {
+            let book = size.map(|size| OrderBook {
+                ts: chrono::Utc::now(),
+                symbol: "ES".into(),
+                bids: if size > 0.0 {
+                    vec![OrderBookLevel {
+                        price: 100.0,
+                        size,
+                        order_cnt: Some(1),
+                    }]
+                } else {
+                    vec![]
+                },
+                asks: vec![],
+            });
+            let market = Market {
+                last: Some(100.0),
+                bid: None,
+                ask: None,
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                balance: None,
+                capabilities: Capabilities::default(),
+                rules: &rules,
+                rules_ready: true,
+                book: book.as_ref(),
+                orders: &[],
+                positions: &[],
+                trades: &[],
+                last_fill: None,
+            };
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                ladder.changes[0].get(&400).copied(),
+                expected,
+                "size {size:?}"
+            );
+        }
+    }
 
     #[test]
     fn profile_keeps_bid_ask_and_unknown_volume_at_their_ticks() {

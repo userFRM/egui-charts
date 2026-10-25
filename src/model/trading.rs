@@ -324,7 +324,7 @@ pub struct TradingRules {
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
     pub time_in_force: Vec<TimeInForce>,
     /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
-    /// on margin. The order ticket shows the margin an order needs from it.
+    /// on margin. The order ticket estimates the margin an order needs from it.
     pub leverage: Option<f64>,
 }
 

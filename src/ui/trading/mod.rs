@@ -182,6 +182,7 @@ impl Trading {
 
     fn load_rules(&mut self, symbol: &str) {
         if self.rules.symbol != symbol {
+            self.pending = None;
             self.rules = TradingRules::new(symbol);
             self.rules_ready = false;
             self.rules_key += 2;
@@ -391,7 +392,7 @@ impl Trading {
         let theme = ui.active_theme();
         let action = egui::Panel::right("order_ticket")
             .resizable(false)
-            .exact_size(340.0)
+            .exact_size(ui.available_width().min(340.0))
             .frame(
                 egui::Frame::new()
                     .fill(theme.ui.panel_bg)
@@ -930,7 +931,8 @@ mod tests {
             TradingLineAction::Cancel(order.clone()),
             TradingLineAction::Modify(order.clone(), order.request.clone()),
         ] {
-            trading.pending = Some(action);
+            trading.load_rules("SYM");
+            trading.pending = Some(action.clone());
             let mut marked = position.clone();
             marked.unrealized_pnl = Some(5.0);
             trading.apply(AccountEvent::Position(marked), &mut Toasts::new());
@@ -948,6 +950,12 @@ mod tests {
             assert!(
                 trading.pending.is_none(),
                 "changed exposure invalidates confirmation"
+            );
+            trading.pending = Some(action);
+            trading.load_rules("OTHER");
+            assert!(
+                trading.pending.is_none(),
+                "a symbol change invalidates confirmation"
             );
         }
     }
