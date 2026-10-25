@@ -674,6 +674,8 @@ mod tests {
                 low: 99.0,
                 close: 101.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(30),
@@ -682,6 +684,8 @@ mod tests {
                 low: 100.0,
                 close: 102.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(60),
@@ -690,6 +694,8 @@ mod tests {
                 low: 101.0,
                 close: 103.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(90),
@@ -698,6 +704,8 @@ mod tests {
                 low: 102.0,
                 close: 103.5,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
         ]
     }
@@ -729,6 +737,8 @@ mod tests {
             low: l,
             close: c,
             volume: 1.0,
+            colors: None,
+            payload: None,
         }
     }
 

@@ -49,6 +49,8 @@ impl RenkoBrick {
             low: self.low,
             close: self.close,
             volume: 0.0, // Renko doesn't use volume
+            colors: None,
+            payload: None,
         }
     }
 }
@@ -248,7 +250,8 @@ pub(crate) fn work_start(bars: &[Bar], size: f64, source: PriceBasedSource) -> u
                 bars[i].high.max(bars[i - 1].high) - bars[i].low.min(bars[i - 1].low)
             }
         };
-        total += movement / size + 2.0;
+        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
+        total += (movement / size).max(0.0) + 2.0;
         if total > super::MAX_WORK {
             return i;
         }
@@ -303,6 +306,8 @@ mod tests {
                     low: c,
                     close: c,
                     volume: 0.0,
+                    colors: None,
+                    payload: None,
                 })
                 .collect();
             let got: Vec<(f64, f64)> = to_renko_bricks(&bars, &RenkoConfig::new(1.0))

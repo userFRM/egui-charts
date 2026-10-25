@@ -333,7 +333,7 @@ impl Trading {
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0)
             .unwrap_or(10f64.powi(-(decimals as i32)));
-        let last = chart.bars(SeriesId::MAIN).last().map(|bar| bar.close);
+        let last = crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close);
         // Prices and ticks belong to the chart's current symbol.
         if self.ticket.symbol != symbol {
             self.ticket.open = false;

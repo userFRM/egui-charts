@@ -25,6 +25,7 @@ impl Chart {
     /// Times outside the local data and `None` clear it. Repeated element times choose the
     /// first element. Each receiver resolves the timestamp against its own series.
     pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
+        self.synced_crosshair_price = None;
         let bars = self.state.shown();
         self.synced_crosshair_bar_idx = time.and_then(|time| {
             if time < bars.first()?.time || time > bars.last()?.time {
@@ -41,6 +42,18 @@ impl Chart {
             };
             Some(bars.partition_point(|bar| bar.time < bars[index].time) as f64)
         });
+    }
+
+    /// Shows a crosshair at the nearest local bar to `time`, as
+    /// [`Self::set_synced_crosshair_time`] does, with its horizontal line and price label at
+    /// `price` on the main price scale. `None`, a time outside the data or a non-finite price
+    /// clears it. The pointer's own crosshair takes its place while the pointer is over the plots.
+    pub fn set_crosshair_position(&mut self, position: Option<(DateTime<Utc>, f64)>) {
+        let position = position.filter(|(_, price)| price.is_finite());
+        self.set_synced_crosshair_time(position.map(|(time, _)| time));
+        self.synced_crosshair_price = position
+            .filter(|_| self.synced_crosshair_bar_idx.is_some())
+            .map(|(_, price)| price);
     }
 
     /// The visible UTC range, including whitespace extrapolated with the nearest distinct
@@ -88,6 +101,7 @@ impl Chart {
     /// `None` clears it. Use [`Self::set_synced_crosshair_time`] between independent charts.
     pub fn set_synced_crosshair_bar_idx(&mut self, bar_idx: Option<f64>) {
         self.synced_crosshair_bar_idx = bar_idx;
+        self.synced_crosshair_price = None;
     }
 
     /// Returns the nearest hovered local index from the last frame, counting elements on

@@ -313,7 +313,8 @@ impl Chart {
             let first_close = series.iter().find_map(|at| {
                 let item = &self.price_series[*at];
                 item.bars[self.series_range(item)]
-                    .first()
+                    .iter()
+                    .find(|bar| !bar.is_whitespace())
                     .map(|bar| bar.close)
             });
             let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
@@ -404,7 +405,7 @@ impl Chart {
                     let item = &self.price_series[*at];
                     let close = match hovered {
                         Some(bar) => self.series_close_at(item, bar),
-                        None => item.bars.last().map(|bar| bar.close),
+                        None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
                     };
                     (item.id, super::price_series::SeriesLegend::new(item, close))
                 })

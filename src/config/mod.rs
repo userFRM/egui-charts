@@ -72,6 +72,11 @@ pub struct ChartOptions {
 
     /// Tooltip display options (Floating, Tracking, Magnifier)
     pub tooltip: TooltipOptions,
+
+    /// Draw the main series or overlay study under the pointer above the others in the main
+    /// pane, in the priority a click selects them.
+    /// Default: false
+    pub hovered_series_on_top: bool,
 }
 
 /// Font weight shared by chart watermarks and drawing annotations.

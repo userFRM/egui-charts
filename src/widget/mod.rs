@@ -138,6 +138,7 @@ pub(crate) use crosshair::menu_value;
 mod events;
 mod feed;
 mod marks;
+mod merge;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
@@ -152,6 +153,7 @@ pub use pane_layout::{PaneId, PaneOptions};
 mod panes;
 mod price_series;
 mod primitives;
+mod raster;
 mod readout;
 mod replay;
 mod selection;
@@ -387,6 +389,10 @@ pub struct Chart {
     // =========================================================================
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
+    /// Main-pane price of the external crosshair; `None` centres its horizontal line.
+    synced_crosshair_price: Option<f64>,
+    /// Time and main-pane price of the crosshair last drawn, for exported images.
+    last_crosshair: Option<(DateTime<Utc>, Option<f64>)>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
 
@@ -422,6 +428,10 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Size to allocate instead of the available space; see [`Chart::set_size`].
+    size: Option<Vec2>,
+    /// The main bars in groups that fall within one pixel, while zoomed out that far.
+    merge_groups: merge::Groups,
 }
 
 /// The object a right-click landed on, with the data needed to position and
@@ -878,9 +888,81 @@ impl Chart {
         &self.config
     }
 
-    /// The chart's behaviour options, set with [`Chart::with_chart_options`].
+    /// The chart's behaviour options, set with [`Chart::with_chart_options`] or
+    /// [`Chart::set_chart_options`].
     pub fn chart_options(&self) -> &ChartOptions {
         &self.chart_options
+    }
+
+    /// Replaces the chart's behaviour options at runtime, taking effect on the next frame.
+    ///
+    /// To change some options and keep the rest, edit a copy of the current ones:
+    ///
+    /// ```rust
+    /// # fn example(chart: &mut egui_charts::Chart) {
+    /// let mut options = chart.chart_options().clone();
+    /// options.crosshair.mode = egui_charts::config::CrosshairMode::Magnet;
+    /// options.time_scale.min_bar_spacing = 0.1;
+    /// chart.set_chart_options(options);
+    /// # }
+    /// ```
+    ///
+    /// The view is kept: the bar spacing changes only when `time_scale.bar_spacing` changes or
+    /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
+    /// or `right_offset_pixels` changes.
+    pub fn set_chart_options(&mut self, options: ChartOptions) {
+        let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
+        if (
+            old.bar_spacing,
+            old.min_bar_spacing,
+            old.max_bar_spacing,
+            old.fix_left_edge,
+            old.fix_right_edge,
+            old.right_offset,
+            old.right_offset_pixels,
+        ) != (
+            new.bar_spacing,
+            new.min_bar_spacing,
+            new.max_bar_spacing,
+            new.fix_left_edge,
+            new.fix_right_edge,
+            new.right_offset,
+            new.right_offset_pixels,
+        ) {
+            let scale = self.state.time_scale_mut();
+            let offset = scale.right_offset();
+            let spacing = if new.bar_spacing == old.bar_spacing {
+                scale.bar_spacing()
+            } else {
+                new.bar_spacing
+            };
+            scale.apply_options(
+                spacing,
+                new.min_bar_spacing,
+                new.max_bar_spacing,
+                new.fix_left_edge,
+                new.fix_right_edge,
+                new.right_offset,
+                new.right_offset_pixels,
+            );
+            if (old.right_offset, old.right_offset_pixels)
+                == (new.right_offset, new.right_offset_pixels)
+            {
+                scale.set_right_offset(offset);
+            }
+        }
+        self.chart_options = options;
+    }
+
+    /// Gives the chart an explicit size in points instead of filling the space `show` is given;
+    /// `None`, the default, fills it again. The size includes the axes and study panes.
+    pub fn set_size(&mut self, size: Option<Vec2>) {
+        self.size = size.filter(|size| size.is_finite() && size.min_elem() >= 0.0);
+    }
+
+    /// The explicit size set with [`Chart::set_size`].
+    pub fn size(&self) -> Option<Vec2> {
+        self.size
     }
 
     /// The chart's bars, time scale, price scale and zoom history, to read them.
