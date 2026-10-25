@@ -264,6 +264,22 @@ pub mod icons {
     pub const STATUS_ERROR: Icon = crate::icon_from_path!("ui/error.svg");
     /// Stacked layers for the widget bar object panel.
     pub const WIDGET_BAR_LAYERS: Icon = crate::icon_from_path!("ui/widget-bar-layers.svg");
+    /// Bulleted list for the widget bar watchlist.
+    pub const WIDGET_BAR_WATCHLIST: Icon = crate::icon_from_path!("ui/widget-bar-watchlist.svg");
+    /// Four-point sparkle for the widget bar highlights.
+    pub const WIDGET_BAR_HIGHLIGHTS: Icon = crate::icon_from_path!("ui/highlights.svg");
+    /// Funnel for the widget bar screener.
+    pub const WIDGET_BAR_SCREENER: Icon = crate::icon_from_path!("ui/screener.svg");
+    /// Flame for the widget bar hotlists.
+    pub const WIDGET_BAR_HOTLISTS: Icon = crate::icon_from_path!("ui/hotlists.svg");
+    /// Folded newspaper for the widget bar news.
+    pub const WIDGET_BAR_NEWS: Icon = crate::icon_from_path!("ui/news.svg");
+    /// Bell for the widget bar notifications.
+    pub const WIDGET_BAR_NOTIFICATIONS: Icon = crate::icon_from_path!("ui/notifications.svg");
+    /// Two speech bubbles for the widget bar chats.
+    pub const WIDGET_BAR_CHATS: Icon = crate::icon_from_path!("ui/chats.svg");
+    /// Grid of filled squares for the widget bar products launcher.
+    pub const WIDGET_BAR_PRODUCTS: Icon = crate::icon_from_path!("ui/products.svg");
     pub const OBJECT_TREE: Icon = crate::icon_from_path!("ui/object-tree.svg");
     pub const EYE: Icon = crate::icon_from_path!("ui/eye.svg");
     pub const EYE_HIDE: Icon = crate::icon_from_path!("ui/eye-off.svg");
@@ -308,6 +324,8 @@ pub mod icons {
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
+    /// An arrow into a price axis, for pinning a study to a scale.
+    pub const PIN_TO_SCALE: Icon = crate::icon_from_path!("ui/pin-scale.svg");
     pub const WATCHLIST: Icon = crate::icon_from_path!("ui/watchlist.svg");
     pub const UI_DRAG_HANDLE: Icon = crate::icon_from_path!("ui/drag-handle.svg");
     pub const UI_MORE_HORIZONTAL: Icon = crate::icon_from_path!("ui/more.svg");

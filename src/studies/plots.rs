@@ -1,4 +1,4 @@
-//! Bands between study outputs or fixed levels.
+//! Bands between study outputs or fixed levels, and shapes stored per shape instead of per bar.
 
 use egui::Color32;
 
@@ -33,6 +33,40 @@ pub struct StudyCandle {
     pub bar: crate::model::Bar,
     /// Output whose colour, stroke width and visibility apply to this candle.
     pub plot: usize,
+}
+
+/// A price band between two source bars, stored once instead of as a value on every bar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StudyZone {
+    /// Source bars the band spans, from the centre of the first to the centre of the last.
+    pub bars: std::ops::Range<usize>,
+    /// Upper price.
+    pub top: f64,
+    /// Lower price.
+    pub bottom: f64,
+    /// Output whose colour, stroke width and visibility apply to this zone: its edges in that
+    /// colour and its band at 15% opacity.
+    pub plot: usize,
+}
+
+#[cfg(feature = "widget")]
+impl StudyZone {
+    pub(crate) fn rect(
+        &self,
+        coords: &crate::chart::coords::ChartMapping,
+        price_to_y: impl Fn(f64) -> f32,
+    ) -> Option<egui::Rect> {
+        let last = self
+            .bars
+            .end
+            .checked_sub(1)
+            .filter(|&l| l >= self.bars.start)?;
+        let rect = egui::Rect::from_two_pos(
+            egui::pos2(coords.idx_to_x(self.bars.start), price_to_y(self.top)),
+            egui::pos2(coords.idx_to_x(last), price_to_y(self.bottom)),
+        );
+        (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
+    }
 }
 
 #[cfg(feature = "widget")]
@@ -101,5 +135,28 @@ pub(crate) fn paint_candles(
                 egui::StrokeKind::Inside,
             );
         }
+    }
+}
+
+#[cfg(feature = "widget")]
+pub(crate) fn paint_zones(
+    painter: &egui::Painter,
+    study: &dyn super::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    let clip = painter.clip_rect();
+    for zone in study.zones() {
+        let style = study.plot_style(zone.plot);
+        let Some(rect) = zone
+            .rect(coords, |p| price.price_to_y(p))
+            .filter(|rect| style.visible && rect.intersects(clip.expand(style.width)))
+        else {
+            continue;
+        };
+        let stroke = egui::Stroke::new(style.width, style.color);
+        painter.rect_filled(rect, 0.0, style.color.gamma_multiply(0.15));
+        painter.line_segment([rect.left_top(), rect.right_top()], stroke);
+        painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
     }
 }

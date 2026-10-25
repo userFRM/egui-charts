@@ -27,6 +27,8 @@ mod replay;
 mod templates;
 use egui_charts::services::StoreKind;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
+#[path = "feeds.rs"]
+mod feeds;
 #[path = "live.rs"]
 mod live;
 #[path = "paper.rs"]
@@ -46,6 +48,7 @@ use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
     KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
+    StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
@@ -67,11 +70,13 @@ use egui_charts::ui::widget_bar::panels::object_tree::{
     DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
 };
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
-use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui::widget_bar::{
-    SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel,
-    WidgetBarSection, WidgetBarWidget,
+    CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
+    NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
+    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
+    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
+use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
@@ -123,15 +128,48 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    Highlights,
+    Screener,
+    Hotlists,
+    Calendar,
+    News,
+    Notifications,
+    Chats,
+    Products,
 }
 
 impl SidePanel {
-    /// Panels the demo renders behind a host rail entry, with the entry's id.
-    const HOSTED: [(SidePanel, u64); 3] = [
-        (SidePanel::DataWindow, 1),
-        (SidePanel::Watchlist, 3),
-        (SidePanel::TimeAndSales, 4),
+    /// Panels the demo renders behind a built-in rail entry, with the entry.
+    const BUILT_IN: [(SidePanel, RightBarIcon); 11] = [
+        (SidePanel::Watchlist, RightBarIcon::Watchlist),
+        (SidePanel::Alerts, RightBarIcon::Alerts),
+        (SidePanel::ObjectTree, RightBarIcon::ObjectTree),
+        (SidePanel::Highlights, RightBarIcon::Highlights),
+        (SidePanel::Screener, RightBarIcon::Screener),
+        (SidePanel::Hotlists, RightBarIcon::Hotlists),
+        (SidePanel::Calendar, RightBarIcon::Calendar),
+        (SidePanel::News, RightBarIcon::News),
+        (SidePanel::Notifications, RightBarIcon::Notifications),
+        (SidePanel::Chats, RightBarIcon::Chats),
+        (SidePanel::Products, RightBarIcon::Products),
     ];
+
+    /// Panels the demo renders behind a host rail entry, with the entry's id.
+    const HOSTED: [(SidePanel, u64); 1] = [(SidePanel::TimeAndSales, 4)];
+
+    fn icon(self) -> Option<RightBarIcon> {
+        Self::BUILT_IN
+            .iter()
+            .find(|(panel, _)| *panel == self)
+            .map(|(_, icon)| *icon)
+    }
+
+    fn from_icon(icon: RightBarIcon) -> Option<Self> {
+        Self::BUILT_IN
+            .iter()
+            .find(|(_, entry)| *entry == icon)
+            .map(|(panel, _)| *panel)
+    }
 
     fn widget(self) -> Option<u64> {
         Self::HOSTED
@@ -145,6 +183,16 @@ impl SidePanel {
             .iter()
             .find(|(_, widget)| *widget == id)
             .map(|(panel, _)| *panel)
+    }
+}
+
+/// A products launcher entry.
+fn product(id: &str, icon: egui_charts::icons::Icon, title: &str, description: &str) -> Product {
+    Product {
+        id: id.into(),
+        icon,
+        title: title.into(),
+        description: description.into(),
     }
 }
 
@@ -237,6 +285,8 @@ pub struct DemoApp {
     interval_entry: Option<String>,
     interval_focus: bool,
     copied_drawing: Option<String>,
+    // A study copied in this session, kept across symbols and intervals.
+    copied_study: Option<String>,
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
@@ -261,6 +311,17 @@ pub struct DemoApp {
     time_and_sales: TimeAndSalesPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
+    // Synthetic highlights and headlines from the live feed.
+    highlights: NewsPanel,
+    news: NewsPanel,
+    calendar: CalendarPanel,
+    screener: ScreenerPanel,
+    hotlists: HotlistsPanel,
+    // The demo's event log: its messages and alert triggers.
+    notifications: NotificationsPanel,
+    notification_host: Arc<feeds::DemoNotifications>,
+    chats: ChatsPanel,
+    products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
     replay: Option<ReplayController>,
@@ -280,7 +341,7 @@ pub struct DemoApp {
     )>,
     // Reopening the dialog must not adopt an earlier readback result.
     export_generation: u64,
-    export_renderer: Option<eframe::egui_wgpu::RenderState>,
+    export_renderer: Option<Arc<eframe::glow::Context>>,
     image_jobs: usize,
     // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
@@ -289,6 +350,9 @@ pub struct DemoApp {
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
+    /// Whether the sample markers, change marks, bar marks and demo level are on, from the
+    /// quick search.
+    api_samples: bool,
 }
 
 impl DemoApp {
@@ -351,34 +415,18 @@ impl DemoApp {
         ]);
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        // The watchlist leads the built-in entries; the demo's other panels sit in the lower group.
-        for (id, icon, tooltip, section) in [
-            (
-                3,
-                egui_charts::icons::icons::WATCHLIST,
-                "Watchlist",
-                WidgetBarSection::Top,
-            ),
-            (
-                1,
-                egui_charts::icons::icons::DATABASE,
-                "Data Window",
-                WidgetBarSection::Bottom,
-            ),
-            (
-                4,
-                egui_charts::icons::icons::SETTINGS_EVENTS,
-                "Time and sales",
-                WidgetBarSection::Bottom,
-            ),
-        ] {
-            widget_bar.widgets.push(WidgetBarWidget {
-                id,
-                icon,
-                tooltip: tooltip.into(),
-                section,
-            });
-        }
+        // The demo feeds every built-in panel; its own panels sit in the lower group.
+        widget_bar.icons = SidePanel::BUILT_IN
+            .iter()
+            .map(|(_, icon)| *icon)
+            .chain([RightBarIcon::Help])
+            .collect();
+        widget_bar.widgets.push(WidgetBarWidget {
+            id: 4,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            tooltip: "Time and sales".into(),
+            section: WidgetBarSection::Bottom,
+        });
         let mut notes = String::new();
         widget_bar.register_panel(
             egui_charts::ui::widget_bar::WidgetBarWidget {
@@ -459,6 +507,7 @@ impl DemoApp {
             interval_entry: None,
             interval_focus: false,
             copied_drawing: None,
+            copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             object_tree: ObjectTreePanel::new(),
@@ -483,6 +532,40 @@ impl DemoApp {
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
+            highlights: NewsPanel::highlights(),
+            news: NewsPanel::new(),
+            calendar: CalendarPanel::new(),
+            screener: ScreenerPanel::new(feeds::screener_sets()),
+            hotlists: HotlistsPanel::new(feeds::HOTLISTS.map(String::from).to_vec()),
+            notifications: NotificationsPanel::new(),
+            notification_host: Arc::default(),
+            chats: ChatsPanel::new(),
+            products: ProductsPanel::new(vec![
+                product(
+                    "screener",
+                    egui_charts::icons::icons::WIDGET_BAR_SCREENER,
+                    "Screener",
+                    "Filter the catalog symbols",
+                ),
+                product(
+                    "calendar",
+                    egui_charts::icons::icons::WIDGET_BAR_CALENDAR,
+                    "Calendars",
+                    "Economic and corporate events",
+                ),
+                product(
+                    "news",
+                    egui_charts::icons::icons::WIDGET_BAR_NEWS,
+                    "News",
+                    "Headlines for the chart's symbol",
+                ),
+                product(
+                    "shortcuts",
+                    egui_charts::icons::icons::WIDGET_BAR_HELP,
+                    "Keyboard shortcuts",
+                    "Every key the chart understands",
+                ),
+            ]),
             replay: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
@@ -496,7 +579,7 @@ impl DemoApp {
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             export_generation: 0,
-            export_renderer: cc.wgpu_render_state.clone(),
+            export_renderer: cc.gl.clone(),
             image_jobs: 0,
             screenshots: mpsc::channel(),
             saved_drawings: cc
@@ -505,6 +588,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             toasts: Toasts::new(),
             demo_level: None,
+            api_samples: false,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -523,6 +607,18 @@ impl DemoApp {
         app.watchlist.set_selected(symbol);
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
+        app.highlights.set_feed(app.live.clone());
+        app.news.set_feed(app.live.clone());
+        app.calendar.set_feed(app.live.clone());
+        app.screener.set_feed(app.live.clone());
+        app.hotlists.set_feed(app.live.clone());
+        app.notification_host
+            .notify("Connected to the synthetic feed", None);
+        app.notifications.set_service(app.notification_host.clone());
+        app.chats
+            .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
+        app.calendar
+            .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
         app.symbol_details.set_storage(app.template_storage.clone());
         app.apply_session();
         app.restore_drawings();
@@ -571,6 +667,8 @@ impl DemoApp {
 
     /// Surface a short-lived, honest status message in the UI.
     fn notify(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.notification_host.notify(msg.clone(), None);
         self.toasts.info(msg);
     }
 
@@ -684,8 +782,6 @@ impl DemoApp {
             }]);
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
-        self.chart
-            .set_mark_source(Some(Arc::new(marks::DemoMarks(self.bars.clone()))));
         self.annotate();
     }
 
@@ -770,6 +866,8 @@ impl DemoApp {
         {
             self.indicator_settings
                 .open(id, study, self.chart.timeframe());
+        } else if self.chart.series().any(|(series, _)| series == id) {
+            self.compare_dialog.open();
         }
     }
 
@@ -1024,8 +1122,29 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
+        let logged = self.alerts.log().len();
         self.alerts.poll(&ctx, &mut self.toasts);
+        // shortcut: a log already holding its 10,000 triggers forwards no new ones; count the
+        // triggers in the alert service if a session can reach that.
+        let new = self.alerts.log().len().saturating_sub(logged);
+        for trigger in self.alerts.log().iter().rev().take(new).rev() {
+            self.notification_host.notify(
+                format!("Alert triggered: {}", trigger.symbol),
+                Some(&trigger.symbol),
+            );
+        }
         self.symbol_details.poll(&ctx);
+        self.highlights.poll(&ctx);
+        self.news.poll(&ctx);
+        self.calendar.poll(&ctx);
+        self.screener.poll(&ctx);
+        self.hotlists.poll(&ctx);
+        self.notifications.poll(&ctx);
+        self.chats.poll(&ctx);
+        self.widget_bar.set_notification_cnt(
+            RightBarIcon::Notifications,
+            self.notifications.unread() as u32,
+        );
         self.trading.poll(&ctx, &mut self.toasts);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
@@ -1368,7 +1487,7 @@ impl DemoApp {
                 current_cursor_type: match self.chart.chart_options().crosshair.style {
                     CrosshairStyle::Full => CursorType::Cross,
                     CrosshairStyle::Dot => CursorType::Dot,
-                    CrosshairStyle::Arrow => CursorType::Arrow,
+                    CrosshairStyle::Arrow | CrosshairStyle::Hidden => CursorType::Arrow,
                     CrosshairStyle::Demonstration => CursorType::Demonstration,
                 },
                 eraser_mode_enabled: dm.eraser_mode,
@@ -1554,11 +1673,7 @@ impl DemoApp {
         if ui.ctx().content_rect().width() < 600.0 {
             return;
         }
-        self.widget_bar.active_icon = match self.open_panel {
-            Some(SidePanel::ObjectTree) => Some(RightBarIcon::ObjectTree),
-            Some(SidePanel::Alerts) => Some(RightBarIcon::Alerts),
-            _ => None,
-        };
+        self.widget_bar.active_icon = self.open_panel.and_then(SidePanel::icon);
         if let Some(id) = self.open_panel.and_then(SidePanel::widget) {
             self.widget_bar.active_widget = Some(id);
         } else if self.open_panel.is_some()
@@ -1591,20 +1706,21 @@ impl DemoApp {
     }
 
     fn toggle_panel(&mut self, icon: RightBarIcon) {
-        let target = match icon {
-            RightBarIcon::ObjectTree => Some(SidePanel::ObjectTree),
-            RightBarIcon::Alerts => Some(SidePanel::Alerts),
-            RightBarIcon::Help => {
-                self.keyboard_shortcuts.toggle();
-                None
-            }
-        };
-        if let Some(target) = target {
+        if icon == RightBarIcon::Help {
+            self.keyboard_shortcuts.toggle();
+        }
+        if let Some(target) = SidePanel::from_icon(icon) {
             self.open_panel = if self.open_panel == Some(target) {
                 None
             } else {
                 Some(target)
             };
+            // Quotes move: list current figures each time a ranking opens.
+            match self.open_panel {
+                Some(SidePanel::Hotlists) => self.hotlists.refresh(),
+                Some(SidePanel::Screener) => self.screener.refresh(),
+                _ => {}
+            }
         }
     }
 
@@ -1630,6 +1746,49 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::Highlights => {
+                    let action = self.highlights.show(ui);
+                    self.handle_news(ui.ctx(), action);
+                }
+                SidePanel::Screener => match self.screener.show(ui) {
+                    ScreenerAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+                    ScreenerAction::ExportCsv(text) => self.save_text("screener.csv", &text),
+                    ScreenerAction::SendToWatchlist(symbols) => {
+                        self.watchlist.import("Screener", &symbols.join(","));
+                        self.open_panel = Some(SidePanel::Watchlist);
+                    }
+                    _ => {}
+                },
+                SidePanel::Hotlists => {
+                    if let HotlistsAction::SelectSymbol(symbol) = self.hotlists.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
+                SidePanel::Notifications => {
+                    if let NotificationsAction::SelectSymbol(symbol) = self.notifications.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
+                SidePanel::Chats => self.chats.show(ui),
+                SidePanel::Products => {
+                    if let ProductsAction::Open(id) = self.products.show(ui) {
+                        match id.as_str() {
+                            "screener" => self.open_panel = Some(SidePanel::Screener),
+                            "calendar" => self.open_panel = Some(SidePanel::Calendar),
+                            "news" => self.open_panel = Some(SidePanel::News),
+                            _ => self.keyboard_shortcuts.toggle(),
+                        }
+                    }
+                }
+                SidePanel::Calendar => {
+                    if let CalendarAction::SelectSymbol(symbol) = self.calendar.show(ui) {
+                        self.open_catalog_symbol(&symbol);
+                    }
+                }
+                SidePanel::News => {
+                    let action = self.news.show(ui);
+                    self.handle_news(ui.ctx(), action);
+                }
                 SidePanel::DataWindow => {
                     self.data_window_expanded =
                         egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
@@ -1639,6 +1798,14 @@ impl DemoApp {
                         );
                 }
             });
+    }
+
+    fn handle_news(&mut self, ctx: &egui::Context, action: NewsAction) {
+        match action {
+            NewsAction::ShowOnChart(time) => self.chart.scroll_to_time(time),
+            NewsAction::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            NewsAction::None => {}
+        }
     }
 
     fn show_object_tree(&mut self, ui: &mut egui::Ui) {
@@ -1777,7 +1944,7 @@ impl DemoApp {
                 .chart
                 .instrument()
                 .cloned()
-                .unwrap_or_else(|| egui_charts::model::Instrument::new(chart_symbol)),
+                .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
         if let Some(mut quote) = chart_quote {
             let (mut time, mut extended) = (now, None);
@@ -1792,6 +1959,8 @@ impl DemoApp {
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
+        self.highlights.set_symbol(&chart_symbol);
+        self.news.set_symbol(&chart_symbol);
         let instrument = self.chart.instrument();
         let mut alert = None;
         for trade in self.live.drain_tape() {
@@ -1819,18 +1988,37 @@ impl DemoApp {
             .unwrap_or_default();
     }
 
+    /// Saves exported `text` to `file` in the temporary directory, or downloads it on the web.
+    fn save_text(&mut self, file: &str, text: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let path = std::env::temp_dir().join(file);
+        #[cfg(target_arch = "wasm32")]
+        let path = std::path::PathBuf::from(file);
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = std::fs::write(&path, text).map_err(|e| e.to_string());
+        #[cfg(target_arch = "wasm32")]
+        let result = browser_download(text.as_bytes(), &path);
+        self.notify(match result {
+            Ok(()) => format!("Export successful: {}", path.display()),
+            Err(error) => format!("Export failed: {error}"),
+        });
+    }
+
+    /// Shows `symbol` on the chart when the demo has data for it.
+    fn open_catalog_symbol(&mut self, symbol: &str) {
+        if DemoSymbol::catalog()
+            .iter()
+            .any(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+        {
+            self.switch_symbol(symbol);
+        } else {
+            self.notify(format!("{symbol} has no synthetic data in this demo"));
+        }
+    }
+
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
         match self.watchlist.show(ui) {
-            WatchlistAction::SelectSymbol(symbol) => {
-                if DemoSymbol::catalog()
-                    .iter()
-                    .any(|spec| spec.symbol.eq_ignore_ascii_case(&symbol))
-                {
-                    self.switch_symbol(&symbol);
-                } else {
-                    self.notify(format!("{symbol} has no synthetic data in this demo"));
-                }
-            }
+            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             WatchlistAction::AddSymbol => {
                 self.watchlist_search = true;
                 self.symbol_search.open();
@@ -1839,21 +2027,7 @@ impl DemoApp {
                 self.notify("The advanced watchlist view is not part of this demo")
             }
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
-            WatchlistAction::Export { text, .. } => {
-                let file = "watchlist.txt";
-                #[cfg(not(target_arch = "wasm32"))]
-                let path = std::env::temp_dir().join(file);
-                #[cfg(target_arch = "wasm32")]
-                let path = std::path::PathBuf::from(file);
-                #[cfg(not(target_arch = "wasm32"))]
-                let result = std::fs::write(&path, text).map_err(|e| e.to_string());
-                #[cfg(target_arch = "wasm32")]
-                let result = browser_download(text.as_bytes(), &path);
-                self.notify(match result {
-                    Ok(()) => format!("Export successful: {}", path.display()),
-                    Err(error) => format!("Export failed: {error}"),
-                });
-            }
+            WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
         }
     }
@@ -2118,7 +2292,7 @@ impl DemoApp {
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
-            self.handle_context_action(action);
+            self.handle_context_action(ui.ctx(), action);
         }
     }
 
@@ -2149,7 +2323,7 @@ impl DemoApp {
         }
     }
 
-    fn handle_context_action(&mut self, action: ChartContextAction) {
+    fn handle_context_action(&mut self, ctx: &egui::Context, action: ChartContextAction) {
         match action {
             ChartContextAction::Host { id, .. } if id == "demo-level-remove" => {
                 self.remove_demo_level();
@@ -2169,7 +2343,38 @@ impl DemoApp {
             }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
+            ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
             ChartContextAction::Drawing(a) => self.handle_drawing_context(a),
+        }
+    }
+
+    /// The study menu applied its chart actions; these are the host's.
+    fn handle_study_context(
+        &mut self,
+        ctx: &egui::Context,
+        id: SeriesId,
+        action: StudyContextMenuAction,
+    ) {
+        match action {
+            StudyContextMenuAction::AddAlert(alert) => self.alerts.save(*alert),
+            StudyContextMenuAction::AddIndicator => self.indicator_dialog.open(),
+            StudyContextMenuAction::AddToFavorites(name) => {
+                self.indicator_dialog.favorites.insert(name);
+            }
+            StudyContextMenuAction::Copy => self.copy_study(ctx, id),
+            StudyContextMenuAction::ObjectTree => {
+                self.open_panel = Some(SidePanel::ObjectTree);
+                self.object_tree.state_mut().select(indicator_tree_id(id));
+            }
+            _ => {}
+        }
+    }
+
+    fn copy_study(&mut self, ctx: &egui::Context, id: SeriesId) {
+        if let Some(text) = self.chart.copy_indicator(id) {
+            ctx.copy_text(text.clone());
+            self.copied_drawing = None;
+            self.copied_study = Some(text);
         }
     }
 
@@ -2361,8 +2566,15 @@ impl DemoApp {
                         Ok(Some(text)) => {
                             ctx.copy_text(text.clone());
                             self.copied_drawing = Some(text);
+                            self.copied_study = None;
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            if let Some(egui_charts::widget::ChartElementId::Indicator(id)) =
+                                self.chart.selected_element()
+                            {
+                                self.copy_study(ctx, id);
+                            }
+                        }
                         Err(error) => {
                             self.toasts
                                 .error(format!("Could not copy drawings: {error}"));
@@ -2390,12 +2602,22 @@ impl DemoApp {
     }
 
     fn paste_drawing(&mut self) {
-        if let Some(text) = self.copied_drawing.clone() {
+        if let Some(text) = self.copied_drawing.clone().or(self.copied_study.clone()) {
             self.paste_drawing_text(&text);
         }
     }
 
     fn paste_drawing_text(&mut self, text: &str) {
+        if text.starts_with("egui-charts-study\n") {
+            if let Err(error) = self
+                .chart
+                .paste_indicator(text, &egui_charts::studies::IndicatorFactory::new())
+            {
+                self.toasts
+                    .error(format!("Could not paste the study: {error}"));
+            }
+            return;
+        }
         if !text.starts_with("egui-charts-drawings\n") {
             return;
         }
@@ -2436,9 +2658,6 @@ impl DemoApp {
             }
         }
         if self.image_jobs > 0 {
-            if let Some(renderer) = &self.export_renderer {
-                let _ = renderer.device.poll(eframe::wgpu::PollType::Poll);
-            }
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         while let Ok((image, target, generation)) = self.screenshots.1.try_recv() {
@@ -3577,7 +3796,7 @@ mod tests {
                     let output = ctx.run_ui(Default::default(), |ui| {
                         app.show_chart(ui, app.theme.chart.bg)
                     });
-                    painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == colour));
+                    painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(colour)));
                     output.drop_without_applying_deltas();
                 }
                 assert!(painted, "comparison prices must be painted");
@@ -3633,7 +3852,11 @@ mod tests {
             }
         );
         assert_eq!(
-            app.chart.chart_options().crosshair.line_style,
+            app.chart.chart_options().crosshair.vert_line_style,
+            CrosshairLineStyle::Solid
+        );
+        assert_eq!(
+            app.chart.chart_options().crosshair.horz_line_style,
             CrosshairLineStyle::Solid
         );
         assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
@@ -3968,7 +4191,7 @@ mod tests {
                         })
                         .collect(),
                 );
-                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                app.chart.set_theme(&ctx, &theme);
                 app.chart.set_instrument(Some(
                     egui_charts::model::Instrument::new("SAMPLE").with_price_decimals(2),
                 ));
@@ -4903,9 +5126,7 @@ mod tests {
                     let ctx = egui::Context::default();
                     let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                     app.theme = theme.clone();
-                    egui_charts::theme::apply_to_egui(&ctx, &theme);
-                    let config = app.chart.config_mut();
-                    *config = theme.apply_to_config(config.clone());
+                    app.chart.set_theme(&ctx, &theme);
                     app.switch_timeframe(interval);
                     app.timeframe_toolbar.set_session(SessionType::ETH);
                     app.apply_session();
