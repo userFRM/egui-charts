@@ -6,13 +6,12 @@ use chrono::{DateTime, Datelike, Days, NaiveTime, Utc};
 use egui::{RichText, Sense, Ui, vec2};
 
 use super::controls::{cell, dropdown};
-use crate::ui_kit::buttons::Button;
-
 use super::watchlist::ROW_HEIGHT;
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedError, Importance};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 

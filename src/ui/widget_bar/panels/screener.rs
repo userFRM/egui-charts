@@ -5,7 +5,6 @@ use std::sync::Arc;
 use egui::{Sense, Ui, vec2};
 
 use super::controls::{cell, dropdown, row};
-
 use super::watchlist::ROW_HEIGHT;
 use crate::data::inbox::Inbox;
 use crate::data::{

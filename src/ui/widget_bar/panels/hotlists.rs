@@ -5,10 +5,8 @@ use std::sync::Arc;
 use egui::{Sense, Ui, vec2};
 
 use super::controls::{cell, dropdown, row};
-
 use super::object_tree::{format_price, price_decimals};
-use super::watchlist::ROW_HEIGHT;
-use super::watchlist::signed;
+use super::watchlist::{ROW_HEIGHT, signed};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
 use crate::icons::icons;
