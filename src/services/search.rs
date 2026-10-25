@@ -105,7 +105,7 @@ mod tests {
     /// Guards the fallback's contract with the dialog: matching ignores case and reaches the
     /// description, each filter excludes what it should (also an instrument without the field),
     /// an exact symbol outranks a longer one listed first, a prefix outranks a match elsewhere
-    /// listed first, and the limit cuts after ranking.
+    /// listed first, and pagination cuts after ranking.
     #[test]
     fn list_search_matches_and_filters() {
         let list = vec![
@@ -123,28 +123,30 @@ mod tests {
                 .with_symbol_type(SymbolType::Stock)
                 .with_exchange("NASDAQ"),
         ];
-        let query = |text: &str, symbol_type, exchange: Option<&str>, limit| SymbolQuery {
+        let query = |text: &str, symbol_type, exchange: Option<&str>, offset, limit| SymbolQuery {
             text: text.into(),
             symbol_type,
             exchange: exchange.map(Into::into),
             limit,
-            offset: 0,
+            offset,
         };
         let cases = [
-            (query("aapl", None, None, 10), &["AAPL"][..]),
-            (query("APPLE", None, None, 10), &["AAPL"]),
-            (query("s&p 500", None, None, 10), &["SPY"]),
-            (query("spy", None, None, 10), &["SPY", "SPYG"]),
-            (query("spy", None, None, 1), &["SPY"]),
-            (query("", Some(SymbolType::Crypto), None, 10), &["BTCUSD"]),
-            (query("", None, Some("NASDAQ"), 10), &["AAPL"]),
-            (query("s", None, None, 10), &["SPYG", "SPY", "BTCUSD"]),
-            (query("xyz", None, None, 10), &[]),
+            (query("aapl", None, None, 0, 10), &["AAPL"][..]),
+            (query("APPLE", None, None, 0, 10), &["AAPL"]),
+            (query("s&p 500", None, None, 0, 10), &["SPYG", "SPY"]),
+            (query("s&p 500", None, None, 1, 10), &["SPY"]),
+            (query("spy", None, None, 2, 10), &[]),
+            (query("spy", None, None, 0, 10), &["SPY", "SPYG"]),
+            (query("spy", None, None, 0, 1), &["SPY"]),
+            (
+                query("", Some(SymbolType::Crypto), None, 0, 10),
+                &["BTCUSD"],
+            ),
+            (query("", None, Some("NASDAQ"), 0, 10), &["AAPL"]),
+            (query("s", None, None, 0, 10), &["SPYG", "SPY", "BTCUSD"]),
+            (query("xyz", None, None, 0, 10), &[]),
         ];
-        for (mut query, expected) in cases {
-            if query.text == "s&p 500" {
-                query.offset = 1;
-            }
+        for (query, expected) in cases {
             let inbox = Arc::new(Inbox::default());
             list.search(query.clone(), inbox.reply(0));
             let answers = inbox.drain().answers;

@@ -113,7 +113,7 @@ pub struct SymbolSearchConfig {
     pub show_exchange: bool,
     /// Show full symbol desc
     pub show_description: bool,
-    /// Max number of results to display
+    /// Results per service page, or the maximum displayed from the supplied list
     pub max_results: usize,
     /// Min characters for a nonempty query; an empty query lists the catalog
     pub min_search_len: usize,
@@ -380,35 +380,34 @@ impl SymbolSearchDialog {
                 });
                 ui.add_space(16.0);
                 let mut categories = vec![Category(None)];
-                let service_categories: Vec<_> = [
-                    SymbolType::Stock,
-                    SymbolType::Index,
-                    SymbolType::Forex,
-                    SymbolType::Futures,
-                    SymbolType::Crypto,
-                    SymbolType::Cfd,
-                    SymbolType::Bond,
-                    SymbolType::Fund,
-                    SymbolType::Option,
-                    SymbolType::Commodity,
-                    SymbolType::Economic,
-                    SymbolType::Dr,
-                    SymbolType::Right,
-                    SymbolType::Warrant,
-                    SymbolType::Expression,
-                    SymbolType::Spread,
-                ]
-                .into_iter()
-                .map(|kind| Symbol::new("", "").with_market("", kind))
-                .collect();
-                for symbol in if self.search.connected() {
-                    &service_categories
+                if self.search.connected() {
+                    categories.extend(
+                        [
+                            SymbolType::Stock,
+                            SymbolType::Index,
+                            SymbolType::Forex,
+                            SymbolType::Futures,
+                            SymbolType::Crypto,
+                            SymbolType::Cfd,
+                            SymbolType::Bond,
+                            SymbolType::Fund,
+                            SymbolType::Option,
+                            SymbolType::Commodity,
+                            SymbolType::Economic,
+                            SymbolType::Dr,
+                            SymbolType::Right,
+                            SymbolType::Warrant,
+                            SymbolType::Expression,
+                            SymbolType::Spread,
+                        ]
+                        .map(|kind| Category(Some(kind))),
+                    );
                 } else {
-                    all_symbols
-                } {
-                    let category = Category(symbol.symbol_type);
-                    if !categories.contains(&category) {
-                        categories.push(category);
+                    for symbol in all_symbols {
+                        let category = Category(symbol.symbol_type);
+                        if !categories.contains(&category) {
+                            categories.push(category);
+                        }
                     }
                 }
                 if !categories.contains(&self.category) {
