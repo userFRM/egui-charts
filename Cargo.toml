@@ -86,7 +86,7 @@ default = ["ui"]
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
 ## `Indicator` trait layer of `studies`) and does not depend on egui.
-widget = ["dep:egui", "dep:web-time"]
+widget = ["dep:egui", "dep:web-time", "dep:png"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
 ## build can compute the same studies.
 studies = []
@@ -119,11 +119,13 @@ ecolor = { version = "0.37.0", features = ["serde"] }
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
 # The icon loader rasterises with the same resvg that egui_extras' SVG loader uses.
 resvg = { version = "0.45.1", default-features = false, optional = true }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
 chrono-tz = "0.10.4"
 web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
+# Encodes chart images rasterised by `Chart::export_png`.
+png = { version = "0.17.16", optional = true }
 thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"

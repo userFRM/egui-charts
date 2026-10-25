@@ -180,6 +180,8 @@ mod tests {
                 low: 100.0,
                 close: 100.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 

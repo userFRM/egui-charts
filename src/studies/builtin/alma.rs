@@ -192,6 +192,8 @@ mod tests {
                     low: price - 1.0,
                     close: price,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()

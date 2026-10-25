@@ -29,10 +29,16 @@ pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
     ha_bars
 }
 
+/// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
+/// value.
 fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
     for bar in bars {
+        if bar.is_whitespace() {
+            ha_bars.push(Bar::whitespace(bar.time));
+            continue;
+        }
         let ha_close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-        let (ha_open, ha_high, ha_low) = match ha_bars.last() {
+        let (ha_open, ha_high, ha_low) = match ha_bars.iter().rev().find(|ha| !ha.is_whitespace()) {
             Some(prev) => {
                 let open = (prev.open + prev.close) / 2.0;
                 (
@@ -50,6 +56,8 @@ fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
             low: ha_low,
             close: ha_close,
             volume: bar.volume,
+            colors: None,
+            payload: None,
         });
     }
 }
@@ -139,6 +147,8 @@ mod tests {
             low,
             close,
             volume: 100.0,
+            colors: None,
+            payload: None,
         }
     }
 

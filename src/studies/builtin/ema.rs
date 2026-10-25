@@ -184,6 +184,8 @@ mod tests {
                 low: c,
                 close: c,
                 volume: 1.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }

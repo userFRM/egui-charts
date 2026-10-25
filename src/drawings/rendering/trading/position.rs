@@ -402,7 +402,10 @@ fn position_exit(
             return Some((target, true));
         }
     }
-    Some((bars.last().map_or(entry, |bar| bar.close), false))
+    Some((
+        crate::model::last_with_value(bars).map_or(entry, |bar| bar.close),
+        false,
+    ))
 }
 
 #[cfg(test)]

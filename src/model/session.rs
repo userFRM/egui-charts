@@ -742,6 +742,8 @@ mod tests {
                 low: 99.0,
                 close: 102.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: Utc.with_ymd_and_hms(2024, 1, 2, 12, 0, 0).unwrap(),
@@ -750,6 +752,8 @@ mod tests {
                 low: 101.0,
                 close: 105.0,
                 volume: 1200.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: Utc.with_ymd_and_hms(2024, 2, 1, 12, 0, 0).unwrap(),
@@ -758,6 +762,8 @@ mod tests {
                 low: 104.0,
                 close: 108.0,
                 volume: 1500.0,
+                colors: None,
+                payload: None,
             },
         ]
     }

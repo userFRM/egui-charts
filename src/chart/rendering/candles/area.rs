@@ -6,10 +6,13 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::line::{draw_styled_line, with_line_type};
+use super::helpers::valued_runs;
+use super::line::{draw_bar_line, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{AreaStyle, Bar, BaselineLevel, BaselineStyle, PriceSource};
+use crate::model::{
+    AreaStyle, Bar, BaselineLevel, BaselineStyle, LinePlotStyle, LineStyle, PriceSource,
+};
 
 const HLC_AREA_ALPHA: u8 = 30;
 
@@ -38,11 +41,18 @@ pub(super) fn render_area(
         price_source,
     );
 
-    if line_points.len() > 1 {
-        let line_points = with_line_type(line_points, style.line.line_type);
-        draw_area_fill(painter, &line_points, price_rect, style);
-        draw_styled_line(painter, line_points, &style.line);
+    let mut fill_points = Vec::new();
+    for run in valued_runs(visible_data).filter(|run| run.len() > 1) {
+        if !fill_points.is_empty() {
+            fill_points.push(Pos2::new(f32::NAN, f32::NAN));
+        }
+        fill_points.extend(with_line_type(
+            line_points[run].to_vec(),
+            style.line.line_type,
+        ));
     }
+    draw_area_fill(painter, &fill_points, price_rect, style);
+    draw_bar_line(painter, visible_data, &line_points, &style.line, false);
 
     if show_volume {
         render_volume_bars(
@@ -88,14 +98,15 @@ pub(super) fn render_hlc_area(
         price_source,
     );
 
-    if points.len() > 1 {
-        draw_hlc_fill(painter, &points, bullish_color, bearish_color);
-        let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
-        painter.add(Shape::line(
-            close_points,
-            Stroke::new(DESIGN_TOKENS.stroke.thick, bullish_color),
-        ));
-    }
+    draw_hlc_fill(painter, visible_data, &points, bullish_color, bearish_color);
+    let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
+    let close_line = LinePlotStyle {
+        color: bullish_color,
+        width: DESIGN_TOKENS.stroke.thick,
+        style: LineStyle::Solid,
+        ..Default::default()
+    };
+    draw_bar_line(painter, visible_data, &close_points, &close_line, false);
 
     if show_volume {
         render_volume_bars(
@@ -245,24 +256,36 @@ fn draw_area_fill(painter: &Painter, points: &[Pos2], rect: Rect, style: &AreaSt
         style.top_fill.lerp_to_gamma(style.bottom_fill, fraction)
     };
     let mut mesh = egui::Mesh::default();
-    for (i, point) in points.iter().enumerate() {
+    let mut connected = false;
+    for point in points {
+        if !point.is_finite() {
+            connected = false;
+            continue;
+        }
+        let n = mesh.vertices.len() as u32;
         mesh.colored_vertex(*point, color_at(point.y));
         mesh.colored_vertex(Pos2::new(point.x, base_y), color_at(base_y));
-        if i > 0 {
-            let n = (2 * i) as u32;
+        if connected {
             mesh.add_triangle(n - 2, n, n - 1);
             mesh.add_triangle(n - 1, n, n + 1);
         }
+        connected = true;
     }
     painter.add(mesh);
 }
 
-fn draw_hlc_fill(painter: &Painter, points: &[HlcPoint], bullish: Color32, bearish: Color32) {
+fn draw_hlc_fill(
+    painter: &Painter,
+    bars: &[Bar],
+    points: &[HlcPoint],
+    bullish: Color32,
+    bearish: Color32,
+) {
     let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), HLC_AREA_ALPHA);
     let (up, down) = (tint(bullish), tint(bearish));
 
     // Both quads are convex: high >= close >= low at both ends of a segment.
-    for pair in points.windows(2) {
+    for pair in valued_runs(bars).flat_map(|run| points[run].windows(2)) {
         let (p1, p2) = (&pair[0], &pair[1]);
         let above = vec![
             Pos2::new(p1.x, p1.y_high),
@@ -305,34 +328,37 @@ fn draw_baseline_segments(
     style: &BaselineStyle,
     price_source: PriceSource,
 ) {
-    let points = with_line_type(
-        collect_price_points(
-            data,
-            start_idx,
-            coords,
-            chart_rect_min_x,
-            idx_to_coord,
-            price_source,
-        ),
-        style.above.line_type,
+    let points = collect_price_points(
+        data,
+        start_idx,
+        coords,
+        chart_rect_min_x,
+        idx_to_coord,
+        price_source,
     );
-    // A segment that crosses the base line is split there, in screen space, where the line is
-    // straight on every price scale. Each part keeps its distance along the path for the dashes.
-    let mut parts = Vec::with_capacity(points.len());
-    let mut distance = 0.0;
-    for pair in points.windows(2) {
-        let (prev, curr) = (pair[0], pair[1]);
-        let crossing = (prev.y < baseline_y && curr.y > baseline_y)
-            || (prev.y > baseline_y && curr.y < baseline_y);
-        if crossing {
-            let t = (baseline_y - prev.y) / (curr.y - prev.y);
-            let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
-            parts.push((prev, cross, distance));
-            parts.push((cross, curr, distance + f64::from(prev.distance(cross))));
-        } else {
-            parts.push((prev, curr, distance));
+    // Split at whitespace before curving, and retain each source bar for its segment colours.
+    let mut parts = Vec::new();
+    for run in valued_runs(data).filter(|run| run.len() > 1) {
+        let path = with_line_type(points[run.clone()].to_vec(), style.above.line_type);
+        let mut bar = run.start;
+        let mut distance = 0.0;
+        for pair in path.windows(2) {
+            let (prev, curr) = (pair[0], pair[1]);
+            while bar + 1 < run.end - 1 && prev == points[bar + 1] {
+                bar += 1;
+            }
+            let crossing = (prev.y < baseline_y && curr.y > baseline_y)
+                || (prev.y > baseline_y && curr.y < baseline_y);
+            if crossing {
+                let t = (baseline_y - prev.y) / (curr.y - prev.y);
+                let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
+                parts.push((prev, cross, distance, bar));
+                parts.push((cross, curr, distance + f64::from(prev.distance(cross)), bar));
+            } else {
+                parts.push((prev, curr, distance, bar));
+            }
+            distance += f64::from(prev.distance(curr));
         }
-        distance += f64::from(prev.distance(curr));
     }
     // The side is decided by value, so an inverted price scale keeps its colours; a part that
     // only touches the base line takes its other side.
@@ -341,11 +367,14 @@ fn draw_baseline_segments(
     };
     // One unfeathered mesh, so adjacent parts of a densely sampled path leave no seams.
     let mut fill = egui::Mesh::default();
-    for &(a, b, _) in &parts {
+    for &(a, b, _, bar) in &parts {
+        let own = data[bar].colors.as_deref();
         let color = if above(a, b) {
-            style.above_fill
+            own.and_then(|colors| colors.top_fill)
+                .unwrap_or(style.above_fill)
         } else {
-            style.below_fill
+            own.and_then(|colors| colors.bottom_fill)
+                .unwrap_or(style.below_fill)
         };
         let n = fill.vertices.len() as u32;
         for point in [a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)] {
@@ -355,13 +384,18 @@ fn draw_baseline_segments(
         fill.add_triangle(n, n + 2, n + 3);
     }
     painter.add(fill);
-    for &(a, b, distance) in &parts {
-        let line = if above(a, b) {
-            &style.above
+    for &(a, b, distance, bar) in &parts {
+        let own = data[bar].colors.as_deref();
+        let (line, color) = if above(a, b) {
+            (&style.above, own.and_then(|colors| colors.top_line))
         } else {
-            &style.below
+            (&style.below, own.and_then(|colors| colors.bottom_line))
         };
-        draw_baseline_line_part(painter, a, b, line, distance);
+        let line = LinePlotStyle {
+            color: color.unwrap_or(line.color),
+            ..line.clone()
+        };
+        draw_baseline_line_part(painter, a, b, &line, distance);
     }
 }
 
@@ -462,6 +496,104 @@ mod tests {
                     "{first} -> {last}, inverted={inverted}: {ink} != {expected}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn curved_fills_keep_whitespace_and_baseline_bar_colours() {
+        use crate::model::{BarColors, LineType};
+        use crate::scales::{PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let mut bars: Vec<_> = [60.0, 70.0, 60.0, 0.0, 40.0, 30.0, 40.0]
+            .into_iter()
+            .map(|value| Bar::from_value(chrono::DateTime::UNIX_EPOCH, value))
+            .collect();
+        bars[3] = Bar::whitespace(bars[3].time);
+        bars[1].colors = Some(Box::new(BarColors {
+            top_line: Some(Color32::BLUE),
+            top_fill: Some(Color32::GOLD),
+            ..Default::default()
+        }));
+        for baseline in [false, true] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                if baseline {
+                    let mut style = BaselineStyle::default();
+                    style.above.line_type = LineType::Curved;
+                    draw_baseline_segments(
+                        ui.painter(),
+                        &bars,
+                        0,
+                        &map,
+                        50.0,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                } else {
+                    let mut style = AreaStyle::default();
+                    style.line.line_type = LineType::Curved;
+                    render_area(
+                        ui.painter(),
+                        rect,
+                        &RenderContext::new(ui.painter(), rect),
+                        &bars,
+                        0,
+                        false,
+                        1.0,
+                        &StyleColors {
+                            bullish: Color32::GREEN,
+                            bearish: Color32::RED,
+                            text: Color32::WHITE,
+                            bullish_border: None,
+                            bearish_border: None,
+                            bullish_wick: None,
+                            bearish_wick: None,
+                            candle_border_width: 0.0,
+                        },
+                        &map,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                }
+            });
+            let meshes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert!(!meshes.is_empty());
+            for mesh in &meshes {
+                assert!(mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()));
+                for triangle in mesh.indices.as_chunks::<3>().0 {
+                    let xs = triangle.map(|i| mesh.vertices[i as usize].pos.x);
+                    assert!(xs.iter().all(|x| *x <= 20.0) || xs.iter().all(|x| *x >= 40.0));
+                }
+            }
+            if baseline {
+                assert!(
+                    meshes
+                        .iter()
+                        .flat_map(|mesh| &mesh.vertices)
+                        .any(|vertex| vertex.color == Color32::GOLD)
+                );
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::LineSegment { points, stroke } if stroke.color == Color32::BLUE && points[0].x >= 10.0 && points[1].x <= 20.0)));
+            }
+            output.drop_without_applying_deltas();
         }
     }
 

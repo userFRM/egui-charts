@@ -177,6 +177,8 @@ mod tests {
                 low: 1234.56,
                 close: 1234.56,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 
