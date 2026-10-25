@@ -216,8 +216,10 @@ impl<'a> IndicatorTemplatePanel<'a> {
         );
         ui.space_sm();
 
-        ui.label("Name:");
-        let name_response = ui.text_edit_singleline(&mut self.state.save_name);
+        let label = ui.label("Name:");
+        let name_response = ui
+            .text_edit_singleline(&mut self.state.save_name)
+            .labelled_by(label.id);
 
         // Auto-focus the name field when save form opens
         if ui
@@ -228,8 +230,9 @@ impl<'a> IndicatorTemplatePanel<'a> {
         }
 
         ui.space_sm();
-        ui.label("Description (optional):");
-        ui.text_edit_singleline(&mut self.state.save_description);
+        let label = ui.label("Description (optional):");
+        ui.text_edit_singleline(&mut self.state.save_description)
+            .labelled_by(label.id);
 
         ui.space_lg();
 

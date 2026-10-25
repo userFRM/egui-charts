@@ -83,79 +83,90 @@ mod tests {
 
     #[test]
     fn chart_summary_tracks_hover_updates_and_empty_history() {
-        let mut chart = Chart::new(BarData::from_bars(vec![
-            Bar::new(
-                Utc.timestamp_opt(0, 0).unwrap(),
-                10.0,
-                15.0,
-                8.0,
-                12.0,
-                100.0,
-            ),
-            Bar::new(
-                Utc.timestamp_opt(60, 0).unwrap(),
-                12.0,
-                18.0,
-                11.0,
-                16.0,
-                200.0,
-            ),
-        ]));
-        chart.set_symbol("TEST");
-        chart.set_timeframe(Timeframe::Min1);
-        let mut harness = Harness::builder()
-            .allow_missing_glyphs()
-            .with_context_setup(|ctx| {
-                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark())
-            })
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui_state(
-                |ui, chart| {
-                    chart.show(ui);
-                },
-                chart,
-            );
-        harness.run();
-        let summary = |harness: &Harness<'_, Chart>| {
-            harness
-                .get_by_role_and_label(Role::GraphicsDocument, "TEST chart")
-                .accesskit_node()
-                .value()
-                .unwrap()
-        };
-        assert!(
-            summary(&harness)
-                .contains("2 bars, 1970-01-01T00:00:00+00:00 to 1970-01-01T00:01:00+00:00")
-        );
-        assert!(summary(&harness).contains("Latest bar: 1970-01-01T00:01:00+00:00. Open 12.00, high 18.00, low 11.00, close 16.00, volume 200"));
-        let map = harness.state().get_chart_mapping();
-        harness.hover_at(egui::pos2(map.idx_to_x(0), map.rect.center().y));
-        harness.run();
-        assert!(summary(&harness).contains("Hovered bar: 1970-01-01T00:00:00+00:00. Open 10.00, high 15.00, low 8.00, close 12.00, volume 100"));
-        harness.remove_cursor();
-        harness.run();
-        assert!(summary(&harness).contains("Latest bar:"));
-        harness.state_mut().update(
-            super::super::SeriesId::MAIN,
-            Bar::new(
-                Utc.timestamp_opt(60, 0).unwrap(),
-                12.0,
-                19.0,
-                11.0,
-                17.0,
-                250.0,
-            ),
-        );
-        harness.run();
-        assert!(
-            summary(&harness)
-                .contains("Open 12.00, high 19.00, low 11.00, close 17.00, volume 250")
-        );
-        harness
-            .state_mut()
-            .set_data(super::super::SeriesId::MAIN, Vec::new());
-        harness.run();
-        assert!(summary(&harness).contains("0 bars. No data"));
-        assert!(!summary(&harness).contains("Open"));
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [320.0, 800.0] {
+                let mut chart = Chart::new(BarData::from_bars(vec![
+                    Bar::new(
+                        Utc.timestamp_opt(0, 0).unwrap(),
+                        10.0,
+                        15.0,
+                        8.0,
+                        12.0,
+                        100.0,
+                    ),
+                    Bar::new(
+                        Utc.timestamp_opt(60, 0).unwrap(),
+                        12.0,
+                        18.0,
+                        11.0,
+                        16.0,
+                        200.0,
+                    ),
+                ]));
+                #[cfg(feature = "studies")]
+                chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+                chart.set_symbol("TEST");
+                chart.set_timeframe(Timeframe::Min1);
+                let theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                    .with_size(egui::vec2(width, 600.0))
+                    .build_ui_state(
+                        |ui, chart| {
+                            chart.show(ui);
+                        },
+                        chart,
+                    );
+                harness.run();
+                let summary = |harness: &Harness<'_, Chart>| {
+                    harness
+                        .get_by_role_and_label(Role::GraphicsDocument, "TEST chart")
+                        .accesskit_node()
+                        .value()
+                        .unwrap()
+                };
+                assert!(
+                    summary(&harness)
+                        .contains("2 bars, 1970-01-01T00:00:00+00:00 to 1970-01-01T00:01:00+00:00")
+                );
+                assert!(summary(&harness).contains("Latest bar: 1970-01-01T00:01:00+00:00. Open 12.00, high 18.00, low 11.00, close 16.00, volume 200"));
+                #[cfg(feature = "studies")]
+                assert!(summary(&harness).contains("SMA: SMA(2): 14.00"));
+                let map = harness.state().get_chart_mapping();
+                harness.hover_at(egui::pos2(map.idx_to_x(0), map.rect.center().y));
+                harness.run();
+                assert!(summary(&harness).contains("Hovered bar: 1970-01-01T00:00:00+00:00. Open 10.00, high 15.00, low 8.00, close 12.00, volume 100"));
+                #[cfg(feature = "studies")]
+                assert!(summary(&harness).contains("SMA: SMA(2): No value"));
+                harness.remove_cursor();
+                harness.run();
+                assert!(summary(&harness).contains("Latest bar:"));
+                harness.state_mut().update(
+                    super::super::SeriesId::MAIN,
+                    Bar::new(
+                        Utc.timestamp_opt(60, 0).unwrap(),
+                        12.0,
+                        19.0,
+                        11.0,
+                        17.0,
+                        250.0,
+                    ),
+                );
+                harness.run();
+                assert!(
+                    summary(&harness)
+                        .contains("Open 12.00, high 19.00, low 11.00, close 17.00, volume 250")
+                );
+                #[cfg(feature = "studies")]
+                assert!(summary(&harness).contains("SMA: SMA(2): 14.50"));
+                harness
+                    .state_mut()
+                    .set_data(super::super::SeriesId::MAIN, Vec::new());
+                harness.run();
+                assert!(summary(&harness).contains("0 bars. No data"));
+                assert!(!summary(&harness).contains("Open"));
+            }
+        }
     }
 }

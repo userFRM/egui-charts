@@ -327,14 +327,16 @@ impl SymbolSearchDialog {
                     if focus_search {
                         ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
-                            .id(search_id)
-                            .font(egui::FontId::proportional(16.0))
-                            .hint_text(RichText::new("Search symbols").size(16.0))
-                            .frame(egui::Frame::NONE)
-                            .desired_width((ui.available_width() - 40.0).max(0.0)),
-                    );
+                    let response = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.search_query)
+                                .id(search_id)
+                                .font(egui::FontId::proportional(16.0))
+                                .hint_text(RichText::new("Search symbols").size(16.0))
+                                .frame(egui::Frame::NONE)
+                                .desired_width((ui.available_width() - 40.0).max(0.0)),
+                        )
+                        .accessible_name("Search symbols");
                     if IconButton::new(&icons::CLOSE)
                         .tooltip("Close")
                         .show(ui)
@@ -834,7 +836,8 @@ impl CompareSymbolsDialog {
                     .font(egui::FontId::proportional(16.0))
                     .frame(egui::Frame::NONE)
                     .desired_width((ui.available_width() - 40.0).max(0.0)),
-            );
+            )
+            .accessible_name("Search symbols");
             if IconButton::new(&icons::CLOSE)
                 .tooltip("Close")
                 .show(ui)

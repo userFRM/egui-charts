@@ -902,6 +902,7 @@ impl DrawingToolbar {
         let mut new_selection = None;
 
         egui::Area::new(egui::Id::unique("floating_drawing_toolbar"))
+            .enabled(ui.is_enabled())
             .fixed_pos(position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
@@ -974,6 +975,14 @@ impl DrawingToolbar {
                                 Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                 Sense::click(),
                             );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::Role::Button,
+                                    response.enabled(),
+                                    self.state.magnet_mode,
+                                    "Magnet Mode",
+                                )
+                            });
                             crate::styles::focus::draw_focus_ring(
                                 ui,
                                 &response,
@@ -1016,7 +1025,9 @@ impl DrawingToolbar {
                                         }
                                     });
                                 }
-                            });
+                            })
+                            .response
+                            .accessible_name("More drawing tools");
                         });
                     });
             });

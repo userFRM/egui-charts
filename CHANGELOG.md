@@ -232,9 +232,7 @@ All notable changes to this project are documented in this file. The format is b
 ### Fixed
 
 - Custom toolbar buttons, drawing controls, tabs, menus, object rows and symbol lists report their accessible names, roles and selected, checked, expanded and disabled states. Dialogs expose their titles, and form rows, study inputs and alert fields associate their labels with their controls. The chart exposes a text summary of its symbol, interval, displayed history and latest or hovered OHLCV and study values, including empty history. Native examples and the demo enable the screen-reader bridge; applications using `eframe` enable its `accesskit` feature. ([#250](https://github.com/userFRM/egui-charts/issues/250), [#280](https://github.com/userFRM/egui-charts/issues/280))
-
 - Object tree rows use themed chevrons, drawing glyphs, settings and trash icons in place of letter and punctuation placeholders. ([#279](https://github.com/userFRM/egui-charts/issues/279))
-
 - A chart with a feed or server time repaints once a second only while its bar countdown is drawn, so a hidden price axis or a last price outside the visible range no longer keeps an idle chart repainting. ([#852](https://github.com/userFRM/egui-charts/issues/852))
 - The Baseline chart fills both sides of its base without faint lines between neighbouring parts of the path, which a curved line made obvious. ([#832](https://github.com/userFRM/egui-charts/issues/832))
 - The top toolbar's layout button shows the cells of the current preset, one cell for a single chart, the matching grid otherwise and a tab strip for tabs, instead of a four-cell grid whatever the layout; each preset's glyph is an `icons::LAYOUT_*` constant. Quick Search has its own magnifier with a lightning bolt (`icons::COMMAND_SEARCH`), so it no longer repeats the symbol search glyph, and Settings uses a hex nut (`icons::SETTINGS_NUT`). ([#844](https://github.com/userFRM/egui-charts/issues/844))

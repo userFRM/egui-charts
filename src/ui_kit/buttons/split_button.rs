@@ -38,7 +38,7 @@ pub struct SplitButton {
     size: ButtonSize,
     tooltip: Option<String>,
     expanded: bool,
-    selected: bool,
+    selected: Option<bool>,
 }
 
 impl SplitButton {
@@ -49,7 +49,7 @@ impl SplitButton {
             size: ButtonSize::MD,
             tooltip: None,
             expanded: false,
-            selected: false,
+            selected: None,
         }
     }
 
@@ -77,7 +77,7 @@ impl SplitButton {
     /// Set whether a tool in this category is selected
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
+        self.selected = Some(selected);
         self
     }
 
@@ -87,7 +87,7 @@ impl SplitButton {
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
 
-        let show_active = self.expanded || self.selected;
+        let show_active = self.expanded || self.selected == Some(true);
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
             let pressed = response.is_pointer_button_down_on();
@@ -123,6 +123,11 @@ impl SplitButton {
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_expanded(self.expanded));
         let tooltip = self.tooltip.as_deref();
-        finish(response, show_active, tooltip.unwrap_or_default(), tooltip)
+        finish(
+            response,
+            self.selected,
+            tooltip.unwrap_or_default(),
+            tooltip,
+        )
     }
 }

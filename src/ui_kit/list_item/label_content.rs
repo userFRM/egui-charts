@@ -103,9 +103,12 @@ impl<'a> ListItemContent for LabelContent<'a> {
         };
 
         let content_rect = context.rect;
+        let is_menu = ui.stack().contained_in(egui::UiKind::Menu);
         context.response.widget_info(|| {
             WidgetInfo::labeled(
-                if context.response.sense.senses_click() {
+                if is_menu {
+                    Role::MenuItem
+                } else if context.response.sense.senses_click() {
                     Role::ListBoxOption
                 } else {
                     Role::ListItem
@@ -115,10 +118,12 @@ impl<'a> ListItemContent for LabelContent<'a> {
             )
         });
 
-        ui.ctx()
-            .accesskit_node_builder(context.response.id, |node| {
-                node.set_selected(context.selected)
-            });
+        if !is_menu && context.response.sense.senses_click() {
+            ui.ctx()
+                .accesskit_node_builder(context.response.id, |node| {
+                    node.set_selected(context.selected)
+                });
+        }
 
         if ui.is_rect_visible(content_rect) {
             // Draw icon if present

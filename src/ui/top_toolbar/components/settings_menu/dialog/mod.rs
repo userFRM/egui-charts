@@ -453,8 +453,9 @@ impl SettingsDialog {
 
     fn draw_save_as_button(&mut self, ui: &mut Ui, mut action: SettingsAction) -> SettingsAction {
         if let Some(name) = &mut self.save_name {
-            ui.label("Template name");
-            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
+            let label = ui.label("Template name");
+            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()))
+                .labelled_by(label.id);
             let name = name.trim().to_owned();
             let label = if self.templates.entries().contains_key(&name) {
                 "Replace"
