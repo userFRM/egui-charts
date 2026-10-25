@@ -2,7 +2,10 @@
 
 use super::Events;
 use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
-use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position, TradingRules};
+use crate::model::{
+    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, Position,
+    TradingRules,
+};
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
 /// positions: it shows what the broker pushes and places the orders the user confirms. Paper
@@ -88,6 +91,8 @@ use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position, T
 pub trait Broker: MaybeSend + 'static {
     /// Pushes the account (balance, currency, capabilities) first, then the working orders and
     /// open positions, then orders, positions, executions and connection status as they change.
+    /// A broker that keeps history pushes it after the open state: the finished orders, the
+    /// balance changes and the journal, oldest first, which the account panel lists.
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
@@ -140,4 +145,8 @@ pub enum AccountEvent {
     Execution(Execution),
     /// The connection to the broker.
     Status(FeedStatus),
+    /// A change of the cash balance, for the balance history.
+    Balance(BalanceChange),
+    /// A line of the trading journal.
+    Journal(JournalEntry),
 }

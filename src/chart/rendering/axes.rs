@@ -128,6 +128,7 @@ pub(crate) fn render_study_tags(
     study: &dyn crate::studies::Indicator,
     axis_right: f32,
     occupied: &mut Vec<Option<Rect>>,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) {
     if !study.is_visible() || study.scale() == crate::studies::StudyScale::None {
         return;
@@ -158,6 +159,7 @@ pub(crate) fn render_study_tags(
                 study
                     .precision()
                     .unwrap_or_else(|| map.price_precision().unwrap_or(2)),
+                formatter,
             )
         } else {
             study.format_value(value)
@@ -202,13 +204,8 @@ pub fn render_price_line(
     let start = Pos2::new(x0, y);
     let end = Pos2::new(price_rect.max.x, y);
     let stroke = Stroke::new(line.width, line.color);
-    let pattern = match line.style {
-        crate::model::LineStyle::Dashed => Some((4.0, 4.0)),
-        crate::model::LineStyle::Dotted => Some((1.0, 3.0)),
-        crate::model::LineStyle::Solid => None,
-    };
     if line.width > 0.0 {
-        if let Some((dash, gap)) = pattern {
+        if let Some((dash, gap)) = line.style.hairline_pattern() {
             draw_dashed_line(painter, start, end, stroke, dash, gap);
         } else {
             painter.line_segment([start, end], stroke);
@@ -230,6 +227,7 @@ pub fn render_price_line(
     let label = transform.label(
         transform.to_scale(line.price),
         price_map.price_precision().unwrap_or(2),
+        None,
     );
     let (text_color, fill) = axis_label_colors(line);
     let (anchor, align) = price_tag_anchor(price_rect, axis_right, y);
@@ -307,10 +305,15 @@ pub(crate) fn paint_crosshair_tag(
 }
 
 /// Width of the current price labels and tags, including their plot gap and right clearance.
-/// Include formatted session and volume labels in `tag_labels` when allocating their column.
-pub fn price_axis_width(painter: &Painter, price_map: &PriceMap, tag_labels: &[&str]) -> f32 {
-    crate::scales::PriceMarkGenerator::new()
-        .generate_marks(price_map)
+/// Include formatted session and volume labels in `tag_labels` when allocating their column,
+/// and the host `formatter` the labels are written with.
+pub fn price_axis_width(
+    painter: &Painter,
+    price_map: &PriceMap,
+    tag_labels: &[&str],
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
+) -> f32 {
+    crate::chart::renderers::price_marks(price_map, formatter)
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))
@@ -343,7 +346,7 @@ pub fn render_quote_tags(
     axis_right: f32,
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
-        painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0,
+        painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0, None,
     )
 }
 
@@ -359,6 +362,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     countdown: Option<&str>,
     volume_precision: Option<u8>,
     reserved_top: f32,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -388,7 +392,7 @@ pub(crate) fn render_quote_tags_with_countdown(
             0,
             close_y,
             {
-                let price = transform.label(transform.to_scale(close.price), decimals);
+                let price = transform.label(transform.to_scale(close.price), decimals, formatter);
                 countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
             },
             close.color,
@@ -418,7 +422,7 @@ pub(crate) fn render_quote_tags_with_countdown(
         if !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
-        let label = transform.label(transform.to_scale(quote.price), decimals);
+        let label = transform.label(transform.to_scale(quote.price), decimals, formatter);
         rows.push((1, y, format!("{} {label}", quote.qualifier), color));
     }
     if let Some((value, color)) = volume.filter(|(value, _)| value.is_finite() && *value >= 0.0) {
@@ -744,6 +748,7 @@ mod tests {
                         ui.painter(),
                         &map,
                         &text.iter().map(String::as_str).collect::<Vec<_>>(),
+                        None,
                     );
                     tags = render_quote_tags_with_countdown(
                         ui.painter(),
@@ -756,6 +761,7 @@ mod tests {
                         countdown,
                         None,
                         0.0,
+                        None,
                     );
                 });
                 let labels: Vec<_> = output

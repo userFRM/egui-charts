@@ -1,38 +1,44 @@
-//! Trading from the chart through the host's [`Broker`]: the order ticket and the Buy and Sell
-//! buttons. The broker holds the account; this module shows what it pushes and sends the orders
-//! the user confirms.
+//! Trading from the chart through the host's [`Broker`]: the broker picker, the order ticket,
+//! the Buy and Sell buttons, depth ladder and the account panel. The broker holds the account;
+//! this module shows what it pushes and sends the orders the user confirms.
 
+mod account_panel;
+mod broker_picker;
+mod dom;
 mod executions;
 mod ticket;
 
+pub use account_panel::{AccountPanel, AccountPanelAction};
+pub use broker_picker::{BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::chart::selection::SeriesId;
 use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines, to_step};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-    OrderType, Position, TradingRules,
+    Account, Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType,
+    Position, Quote, TradingRules,
 };
 use crate::services::{AccountEvent, Broker, Listener};
+use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::components::settings_menu::{TradingNotifications, TradingSettings};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::Chart;
-use ticket::{Market, OrderTicket, order_quantity};
+use ticket::{Action, Market, OrderTicket, order_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
 ///
-/// Call [`poll`](Self::poll) every frame, then [`show`](Self::show) after the chart. Open the
-/// order ticket with [`open_ticket`](Self::open_ticket), for example from the chart menu's
-/// [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route the chart's
-/// Buy and Sell buttons ([`Chart::take_quote_action`]) to [`trade`](Self::trade). Orders reach
-/// the broker only from the ticket's submit button, or at once from Buy and Sell when the user
-/// turned on instant orders in the chart settings
-/// ([`TradingSettings::instant_orders`]).
+/// Call [`poll`](Self::poll) every frame, [`show_ticket`](Self::show_ticket) before laying out
+/// the chart, so the order ticket takes its panel beside it, and [`show`](Self::show) after the
+/// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
+/// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
+/// the chart's Buy and Sell buttons ([`Chart::take_quote_action`]) to [`trade`](Self::trade).
+/// Orders reach the broker only from the ticket's submit button, or once the user confirms them
+/// in the depth ladder, or at once from Buy and Sell and the ladder when the user turned on
+/// [`TradingSettings::instant_orders`].
 ///
 /// ```no_run
 /// # fn frame(ui: &mut egui::Ui, chart: &mut egui_charts::Chart,
@@ -42,6 +48,7 @@ use ticket::{Market, OrderTicket, order_quantity};
 /// use egui_charts::widget::QuoteSide;
 ///
 /// trading.poll(ui.ctx(), toasts);
+/// trading.show_ticket(ui, chart);
 /// chart.show(ui);
 /// if let Some(side) = chart.take_quote_action() {
 ///     if side == QuoteSide::Ticket {
@@ -63,10 +70,6 @@ pub struct Trading {
     account: Option<Account>,
     orders: Vec<Order>,
     positions: Vec<Position>,
-    /// The fills of this account, oldest first.
-    executions: Vec<Execution>,
-    /// Every order the broker reported, for execution labels and notifications.
-    reported_orders: HashMap<OrderId, OrderRequest>,
     rules: TradingRules,
     rules_key: u64,
     rules_ready: bool,
@@ -75,12 +78,16 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// Decimals of the chart's prices, for notifications.
     decimals: usize,
+    /// The latest quote of a symbol, from [`set_quote`](Self::set_quote).
+    quote: Option<(String, Quote)>,
     /// The quantity the ticket opens with, and that instant orders and the chart menu's orders
     /// use. Positive, in the symbol's trading units. The chart's legend shows it under the quote
     /// buttons' spread, where a click opens a calculator that changes it.
     pub quantity: f64,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
+    /// The account panel's names and the history it lists.
+    pub account_panel: AccountPanel,
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::ui::top_toolbar::ChartSettingsState::trading)
@@ -102,16 +109,16 @@ impl Default for Trading {
             account: None,
             orders: Vec::new(),
             positions: Vec::new(),
-            executions: Vec::new(),
-            reported_orders: HashMap::new(),
             rules: TradingRules::new(""),
             rules_key: 1,
             rules_ready: false,
             ticket: OrderTicket::default(),
             pending: None,
             decimals: 2,
+            quote: None,
             quantity: 1.0,
             presets: Vec::new(),
+            account_panel: AccountPanel::default(),
             display: TradingSettings::default(),
             sound: None,
             calculator: None,
@@ -120,26 +127,48 @@ impl Default for Trading {
 }
 
 impl Trading {
+    /// Sets the latest quote of `symbol`, such as the one `WatchlistPanel::quote` holds for the
+    /// chart's symbol. While the chart shows `symbol`, the ticket enters a market buy at the
+    /// quote's ask and a market sell at its bid; without them, at the last price.
+    pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
+        self.quote = Some((symbol.to_owned(), quote));
+    }
+
     /// Connects to `service`, dropping the previous account's state.
     pub fn set_service(&mut self, service: Arc<dyn Broker>) {
         self.listener = None;
         self.service = Some(service);
         self.inbox = Arc::default();
         self.ticket.open = false;
-        self.sound = None;
-        self.calculator = None;
-        self.executions.clear();
-        self.reported_orders.clear();
         self.connect();
+    }
+
+    /// Disconnects from the broker, dropping the account's state.
+    pub fn disconnect(&mut self) {
+        self.listener = None;
+        self.service = None;
+        self.inbox = Arc::default();
+        self.display.instant_orders = false;
+        self.ticket.open = false;
+        self.connect();
+    }
+
+    /// Whether a broker is connected.
+    pub fn is_connected(&self) -> bool {
+        self.service.is_some()
     }
 
     fn connect(&mut self) {
         self.pending = None;
+        self.sound = None;
+        self.calculator = None;
+        self.ticket = OrderTicket::default();
         self.rules = TradingRules::new("");
         self.rules_ready = false;
         self.account = None;
         self.orders.clear();
         self.positions.clear();
+        self.account_panel.clear();
         // Stream keys are even; symbol rules use odd keys, and order replies use zero.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
@@ -161,6 +190,21 @@ impl Trading {
     pub fn open_ticket(&mut self, request: OrderRequest) {
         self.load_rules(&request.symbol);
         self.ticket.open(&request);
+    }
+
+    /// Opens the order ticket for `symbol`, or closes it when it is open, as the toolbar's Trade
+    /// button does.
+    pub fn toggle_ticket(&mut self, symbol: String) {
+        if self.ticket.open {
+            self.ticket.open = false;
+        } else {
+            self.open_ticket(OrderRequest::new(
+                symbol,
+                OrderSide::Buy,
+                self.quantity,
+                OrderType::Market,
+            ));
+        }
     }
 
     /// Handles the Buy or Sell button: a market order of [`quantity`](Self::quantity) at once
@@ -190,6 +234,7 @@ impl Trading {
 
     fn load_rules(&mut self, symbol: &str) {
         if self.rules.symbol != symbol {
+            self.pending = None;
             self.rules = TradingRules::new(symbol);
             self.rules_ready = false;
             self.rules_key += 2;
@@ -248,12 +293,24 @@ impl Trading {
         let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
         let positive = |value: f64| value.is_finite() && value > 0.0;
         let valid = match &event {
-            AccountEvent::Account(account) => account.balance.is_finite() && finite(account.equity),
+            AccountEvent::Account(account) => {
+                account.balance.is_finite()
+                    && [
+                        account.equity,
+                        account.realized_pnl,
+                        account.margin,
+                        account.orders_margin,
+                        account.available_funds,
+                    ]
+                    .into_iter()
+                    .all(finite)
+            }
             AccountEvent::Order(order) => {
                 let request = &order.request;
                 positive(request.quantity)
                     && order.filled.is_finite()
                     && (0.0..=request.quantity).contains(&order.filled)
+                    && finite(order.fill_price)
                     && finite(request.take_profit)
                     && finite(request.stop_loss)
                     && match request.order_type {
@@ -267,14 +324,31 @@ impl Trading {
             AccountEvent::Position(position) => {
                 position.quantity.is_finite()
                     && position.average_price.is_finite()
-                    && finite(position.unrealized_pnl)
+                    && [
+                        position.unrealized_pnl,
+                        position.last_price,
+                        position.trade_value,
+                        position.market_value,
+                        position.leverage,
+                        position.margin,
+                    ]
+                    .into_iter()
+                    .all(finite)
             }
             AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+            AccountEvent::Balance(change) => {
+                change.balance.is_finite() && change.amount.is_finite()
+            }
             _ => true,
         };
         if !valid {
             return;
         }
+        let first_order = match &event {
+            AccountEvent::Order(order) => !self.account_panel.fills.orders.contains_key(&order.id),
+            _ => false,
+        };
+        self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
@@ -299,10 +373,7 @@ impl Trading {
                     self.pending = None;
                 }
                 self.orders.retain(|working| working.id != order.id);
-                let first = !self.reported_orders.contains_key(&order.id);
-                self.reported_orders
-                    .insert(order.id.clone(), order.request.clone());
-                if first
+                if first_order
                     && order.status == OrderStatus::Working
                     && order.request.order_type != OrderType::Market
                 {
@@ -345,19 +416,20 @@ impl Trading {
                 }
             }
             AccountEvent::Execution(fill) => {
-                let order = self.reported_orders.get(&fill.order);
-                let mut text = format!("{} {}", executions::side_name(fill.side), fill.quantity);
+                let order = self.account_panel.fills.orders.get(&fill.order);
+                let mut text = format!("{} {}", ticket::side_name(fill.side), fill.quantity);
                 if let Some(order) = order {
                     text += &format!(" {}", order.symbol);
                 }
                 text += &format!(" at {:.*}", self.decimals, fill.price);
-                let filled = fill.quantity
-                    + self
-                        .executions
-                        .iter()
-                        .filter(|earlier| earlier.order == fill.order)
-                        .map(|earlier| earlier.quantity)
-                        .sum::<f64>();
+                let filled = self
+                    .account_panel
+                    .fills
+                    .executions
+                    .iter()
+                    .filter(|earlier| earlier.order == fill.order)
+                    .map(|earlier| earlier.quantity)
+                    .sum::<f64>();
                 // Fills that add up to the order within rounding complete it.
                 let mut toast = match order {
                     Some(order) => {
@@ -383,7 +455,6 @@ impl Trading {
                 if self.display.play_execution_sound {
                     self.sound = Some(self.display.execution_sound.clone());
                 }
-                self.executions.push(fill);
             }
             _ => {}
         }
@@ -408,34 +479,120 @@ impl Trading {
         }
     }
 
-    /// Draws the chart symbol's working orders, brackets and positions as lines on `chart`, its
-    /// fills as marks on their bars, and the order ticket, leaving out the layers
-    /// [`display`](Self::display) turns off. The fills of one side in one bar form one mark: an
-    /// arrow under the bar's low for buys or over its high for sells, with a chevron for each
-    /// fill up to ten, and hovering it lists every fill. The lines and their labels are drawn
-    /// over the marks. Sends the order the user submits, and asks the user to confirm a change
-    /// made on a line before sending it.
-    pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
-        chart.trading_bid_ask = self.display.bid_ask_labels;
-        let symbol = chart.symbol().to_owned();
-        let symbol = symbol.as_str();
+    /// What the order ticket needs from `chart` and the account this frame.
+    fn market<'a>(&'a self, chart: &'a Chart) -> Market<'a> {
+        let symbol = chart.symbol();
         let instrument = chart
             .instrument()
             .filter(|instrument| instrument.symbol == symbol);
         let decimals = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or(2, usize::from);
-        self.decimals = decimals;
         let tick = instrument
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0)
             .unwrap_or(10f64.powi(-(decimals as i32)));
-        let last = chart.bars(SeriesId::MAIN).last().map(|bar| bar.close);
-        // Prices and ticks belong to the chart's current symbol.
-        if self.ticket.symbol != symbol {
-            self.ticket.open = false;
+        let replay = chart.replay_time().is_some();
+        let quote = (self.quote.as_ref())
+            .filter(|(quoted, _)| quoted == symbol && !replay)
+            .map(|(_, quote)| quote);
+        let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
+        Market {
+            last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
+            bid: book
+                .and_then(|book| book.best_bid().map(|level| level.price))
+                .or_else(|| quote.and_then(|quote| quote.bid)),
+            ask: book
+                .and_then(|book| book.best_ask().map(|level| level.price))
+                .or_else(|| quote.and_then(|quote| quote.ask)),
+            tick,
+            decimals,
+            currency: self
+                .account
+                .as_ref()
+                .map_or("", |account| account.currency.as_str()),
+            balance: self.account.as_ref().map(|account| account.balance),
+            capabilities: self.capabilities(),
+            rules: &self.rules,
+            rules_ready: self.rules_ready && self.rules.symbol == symbol,
+            book,
+            orders: &self.orders,
+            positions: &self.positions,
+            trades: &[],
+            last_fill: self.account_panel.fills.price(symbol),
         }
-        self.load_rules(symbol);
+    }
+
+    /// Draws the order ticket, while it is open, as a panel at the right of `ui` for the chart's
+    /// symbol. Call it before laying out the chart, so the chart takes the space left. Sends the
+    /// order the user submits, and the orders the user places from the depth ladder; a change to a
+    /// working order or the position waits for the confirmation [`show`](Self::show) asks for.
+    pub fn show_ticket(&mut self, ui: &mut egui::Ui, chart: &Chart) {
+        if !self.ticket.open {
+            return;
+        }
+        let symbol = chart.symbol();
+        if self.ticket.symbol != symbol {
+            // The ticket follows the chart; prices of the previous symbol mean nothing here.
+            self.ticket.change_symbol(symbol);
+        }
+        if self.account_panel.editing.is_none() {
+            self.load_rules(symbol);
+        }
+        let mut ticket = std::mem::take(&mut self.ticket);
+        let mut presets = std::mem::take(&mut self.presets);
+        let mut one_click = self.display.instant_orders;
+        let trades: Vec<_> = if chart.replay_time().is_some() {
+            Vec::new()
+        } else {
+            chart.trades(SeriesId::MAIN).collect()
+        };
+        let mut market = self.market(chart);
+        market.last = trades.last().map(|trade| trade.price).or(market.last);
+        market.trades = &trades;
+        let theme = ui.active_theme();
+        let action = egui::Panel::right("order_ticket")
+            .resizable(false)
+            .exact_size(ui.available_width().min(340.0))
+            .frame(
+                egui::Frame::new()
+                    .fill(theme.ui.panel_bg)
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
+            )
+            .show(ui, |ui| {
+                ticket.show(ui, &market, &mut presets, &mut one_click)
+            })
+            .inner;
+        // Later panels may grow to their contents, but must not cover the docked ticket.
+        ui.shrink_clip_rect(ui.available_rect_before_wrap());
+        (self.ticket, self.presets, self.display.instant_orders) = (ticket, presets, one_click);
+        match action {
+            Some(Action::Place(request)) => self.place(request),
+            Some(Action::Cancel(ids)) => {
+                if let Some(service) = &self.service {
+                    for id in ids {
+                        service.cancel(id, self.inbox.reply(0));
+                    }
+                }
+            }
+            Some(Action::Confirm(change)) => self.pending = Some(change),
+            None => {}
+        }
+    }
+
+    /// Draws the chart symbol's working orders, brackets, positions and execution marks,
+    /// respecting [`display`](Self::display). Hovering a mark lists every fill grouped in it.
+    /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
+    pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
+        chart.trading_bid_ask = self.display.bid_ask_labels;
+        let symbol = chart.symbol().to_owned();
+        let symbol = symbol.as_str();
+        let market = self.market(chart);
+        let (decimals, tick, last) = (market.decimals, market.tick, market.last);
+        self.decimals = decimals;
+        if self.account_panel.editing.is_none() {
+            self.load_rules(symbol);
+        }
         let currency = self
             .account
             .as_ref()
@@ -486,10 +643,14 @@ impl Trading {
                 // Under the lines, so that no mark covers an order's or a position's label.
                 if display.show_executions {
                     let fills: Vec<_> = self
+                        .account_panel
+                        .fills
                         .executions
                         .iter()
                         .filter(|fill| {
-                            self.reported_orders
+                            self.account_panel
+                                .fills
+                                .orders
                                 .get(&fill.order)
                                 .is_some_and(|request| request.symbol == symbol)
                         })
@@ -558,15 +719,7 @@ impl Trading {
         if !self.ticket.open {
             return;
         }
-        let market = Market {
-            last: (self.ticket.symbol == symbol).then_some(last).flatten(),
-            tick,
-            decimals,
-            currency,
-            capabilities,
-            rules: &self.rules,
-            rules_ready: self.rules_ready,
-        };
+        let market = self.market(chart);
         if let Ok(request) = self.ticket.request(&market)
             && request.order_type != OrderType::Market
         {
@@ -618,13 +771,6 @@ impl Trading {
                 self.ticket.open = false;
                 self.place(request);
             }
-        }
-        let anchor = chart.get_rendered_price_rect().right_top() + egui::vec2(-8.0, 8.0);
-        if let Some(request) = self
-            .ticket
-            .show(ui.ctx(), anchor, &market, &mut self.presets)
-        {
-            self.place(request);
         }
     }
 
@@ -688,7 +834,7 @@ fn order_toast(
     decimals: usize,
     executed: bool,
 ) -> Toast {
-    let side = executions::side_name(request.side);
+    let side = ticket::side_name(request.side);
     let mut toast = Toast::new(
         if executed {
             ToastKind::Success
@@ -783,6 +929,7 @@ fn valid(rules: &TradingRules) -> bool {
         && rules
             .max_quantity
             .is_none_or(|max| positive(max) && max >= rules.min_quantity)
+        && rules.leverage.is_none_or(positive)
         && !rules.time_in_force.is_empty()
 }
 
@@ -865,6 +1012,7 @@ fn describe(
 mod tests {
     use super::*;
     use crate::data::Reply;
+    use crate::model::Execution;
     use crate::services::Events;
     use std::sync::Mutex;
 
@@ -1349,7 +1497,8 @@ mod tests {
         ] {
             trading.display = display;
             chart.price_scale_mut().options_mut().invert_scale = inverted;
-            trading.executions[0].time = time - chrono::Duration::days(i64::from(neighbouring));
+            trading.account_panel.fills.executions[0].time =
+                time - chrono::Duration::days(i64::from(neighbouring));
             let (mut tips, mut texts, mut hovered, mut covered) =
                 (Vec::new(), Vec::new(), false, false);
             for frame in 0..4 {
@@ -1666,7 +1815,7 @@ mod tests {
                         let y = chart.get_chart_mapping().price_to_y(94.0);
                         let at = output.shapes.iter().find_map(|shape| match &shape.shape {
                             egui::Shape::Text(text)
-                                if text.galley.text() == executions::side_name(side)
+                                if text.galley.text() == ticket::side_name(side)
                                     && (y - 12.0..y + 50.0).contains(&text.pos.y) =>
                             {
                                 Some(text.pos + text.galley.size() / 2.0)
@@ -1805,6 +1954,31 @@ mod tests {
     }
 
     #[test]
+    fn chart_frames_keep_the_edited_orders_symbol_rules() {
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let order = Order::new(
+            OrderId::new("1"),
+            OrderRequest::new("OTHER", OrderSide::Buy, 2.0, OrderType::Limit(100.0)),
+            OrderStatus::Working,
+        );
+        trading.account_panel.editing = Some((order.clone(), order.request));
+        trading.load_rules("OTHER");
+        let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+        let mut rules = TradingRules::new("OTHER");
+        rules.quantity_step = 2.0;
+        reply.send(Ok(rules));
+        let mut chart = crate::ChartBuilder::new().with_symbol("MAIN").build();
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        egui::__run_test_ui(|ui| trading.show(ui, &mut chart));
+        assert_eq!(trading.rules.symbol, "OTHER");
+        assert!(trading.rules_ready);
+        assert!(broker.rules.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn account_changes_discard_stale_confirmations_and_feedback() {
         let mut trading = Trading::default();
         let position = Position::new("SYM", 2.0, 100.0);
@@ -1819,7 +1993,8 @@ mod tests {
             TradingLineAction::Cancel(order.clone()),
             TradingLineAction::Modify(order.clone(), order.request.clone()),
         ] {
-            trading.pending = Some(action);
+            trading.load_rules("SYM");
+            trading.pending = Some(action.clone());
             let mut marked = position.clone();
             marked.unrealized_pnl = Some(5.0);
             trading.apply(AccountEvent::Position(marked), &mut Toasts::new());
@@ -1838,11 +2013,56 @@ mod tests {
                 trading.pending.is_none(),
                 "changed exposure invalidates confirmation"
             );
+            trading.pending = Some(action);
+            trading.load_rules("OTHER");
+            assert!(
+                trading.pending.is_none(),
+                "a symbol change invalidates confirmation"
+            );
         }
         trading.sound = Some("Bell".into());
         trading.calculator = Some((egui::Pos2::ZERO, "3".into()));
         trading.set_service(Arc::new(Recorder::default()));
         assert_eq!(trading.take_execution_sound(), None);
         assert!(trading.calculator.is_none());
+    }
+
+    #[test]
+    fn docked_tickets_keep_later_panels_out_of_their_bounds() {
+        for width in [320.0, 480.0, 800.0] {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let mut trading = Trading::default();
+            trading.open_ticket(OrderRequest::new(
+                "SYM",
+                OrderSide::Buy,
+                1.0,
+                OrderType::Market,
+            ));
+            let mut remaining = egui::Rect::NOTHING;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 360.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    trading.show_ticket(ui, &chart);
+                    remaining = ui.clip_rect();
+                },
+            );
+            let symbol = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "SYM" => Some(text.pos.x),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            assert!(
+                remaining.right() <= symbol.expect("the ticket's symbol"),
+                "later panels stay beside the ticket at {width}"
+            );
+        }
     }
 }

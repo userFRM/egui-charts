@@ -12,7 +12,7 @@ use egui::Key;
 use std::fmt;
 
 /// Global keyboard shortcut configuration.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct KeyboardOptions {
     /// Enable keyboard shortcuts
     pub enabled: bool,
@@ -121,7 +121,8 @@ pub enum KeyboardAction {
     // Drawing tools
     /// Enable/disable drawing mode
     ToggleDrawingMode,
-    /// Delete selected drawing (Delete, Backspace)
+    /// Delete the selected drawings, or the selected study when no drawing is selected
+    /// (Delete, Backspace)
     DeleteSelectedDrawing,
     /// Escape/cancel current action (Escape)
     Cancel,
@@ -239,7 +240,7 @@ impl KeyboardAction {
             Self::ToggleVolume => "Toggle volume",
             Self::CycleChartType => "Cycle chart type",
             Self::ToggleDrawingMode => "Toggle drawing mode",
-            Self::DeleteSelectedDrawing => "Delete drawing",
+            Self::DeleteSelectedDrawing => "Delete drawing or study",
             Self::Cancel => "Cancel",
             Self::SetTimeframe1Min => "1 minute",
             Self::SetTimeframe5Min => "5 minutes",
@@ -309,6 +310,7 @@ impl KeyboardAction {
             Self::OpenQuickSearch => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::K)] },
             Self::GoToDate => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::G)] },
             Self::Snapshot => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::S)] },
+            Self::SaveLayout => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::S)] },
             Self::Undo => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)] },
             Self::Redo => {
                 const {
@@ -393,6 +395,7 @@ impl KeyboardAction {
             Self::OpenIndicatorSearch => "/",
             Self::GoToDate => "Alt+G",
             Self::Snapshot => "Alt+S",
+            Self::SaveLayout => "Ctrl+S",
             Self::MaximizeChart => "Alt+Enter",
             Self::DeleteSelectedDrawing => "Del / Backspace",
             Self::Cancel => "Esc",
@@ -466,6 +469,7 @@ impl KeyboardAction {
                     Self::CreateAlert,
                     Self::GoToDate,
                     Self::Snapshot,
+                    Self::SaveLayout,
                     Self::MaximizeChart,
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,

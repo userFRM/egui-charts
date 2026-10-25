@@ -12,11 +12,13 @@
 use std::fmt;
 use std::str::FromStr;
 
+use super::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
+
 /// Scaling mode for the price (Y) axis.
 ///
 /// Determines how raw price values are transformed before being mapped to
 /// pixel coordinates.  The default is [`Normal`](PriceScaleMode::Normal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PriceScaleMode {
     /// Prices on a linear axis: equal price differences take equal heights.
     #[default]
@@ -55,7 +57,7 @@ impl FromStr for PriceScaleMode {
 }
 
 /// A min/max price range, used throughout the scale engine.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceRange {
     /// Minimum price in the range.
     pub min: f64,
@@ -80,13 +82,15 @@ impl PriceRange {
     }
 }
 
-/// Top and bottom margins for the price scale, expressed as fractions of the
-/// visible data range.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Space auto-scaling leaves above and below the data, as fractions of the pane height.
+///
+/// The defaults keep the data in the middle 80% of the pane. Margins that together
+/// leave no room for the data are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleMargins {
-    /// Top margin as a fraction of the data range (0.0 to 1.0)
+    /// Space above the highest value, as a fraction of the pane height (0.0 to 1.0)
     pub top: f64,
-    /// Bottom margin as a fraction of the data range (0.0 to 1.0)
+    /// Space below the lowest value, as a fraction of the pane height (0.0 to 1.0)
     pub bottom: f64,
 }
 
@@ -145,7 +149,7 @@ impl fmt::Display for PriceScaleId {
 }
 
 /// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,
@@ -155,13 +159,16 @@ pub struct PriceScaleOptions {
 
     /// Margins (top and bottom)
     pub scale_margins: PriceScaleMargins,
+
+    /// Spacing and number of the tick marks, which place the axis labels and grid lines
+    pub tick_marks: PriceMarkGeneratorConfig,
 }
 
 /// How one series' prices become scale units.
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,
@@ -194,26 +201,39 @@ impl PriceTransform {
         }
     }
 
+    /// The value an axis label shows for a scale value: the price in the normal and logarithmic
+    /// modes, the percentage or index value otherwise.
+    pub(crate) fn axis_value(&self, value: f64) -> f64 {
+        if self.mode == PriceScaleMode::Logarithmic {
+            self.to_price(value)
+        } else {
+            value
+        }
+    }
+
     /// Formats a scale value for the axis: prices, signed percentages or index values.
-    pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
-        match self.mode {
-            PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
-            mode => {
-                use super::{DefaultPriceFormatter, PriceFormatter};
-                let price = if mode == PriceScaleMode::Logarithmic {
-                    self.to_price(value)
-                } else {
-                    value
-                };
-                DefaultPriceFormatter::with_precision(decimals).format(price)
-            }
+    ///
+    /// A host `formatter` receives the price in the normal and logarithmic modes and
+    /// the percentage or index value otherwise, and replaces `decimals`.
+    pub(crate) fn label(
+        &self,
+        value: f64,
+        decimals: usize,
+        formatter: Option<&dyn super::PriceFormatter>,
+    ) -> String {
+        use super::{DefaultPriceFormatter, PriceFormatter};
+        let value = self.axis_value(value);
+        match (formatter, self.mode) {
+            (Some(formatter), _) => formatter.format(value),
+            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
 }
 
 /// One price axis: options and the visible range in scale units, fitted to the
 /// data until the user scales it by hand.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PriceScale {
     options: PriceScaleOptions,
     /// Visible range in scale units
@@ -340,8 +360,16 @@ impl PriceScale {
             PriceScaleMode::Logarithmic if max - min <= 1e-9 => 0.01,
             _ => auto_scale_span(min, max),
         };
-        let margins = self.options.scale_margins;
-        self.range = PriceRange::new(min - span * margins.bottom, max + span * margins.top);
+        let PriceScaleMargins { top, bottom } = self.options.scale_margins;
+        let (top, bottom) = (top.clamp(0.0, 1.0), bottom.clamp(0.0, 1.0));
+        let (top, bottom) = if top + bottom < 1.0 {
+            (top, bottom)
+        } else {
+            (0.0, 0.0)
+        };
+        // The data fills the rest of the pane, so the whole range is that share's inverse.
+        let total = span / (1.0 - top - bottom);
+        self.range = PriceRange::new(min - total * bottom, max + total * top);
     }
 
     /// Shows `min..max` and switches to manual.
@@ -421,6 +449,7 @@ impl PriceScale {
             self.options.invert_scale,
         )
         .with_price_precision(self.price_precision)
+        .with_tick_marks(self.options.tick_marks)
     }
 }
 
@@ -436,6 +465,7 @@ pub struct PriceMap {
     bottom: f32,
     inverted: bool,
     price_precision: Option<u8>,
+    tick_marks: PriceMarkGeneratorConfig,
 }
 
 impl PriceMap {
@@ -455,6 +485,7 @@ impl PriceMap {
             bottom,
             inverted,
             price_precision: None,
+            tick_marks: PriceMarkGeneratorConfig::default(),
         }
     }
 
@@ -462,6 +493,18 @@ impl PriceMap {
     pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
         self.price_precision = decimals;
         self
+    }
+
+    /// Sets how [`marks`](Self::marks) spaces the tick marks.
+    pub fn with_tick_marks(mut self, config: PriceMarkGeneratorConfig) -> Self {
+        self.tick_marks = config;
+        self
+    }
+
+    /// Tick marks for the visible range, spaced by the scale's
+    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings.
+    pub fn marks(&self) -> Vec<PriceMark> {
+        PriceMarkGenerator::with_config(self.tick_marks).generate_marks(self)
     }
 
     /// Supplied price decimals, or `None` to derive them from the tick step.
@@ -581,6 +624,30 @@ mod tests {
             assert!(
                 (back - price).abs() < 1e-3 * price.abs(),
                 "{mode:?} {price}: back {back}"
+            );
+        }
+    }
+
+    /// Margins are shares of the pane height: data from 100 to 170 with 20% above and 10% below
+    /// fills 70% of the pane, so the range is 100 wide and runs from 90 to 190. Margins that
+    /// leave no room for the data are ignored.
+    #[test]
+    fn autoscale_margins_are_shares_of_the_pane() {
+        for (top, bottom, expected) in [
+            (0.2, 0.1, (90.0, 190.0)),
+            (0.0, 0.0, (100.0, 170.0)),
+            (0.6, 0.4, (100.0, 170.0)),
+            (f64::NAN, 0.1, (100.0, 170.0)),
+        ] {
+            let mut scale = PriceScale::new(PriceScaleOptions {
+                scale_margins: PriceScaleMargins { top, bottom },
+                ..Default::default()
+            });
+            scale.autoscale(100.0, 170.0);
+            let PriceRange { min, max } = scale.range();
+            assert!(
+                (min - expected.0).abs() < 1e-9 && (max - expected.1).abs() < 1e-9,
+                "{top} {bottom}: {min}..{max}"
             );
         }
     }

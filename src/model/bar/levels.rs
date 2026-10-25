@@ -62,6 +62,8 @@ mod tests {
             low: 99.0,
             close: 100.0,
             volume: 0.0,
+            colors: None,
+            payload: None,
         };
         let grid = super::level_grid(&[bar], 5e-324);
         assert!(grid.is_finite() && grid > 0.0, "grid {grid}");

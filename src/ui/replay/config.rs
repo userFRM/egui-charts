@@ -106,10 +106,6 @@ pub struct ReplayBehavior {
     pub default_speed: ReplaySpeed,
     /// Whether to loop when reaching end
     pub loop_playback: bool,
-    /// Whether to show trading simulation panel by default
-    pub show_trading_panel: bool,
-    /// Initial capital for trading simulation
-    pub initial_capital: f64,
     /// Whether to auto-scroll chart during playback
     pub auto_scroll: bool,
     /// Number of bars to keep visible ahead of current position
@@ -133,8 +129,6 @@ impl Default for ReplayBehavior {
         Self {
             default_speed: ReplaySpeed::Normal,
             loop_playback: false,
-            show_trading_panel: false,
-            initial_capital: 10000.0,
             auto_scroll: true,
             lookahead_bars: 10,
             pause_on_interaction: false,

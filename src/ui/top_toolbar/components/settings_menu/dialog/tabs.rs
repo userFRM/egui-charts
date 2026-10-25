@@ -941,5 +941,7 @@ fn line_style_preview(ls: LineStyle) -> &'static str {
         LineStyle::Solid => "Solid",
         LineStyle::Dashed => "\u{2013} \u{2013} \u{2013}",
         LineStyle::Dotted => "· · · ·",
+        LineStyle::LargeDashed => "\u{2014}  \u{2014}  \u{2014}",
+        LineStyle::SparseDotted => "·   ·   ·",
     }
 }

@@ -134,11 +134,19 @@ pub enum LineStyle {
     #[default]
     Dashed,
     Dotted,
+    LargeDashed,
+    SparseDotted,
 }
 
 impl LineStyle {
     pub fn all() -> &'static [LineStyle] {
-        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+        &[
+            LineStyle::Solid,
+            LineStyle::Dashed,
+            LineStyle::Dotted,
+            LineStyle::LargeDashed,
+            LineStyle::SparseDotted,
+        ]
     }
 
     pub fn name(&self) -> &'static str {
@@ -146,6 +154,8 @@ impl LineStyle {
             LineStyle::Solid => "Solid",
             LineStyle::Dashed => "Dashed",
             LineStyle::Dotted => "Dotted",
+            LineStyle::LargeDashed => "Large dashed",
+            LineStyle::SparseDotted => "Sparse dotted",
         }
     }
 }

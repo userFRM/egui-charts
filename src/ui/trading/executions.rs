@@ -21,13 +21,7 @@ const LENGTH: f32 = 16.0;
 /// The space between a bar and its marks, and between a mark and its label.
 const GAP: f32 = 4.0;
 
-/// "Buy" or "Sell".
-pub(super) fn side_name(side: OrderSide) -> &'static str {
-    match side {
-        OrderSide::Buy => "Buy",
-        OrderSide::Sell => "Sell",
-    }
-}
+use super::ticket::{side_color, side_name};
 
 /// Draws `fills` on the price pane of `chart`. The fills of one side in one bar form one mark: an
 /// arrow pointing up in the buy colour just under the bar's low, or down in the sell colour just
@@ -120,9 +114,10 @@ pub(super) fn show(
             .and_then(|index| bars.get(index))
             .map_or((price, price), |bar| (bar.low, bar.high));
         let (low_y, high_y) = (mapping.price_to_y(low), mapping.price_to_y(high));
-        let (color, down, edge) = match side {
-            OrderSide::Buy => (theme.ui.accent, 1.0, low_y.max(high_y) + GAP),
-            OrderSide::Sell => (theme.chart.candle_down, -1.0, low_y.min(high_y) - GAP),
+        let color = side_color(&theme, *side);
+        let (down, edge) = match side {
+            OrderSide::Buy => (1.0, low_y.max(high_y) + GAP),
+            OrderSide::Sell => (-1.0, low_y.min(high_y) - GAP),
         };
         if !edge.is_finite() {
             continue;

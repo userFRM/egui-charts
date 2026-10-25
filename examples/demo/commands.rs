@@ -20,6 +20,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
         ("samples", "Toggle API samples", "Settings"),
+        ("pane", "Add a symbol in a new pane", "Actions"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -113,7 +114,11 @@ impl DemoApp {
             }
             "samples" => {
                 self.api_samples = !self.api_samples;
-                self.show_api_samples();
+                self.annotate();
+                return;
+            }
+            "pane" => {
+                self.add_series_pane();
                 return;
             }
             _ => return,

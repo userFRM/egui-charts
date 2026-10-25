@@ -9,7 +9,9 @@ mod drawings;
 use drawings::DrawingLinks;
 
 /// Multi-chart arrangement. Changing presets retains the host's hidden charts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum ChartLayoutMode {
     /// One chart.
     #[default]
@@ -364,7 +366,7 @@ impl ChartLayout {
                     .max_rect(rect)
                     .id_salt(("chart_slot", index)),
                 |ui| {
-                    ui.set_clip_rect(rect);
+                    ui.shrink_clip_rect(rect);
                     let response = charts[index].show(ui);
                     if focus {
                         response.request_focus();
@@ -374,7 +376,7 @@ impl ChartLayout {
                         && charts[index]
                             .pane_layout
                             .maximized
-                            .is_none_or(|pane| pane == super::SeriesId::MAIN)
+                            .is_none_or(|pane| pane == super::PaneId::MAIN)
                     {
                         let button = ui.put(
                             Rect::from_min_size(
@@ -582,6 +584,18 @@ mod tests {
             }
         }
         let ctx = egui::Context::default();
+        for width in [80.0, 240.0] {
+            let clip = Rect::from_min_size(Pos2::ZERO, vec2(width, 600.0));
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                ui.set_clip_rect(clip);
+                ChartLayout::default().show(ui, &mut [&mut chart(60)]);
+            });
+            let clipped = output.shapes.iter().all(|shape| {
+                !matches!(shape.shape, egui::Shape::Text(_)) || clip.contains_rect(shape.clip_rect)
+            });
+            output.drop_without_applying_deltas();
+            assert!(clipped, "a chart must respect its host's clip");
+        }
         let mut charts = [chart(60), chart(120)];
         for chart in &mut charts {
             chart.set_symbol("LONG_SYMBOL_".repeat(12));

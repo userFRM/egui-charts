@@ -135,6 +135,7 @@ mod tests {
                         ..ToolbarEntry::new("hidden", "Hidden entry")
                     },
                 ];
+                toolbar.call_to_action = Some(("cta".into(), "Get data".into()));
                 let mut frame = |events| {
                     let mut action = TopToolbarAction::None;
                     let output = ctx.run_ui(
@@ -187,13 +188,14 @@ mod tests {
                 let (_, labels) = frame(vec![]);
                 let research = at(&labels, "Research");
                 let tools = at(&labels, "Host tools");
+                let cta = at(&labels, "Get data");
                 assert!(
                     (research.y - interval.y).abs() <= 1.0,
                     "host buttons share the toolbar centre: {research:?} versus {interval:?}"
                 );
                 assert!(
-                    research.x < tools.x && tools.x < width,
-                    "registration order and reserved width"
+                    research.x < tools.x && tools.x < cta.x && cta.x < width,
+                    "registration order, the call to action last, and reserved width"
                 );
                 let click = |pos| {
                     vec![
@@ -217,6 +219,8 @@ mod tests {
                     frame(click(research)).0,
                     TopToolbarAction::Host("research".into())
                 );
+                frame(vec![Event::PointerMoved(cta)]);
+                assert_eq!(frame(click(cta)).0, TopToolbarAction::Host("cta".into()));
                 frame(vec![Event::PointerMoved(tools)]);
                 assert_eq!(
                     frame(click(tools)).0,

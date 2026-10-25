@@ -1,15 +1,30 @@
 //! Right toolbar panels
 //!
-//! Individual panels for alerts, object tree, watchlists, symbol details and time and sales.
+//! Individual panels for alerts, object tree, watchlists, symbol details, time and sales, news,
+//! the event calendars, the screener, hotlists, notifications, chats and the products launcher.
 
 pub mod alerts_panel;
+pub mod calendar;
+pub mod chats;
+pub mod hotlists;
+pub mod news;
+pub mod notifications;
 pub mod object_tree;
+pub mod products;
+pub mod screener;
 pub mod symbol_details;
 pub mod time_and_sales;
 pub mod watchlist;
 
 pub use alerts_panel::*;
+pub use calendar::*;
+pub use chats::*;
+pub use hotlists::*;
+pub use news::*;
+pub use notifications::*;
 pub use object_tree::*;
+pub use products::*;
+pub use screener::*;
 pub use symbol_details::*;
 pub use time_and_sales::*;
 pub use watchlist::*;
@@ -17,7 +32,7 @@ pub use watchlist::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Tick, TradeSide};
+    use crate::model::{Quote, Tick, TradeSide};
     use crate::theme::{Theme, apply_to_egui};
 
     #[test]
@@ -32,22 +47,11 @@ mod tests {
                         "A long watchlist name that must leave room for its menu",
                         &format!("{symbol},A"),
                     )]);
-                    watchlist.set_quote(
-                        symbol,
-                        WatchlistQuote {
-                            last: 123456.789,
-                            prev_close: 100000.0,
-                            price_decimals: Some(3),
-                        },
-                    );
-                    watchlist.set_quote(
-                        "A",
-                        WatchlistQuote {
-                            last: 10.0,
-                            prev_close: 10.0,
-                            price_decimals: Some(2),
-                        },
-                    );
+                    let time = Default::default();
+                    watchlist.set_quote(symbol, Quote::new(123456.789, 100000.0, time));
+                    watchlist.set_price_decimals(symbol, 3);
+                    watchlist.set_quote("A", Quote::new(10.0, 10.0, time));
+                    watchlist.set_price_decimals("A", 2);
                     let mut trades = TimeAndSalesPanel::default();
                     trades.config.price_decimals = Some(2);
                     trades.push(Tick::new(

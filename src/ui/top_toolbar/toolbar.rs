@@ -2,8 +2,8 @@
 //!
 //! Symbol search, interval, chart type, indicators, alert, replay, undo and redo
 //! on the left; the chart layout, layout name, save, quick search, settings,
-//! fullscreen and screenshot on the right, in a horizontally scrolling strip
-//! after the fixed main menu.
+//! fullscreen, screenshot, publish and trade on the right, then the host's call to
+//! action, in a horizontally scrolling strip after the fixed main menu.
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::theme::ThemeExt;
@@ -13,7 +13,7 @@ use egui::Ui;
 
 use super::{
     actions::TopToolbarAction,
-    buttons::{IconTextButton, TextIconButton, ToolbarIconButton, Trigger},
+    buttons::{IconTextButton, PillButton, TextIconButton, ToolbarIconButton, Trigger},
     components::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
@@ -49,6 +49,8 @@ enum Slot {
     Settings,
     Fullscreen,
     Screenshot,
+    Publish,
+    Trade,
 }
 
 use Slot as S;
@@ -66,7 +68,14 @@ const LEFT: &[&[Slot]] = &[
 /// Right-aligned part of the strip, in groups divided by separators.
 const RIGHT: &[&[Slot]] = &[
     &[S::Layouts, S::LayoutName, S::Save],
-    &[S::QuickSearch, S::Settings, S::Fullscreen, S::Screenshot],
+    &[
+        S::QuickSearch,
+        S::Settings,
+        S::Fullscreen,
+        S::Screenshot,
+        S::Publish,
+        S::Trade,
+    ],
 ];
 
 /// Space between the controls of a group.
@@ -83,12 +92,7 @@ fn separator() -> f32 {
 fn show_separator(ui: &mut Ui) {
     ui.add_space(gap());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
-    let theme = ui.active_theme();
-    let color = if theme.dark {
-        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.18)
-    } else {
-        theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
-    };
+    let color = super::buttons::rule_color(&ui.active_theme());
     ui.painter().rect_filled(rect, 0.0, color);
     ui.add_space(gap());
 }
@@ -121,18 +125,19 @@ impl Slot {
             ),
             S::Save => (&embedded_icons::DATABASE, "Save chart", A::Save),
             S::QuickSearch => (
-                &embedded_icons::QUICK_SEARCH,
+                &embedded_icons::COMMAND_SEARCH,
                 "Quick Search",
                 A::OpenQuickSearch,
             ),
-            S::Settings => (&embedded_icons::SETTINGS_GEAR, "Settings", A::OpenSettings),
+            S::Settings => (&embedded_icons::SETTINGS_NUT, "Settings", A::OpenSettings),
             S::Fullscreen => (
                 &embedded_icons::FULLSCREEN,
                 "Fullscreen",
                 A::ToggleFullscreen,
             ),
             S::Screenshot => (&embedded_icons::CAMERA, "Snapshot", A::TakeScreenshot),
-            S::Interval | S::ChartType | S::Layouts | S::LayoutName => return None,
+            S::Publish => (&embedded_icons::PUBLISH, "Publish", A::Publish),
+            S::Interval | S::ChartType | S::Layouts | S::LayoutName | S::Trade => return None,
         })
     }
 
@@ -155,6 +160,8 @@ impl Slot {
             S::Settings => Control::Settings,
             S::Fullscreen => Control::Fullscreen,
             S::Screenshot => Control::Snapshot,
+            S::Publish => Control::Publish,
+            S::Trade => Control::Trading,
         }
     }
 }
@@ -177,6 +184,9 @@ pub struct TopToolbar {
     pub indicator_templates: Vec<(String, String)>,
     /// Host buttons and dropdowns in registration order, placed before the host action slot.
     pub host_entries: Vec<super::ToolbarEntry>,
+    /// Host call to action as (id, label), drawn as a filled pill at the right end after the host
+    /// action slot. Choosing it emits [`TopToolbarAction::Host`] with the id; `None` shows nothing.
+    pub call_to_action: Option<(String, String)>,
 }
 
 impl Default for TopToolbar {
@@ -191,6 +201,7 @@ impl Default for TopToolbar {
             host_hidden: HashSet::new(),
             indicator_templates: Vec::new(),
             host_entries: Vec::new(),
+            call_to_action: None,
         }
     }
 }
@@ -214,9 +225,10 @@ impl TopToolbar {
         crate::ui::app_state::set_control_visible(&mut self.host_hidden, control, visible);
     }
 
-    /// Whether the host left `slot` visible.
+    /// Whether the host left `slot` visible. Trade also needs a broker.
     fn is_shown(&self, slot: Slot) -> bool {
         !self.host_hidden.contains(&slot.host_control())
+            && (slot != S::Trade || self.state.can_trade)
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -309,6 +321,18 @@ impl TopToolbar {
                                         entry.show(ui, &mut host_action);
                                     }
                                     actions(ui);
+                                    if let Some((id, label)) = &self.call_to_action {
+                                        let response = PillButton {
+                                            label,
+                                            tooltip: None,
+                                            filled: true,
+                                        }
+                                        .show(ui);
+                                        if response.clicked() {
+                                            host_action = TopToolbarAction::Host(id.clone());
+                                        }
+                                        ui.add_space(gap());
+                                    }
                                 },
                             )
                             .response
@@ -394,6 +418,7 @@ impl TopToolbar {
                 width += match control {
                     S::LayoutName => self.layout_menu.width(ui),
                     S::Save => Self::save_button(&self.config).width(ui),
+                    S::Trade => Self::trade_button().width(ui),
                     _ => self.config.btn_size,
                 };
                 count += 1;
@@ -469,6 +494,12 @@ impl TopToolbar {
             S::ChartType => {
                 if let ChartTypeAction::Select(ct) = self.chart_type_selector.show(ui) {
                     *action = TopToolbarAction::ChartStyleSelected(ct);
+                }
+                return;
+            }
+            S::Trade => {
+                if Self::trade_button().show(ui).clicked() {
+                    *action = TopToolbarAction::ToggleTrading;
                 }
                 return;
             }
@@ -607,6 +638,14 @@ impl TopToolbar {
             name: "Symbol search".to_owned(),
             min_width: 128.0,
             filled: true,
+        }
+    }
+
+    fn trade_button() -> PillButton<'static> {
+        PillButton {
+            label: "Trade",
+            tooltip: Some("Order ticket"),
+            filled: false,
         }
     }
 
@@ -966,6 +1005,7 @@ mod tests {
                         "Settings",
                         "Fullscreen",
                         "Snapshot",
+                        "Publish",
                         host_label,
                     ],
                     "accessible controls must keep their order at every width"
@@ -1010,7 +1050,7 @@ mod tests {
                 ),
                 (
                     S::LayoutName,
-                    "Rename layout…",
+                    "Rename…",
                     TopToolbarAction::Layout(LayoutAction::Rename("Unnamed".into(), "Desk".into())),
                 ),
                 (
@@ -1033,8 +1073,10 @@ mod tests {
                 (S::Redo, "Redo", TopToolbarAction::Redo),
                 (S::Redo, "Redo", TopToolbarAction::None),
                 (S::Replay, "Replay", TopToolbarAction::ToggleReplay),
+                (S::Publish, "Publish", TopToolbarAction::Publish),
+                (S::Trade, "Trade", TopToolbarAction::ToggleTrading),
             ] {
-                let direct = matches!(slot, S::Undo | S::Redo | S::Replay);
+                let direct = matches!(slot, S::Undo | S::Redo | S::Replay | S::Publish | S::Trade);
                 let mut toolbar = TopToolbar::new();
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
@@ -1177,14 +1219,31 @@ mod tests {
                 |t| t.set_control_visible(Control::Layouts, false),
                 &[TopToolbarAction::Save],
             ),
+            (
+                |t| t.set_control_visible(Control::Publish, false),
+                &[TopToolbarAction::Publish],
+            ),
+            (
+                |t| t.set_control_visible(Control::Trading, false),
+                &[TopToolbarAction::ToggleTrading],
+            ),
+            (
+                |t| t.state.can_trade = false,
+                &[TopToolbarAction::ToggleTrading],
+            ),
         ];
         let ctx = egui::Context::default();
-        let on = click_along(&ctx, &mut TopToolbar::default());
+        let broker = || {
+            let mut toolbar = TopToolbar::default();
+            toolbar.state.can_trade = true;
+            toolbar
+        };
+        let on = click_along(&ctx, &mut broker());
         for (turn_off, gone) in rows {
             for action in *gone {
                 assert!(on.contains(action), "{action:?} missing while on");
             }
-            let mut toolbar = TopToolbar::default();
+            let mut toolbar = broker();
             turn_off(&mut toolbar);
             let off = click_along(&ctx, &mut toolbar);
             for action in *gone {

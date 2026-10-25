@@ -170,11 +170,7 @@ impl NotificationPanel {
         use egui::{FontId, Rect, Sense, Stroke, pos2, vec2};
         let theme = ui.active_theme();
         let buy = trade.side == crate::model::OrderSide::Buy;
-        let side_color = if buy {
-            theme.ui.accent
-        } else {
-            theme.chart.candle_down
-        };
+        let side_color = crate::theme::trading_side_color(&theme, trade.side);
         let icon_color = if trade.executed {
             theme.ui.take_profit
         } else {

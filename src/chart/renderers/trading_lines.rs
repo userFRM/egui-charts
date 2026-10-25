@@ -135,10 +135,7 @@ pub fn render_trading_lines<'a>(
     options: &TradingLineOptions<'_>,
 ) -> TradingLines {
     let theme = ui.ctx().active_theme();
-    let side_color = |side| match side {
-        OrderSide::Buy => theme.ui.accent,
-        OrderSide::Sell => theme.chart.candle_down,
-    };
+    let side_color = |side| crate::theme::trading_side_color(&theme, side);
     let positions: Vec<_> = positions.into_iter().collect();
     let orders: Vec<_> = orders.into_iter().collect();
     let mut action = None;
@@ -383,10 +380,7 @@ fn show_position(
     } else {
         OrderSide::Sell
     };
-    let color = match side {
-        OrderSide::Buy => theme.ui.accent,
-        OrderSide::Sell => theme.chart.candle_down,
-    };
+    let color = crate::theme::trading_side_color(&theme, side);
     let size = position.quantity.abs();
     let entry = position.average_price;
     let y = mapping.price_to_y(entry);

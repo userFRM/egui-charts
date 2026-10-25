@@ -7,7 +7,6 @@
 //! - Variable playback speeds (0.1x to 100x)
 //! - Progress bar with seek functionality
 //! - Markers for annotating specific bars
-//! - Trading simulation integration
 //!
 //! # Architecture
 //!
@@ -68,7 +67,7 @@ pub use config::{ReplayBehavior, ReplayColors, ReplayConfig, ReplayLayout};
 pub use controls::{CompactReplayControls, ReplayControls, ReplayKeyboardHandler};
 pub use session::ReplaySession;
 pub use start::{ReplayStartAction, ReplayStartPicker};
-pub use state::{PlaybackState, ReplayMarker, ReplayState, TradingSimulationState};
+pub use state::{PlaybackState, ReplayMarker, ReplayState};
 pub use toolbar::{ReplayToolbar, ReplayToolbarAction, ReplayToolbarConfig, ReplayToolbarState};
 
 use crate::model::Bar;
@@ -321,20 +320,6 @@ impl ReplayController {
             ReplayAction::ClearMarkers => {
                 self.state.clear_markers();
             }
-
-            // Trading simulation
-            ReplayAction::EnableTradingSimulation => {
-                self.state.trading_sim.enabled = true;
-                self.state.show_trading_panel = true;
-            }
-            ReplayAction::DisableTradingSimulation => {
-                self.state.trading_sim.enabled = false;
-            }
-            ReplayAction::ResetTradingSimulation => {
-                self.state
-                    .trading_sim
-                    .reset(self.config.behavior.initial_capital);
-            }
         }
     }
 
@@ -405,6 +390,8 @@ mod tests {
                 low: 99.0 + i as f64,
                 close: 100.5 + i as f64,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             });
             timestamps.push(ts);
         }

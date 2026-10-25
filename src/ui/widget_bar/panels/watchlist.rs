@@ -1,21 +1,29 @@
 //! Host-fed watchlists: named lists of symbols with sections, colour flags, sorting and text
-//! import and export. The host supplies quotes and persists the lists.
+//! import and export. The host's quote service supplies the quotes, and the host persists the
+//! lists.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use egui::text::{LayoutJob, TextFormat};
 use egui::{
-    Align, Align2, Color32, EventFilter, Key, Label, Layout, Modifiers, RichText, Sense, Shape,
-    Stroke, TextStyle, Ui, pos2, vec2,
+    Align, Align2, Color32, EventFilter, FontId, Key, Label, Layout, Modifiers, RichText, Sense,
+    Shape, Stroke, TextStyle, Ui, pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::{format_price, price_decimals};
+use crate::data::inbox::Inbox;
 use crate::icons::icons;
+use crate::model::Quote;
+use crate::services::{Listener, Quotes};
 use crate::theme::ThemeExt;
-use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
+use crate::ui_kit::{EmptyState, IconButton};
 
 const ROW_HEIGHT: f32 = 26.0;
+/// Height of a panel header row, which fits its title and action buttons.
+pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
 /// A colour flag marking a watchlist symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -143,33 +151,6 @@ impl Watchlist {
     }
 }
 
-/// The latest prices of one watchlist symbol, supplied by the host.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WatchlistQuote {
-    /// Last traded price.
-    pub last: f64,
-    /// Close of the previous session. The change is `last - prev_close`, and the change percent
-    /// is that difference divided by the absolute previous close, times 100.
-    pub prev_close: f64,
-    /// Decimals of the price columns, as `Instrument::price_decimals`. `None` chooses them from
-    /// the size of the last price.
-    pub price_decimals: Option<u8>,
-}
-
-impl WatchlistQuote {
-    pub(super) fn change(&self) -> f64 {
-        self.last - self.prev_close
-    }
-
-    pub(super) fn change_percent(&self) -> f64 {
-        if self.prev_close == 0.0 {
-            f64::NAN
-        } else {
-            self.change() / self.prev_close.abs() * 100.0
-        }
-    }
-}
-
 /// A sortable watchlist column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchlistColumn {
@@ -187,6 +168,11 @@ pub enum WatchlistAction {
     None,
     /// Show this symbol on the chart. The panel already marks it selected.
     SelectSymbol(String),
+    /// Let the user pick a symbol, such as with symbol search, and pass it to
+    /// [`WatchlistPanel::add_symbol`].
+    AddSymbol,
+    /// Show the active list in the host's full-size view.
+    AdvancedView,
     /// Read a text file the user chooses and pass it to [`WatchlistPanel::import`].
     Import,
     /// Save `text`, the active list in the [`Watchlist::from_text`] format, to a file the user
@@ -199,20 +185,36 @@ struct RowDrag(egui::Id, usize);
 
 /// Watchlists fed by host quotes.
 ///
-/// Feed quotes with [`set_quote`](Self::set_quote) for the [`symbols`](Self::symbols) of the
-/// active list, and keep the chart symbol selected with [`set_selected`](Self::set_selected).
-/// Clicking a symbol, or moving through the list with the up and down arrow keys after a click,
-/// returns [`WatchlistAction::SelectSymbol`]. Column headers cycle through ascending, descending
-/// and list order; sorting keeps symbols inside their section. Unsorted rows are dragged to
-/// reorder, and rows are right-clicked to flag, rename or remove. The host persists
-/// [`lists`](Self::lists) and handles file intents.
+/// With a [`Quotes`] service attached through [`set_service`](Self::set_service), the panel
+/// subscribes to the [`symbols`](Self::symbols) of the active list and the selected symbol, and
+/// subscribes again whenever they change; call [`poll`](Self::poll) each frame, even while the
+/// panel is hidden. Without one, set quotes with [`set_quote`](Self::set_quote). Either way
+/// [`quote`](Self::quote) reads them back, so the selected symbol's quote can feed the symbol
+/// details panel, the symbol header and the order ticket. Keep the chart symbol selected with
+/// [`set_selected`](Self::set_selected).
+/// The list name in the header opens the list menu; beside it, the add button returns
+/// [`WatchlistAction::AddSymbol`], the advanced view button [`WatchlistAction::AdvancedView`],
+/// and the more button opens the actions on the active list. Clicking a symbol, or moving
+/// through the list with the up and down arrow keys after a click, returns
+/// [`WatchlistAction::SelectSymbol`]. Column headers cycle through ascending, descending and
+/// list order; sorting keeps symbols inside their section. Clicking a section collapses or
+/// expands its symbols. Unsorted rows are dragged to reorder, and rows are right-clicked to
+/// flag, rename or remove. The host persists [`lists`](Self::lists) and handles file intents.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
-    quotes: HashMap<String, WatchlistQuote>,
+    quotes: HashMap<String, Quote>,
+    /// Decimals of the price columns per symbol, where the host knows them.
+    decimals: HashMap<String, u8>,
     sort: Option<(WatchlistColumn, bool)>,
     selected: Option<String>,
-    draft: String,
+    service: Option<Arc<dyn Quotes>>,
+    inbox: Arc<Inbox>,
+    listener: Option<Listener>,
+    /// Key of the current stream's pushes in the inbox.
+    generation: u64,
+    /// The symbols of the current stream.
+    subscribed: Vec<String>,
 }
 
 impl Default for WatchlistPanel {
@@ -231,9 +233,14 @@ impl WatchlistPanel {
             lists,
             active: 0,
             quotes: HashMap::new(),
+            decimals: HashMap::new(),
             sort: None,
             selected: None,
-            draft: String::new(),
+            service: None,
+            inbox: Arc::default(),
+            listener: None,
+            generation: 0,
+            subscribed: Vec::new(),
         }
     }
 
@@ -248,13 +255,68 @@ impl WatchlistPanel {
     }
 
     /// Sets the latest quote of `symbol`.
-    pub fn set_quote(&mut self, symbol: &str, quote: WatchlistQuote) {
+    pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
         self.quotes.insert(symbol.to_owned(), quote);
+    }
+
+    /// The latest quote of `symbol`, if the panel holds one.
+    pub fn quote(&self, symbol: &str) -> Option<&Quote> {
+        self.quotes.get(symbol)
+    }
+
+    /// Shows the prices of `symbol` with `decimals`, as `Instrument::price_decimals`. Without
+    /// them, the decimals follow the size of the last price.
+    pub fn set_price_decimals(&mut self, symbol: &str, decimals: u8) {
+        self.decimals.insert(symbol.to_owned(), decimals);
+    }
+
+    /// Takes quotes from `service` from the next [`poll`](Self::poll) on.
+    pub fn set_service(&mut self, service: Arc<dyn Quotes>) {
+        self.service = Some(service);
+        self.listener = None;
+    }
+
+    /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
+    /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        let Some(service) = &self.service else {
+            return;
+        };
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        let mut symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
+        symbols.extend(self.selected.clone());
+        symbols.sort();
+        symbols.dedup();
+        let lagged = self.listener.as_ref().is_none_or(|l| !l.is_active());
+        if lagged || symbols != self.subscribed {
+            self.generation += 1;
+            let (listener, events) = Listener::new(&self.inbox, self.generation);
+            // Replacing the listener stops the previous stream.
+            self.listener = Some(listener);
+            self.quotes.retain(|symbol, _| symbols.contains(symbol));
+            self.subscribed = symbols;
+            service.subscribe(&self.subscribed, events);
+        }
+        for (key, answer) in self.inbox.drain().answers {
+            if key == self.generation
+                && let Ok(event) = answer.downcast::<(String, Quote)>()
+            {
+                let (symbol, quote) = *event;
+                self.quotes.insert(symbol, quote);
+            }
+        }
     }
 
     /// Marks `symbol` selected, such as the symbol the chart shows.
     pub fn set_selected(&mut self, symbol: &str) {
         self.selected = Some(symbol.to_owned());
+    }
+
+    /// Appends `symbol` to the active list as [`Watchlist::add_symbol`] does, such as the symbol
+    /// picked after [`WatchlistAction::AddSymbol`]. Returns false when the list is unchanged.
+    pub fn add_symbol(&mut self, symbol: &str) -> bool {
+        self.lists[self.active].add_symbol(symbol)
     }
 
     /// Adds a list read with [`Watchlist::from_text`] and shows it.
@@ -270,20 +332,57 @@ impl WatchlistPanel {
             lists,
             active,
             quotes,
+            decimals,
             sort,
             selected,
-            draft,
+            ..
         } = self;
-        let mut more = None;
-        PanelHeader::new(&lists[*active].name).show(ui, |ui| {
+        let theme = ui.active_theme();
+        let (mut menu, mut more) = (None, None);
+        let header = vec2(ui.available_width(), HEADER_HEIGHT);
+        ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
+            ui.set_min_height(header.y);
+            ui.spacing_mut().item_spacing.x = theme.spacing.sm;
             more = Some(
                 IconButton::new(&icons::UI_MORE_HORIZONTAL)
-                    .tooltip("Lists")
+                    .tooltip("More")
                     .show(ui),
             );
+            if IconButton::new(&icons::TABLE)
+                .tooltip("Advanced view")
+                .show(ui)
+                .clicked()
+            {
+                action = WatchlistAction::AdvancedView;
+            }
+            if IconButton::new(&icons::PLUS)
+                .tooltip("Add symbol")
+                .show(ui)
+                .clicked()
+            {
+                action = WatchlistAction::AddSymbol;
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let chevron = icons::CHEVRON_DOWN.as_image_square(16.0);
+                let title = LayoutJob::single_section(
+                    lists[*active].name.clone(),
+                    weighted(theme.text.title, 700.0, theme.ui.text),
+                );
+                menu = Some(
+                    ui.add(
+                        egui::Button::new((title, chevron))
+                            .frame_when_inactive(false)
+                            .image_tint_follows_text_color(true)
+                            .truncate(),
+                    )
+                    .on_hover_text("Lists"),
+                );
+            });
         });
-        let Some(more) = more else { return action };
-        egui::Popup::menu(&more).show(|ui| {
+        let (Some(menu), Some(more)) = (menu, more) else {
+            return action;
+        };
+        egui::Popup::menu(&menu).show(|ui| {
             for (index, list) in lists.iter().enumerate() {
                 if ui.selectable_label(index == *active, &list.name).clicked() {
                     *active = index;
@@ -298,17 +397,19 @@ impl WatchlistPanel {
                 lists.push(Watchlist::new(format!("Watchlist {}", lists.len() + 1)));
                 *active = lists.len() - 1;
             }
+            if ui
+                .add_enabled(lists.len() > 1, egui::Button::new("Delete list"))
+                .clicked()
+            {
+                lists.remove(*active);
+                *active = active.saturating_sub(1);
+            }
+        });
+        egui::Popup::menu(&more).show(|ui| {
             if ui.button("Add section").clicked() {
-                let title = draft.trim();
-                let title = if title.is_empty() {
-                    "New section"
-                } else {
-                    title
-                };
                 lists[*active]
                     .items
-                    .push(WatchlistItem::Section(title.to_owned()));
-                draft.clear();
+                    .push(WatchlistItem::Section("New section".to_owned()));
             }
             if ui.button("Import list…").clicked() {
                 action = WatchlistAction::Import;
@@ -319,35 +420,23 @@ impl WatchlistPanel {
                     text: lists[*active].to_text(),
                 };
             }
-            if ui
-                .add_enabled(lists.len() > 1, egui::Button::new("Delete list"))
-                .clicked()
-            {
-                lists.remove(*active);
-                *active = active.saturating_sub(1);
-            }
         });
         let list = &mut lists[*active];
 
-        let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
-        ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-            let add = IconButton::new(&icons::PLUS)
-                .tooltip("Add symbol")
-                .show(ui)
-                .clicked();
-            let field = ui.add(
-                egui::TextEdit::singleline(draft)
-                    .hint_text("Add symbol")
-                    .desired_width(f32::INFINITY),
-            );
-            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if (add || entered) && list.add_symbol(draft) {
-                draft.clear();
-            }
-        });
-
-        let order = display_order(&list.items, quotes, *sort);
         let list_id = ui.scope_id().with(("watchlist_rows", *active));
+        // Keyed by title, so a section stays collapsed when rows move or the list is sorted.
+        let collapsed_id = |title: &str| list_id.with(("collapsed", title));
+        let collapsed: HashSet<usize> = ui.data(|data| {
+            (0..list.items.len())
+                .filter(|&i| match &list.items[i] {
+                    WatchlistItem::Section(title) => {
+                        data.get_temp(collapsed_id(title)).unwrap_or(false)
+                    }
+                    WatchlistItem::Symbol { .. } => false,
+                })
+                .collect()
+        });
+        let order = display_order(&list.items, quotes, *sort, &collapsed);
         // Arrow keys move the selection instead of the keyboard focus.
         let arrows = EventFilter {
             vertical_arrows: true,
@@ -383,7 +472,6 @@ impl WatchlistPanel {
             }
         }
 
-        let theme = ui.active_theme();
         let font = TextStyle::Body.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
         let columns = |rect: egui::Rect| {
@@ -431,7 +519,7 @@ impl WatchlistPanel {
                 ),
                 align,
                 label,
-                small.clone(),
+                font.clone(),
                 theme.ui.text_secondary,
             );
             if let Some((sorted, descending)) = *sort
@@ -480,7 +568,7 @@ impl WatchlistPanel {
         if list.items.is_empty() {
             EmptyState::new("This list is empty")
                 .icon(&icons::WATCHLIST)
-                .description("Add a symbol above.")
+                .description("Add symbols with the add button above.")
                 .fill_height()
                 .show(ui);
             return action;
@@ -529,9 +617,32 @@ impl WatchlistPanel {
                     let painter = ui.painter().clone();
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
+                            let is_collapsed = collapsed.contains(&index);
+                            if response.clicked() {
+                                let id = collapsed_id(title);
+                                ui.data_mut(|data| data.insert_temp(id, !is_collapsed));
+                            }
+                            if response.hovered() {
+                                painter.rect_filled(rect, 0.0, theme.ui.btn_bg_hover);
+                            }
+                            let chevron = if is_collapsed {
+                                &icons::CHEVRON_RIGHT
+                            } else {
+                                &icons::CHEVRON_DOWN
+                            };
+                            let icon = egui::Rect::from_center_size(
+                                pos2(rect.left() + 16.0, rect.center().y),
+                                vec2(14.0, 14.0),
+                            );
+                            chevron
+                                .as_image_tinted(icon.size(), theme.ui.text_secondary)
+                                .paint_at(ui, icon);
                             ui.new_child(
                                 egui::UiBuilder::new()
-                                    .max_rect(rect.shrink2(vec2(10.0, 0.0)))
+                                    .max_rect(
+                                        rect.with_min_x(icon.right() + 6.0)
+                                            .with_max_x(rect.right() - 10.0),
+                                    )
                                     .layout(Layout::left_to_right(Align::Center)),
                             )
                             .add(
@@ -581,8 +692,7 @@ impl WatchlistPanel {
                                 .selectable(false),
                             );
                             if let Some(quote) = quotes.get(symbol.as_str()) {
-                                let decimals = quote
-                                    .price_decimals
+                                let decimals = (decimals.get(symbol.as_str()).copied())
                                     .unwrap_or_else(|| price_decimals(quote.last));
                                 let change = quote.change();
                                 let color = if change > 0.0 {
@@ -662,6 +772,13 @@ impl WatchlistPanel {
     }
 }
 
+/// Text in the bundled face at `weight`, such as 700 for bold.
+pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
+    let mut format = TextFormat::simple(FontId::proportional(size), color);
+    format.coords.push("wght", weight);
+    format
+}
+
 /// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
 pub(super) fn signed(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
@@ -675,13 +792,22 @@ pub(super) fn signed(value: f64, decimals: usize) -> String {
 
 /// Item indices in display order: list order, or with `sort`, each run of symbols between
 /// sections sorted while sections keep their place. Symbols without a value sort last in both
-/// directions; ties keep list order.
+/// directions; ties keep list order. The symbols of the `collapsed` sections are left out.
 fn display_order(
     items: &[WatchlistItem],
-    quotes: &HashMap<String, WatchlistQuote>,
+    quotes: &HashMap<String, Quote>,
     sort: Option<(WatchlistColumn, bool)>,
+    collapsed: &HashSet<usize>,
 ) -> Vec<usize> {
     let mut order: Vec<usize> = (0..items.len()).collect();
+    let mut hidden = false;
+    order.retain(|&i| {
+        if matches!(items[i], WatchlistItem::Section(_)) {
+            hidden = collapsed.contains(&i);
+            return true;
+        }
+        !hidden
+    });
     let Some((column, descending)) = sort else {
         return order;
     };
@@ -764,7 +890,7 @@ mod tests {
     }
 
     /// Sorting stays inside each section, puts symbols without a value last in both directions
-    /// and keeps list order on ties.
+    /// and keeps list order on ties. A collapsed section keeps its title and hides its symbols.
     #[test]
     fn sorting_keeps_sections_in_place_and_missing_values_last() {
         let items = vec![
@@ -777,11 +903,7 @@ mod tests {
             symbol("DOWN"),
             symbol("TIE"),
         ];
-        let quote = |last, prev_close| WatchlistQuote {
-            last,
-            prev_close,
-            price_decimals: None,
-        };
+        let quote = |last, prev_close| Quote::new(last, prev_close, Default::default());
         let quotes = HashMap::from([
             ("A".to_owned(), quote(10.0, 10.0)),
             ("C".to_owned(), quote(30.0, 20.0)),
@@ -790,8 +912,8 @@ mod tests {
             ("DOWN".to_owned(), quote(90.0, 100.0)),
             ("TIE".to_owned(), quote(10.0, 10.0)),
         ]);
-        let names = |sort| {
-            display_order(&items, &quotes, sort)
+        let names = |sort, collapsed: &[usize]| {
+            display_order(&items, &quotes, sort, &collapsed.iter().copied().collect())
                 .into_iter()
                 .map(|i| match &items[i] {
                     WatchlistItem::Symbol { symbol, .. } => symbol.as_str(),
@@ -800,6 +922,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         use WatchlistColumn::*;
+        assert_eq!(names(Some((Symbol, true)), &[2]), ["C", "A", "|"]);
         for (sort, expected) in [
             (None, ["C", "A", "|", "NONE", "UP", "FLAT", "DOWN", "TIE"]),
             (
@@ -819,7 +942,7 @@ mod tests {
                 ["C", "A", "|", "UP", "DOWN", "FLAT", "TIE", "NONE"],
             ),
         ] {
-            assert_eq!(names(sort), expected, "{sort:?}");
+            assert_eq!(names(sort, &[]), expected, "{sort:?}");
         }
         assert_eq!(quote(-37.63, -10.0).change_percent(), -276.3);
     }
@@ -933,5 +1056,55 @@ mod tests {
             let (action, _) = frame(&mut panel, vec![key(pressed)]);
             assert_eq!(action, WatchlistAction::SelectSymbol(expected.into()));
         }
+    }
+
+    /// Guards the quote subscription: the panel subscribes to its list and the selected symbol,
+    /// applies the pushes of the current stream, and subscribes again with a new stream when its
+    /// symbols change, stopping the old one (whose late pushes must not land) and dropping the
+    /// quotes of symbols it no longer quotes. A lagged stream is replaced; unchanged symbols keep
+    /// the stream.
+    #[test]
+    fn quotes_follow_the_list_and_the_selected_symbol() {
+        type Subscriptions = Vec<(Vec<String>, crate::services::Events<(String, Quote)>)>;
+        #[derive(Default)]
+        struct Recorder(std::sync::Mutex<Subscriptions>);
+        impl Quotes for Recorder {
+            fn subscribe(
+                &self,
+                symbols: &[String],
+                events: crate::services::Events<(String, Quote)>,
+            ) {
+                self.0.lock().unwrap().push((symbols.to_vec(), events));
+            }
+        }
+        let service = Arc::new(Recorder::default());
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "B,A")]);
+        panel.set_selected("C");
+        panel.set_service(service.clone());
+        let ctx = egui::Context::default();
+        let quote = |last| Quote::new(last, 1.0, Default::default());
+        let stream = |i: usize| service.0.lock().unwrap()[i].clone();
+        panel.poll(&ctx);
+        let (symbols, first) = stream(0);
+        assert_eq!(symbols, ["A", "B", "C"]);
+        first.push(("A".into(), quote(2.0)));
+        first.push(("C".into(), quote(3.0)));
+        panel.poll(&ctx);
+        assert_eq!(panel.quote("C").map(|q| q.last), Some(3.0));
+
+        panel.set_selected("D");
+        panel.poll(&ctx);
+        let (symbols, second) = stream(1);
+        assert_eq!(symbols, ["A", "B", "D"]);
+        assert!(!first.is_active() && second.is_active());
+        first.push(("A".into(), quote(9.0)));
+        panel.poll(&ctx);
+        assert_eq!(panel.quote("A").map(|q| q.last), Some(2.0));
+        assert_eq!(panel.quote("C"), None);
+        assert_eq!(service.0.lock().unwrap().len(), 2);
+
+        (0..=10_000).for_each(|_| second.push(("A".into(), quote(1.0))));
+        panel.poll(&ctx);
+        assert_eq!(stream(2).0, ["A", "B", "D"]);
     }
 }

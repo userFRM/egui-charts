@@ -14,48 +14,30 @@ use std::sync::Arc;
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
 
 impl DemoApp {
-    /// Annotates the bars on show: the time-axis events and the API samples if they are on, a
-    /// watermark of the symbol and its company and the demo level at the recent high.
+    /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
+    /// fill and a stop marked at their prices, marks of the live changes of the close, signal bar
+    /// marks, a watermark of the symbol and its company and the demo level at the recent high.
     pub(super) fn annotate(&mut self) {
-        let spec = DemoSymbol::find(&self.state.symbol);
-        let high = self.bars[self.bars.len().saturating_sub(30)..]
-            .iter()
-            .map(|bar| bar.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        self.show_api_samples();
-        let gray = Color32::from_rgba_unmultiplied(120, 123, 134, 56);
-        self.chart.set_watermark(Some(
-            Watermark::default()
-                .with_image(
-                    egui_charts::icons::icons::CHART_CANDLES
-                        .as_image_tinted(Vec2::splat(72.0), gray),
-                )
-                .with_line(
-                    WatermarkLine::new(spec.symbol, 64.0, gray).with_weight(FontWeight::Bold),
-                )
-                .with_line(WatermarkLine::new(spec.company_name, 20.0, gray)),
-        ));
-        if high.is_finite() {
-            self.set_demo_level(high);
-        }
-    }
-
-    /// Requests the time-axis events, and shows or clears the API samples: a fill and a stop
-    /// marked at their prices, marks of the live changes of the close and signal bar marks.
-    pub(super) fn show_api_samples(&mut self) {
         let samples = self.api_samples;
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {
             bars: self.bars.clone(),
             samples,
         })));
+        self.chart
+            .set_change_markers(SeriesId::MAIN, samples.then(ChangeMarkers::default));
+        let recent = &self.bars[self.bars.len().saturating_sub(30)..];
+        let low = recent
+            .iter()
+            .map(|bar| bar.low)
+            .fold(f64::INFINITY, f64::min);
+        let high = recent
+            .iter()
+            .map(|bar| bar.high)
+            .fold(f64::NEG_INFINITY, f64::max);
         let at = |back: usize| {
             let at = self.bars.len().checked_sub(back).filter(|_| samples)?;
             Some(&self.bars[at])
         };
-        let low = self.bars[self.bars.len().saturating_sub(30)..]
-            .iter()
-            .map(|bar| bar.low)
-            .fold(f64::INFINITY, f64::min);
         let mut markers = Vec::new();
         if let Some(bar) = at(30) {
             markers.push(
@@ -76,8 +58,27 @@ impl DemoApp {
             );
         }
         self.chart.set_markers(SeriesId::MAIN, markers);
-        self.chart
-            .set_change_markers(SeriesId::MAIN, samples.then(ChangeMarkers::default));
+        if !samples {
+            self.chart.set_watermark(None);
+            self.remove_demo_level();
+            return;
+        }
+        let spec = DemoSymbol::find(&self.state.symbol);
+        let gray = Color32::from_rgba_unmultiplied(120, 123, 134, 56);
+        self.chart.set_watermark(Some(
+            Watermark::default()
+                .with_image(
+                    egui_charts::icons::icons::CHART_CANDLES
+                        .as_image_tinted(Vec2::splat(72.0), gray),
+                )
+                .with_line(
+                    WatermarkLine::new(spec.symbol, 64.0, gray).with_weight(FontWeight::Bold),
+                )
+                .with_line(WatermarkLine::new(spec.company_name, 20.0, gray)),
+        ));
+        if high.is_finite() {
+            self.set_demo_level(high);
+        }
     }
 
     /// Moves the demo level to `price` through its handle, adding it when there is none.

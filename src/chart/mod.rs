@@ -18,6 +18,7 @@
 //! | [`coords`] | Unified coordinate system: the one mapping between bar index or price and the screen |
 //! | [`series`] | Series hit testing, selection and display settings |
 //! | [`overlays`] | Visual overlays: heatmap strips, volume bubbles |
+//! | [`primitives`] | Host drawing attached to a series, and the renderers of custom series |
 //!
 //! # Internal Modules (crate-only)
 //!
@@ -27,6 +28,7 @@
 
 pub mod coords;
 pub mod overlays;
+pub mod primitives;
 pub mod selection;
 pub mod series;
 
