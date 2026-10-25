@@ -98,6 +98,7 @@ impl DemoApp {
             .with_config(source.config().clone())
             .with_chart_options(source.chart_options().clone())
             .with_chart_type(source.chart_type())
+            .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
@@ -641,6 +642,13 @@ mod tests {
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().registry.set_availability(
+            egui_charts::drawings::DrawingToolType::TrendLine,
+            egui_charts::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
         app.chart.set_main_series_visible(false);
         app.chart
             .set_event_visibility(egui_charts::model::EventVisibility {
@@ -652,6 +660,14 @@ mod tests {
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         for copy in &mut app.extra_charts {
+            assert!(
+                !copy
+                    .chart
+                    .drawings()
+                    .registry
+                    .availability(egui_charts::drawings::DrawingToolType::TrendLine)
+                    .enabled
+            );
             assert_eq!(copy.chart.event_visibility(), app.chart.event_visibility());
             copy.chart.set_visible_bars(200);
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {

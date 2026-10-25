@@ -177,7 +177,7 @@ impl Chart {
                 next.registry = self.drawings.registry.clone();
                 next.options = self.drawings.options.clone();
                 next.tool_defaults = self.drawings.tool_defaults.clone();
-                next.active_tool = self.drawings.active_tool;
+                next.set_active_tool(self.drawings.active_tool);
                 if let Some(id) = self.drawings.active_custom_tool() {
                     let _ = next.set_custom_tool(id);
                 }

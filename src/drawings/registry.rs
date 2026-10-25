@@ -190,8 +190,15 @@ mod tests {
             crate::drawings::persistence::stored_to_drawing(&stored, |t| t as f32 / 1000., 7);
         assert_eq!(restored.custom_tool.as_deref(), Some("midpoint"));
         assert_eq!(restored.custom_settings, serde_json::json!({"radius": 10}));
-        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-        chart.drawings_mut().registry = manager.registry.clone();
+        let mut chart = crate::ChartBuilder::new()
+            .with_drawing_registry(manager.registry.clone())
+            .build();
+        chart.set_data(
+            crate::widget::SeriesId::MAIN,
+            crate::widget::test_frames::chart(&[90.0], &[110.0])
+                .bars(crate::widget::SeriesId::MAIN)
+                .to_vec(),
+        );
         let mut exported = Drawing::custom("midpoint");
         exported.chart_points = vec![ChartPoint::new(60.0, 100.0), ChartPoint::new(80.0, 100.0)];
         chart.drawings_mut().add_drawing(exported).unwrap();
@@ -204,6 +211,12 @@ mod tests {
             )),
             "custom drawing missing from export"
         );
+        chart.set_symbol("A");
+        chart.drawings_mut().set_custom_tool("midpoint").unwrap();
+        chart.set_symbol("B");
+        chart.drawings_mut().set_active_tool(None);
+        chart.set_symbol("A");
+        assert_eq!(chart.drawings().active_custom_tool(), None);
         let mut invalid = Drawing::custom("midpoint");
         invalid.chart_points = vec![ChartPoint::new(1., 1.)];
         assert!(manager.add_drawing(invalid).is_err());

@@ -294,7 +294,10 @@ impl DrawingManager {
 
     /// Returns the ID of the currently selected (primary) drawing, if any.
     pub fn sel_drawing(&self) -> Option<usize> {
-        self.selection.primary().filter(|id| self.is_selected(*id))
+        self.selection
+            .primary()
+            .filter(|id| self.is_selected(*id))
+            .or_else(|| self.selected_ids().next())
     }
 
     /// Selects the drawing with the given ID (deselects all others).
@@ -2145,6 +2148,15 @@ mod tests {
         assert!(manager.group_drawings("levels").next().is_none());
         assert!(manager.redo());
         assert_eq!(manager.group_drawings("levels").count(), 2);
+        manager.edit_selected(|drawing| {
+            if drawing.id == 1 {
+                drawing.selectable = false;
+            }
+        });
+        assert_eq!(manager.sel_drawing(), Some(2));
+        assert_eq!(manager.selected_ids().collect::<Vec<_>>(), [2]);
+        assert!(manager.undo());
+        manager.select_group("levels");
         manager.delete_selected();
         assert_eq!(
             manager.drawings.iter().map(|d| d.id).collect::<Vec<_>>(),

@@ -521,6 +521,8 @@ pub struct ChartBuilder {
     config: ChartConfig,
     chart_options: ChartOptions,
     indicators: Option<IndicatorRegistry>,
+    #[cfg(feature = "drawings")]
+    drawing_registry: crate::drawings::DrawingToolRegistry,
     visible_candles: usize,
     /// Bars asked for in the first page of history.
     initial_bars: usize,
@@ -541,6 +543,8 @@ impl ChartBuilder {
             config: ChartConfig::default(),
             chart_options: ChartOptions::default(),
             indicators: None,
+            #[cfg(feature = "drawings")]
+            drawing_registry: Default::default(),
             visible_candles: 100,
             initial_bars: 1000,
         }
@@ -721,6 +725,14 @@ impl ChartBuilder {
         self
     }
 
+    /// Set host drawing tools and built-in availability before the chart is built.
+    #[cfg(feature = "drawings")]
+    #[must_use]
+    pub fn with_drawing_registry(mut self, registry: crate::drawings::DrawingToolRegistry) -> Self {
+        self.drawing_registry = registry;
+        self
+    }
+
     /// Set the number of bars visible in the initial viewport (default: 100).
     ///
     /// This controls the initial bar spacing so that approximately `count` bars
@@ -824,6 +836,10 @@ impl ChartBuilder {
         chart.set_visible_bars(self.visible_candles);
         chart.set_symbol(self.symbol.unwrap_or_default());
         chart.set_timeframe(self.timeframe);
+        #[cfg(feature = "drawings")]
+        {
+            chart.drawings.registry = self.drawing_registry;
+        }
         if let Some(feed) = self.feed {
             chart.attach_feed(feed, self.initial_bars);
         }

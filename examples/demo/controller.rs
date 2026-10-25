@@ -1837,7 +1837,7 @@ impl DemoApp {
         }
 
         // Live drawings.
-        for d in &self.chart.drawings().drawings {
+        for d in self.chart.drawings().listed_drawings() {
             let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
             item.visible = d.visible;
             item.locked = d.locked;
@@ -4816,6 +4816,17 @@ mod tests {
             app.chart.drawings_mut().add_synced_drawing(drawing);
         }
         let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
+        app.chart
+            .drawings_mut()
+            .edit_drawing(ids[2], |drawing| drawing.listed = false);
+        assert!(
+            !app.build_source_items()
+                .iter()
+                .any(|source| source.id == ids[2])
+        );
+        app.chart
+            .drawings_mut()
+            .edit_drawing(ids[2], |drawing| drawing.listed = true);
         let sources = app.build_source_items();
         assert_eq!(
             sources

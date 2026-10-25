@@ -783,8 +783,20 @@ mod tests {
 
     #[test]
     fn every_tool_round_trips_with_all_settings() {
-        for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
+        for (tool, custom_anchors) in DrawingToolType::all()
+            .iter()
+            .copied()
+            .filter(|t| !t.is_cursor())
+            .map(|tool| (tool, None))
+            .chain((1..=3).map(|anchors| (DrawingToolType::Polyline, Some(anchors))))
+        {
             let mut drawing = non_default_drawing(tool);
+            if let Some(anchors) = custom_anchors {
+                drawing.custom_tool = Some("host-shape".into());
+                drawing.custom_settings = serde_json::json!({"radius": 10});
+                drawing.chart_points.truncate(anchors);
+                drawing.update_screen_coords(bar_to_x, price_to_y);
+            }
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![0.25, 0.75],
                 time_levels: vec![0.5],
