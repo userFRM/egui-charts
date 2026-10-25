@@ -1525,7 +1525,7 @@ impl Chart {
             {
                 values.extend([
                     (quote.bid, "Bid", ui.active_theme().ui.accent),
-                    (quote.ask, "Ask", ui.active_theme().ui.error),
+                    (quote.ask, "Ask", ui.active_theme().chart.candle_down),
                 ]);
             }
             for (value, name, color) in values {
@@ -1578,7 +1578,14 @@ impl Chart {
                             egui::Color32::WHITE,
                         );
                         let box_rect = Rect::from_min_size(
-                            egui::pos2(rect.left() - badge.size().x - 8.0, rect.top()),
+                            egui::pos2(
+                                if axis_edge <= price_rect.left() {
+                                    rect.right() + 1.0
+                                } else {
+                                    rect.left() - badge.size().x - 8.0
+                                },
+                                rect.top(),
+                            ),
                             egui::vec2(badge.size().x + 7.0, rect.height()),
                         );
                         painter.rect_filled(box_rect, 2.0, color);
@@ -2429,6 +2436,7 @@ mod tests {
                 chart.config.show_symbol_prev_close = label;
                 chart.config.show_prev_close_line = line;
                 chart.config.show_countdown = countdown;
+                chart.config.show_bid_ask = label;
                 let bar = chart.state.data().bars.last().unwrap();
                 chart.set_quote(Some(Level1Quote {
                     symbol: "TEST".into(),
@@ -2476,6 +2484,26 @@ mod tests {
                             - chart.config.left_axis_width.max(chart.measured_axis_width),
                     "session label is clipped on the left"
                 );
+                for name in ["Bid", "Ask"] {
+                    let badge = painted.iter().find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == name => {
+                            Some(text.visual_bounding_rect())
+                        }
+                        _ => None,
+                    });
+                    assert_eq!(badge.is_some(), label);
+                    if let Some(badge) = badge {
+                        assert!(
+                            ctx.content_rect().contains_rect(badge)
+                                && if left {
+                                    badge.center().x >= plot.left()
+                                } else {
+                                    badge.center().x <= plot.right()
+                                },
+                            "{name} stays inside the plot on either axis"
+                        );
+                    }
+                }
                 let close_y = chart.last_price_map.price_to_y(120.0);
                 let prev_y = chart.last_price_map.price_to_y(110.0);
                 let price_tags: Vec<_> = painted

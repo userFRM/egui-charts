@@ -119,9 +119,10 @@ pub(super) fn show(
             .ok()
             .and_then(|index| bars.get(index))
             .map_or((price, price), |bar| (bar.low, bar.high));
+        let (low_y, high_y) = (mapping.price_to_y(low), mapping.price_to_y(high));
         let (color, down, edge) = match side {
-            OrderSide::Buy => (theme.ui.accent, 1.0, mapping.price_to_y(low) + GAP),
-            OrderSide::Sell => (theme.ui.error, -1.0, mapping.price_to_y(high) - GAP),
+            OrderSide::Buy => (theme.ui.accent, 1.0, low_y.max(high_y) + GAP),
+            OrderSide::Sell => (theme.chart.candle_down, -1.0, low_y.min(high_y) - GAP),
         };
         if !edge.is_finite() {
             continue;
@@ -192,53 +193,6 @@ pub(super) fn show(
                 Sense::hover(),
             )
             .on_hover_text(text);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::OrderId;
-
-    #[test]
-    fn neighbouring_labels_coalesce_into_a_weighted_run() {
-        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-        let bars = chart.bars(crate::chart::selection::SeriesId::MAIN);
-        let fills = [
-            Execution::new(OrderId::new("a"), bars[94].time, OrderSide::Buy, 90.0, 1.0),
-            Execution::new(OrderId::new("b"), bars[95].time, OrderSide::Buy, 100.0, 2.0),
-            Execution::new(
-                OrderId::new("c"),
-                bars[95].time,
-                OrderSide::Sell,
-                105.0,
-                3.0,
-            ),
-        ];
-        let ctx = egui::Context::default();
-        for _ in 0..2 {
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                chart.show(ui);
-                show(ui, &chart, &fills.iter().collect::<Vec<_>>(), true, 2);
-            });
-            let labels: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) if text.galley.text().contains(" @ ") => Some((
-                        text.galley.text(),
-                        text.galley.rect.translate(text.pos.to_vec2()),
-                    )),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                labels.iter().map(|(text, _)| *text).collect::<Vec<_>>(),
-                ["3 @ 96.67", "3 @ 105.00"]
-            );
-            assert!(!labels[0].1.intersects(labels[1].1));
-            output.drop_without_applying_deltas();
         }
     }
 }

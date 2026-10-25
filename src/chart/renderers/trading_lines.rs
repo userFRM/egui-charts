@@ -65,11 +65,19 @@ pub struct TradingLines {
     pub tags: Vec<(f64, Color32)>,
     /// Indices in `tags` that use chart background and a coloured outline.
     pub outlined: Vec<usize>,
+    /// The projected order whose submit button the user pressed.
+    pub submitted: Option<OrderRequest>,
 }
 
 /// What [`render_trading_lines`] draws and offers.
 #[derive(Clone)]
 pub struct TradingLineOptions<'a> {
+    /// Draw orders and their brackets. Hidden orders still identify existing position exits.
+    pub show_orders: bool,
+    /// Draw positions. Hidden positions still supply their brackets' entry price.
+    pub show_positions: bool,
+    /// Offer a Buy or Sell submit button beside projected orders.
+    pub submit: bool,
     /// Order and bracket lines can be dragged, and brackets removed.
     pub modify: bool,
     /// Position labels offer a close button, and a reverse button with
@@ -107,6 +115,7 @@ enum Level {
 enum Button {
     Cancel,
     Reverse,
+    Submit,
 }
 
 const HEIGHT: f32 = 22.0;
@@ -128,15 +137,16 @@ pub fn render_trading_lines<'a>(
     let theme = ui.ctx().active_theme();
     let side_color = |side| match side {
         OrderSide::Buy => theme.ui.accent,
-        OrderSide::Sell => theme.ui.error,
+        OrderSide::Sell => theme.chart.candle_down,
     };
     let positions: Vec<_> = positions.into_iter().collect();
     let orders: Vec<_> = orders.into_iter().collect();
     let mut action = None;
     let mut tags = Vec::new();
     let mut outlined = Vec::new();
+    let mut submitted = None;
 
-    for position in &positions {
+    for position in positions.iter().filter(|_| options.show_positions) {
         let mut position_options = options.clone();
         for order in &orders {
             if order.request.symbol == position.symbol
@@ -153,7 +163,7 @@ pub fn render_trading_lines<'a>(
         action = action.or(pressed);
     }
 
-    for order in orders {
+    for order in orders.into_iter().filter(|_| options.show_orders) {
         let request = &order.request;
         let open = request.quantity - order.filled;
         let kind = match request.order_type {
@@ -230,6 +240,7 @@ pub fn render_trading_lines<'a>(
                 quantity: open,
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
                 draggable: options.modify,
+                submit: (options.submit && level == Level::Entry).then_some(request.side),
             };
             let first_tag = tags.len();
             let (dragged, pressed) = ui
@@ -237,11 +248,8 @@ pub fn render_trading_lines<'a>(
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
                 .inner;
-            if tags.len() == first_tag {
-                continue;
-            }
-            let drawn = tags[first_tag].0;
-            if appearance == Level::Entry {
+            let drawn = tags.get(first_tag).map_or(price, |tag| tag.0);
+            if appearance == Level::Entry && tags.len() > first_tag {
                 outlined.push(first_tag);
                 parent_price = Some(drawn);
             }
@@ -262,7 +270,14 @@ pub fn render_trading_lines<'a>(
             {
                 connector(ui, mapping, entry, drawn, side_color(request.side));
             }
+            if tags.len() == first_tag {
+                continue;
+            }
             let price = match (dragged, pressed) {
+                (_, Some(Button::Submit)) => {
+                    submitted = Some(request.clone());
+                    continue;
+                }
                 (Some(price), _) => Some(price),
                 (None, Some(Button::Cancel)) if level == Level::Entry => {
                     action = action.or(Some(TradingLineAction::Cancel(order.clone())));
@@ -302,6 +317,7 @@ pub fn render_trading_lines<'a>(
         action,
         tags,
         outlined,
+        submitted,
     }
 }
 
@@ -369,7 +385,7 @@ fn show_position(
     };
     let color = match side {
         OrderSide::Buy => theme.ui.accent,
-        OrderSide::Sell => theme.ui.error,
+        OrderSide::Sell => theme.chart.candle_down,
     };
     let size = position.quantity.abs();
     let entry = position.average_price;
@@ -378,7 +394,7 @@ fn show_position(
         return None;
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let line = PriceLine::new(entry, color).with_style(LineStyle::Solid);
+    let line = PriceLine::new(entry, color).with_style(LineStyle::Dotted);
     render_price_line(
         &painter,
         mapping.rect,
@@ -391,7 +407,7 @@ fn show_position(
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
-    let font = FontId::proportional(11.0);
+    let font = FontId::proportional(crate::styles::typography::MD);
     let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
     let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
     // The result the position makes when the price moves by `gain` in its favour.
@@ -704,6 +720,7 @@ struct Label<'a> {
     quantity: f64,
     buttons: &'a [Button],
     draggable: bool,
+    submit: Option<OrderSide>,
 }
 
 impl Label<'_> {
@@ -728,7 +745,7 @@ impl Label<'_> {
         }
         // A tick can snap beyond the pane; keep its drag target reachable until release.
         let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
-        let font = FontId::proportional(11.0);
+        let font = FontId::proportional(crate::styles::typography::MD);
         let painter = ui.painter().clone();
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
         let body = (self.body)(staged.unwrap_or(line.price));
@@ -738,7 +755,8 @@ impl Label<'_> {
         let total = body.as_deref().map_or(0.0, width)
             + width(&quantity)
             + HEIGHT * self.buttons.len() as f32;
-        let mut x = mapping.rect.right() - LABEL_INSET - total;
+        let inset = LABEL_INSET.min((mapping.rect.width() - total - 8.0).max(8.0));
+        let mut x = mapping.rect.right() - inset - total;
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
 
         let mut dragged = None;
@@ -862,6 +880,36 @@ impl Label<'_> {
             }
             paint_glyph(&clipped, *button, cell.center(), line.color);
         }
+        if let Some(side) = self.submit {
+            let size = vec2(58.0, HEIGHT);
+            let left = rect.left() - size.x - HEIGHT * 0.65;
+            let at = if left >= mapping.rect.left() + 8.0 {
+                pos2(left, rect.top())
+            } else {
+                pos2(
+                    rect.left().max(mapping.rect.left() + 8.0),
+                    rect.bottom() + 4.0,
+                )
+            };
+            let button = Rect::from_min_size(at, size);
+            if ui
+                .put(
+                    button,
+                    egui::Button::new(
+                        egui::RichText::new(if side == OrderSide::Buy {
+                            "Buy"
+                        } else {
+                            "Sell"
+                        })
+                        .color(Color32::WHITE),
+                    )
+                    .fill(line.color),
+                )
+                .clicked()
+            {
+                pressed = Some(Button::Submit);
+            }
+        }
         (dragged, pressed)
     }
 }
@@ -876,11 +924,13 @@ fn paint_glyph(painter: &egui::Painter, button: Button, center: Pos2, color: Col
         painter.circle_filled(b, 0.75, color);
     };
     match button {
+        Button::Submit => unreachable!(),
         Button::Cancel => {
             segment(center + vec2(-r, -r), center + vec2(r, r));
             segment(center + vec2(-r, r), center + vec2(r, -r));
         }
         Button::Reverse => {
+            let r = 5.0;
             for (dx, dir) in [(-2.5, -1.0), (2.5, 1.0)] {
                 let top = center + vec2(dx, dir * -r);
                 let tip = center + vec2(dx, dir * r);
@@ -900,5 +950,6 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
     let b = pos2(x, mapping.price_to_y(exit));
     painter.line_segment([a, b], Stroke::new(1.0, color));
     painter.circle(b, 3.5, ui.active_theme().chart.bg, Stroke::new(1.0, color));
+    painter.circle_filled(a, 7.0, color.gamma_multiply(0.2));
     painter.circle_filled(a, 3.0, color);
 }

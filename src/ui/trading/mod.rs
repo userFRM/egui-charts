@@ -65,8 +65,8 @@ pub struct Trading {
     positions: Vec<Position>,
     /// The fills of this account, oldest first.
     executions: Vec<Execution>,
-    /// The symbol and requested quantity of every order the broker reported, for its fills.
-    order_symbols: HashMap<OrderId, OrderRequest>,
+    /// Every order the broker reported, for execution labels and notifications.
+    reported_orders: HashMap<OrderId, OrderRequest>,
     rules: TradingRules,
     rules_key: u64,
     rules_ready: bool,
@@ -103,7 +103,7 @@ impl Default for Trading {
             orders: Vec::new(),
             positions: Vec::new(),
             executions: Vec::new(),
-            order_symbols: HashMap::new(),
+            reported_orders: HashMap::new(),
             rules: TradingRules::new(""),
             rules_key: 1,
             rules_ready: false,
@@ -127,7 +127,7 @@ impl Trading {
         self.inbox = Arc::default();
         self.ticket.open = false;
         self.executions.clear();
-        self.order_symbols.clear();
+        self.reported_orders.clear();
         self.connect();
     }
 
@@ -297,8 +297,8 @@ impl Trading {
                     self.pending = None;
                 }
                 self.orders.retain(|working| working.id != order.id);
-                let first = !self.order_symbols.contains_key(&order.id);
-                self.order_symbols
+                let first = !self.reported_orders.contains_key(&order.id);
+                self.reported_orders
                     .insert(order.id.clone(), order.request.clone());
                 if first
                     && order.status == OrderStatus::Working
@@ -343,7 +343,7 @@ impl Trading {
                 }
             }
             AccountEvent::Execution(fill) => {
-                let order = self.order_symbols.get(&fill.order);
+                let order = self.reported_orders.get(&fill.order);
                 let mut text = format!("{} {}", executions::side_name(fill.side), fill.quantity);
                 if let Some(order) = order {
                     text += &format!(" {}", order.symbol);
@@ -369,8 +369,11 @@ impl Trading {
                     && filled < order.quantity * (1.0 - 1e-9)
                 {
                     toast.kind = ToastKind::Info;
-                    toast.title =
-                        Some(format!("{} order partially executed on", order_name(order)));
+                    toast.title = Some(format!(
+                        "{} order partially executed ({filled} of {}) on",
+                        order_name(order),
+                        order.quantity
+                    ));
                     toast.message =
                         format!("Partially filled: {text} ({filled} of {})", order.quantity);
                 }
@@ -441,6 +444,9 @@ impl Trading {
             let mapping = chart.get_chart_mapping();
             let display = &self.display;
             let options = TradingLineOptions {
+                show_orders: display.show_orders,
+                show_positions: display.show_poss,
+                submit: false,
                 modify: capabilities.modify,
                 close: capabilities.market,
                 reverse: display.reverse_button,
@@ -481,7 +487,7 @@ impl Trading {
                         .executions
                         .iter()
                         .filter(|fill| {
-                            self.order_symbols
+                            self.reported_orders
                                 .get(&fill.order)
                                 .is_some_and(|request| request.symbol == symbol)
                         })
@@ -491,12 +497,8 @@ impl Trading {
                 render_trading_lines(
                     ui,
                     &mapping,
-                    shown_orders
-                        .iter()
-                        .filter(|o| display.show_orders && o.request.symbol == symbol),
-                    self.positions
-                        .iter()
-                        .filter(|p| display.show_poss && p.symbol == symbol),
+                    shown_orders.iter().filter(|o| o.request.symbol == symbol),
+                    self.positions.iter().filter(|p| p.symbol == symbol),
                     &options,
                 )
             };
@@ -572,6 +574,9 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             let mapping = chart.get_chart_mapping();
             let options = TradingLineOptions {
+                show_orders: true,
+                show_positions: false,
+                submit: true,
                 modify: true,
                 close: false,
                 reverse: false,
@@ -592,12 +597,11 @@ impl Trading {
                 request.clone(),
                 OrderStatus::Working,
             );
-            let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
-            let projected_price = lines
-                .outlined
-                .first()
-                .and_then(|index| lines.tags.get(*index))
-                .map(|(price, _)| *price);
+            let lines = ui
+                .push_id("projected_order", |ui| {
+                    render_trading_lines(ui, &mapping, [&order], [], &options)
+                })
+                .inner;
             let offset = chart.trading_tags.len();
             chart.trading_tags.extend(lines.tags);
             chart
@@ -608,52 +612,7 @@ impl Trading {
                 Some(TradingLineAction::Modify(_, changed)) => self.ticket.open(&changed),
                 _ => {}
             }
-            let theme = chart.theme_override.clone().unwrap_or_else(|| {
-                use crate::theme::ThemeExt;
-                ui.ctx().active_theme()
-            });
-            let color = if request.side == OrderSide::Buy {
-                theme.ui.accent
-            } else {
-                theme.ui.error
-            };
-            let (price, kind) = match request.order_type {
-                OrderType::Limit(price) => (price, "Limit"),
-                OrderType::Stop(price) => (price, "Stop"),
-                OrderType::StopLimit { stop, .. } => (stop, "Stop limit"),
-                _ => unreachable!(),
-            };
-            let price = projected_price.unwrap_or(price);
-            let label_width = [request.quantity.to_string(), kind.to_owned()]
-                .iter()
-                .map(|text| {
-                    ui.painter()
-                        .layout_no_wrap(text.clone(), egui::FontId::proportional(11.0), color)
-                        .size()
-                        .x
-                        + 12.0
-                })
-                .sum::<f32>()
-                + 22.0;
-            let button = egui::Rect::from_min_size(
-                egui::pos2(
-                    mapping.rect.right() - 84.0 - label_width - 72.0,
-                    mapping.price_to_y(price) - 11.0,
-                ),
-                egui::vec2(58.0, 22.0),
-            );
-            if mapping.is_y_visible(mapping.price_to_y(price))
-                && ui
-                    .put(
-                        button.intersect(mapping.rect),
-                        egui::Button::new(
-                            egui::RichText::new(executions::side_name(request.side))
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(color),
-                    )
-                    .clicked()
-            {
+            if let Some(request) = lines.submitted {
                 self.ticket.open = false;
                 self.place(request);
             }
@@ -1114,7 +1073,7 @@ mod tests {
                             chart
                                 .trading_tags
                                 .iter()
-                                .any(|(_, color)| *color == theme.ui.error)
+                                .any(|(_, color)| *color == theme.chart.candle_down)
                         );
                         let mapping = chart.get_chart_mapping();
                         let y = mapping.price_to_y(if operation.ends_with("order") {
@@ -1373,19 +1332,25 @@ mod tests {
             ..TradingSettings::default()
         };
         let mut clock = 0.0;
-        for (display, drawn, labels) in [
-            (TradingSettings::default(), true, false),
-            (labelled, true, true),
-            (hidden, false, false),
+        for (display, drawn, labels, neighbouring, inverted) in [
+            (TradingSettings::default(), true, false, false, false),
+            (labelled.clone(), true, true, false, false),
+            (labelled.clone(), true, true, true, false),
+            (labelled, true, true, false, true),
+            (hidden, false, false, false, false),
         ] {
             trading.display = display;
+            chart.price_scale_mut().options_mut().invert_scale = inverted;
+            trading.executions[0].time = time - chrono::Duration::days(i64::from(neighbouring));
             let (mut tips, mut texts, mut hovered, mut covered) =
                 (Vec::new(), Vec::new(), false, false);
             for frame in 0..4 {
                 clock += 1.0;
                 let (x, low) = (
                     chart.index_to_x(95.0),
-                    chart.get_chart_mapping().price_to_y(90.0),
+                    chart
+                        .get_chart_mapping()
+                        .price_to_y(if inverted { 110.0 } else { 90.0 }),
                 );
                 // The pointer rests on the buy mark once it has been drawn.
                 let events = x
@@ -1400,7 +1365,10 @@ mod tests {
                     chart.show(ui);
                     trading.show(ui, &mut chart);
                 });
-                let (buy, sell) = (ctx.active_theme().ui.accent, ctx.active_theme().ui.error);
+                let (buy, sell) = (
+                    ctx.active_theme().ui.accent,
+                    ctx.active_theme().chart.candle_down,
+                );
                 let chevrons: Vec<_> = output
                     .shapes
                     .iter()
@@ -1429,8 +1397,14 @@ mod tests {
                     })
                     .collect();
                 // 1_700_000_000 is 2023-11-14 22:13:20 UTC; 95 days and 12 hours later.
-                let tooltip = "Buy 1 at 95.00, Sun 18 Feb '24 10:13:20\n\
-                               Buy 2 at 98.00, Sun 18 Feb '24 10:13:20";
+                let tooltip = format!(
+                    "Buy 1 at 95.00, {} 10:13:20\nBuy 2 at 98.00, Sun 18 Feb '24 10:13:20",
+                    if neighbouring {
+                        "Sat 17 Feb '24"
+                    } else {
+                        "Sun 18 Feb '24"
+                    }
+                );
                 hovered = output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == tooltip)
                 });
@@ -1447,7 +1421,8 @@ mod tests {
             }
             let x = chart.index_to_x(95.0).unwrap();
             let mapping = chart.get_chart_mapping();
-            let (low, high) = (mapping.price_to_y(90.0), mapping.price_to_y(110.0));
+            let (a, b) = (mapping.price_to_y(90.0), mapping.price_to_y(110.0));
+            let (low, high) = (a.max(b), a.min(b));
             // The two buys stack their chevrons 4 points apart from 4 points under the low; the
             // sell hangs 4 points over the high.
             let expected = [
@@ -1565,136 +1540,176 @@ mod tests {
     #[test]
     fn coincident_order_and_position_axis_tags_keep_their_own_style() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            let broker = Arc::new(Recorder {
-                state: vec![
-                    AccountEvent::Order(Order::new(
-                        OrderId::new("order"),
-                        OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
-                        OrderStatus::Working,
-                    )),
-                    AccountEvent::Position(Position::new("SYM", 2.0, 100.0)),
-                ],
-                ..Recorder::default()
-            });
-            let mut trading = Trading::default();
-            trading.set_service(broker);
-            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-            chart.symbol = "SYM".into();
-            chart.set_theme_override(Some(theme.clone()));
-            let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            for pass in 0..3 {
-                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    trading.poll(ui.ctx(), &mut Toasts::new());
-                    chart.show(ui);
-                    trading.show(ui, &mut chart);
+            for (show_positions, show_orders) in
+                [(true, true), (false, true), (true, false), (false, false)]
+            {
+                let mut exit =
+                    OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Limit(105.0));
+                exit.position_bracket = Some(crate::model::PositionBracket::TakeProfit);
+                let broker = Arc::new(Recorder {
+                    state: vec![
+                        AccountEvent::Order(Order::new(
+                            OrderId::new("order"),
+                            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
+                            OrderStatus::Working,
+                        )),
+                        AccountEvent::Position(Position::new("SYM", 2.0, 100.0)),
+                        AccountEvent::Order(Order::new(
+                            OrderId::new("exit"),
+                            exit,
+                            OrderStatus::Working,
+                        )),
+                    ],
+                    ..Recorder::default()
                 });
-                if pass == 2 {
-                    let edge = chart.get_chart_mapping().rect.right();
-                    let tags: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            egui::Shape::Rect(rect) if rect.rect.center().x > edge => Some(rect),
-                            _ => None,
-                        })
-                        .collect();
-                    assert!(
-                        tags.iter().any(|rect| rect.fill == theme.ui.accent),
-                        "position tag stays filled"
-                    );
-                    assert!(
-                        tags.iter()
-                            .any(|rect| rect.stroke.color == theme.ui.accent
+                let mut trading = Trading::default();
+                trading.set_service(broker);
+                trading.display.show_poss = show_positions;
+                trading.display.show_orders = show_orders;
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                chart.set_theme_override(Some(theme.clone()));
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                for pass in 0..3 {
+                    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        trading.poll(ui.ctx(), &mut Toasts::new());
+                        chart.show(ui);
+                        trading.show(ui, &mut chart);
+                    });
+                    if pass == 2 {
+                        let edge = chart.get_chart_mapping().rect.right();
+                        let tags: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Rect(rect) if rect.rect.center().x > edge => {
+                                    Some(rect)
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            tags.iter().any(|rect| rect.fill == theme.ui.accent),
+                            show_positions,
+                            "position tag stays filled"
+                        );
+                        assert_eq!(
+                            tags.iter().any(|rect| rect.stroke.color == theme.ui.accent
                                 && rect.stroke.width == 1.0),
-                        "order tag stays outlined"
-                    );
+                            show_orders,
+                            "order tag stays outlined"
+                        );
+                    }
+                    if pass == 2 {
+                        let has_text = |wanted: &str| {
+                            output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == wanted)
+                    })
+                        };
+                        assert_eq!(
+                            has_text("+10.00 USD"),
+                            show_orders,
+                            "brackets retain the hidden position's entry price"
+                        );
+                        assert!(
+                            !has_text("TP"),
+                            "hiding orders cannot offer a duplicate exit"
+                        );
+                        assert_eq!(has_text("SL"), show_positions);
+                    }
+                    output.drop_without_applying_deltas();
                 }
-                output.drop_without_applying_deltas();
             }
         }
     }
 
     #[test]
     fn projected_orders_only_send_from_their_submit_button() {
-        for side in [OrderSide::Buy, OrderSide::Sell] {
-            for submit in [false, true] {
-                let broker = Arc::new(Recorder::default());
-                let mut trading = Trading::default();
-                trading.set_service(broker.clone());
-                trading.poll(&egui::Context::default(), &mut Toasts::new());
-                trading.display.instant_orders = true;
-                let request = OrderRequest::new("SYM", side, 20.0, OrderType::Limit(94.0));
-                trading.open_ticket(request.clone());
-                trading.rules_ready = true;
-                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-                chart.symbol = "SYM".into();
-                let ctx = egui::Context::default();
-                let frame = |trading: &mut Trading, chart: &mut Chart, events| {
-                    let output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(1000.0, 800.0),
-                            )),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            chart.show(ui);
-                            trading.show(ui, chart);
-                        },
+        for (width, quantity) in [(1000.0, 20.0), (320.0, 1_000_000.0)] {
+            for side in [OrderSide::Buy, OrderSide::Sell] {
+                for submit in [false, true] {
+                    let broker = Arc::new(Recorder::default());
+                    let mut trading = Trading::default();
+                    trading.set_service(broker.clone());
+                    trading.poll(&egui::Context::default(), &mut Toasts::new());
+                    trading.display.instant_orders = true;
+                    let request = OrderRequest::new("SYM", side, quantity, OrderType::Limit(94.0));
+                    trading.open_ticket(request.clone());
+                    trading.rules_ready = true;
+                    let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                    chart.symbol = "SYM".into();
+                    let ctx = egui::Context::default();
+                    let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 800.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                                trading.show(ui, chart);
+                            },
+                        );
+                        let y = chart.get_chart_mapping().price_to_y(94.0);
+                        let at = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if text.galley.text() == executions::side_name(side)
+                                    && (y - 12.0..y + 50.0).contains(&text.pos.y) =>
+                            {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        at
+                    };
+                    frame(&mut trading, &mut chart, vec![]);
+                    let button =
+                        frame(&mut trading, &mut chart, vec![]).expect("projected submit button");
+                    assert!(
+                        chart.get_chart_mapping().rect.contains(button),
+                        "submit remains inside the plot at {width}"
                     );
-                    let y = chart.get_chart_mapping().price_to_y(94.0);
-                    let at = output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text)
-                            if text.galley.text() == executions::side_name(side)
-                                && (text.pos.y + text.galley.size().y / 2.0 - y).abs() < 3.0 =>
-                        {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    });
-                    output.drop_without_applying_deltas();
-                    at
-                };
-                frame(&mut trading, &mut chart, vec![]);
-                let button =
-                    frame(&mut trading, &mut chart, vec![]).expect("projected submit button");
-                assert!(broker.placed.lock().unwrap().is_empty());
-                let map = chart.get_chart_mapping();
-                let at = if submit {
-                    button
-                } else {
-                    egui::pos2(map.rect.right() - 95.0, map.price_to_y(94.0))
-                };
-                frame(
-                    &mut trading,
-                    &mut chart,
-                    vec![egui::Event::PointerMoved(at)],
-                );
-                for pressed in [true, false] {
+                    assert!(broker.placed.lock().unwrap().is_empty());
+                    let map = chart.get_chart_mapping();
+                    let at = if submit {
+                        button
+                    } else {
+                        egui::pos2(map.rect.right() - 95.0, map.price_to_y(94.0))
+                    };
                     frame(
                         &mut trading,
                         &mut chart,
-                        vec![egui::Event::PointerButton {
-                            pos: at,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        }],
+                        vec![egui::Event::PointerMoved(at)],
+                    );
+                    for pressed in [true, false] {
+                        frame(
+                            &mut trading,
+                            &mut chart,
+                            vec![egui::Event::PointerButton {
+                                pos: at,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            }],
+                        );
+                    }
+                    frame(&mut trading, &mut chart, vec![]);
+                    assert!(!trading.ticket.open);
+                    assert_eq!(
+                        *broker.placed.lock().unwrap(),
+                        if submit { vec![request] } else { vec![] }
+                    );
+                    assert!(
+                        broker.cancelled.lock().unwrap().is_empty(),
+                        "a projected cancel never reaches the broker"
                     );
                 }
-                frame(&mut trading, &mut chart, vec![]);
-                assert!(!trading.ticket.open);
-                assert_eq!(
-                    *broker.placed.lock().unwrap(),
-                    if submit { vec![request] } else { vec![] }
-                );
-                assert!(
-                    broker.cancelled.lock().unwrap().is_empty(),
-                    "a projected cancel never reaches the broker"
-                );
             }
         }
     }

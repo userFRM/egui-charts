@@ -844,7 +844,7 @@ fn paint_quotes(
         layout.painter,
         sell_rect,
         sell,
-        theme.ui.error,
+        theme.chart.candle_down,
         "Sell at bid",
         id.with("sell"),
     );

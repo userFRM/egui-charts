@@ -303,7 +303,7 @@ impl OrderTicket {
         let theme = ui.ctx().active_theme();
         let side_color = |side| match side {
             OrderSide::Buy => theme.ui.accent,
-            OrderSide::Sell => theme.ui.error,
+            OrderSide::Sell => theme.chart.candle_down,
         };
         ui.columns(2, |columns| {
             let sides = [(OrderSide::Sell, "Sell"), (OrderSide::Buy, "Buy")];

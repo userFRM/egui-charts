@@ -170,21 +170,24 @@ impl NotificationPanel {
         use egui::{FontId, Rect, Sense, Stroke, pos2, vec2};
         let theme = ui.active_theme();
         let buy = trade.side == crate::model::OrderSide::Buy;
-        let side_color = if buy { theme.ui.accent } else { theme.ui.error };
+        let side_color = if buy {
+            theme.ui.accent
+        } else {
+            theme.chart.candle_down
+        };
         let icon_color = if trade.executed {
             theme.ui.take_profit
         } else {
             side_color
         };
-        let font = FontId::proportional(13.0);
+        let font = FontId::proportional(crate::styles::typography::LG);
         let mut title_format = egui::text::TextFormat::simple(font.clone(), theme.ui.text);
         title_format.coords.push("wght", 600.0);
-        let title = ui
-            .painter()
-            .layout_job(egui::text::LayoutJob::single_section(
-                toast.title.clone().unwrap_or_default(),
-                title_format,
-            ));
+        let mut title_job = egui::text::LayoutJob::single_section(
+            toast.title.clone().unwrap_or_default(),
+            title_format,
+        );
+        let title = ui.painter().layout_job(title_job.clone());
         let symbol = ui
             .painter()
             .layout_no_wrap(trade.symbol.clone(), font.clone(), theme.ui.text);
@@ -207,8 +210,36 @@ impl NotificationPanel {
         let width = (62.0 + title.size().x + symbol.size().x + 44.0)
             .max(62.0 + side.size().x + price.size().x + 30.0)
             .max(self.config.width)
-            .min(ui.ctx().content_rect().width() - 32.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 66.0), Sense::hover());
+            .min(ui.ctx().content_rect().width() - 32.0)
+            .floor();
+        let content_width = (width - 80.0).max(1.0);
+        title_job.wrap.max_width = content_width;
+        let title = ui.painter().layout_job(title_job);
+        let symbol = ui.painter().layout(
+            trade.symbol.clone(),
+            FontId::proportional(crate::styles::typography::LG),
+            theme.ui.text,
+            (content_width - 12.0).max(1.0),
+        );
+        let symbol_at = if title.size().x + symbol.size().x + 18.0 <= content_width {
+            vec2(title.size().x + 6.0, -2.0)
+        } else {
+            vec2(0.0, title.size().y + 4.0)
+        };
+        let second_row = (symbol_at.y + symbol.size().y + 4.0).max(title.size().y) + 12.0;
+        let price_at = if side.size().x + price.size().x + 18.0 <= content_width {
+            vec2(side.size().x + 18.0, second_row + 2.0)
+        } else {
+            vec2(0.0, second_row + side.size().y + 10.0)
+        };
+        let price = ui.painter().layout(
+            format!("at {}", trade.price),
+            FontId::proportional(crate::styles::typography::LG),
+            theme.ui.text,
+            (content_width - price_at.x).max(1.0),
+        );
+        let height = (price_at.y + price.size().y + 24.0).max(72.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height.ceil()), Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 8.0, theme.chart.bg);
         let tile = Rect::from_min_size(rect.min, vec2(42.0, rect.height()));
@@ -244,54 +275,43 @@ impl NotificationPanel {
         } else {
             icon_color
         };
+        let weight = if trade.executed { 1.5 } else { 4.0 };
         for pair in points.windows(2) {
-            painter.line_segment([pair[0], pair[1]], Stroke::new(1.5, glyph_color));
+            painter.line_segment([pair[0], pair[1]], Stroke::new(weight, glyph_color));
         }
         for point in points {
-            painter.circle_filled(point, 0.75, glyph_color);
+            painter.circle_filled(point, weight / 2.0, glyph_color);
         }
         let content = painter.with_clip_rect(Rect::from_min_max(
             rect.min,
             pos2(rect.right() - 28.0, rect.bottom()),
         ));
         let x = tile.right() + 10.0;
-        let top = rect.top() + 10.0;
-        let symbol_rect = Rect::from_min_size(
-            pos2(x + title.size().x + 6.0, top - 2.0),
-            symbol.size() + vec2(12.0, 4.0),
-        );
+        let top = rect.top() + 12.0;
+        let symbol_rect =
+            Rect::from_min_size(pos2(x, top) + symbol_at, symbol.size() + vec2(12.0, 4.0));
         content.galley(pos2(x, top), title, theme.ui.text);
         content.rect_filled(symbol_rect, 10.0, theme.ui.btn_bg_hover);
         content.galley(symbol_rect.min + vec2(6.0, 2.0), symbol, theme.ui.text);
         let side_rect =
-            Rect::from_min_size(pos2(x, rect.top() + 36.0), side.size() + vec2(12.0, 4.0));
+            Rect::from_min_size(pos2(x, top + second_row), side.size() + vec2(12.0, 4.0));
         content.rect_filled(side_rect, 4.0, side_color.gamma_multiply(0.12));
         content.galley(side_rect.min + vec2(6.0, 2.0), side, side_text);
-        content.galley(
-            pos2(side_rect.right() + 6.0, side_rect.top() + 2.0),
-            price,
-            theme.ui.text,
-        );
-        let close = Rect::from_center_size(
-            pos2(rect.right() - 14.0, rect.top() + 18.0),
-            vec2(20.0, 20.0),
-        );
+        content.galley(pos2(x, top) + price_at, price, theme.ui.text);
         if toast.dismissible {
-            let c = close.center();
-            for d in [-1.0, 1.0] {
-                painter.line_segment(
-                    [c + vec2(-4.0, d * 4.0), c + vec2(4.0, -d * 4.0)],
-                    Stroke::new(1.5, theme.ui.text),
-                );
-            }
+            let close = Rect::from_center_size(
+                pos2(rect.right() - 14.0, rect.top() + 18.0),
+                vec2(20.0, 20.0),
+            );
             return ui
-                .interact(
-                    close,
-                    ui.scope_id().with(("dismiss", toast.id)),
-                    Sense::click(),
-                )
-                .on_hover_text("Dismiss")
-                .clicked();
+                .scope_builder(egui::UiBuilder::new().max_rect(close), |ui| {
+                    IconButton::new(&icons::CLOSE)
+                        .size(ButtonSize::SM)
+                        .tooltip("Dismiss")
+                        .show(ui)
+                        .clicked()
+                })
+                .inner;
         }
         false
     }
@@ -312,7 +332,14 @@ impl NotificationPanel {
             .inner_margin(egui::Margin::same(theme.spacing.lg as i8));
 
         frame.show(ui, |ui| {
-            ui.set_width(self.config.width);
+            ui.set_width(
+                self.config.width.min(
+                    (ui.ctx().content_rect().width()
+                        - 2.0 * (theme.spacing.xxl + theme.spacing.lg)
+                        - 2.0)
+                        .max(1.0),
+                ),
+            );
 
             ui.horizontal(|ui| {
                 // Icon
@@ -380,47 +407,84 @@ mod tests {
     /// button.
     #[test]
     fn toasts_stack_8_px_apart_16_px_from_the_corner() {
-        let ctx = Context::default();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 800.0));
-        let mut toasts = Toasts::new();
-        toasts.add(Toast::info("Chart layout saved").permanent());
-        let long =
-            "Order rejected: Insufficient buying power: 762450.00 USD needed, 100000.00 available";
-        toasts.add(Toast::error(long).permanent());
-        // A sizing pass, then a visible frame.
-        let mut wrap = f32::INFINITY;
-        for _ in 0..2 {
-            let input = egui::RawInput {
-                screen_rect: Some(screen),
-                ..Default::default()
-            };
-            let output = ctx.run_ui(input, |ui| {
-                NotificationPanel::new().show_with_toasts(ui.ctx(), &mut toasts);
-            });
-            for shape in &output.shapes {
-                if let egui::Shape::Text(text) = &shape.shape
-                    && text.galley.text() == long
-                {
-                    wrap = text.pos.x + text.galley.job.wrap.max_width;
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [1000.0, 320.0] {
+                for trading in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let screen =
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 800.0));
+                    let mut toasts = Toasts::new();
+                    toasts.add(Toast::info("Chart layout saved").permanent());
+                    let long = "Order rejected: Insufficient buying power: 762450.00 USD needed, 100000.00 available";
+                    let title = "Limit order partially executed (1 of 3) on";
+                    let mut toast = Toast::error(long).permanent();
+                    if trading {
+                        toast = toast.with_title(title);
+                        toast.trading = Some(super::super::TradingToast {
+                            symbol: "LONG:SYMBOL".into(),
+                            side: crate::model::OrderSide::Buy,
+                            quantity: 0.5,
+                            price: "123456789.00".into(),
+                            executed: true,
+                        });
+                    }
+                    toasts.add(toast);
+                    let mut wrap = f32::INFINITY;
+                    for pass in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                NotificationPanel::new().show_with_toasts(ui.ctx(), &mut toasts);
+                            },
+                        );
+                        for shape in &output.shapes {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                if text.galley.text() == long {
+                                    wrap = text.pos.x + text.galley.job.wrap.max_width;
+                                }
+                                if pass == 2 {
+                                    let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                                    assert!(
+                                        shape.clip_rect.expand(0.5).contains_rect(bounds),
+                                        "text is fully visible at {width}: {}",
+                                        text.galley.text()
+                                    );
+                                }
+                            }
+                        }
+                        if trading && pass == 2 {
+                            assert!(output.shapes.iter().any(|shape| {
+                                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == title)
+                            }), "partial-fill progress remains visible");
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                    let rect = |toast: &Toast| {
+                        ctx.memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
+                            .unwrap()
+                    };
+                    let (older, newer) = (rect(&toasts.toasts()[0]), rect(&toasts.toasts()[1]));
+                    assert_eq!(
+                        newer.right_bottom(),
+                        screen.right_bottom() - Vec2::splat(16.0)
+                    );
+                    assert_eq!(newer.top() - older.bottom(), 8.0);
+                    assert!(screen.shrink(15.0).contains_rect(newer));
+                    if !trading {
+                        let button = newer.right()
+                            - ctx.active_theme().spacing.lg
+                            - DESIGN_TOKENS.sizing.button_sm;
+                        assert!(
+                            wrap <= button,
+                            "the message wraps at {wrap}, past the close button at {button}"
+                        );
+                    }
                 }
             }
-            output.drop_without_applying_deltas();
         }
-        let rect = |toast: &Toast| {
-            ctx.memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
-                .unwrap()
-        };
-        let (older, newer) = (rect(&toasts.toasts()[0]), rect(&toasts.toasts()[1]));
-        assert_eq!(
-            newer.right_bottom(),
-            screen.right_bottom() - Vec2::splat(16.0)
-        );
-        assert_eq!(newer.top() - older.bottom(), 8.0);
-        // The close button sits in the toast's inner margin's corner.
-        let button = newer.right() - ctx.active_theme().spacing.lg - DESIGN_TOKENS.sizing.button_sm;
-        assert!(
-            wrap <= button,
-            "the message wraps at {wrap}, past the close button at {button}"
-        );
     }
 }
