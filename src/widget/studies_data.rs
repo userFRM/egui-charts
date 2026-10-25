@@ -480,6 +480,22 @@ mod tests {
         };
         // Hourly SMA(2) first closes at 02:00 with (10+14)/2=12. The newest value is (14+20)/2=17.
         assert_eq!(output(&chart), [None, None, None, Some(12.0), Some(12.0)]);
+        // The forming 02:30 bar has not reached 03:00, so its scheduled close cannot
+        // confirm the 02:00 hourly value while waiting for the interval close.
+        chart.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 6], 30));
+        settle(&mut chart);
+        assert_eq!(
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .values()
+                .value(0, 5),
+            Some(12.0)
+        );
+        chart.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 5], 30));
+        settle(&mut chart);
         chart
             .indicator_mut(id)
             .unwrap()

@@ -231,6 +231,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Waiting for a higher study interval to close treats the latest chart bar as forming. Its scheduled end no longer confirms a source bar early; historical chart bars retain their close-time alignment. ([#175](https://github.com/userFRM/egui-charts/issues/175))
 - VWAP uses the chart interval to distinguish intraday exchange sessions from UTC-labelled daily bars, retaining timestamp inference only without an interval. Changing the interval recalculates existing studies. The inferred Daily flag is hidden from inputs; saved legacy values remain accepted and are ignored. Hosts should supply the interval through `Indicator::set_timeframe` or `Chart::set_timeframe`. ([#672](https://github.com/userFRM/egui-charts/issues/672))
 
 - A chart with a feed or server time repaints once a second only while its bar countdown is drawn, so a hidden price axis or a last price outside the visible range no longer keeps an idle chart repainting. ([#852](https://github.com/userFRM/egui-charts/issues/852))

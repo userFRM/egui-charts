@@ -182,9 +182,18 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
             let value = advancing
                 .bar_at(bar.time)
                 .and_then(|_| {
-                    let close = clock
-                        .next_open(clock.bar_open(bar.time))
-                        .unwrap_or(bar.time);
+                    let forming_higher = at + 1 == data.len()
+                        && self.wait_for_close
+                        && clock
+                            .timeframe()
+                            .is_some_and(|tf| advancing.timeframe.duration_ms() > tf.duration_ms());
+                    let close = if forming_higher {
+                        bar.time
+                    } else {
+                        clock
+                            .next_open(clock.bar_open(bar.time))
+                            .unwrap_or(bar.time)
+                    };
                     advancing.output_at(close, !self.wait_for_close && at + 1 == data.len())
                 })
                 .and_then(|at| values[at])
@@ -288,7 +297,7 @@ mod tests {
                 .map(|at| study.values().value(0, at))
                 .collect();
             assert_eq!(actual, expected, "{name}");
-            let half_days: Vec<_> = (0..10)
+            let half_days: Vec<_> = (0..11)
                 .map(|at| {
                     Bar::new(
                         DateTime::UNIX_EPOCH + Duration::hours(at * 12),
@@ -314,9 +323,16 @@ mod tests {
                 None,
                 expected[2],
                 expected[4],
+                None,
             ];
-            let actual: Vec<_> = (0..10).map(|at| study.values().value(0, at)).collect();
+            let actual: Vec<_> = (0..11).map(|at| study.values().value(0, at)).collect();
             assert_eq!(actual, aligned, "{name} confirmed intervals");
+            study.update_data(&half_days[..10], 0, &sources);
+            assert_eq!(
+                study.values().value(0, 9),
+                expected[2],
+                "{name} forming chart bar"
+            );
             study
                 .set_input("wait_for_close", InputValue::Toggle(false))
                 .unwrap();

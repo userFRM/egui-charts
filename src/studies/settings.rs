@@ -313,10 +313,19 @@ impl Indicator for ConfiguredStudy {
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
         for (at, bar) in data.iter().enumerate() {
-            let close = self
-                .clock
-                .next_open(self.clock.bar_open(bar.time))
-                .unwrap_or(bar.time);
+            let forming_higher = at + 1 == data.len()
+                && self.wait_for_close
+                && self
+                    .clock
+                    .timeframe()
+                    .is_some_and(|tf| source.timeframe.duration_ms() > tf.duration_ms());
+            let close = if forming_higher {
+                bar.time
+            } else {
+                self.clock
+                    .next_open(self.clock.bar_open(bar.time))
+                    .unwrap_or(bar.time)
+            };
             let output = source.output_at(close, !self.wait_for_close && at + 1 == data.len());
             self.aligned_bars.push(output);
             let values: Vec<_> = (0..self.study.line_cnt())
