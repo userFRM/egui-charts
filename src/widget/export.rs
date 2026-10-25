@@ -246,7 +246,6 @@ impl Chart {
                 marker_options: series.marker_options,
                 change_marks: None,
                 lines: series.lines.clone(),
-                revision: series.revision,
             })
             .collect();
         chart.series_scales = self.series_scales.clone();

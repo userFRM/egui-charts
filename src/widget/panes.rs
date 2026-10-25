@@ -193,9 +193,9 @@ impl Chart {
 
         let mut host_clicks = Vec::new();
         let studies = if self.chart_type.is_time_independent() {
-            &self.element_studies.members
+            &self.element_studies.studies
         } else {
-            &self.members
+            &self.studies
         };
         // Render the other panes around the price pane
         let (start_idx, end_idx) = self.state.visible_range();
