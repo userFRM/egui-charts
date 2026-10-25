@@ -16,6 +16,17 @@ pub enum ZigZagMode {
     Typical,
 }
 
+/// One swing extreme in source-bar order. The last pivot is provisional and can move.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZigZagPivot {
+    /// Index in the bars passed to [`Indicator::calculate`], including skipped bars.
+    pub bar_index: usize,
+    /// Price of the swing extreme.
+    pub price: f64,
+    /// Whether this is a high; highs and lows alternate.
+    pub is_high: bool,
+}
+
 /// Zig Zag: the swings of at least `deviation_percent` (Merrill's filtered waves), drawn
 /// as straight lines between consecutive pivots.
 ///
@@ -51,6 +62,7 @@ pub struct ZigZag {
     /// Price mode
     mode: ZigZagMode,
     values: IndicatorValues,
+    pivots: Vec<ZigZagPivot>,
     color: Color32,
     visible: bool,
 }
@@ -63,9 +75,16 @@ impl ZigZag {
             depth: depth.max(1),
             mode: ZigZagMode::HighLow,
             values: IndicatorValues::new(),
+            pivots: Vec::new(),
             color: DESIGN_TOKENS.semantic.extended.info,
             visible: true,
         }
+    }
+
+    /// Swing extremes used to draw the study, in source-bar order.
+    /// All except the last are confirmed; the last follows the current leg.
+    pub fn pivots(&self) -> &[ZigZagPivot] {
+        &self.pivots
     }
 
     pub fn with_mode(mut self, mode: ZigZagMode) -> Self {
@@ -94,11 +113,11 @@ impl ZigZag {
     }
 
     /// The values over `data`, every bar of which has finite prices.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+    fn compute(&self, data: &[Bar]) -> (IndicatorValues, Vec<ZigZagPivot>) {
         let mut values = IndicatorValues::missing(data.len());
         let (depth, deviation) = (self.depth, self.deviation_percent);
         if deviation <= 0.0 {
-            return values;
+            return (values, Vec::new());
         }
         // (bar, high, low) of the bars with usable prices.
         let bars: Vec<(usize, f64, f64)> = data
@@ -117,7 +136,7 @@ impl ZigZag {
                 && (from.1 - bars[p].2) / from.1 * 100.0 >= deviation
         };
         let Some(&(_, high, low)) = bars.first() else {
-            return values;
+            return (values, Vec::new());
         };
 
         // Before the first pivot: the highest high and the lowest low.
@@ -161,7 +180,7 @@ impl ZigZag {
                 }
             }
             if let Some((pivot, up)) = reversal {
-                pivots.push(pivot);
+                pivots.push((pivot, !up));
                 // The new leg starts at the swing's extreme since the pivot, not at the confirming
                 // bar; the bars after it are judged again against the leg.
                 let extreme = (pivot.0 + 1..=p)
@@ -179,23 +198,28 @@ impl ZigZag {
             }
             p += 1;
         }
-        pivots.extend(trend.map(|(_, extreme)| extreme));
+        pivots.extend(trend.map(|(up, extreme)| (extreme, up)));
         // Back to bar numbers.
-        let pivots: Vec<(usize, f64)> = pivots
+        let pivots: Vec<ZigZagPivot> = pivots
             .into_iter()
-            .map(|(p, price)| (bars[p].0, price))
+            .map(|((p, price), is_high)| ZigZagPivot {
+                bar_index: bars[p].0,
+                price,
+                is_high,
+            })
             .collect();
 
         // Renderers join values on adjacent bars, so fill each leg with a
         // straight line between its pivots. A lone pivot is not a swing.
         for leg in pivots.windows(2) {
-            let ((start, from), (end, to)) = (leg[0], leg[1]);
+            let (start, from) = (leg[0].bar_index, leg[0].price);
+            let (end, to) = (leg[1].bar_index, leg[1].price);
             for i in start..=end {
                 let t = (i - start) as f64 / (end - start) as f64;
                 values.set(i, IndicatorValue::Single(from + (to - from) * t));
             }
         }
-        values
+        (values, pivots)
     }
 }
 
@@ -222,15 +246,30 @@ impl Indicator for ZigZag {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                [true, false]
-                    .iter()
-                    .all(|&high| self.get_price(b, high).is_finite())
-            },
-            |data| self.compute(data),
-        );
+        let finite = |b: &Bar| {
+            [true, false]
+                .iter()
+                .all(|&high| self.get_price(b, high).is_finite())
+        };
+        let mut pivots = Vec::new();
+        let values = over_finite_bars(data, finite, |data| {
+            let (values, computed) = self.compute(data);
+            pivots = computed;
+            values
+        });
+        if data.iter().any(|b| !finite(b)) {
+            let indices: Vec<_> = data
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| finite(b))
+                .map(|(i, _)| i)
+                .collect();
+            for pivot in &mut pivots {
+                pivot.bar_index = indices[pivot.bar_index];
+            }
+        }
+        self.values = values;
+        self.pivots = pivots;
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -506,6 +545,29 @@ mod tests {
             let data: Vec<Bar> = bars.iter().map(|&(h, l)| make_bar(h, l, l)).collect();
             let mut zz = zz.clone();
             zz.calculate(&data);
+            let extremes: &[(usize, bool)] = match *name {
+                "swings" => &[(1, true), (4, false), (8, true), (10, false)],
+                "both reversals at once" => &[(0, true), (1, false), (2, true)],
+                "swing extreme before the confirming bar" => {
+                    &[(0, false), (3, true), (5, false), (9, true)]
+                }
+                "rises from the first bar" => &[(0, false), (3, true), (4, false)],
+                "outside bar" => &[(0, false), (4, true)],
+                "high before the low" => &[(1, false), (2, true)],
+                "touches zero" => &[(0, true), (3, false)],
+                "NaN bar inside a leg" => &[(0, false), (1, true)],
+                "NaN first bar" => &[(2, true), (7, false), (11, true), (16, false), (19, true)],
+                "flat" | "deviation 0" | "negative prices" => &[],
+                _ => unreachable!("case needs its pivot expectations"),
+            };
+            assert_eq!(zz.pivots().len(), extremes.len(), "{name}");
+            for (pivot, &(bar, high)) in zz.pivots().iter().zip(extremes) {
+                assert_eq!((pivot.bar_index, pivot.is_high), (bar, high), "{name}");
+                assert!(
+                    (pivot.price - expected[bar].unwrap()).abs() < 1e-9,
+                    "{name}"
+                );
+            }
             let got: Vec<Option<f64>> = zz
                 .values()
                 .to_rows()

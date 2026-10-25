@@ -160,3 +160,68 @@ pub(crate) fn paint_zones(
         painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
     }
 }
+
+/// Apply the study's presentation and pane mapping before rendering or hit testing.
+#[cfg(feature = "widget")]
+pub(crate) fn mapped_drawings(
+    study: &dyn super::Indicator,
+    coords: &crate::chart::coords::ChartMapping,
+    price_to_y: impl Fn(f64) -> f32,
+) -> Vec<crate::drawings::Drawing> {
+    let style = study.plot_style(0);
+    if !style.visible {
+        return Vec::new();
+    }
+    study
+        .drawings()
+        .iter()
+        .map(|drawing| {
+            let mut drawing = drawing.clone();
+            drawing.color = style.color.to_srgba_unmultiplied();
+            drawing.stroke_width = style.width;
+            drawing.line_style = match style.pattern {
+                super::PlotPattern::Solid => crate::drawings::LineStyle::Solid,
+                super::PlotPattern::Dashed => crate::drawings::LineStyle::Dashed,
+                super::PlotPattern::Dotted => crate::drawings::LineStyle::Dotted,
+                super::PlotPattern::LargeDashed => crate::drawings::LineStyle::LargeDashed,
+                super::PlotPattern::SparseDotted => crate::drawings::LineStyle::SparseDotted,
+            };
+            drawing.update_screen_coords(
+                |bar: f32| {
+                    let index = bar as usize;
+                    coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
+                },
+                &price_to_y,
+            );
+            drawing
+        })
+        .collect()
+}
+
+#[cfg(feature = "widget")]
+pub(crate) fn paint_drawings(
+    context: &crate::chart::renderers::RenderContext,
+    study: &dyn super::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    let bar_to_x = |bar: f32| {
+        let index = bar as usize;
+        coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
+    };
+    let price_to_y = |p| price.price_to_y(p);
+    let view = crate::drawings::rendering::ChartView {
+        instrument: None,
+        bars: &[],
+        revision: 0,
+        bar_to_x: &bar_to_x,
+        price_to_y: &price_to_y,
+    };
+    for drawing in mapped_drawings(study, coords, price_to_y) {
+        drawing.render(
+            &context.painter.with_clip_rect(context.rect),
+            context.rect,
+            &view,
+        );
+    }
+}

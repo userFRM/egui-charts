@@ -146,12 +146,16 @@ mod keltner;
 mod std_dev;
 
 // Support/Resistance indicators
+#[cfg(feature = "widget")]
+mod auto_drawing;
 mod gaps;
 mod pivot_points;
 mod pivot_points_high_low;
 mod rsi_divergence;
 mod williams_fractals;
 mod zigzag;
+#[cfg(feature = "widget")]
+pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 
 // Oscillator/Momentum indicators (additional)
 mod connors_rsi;
@@ -341,7 +345,7 @@ pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use rsi_divergence::RsiDivergence;
 pub use williams_fractals::WilliamsFractals;
-pub use zigzag::{ZigZag, ZigZagMode};
+pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;
