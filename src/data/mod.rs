@@ -25,11 +25,13 @@ use std::time::Duration;
 
 pub(crate) mod depth;
 #[cfg_attr(
-    not(feature = "widget"),
+    not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget keeps a depth history")
 )]
 mod depth_history;
 mod footprint;
+mod orders;
+pub use orders::{OrderEvent, OrderQueue, RestingOrder};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")

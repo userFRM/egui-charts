@@ -9,7 +9,7 @@ use super::depth::{Book, Lost};
 use super::depth_history::{DepthColumn, DepthHistoryConfig, Sampler};
 use super::merge::{Origin, fold, valid};
 use super::trades::{self, Trades};
-use super::{FeedError, FeedStatus, SubscriptionId};
+use super::{FeedError, FeedStatus, OrderEvent, OrderQueue, RestingOrder, SubscriptionId};
 use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
@@ -86,6 +86,9 @@ struct Live {
     last_close: Option<f64>,
     empty: bool,
     book: Book,
+    orders: Option<OrderQueue>,
+    orders_changed: bool,
+    tick_size: Option<f64>,
     /// Samples the book for the chart's depth history, when it keeps one.
     sampler: Option<Sampler>,
     taken: TakenIds,
@@ -128,6 +131,8 @@ pub(crate) struct Updates {
     pub(crate) trades: Trades,
     /// The order book, if it changed.
     pub(crate) depth: Option<OrderBook>,
+    pub(crate) orders: Option<OrderQueue>,
+    pub(crate) orders_changed: bool,
     /// Columns sampled for the depth history, oldest first, as many as its newest resolution
     /// holds: the oldest make room for new ones.
     pub(crate) depth_columns: VecDeque<DepthColumn>,
@@ -155,6 +160,8 @@ impl Updates {
             bars: BTreeMap::new(),
             trades,
             depth: None,
+            orders: None,
+            orders_changed: false,
             depth_columns: VecDeque::new(),
             quote: None,
             resnapshot: false,
@@ -212,6 +219,9 @@ impl Inbox {
             last_close: None,
             empty: false,
             book: Book::new(tick_size),
+            orders: None,
+            orders_changed: false,
+            tick_size,
             sampler: None,
             taken: TakenIds {
                 order: VecDeque::new(),
@@ -254,6 +264,10 @@ impl Inbox {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
                 updates.depth = live.book.take_changed();
+                updates.orders_changed = std::mem::take(&mut live.orders_changed);
+                if updates.orders_changed {
+                    updates.orders = live.orders.clone();
+                }
                 (*id, updates)
             })
             .collect();
@@ -563,7 +577,11 @@ impl Sink {
     /// when it has one, so prices that differ by a rounding error are one level and the latest
     /// size pushed for it holds. A crossed book is kept as pushed.
     pub fn push_depth_snapshot(&self, sequence: u64, book: OrderBook) {
-        self.update(|live| live.depth(book.ts, |depth| depth.snapshot(sequence, book)));
+        self.update(|live| {
+            live.orders = None;
+            live.orders_changed = true;
+            live.depth(book.ts, |depth| depth.snapshot(sequence, book));
+        });
     }
 
     /// The levels that changed since the update numbered `sequence - 1`, each with its new size; a
@@ -580,7 +598,57 @@ impl Sink {
     ///
     /// [`Datafeed::request_depth_snapshot`]: super::Datafeed::request_depth_snapshot
     pub fn push_depth_delta(&self, sequence: u64, changes: &OrderBook) {
-        self.update(|live| live.depth(changes.ts, |depth| depth.delta(sequence, changes)));
+        self.update(|live| {
+            live.orders = None;
+            live.orders_changed = true;
+            live.depth(changes.ts, |depth| depth.delta(sequence, changes));
+        });
+    }
+
+    /// Replaces the per-order book, at most 10,000 orders per side, listed in queue order.
+    /// The next event has `sequence + 1`; events buffered during resync above the snapshot's
+    /// sequence apply afterwards. Gaps and invalid events clear both books and ask the feed for
+    /// a new snapshot once through `Datafeed::request_depth_snapshot`. Use either order events
+    /// or aggregated deltas for a subscription; an aggregated push discards the order queues.
+    pub fn push_order_snapshot(
+        &self,
+        sequence: u64,
+        time: DateTime<Utc>,
+        orders: Vec<RestingOrder>,
+    ) {
+        let mut trades = Vec::new();
+        self.update(|live| {
+            live.sample_book(time);
+            let book = live
+                .orders
+                .get_or_insert_with(|| OrderQueue::new(live.tick_size));
+            let result = book.set_snapshot(sequence, time, orders);
+            trades = book.take_executions();
+            live.sync_orders(sequence, result);
+        });
+        for trade in trades {
+            self.push_tick(trade);
+        }
+    }
+
+    /// Applies one order event with consecutive sequencing. Repeated sequences are ignored;
+    /// while waiting for a snapshot at most 10,000 consecutive events are kept. Unknown cancels,
+    /// duplicate adds, invalid sizes and oversized executions lose the book. An execution's
+    /// optional trade enters the raw trade store and carries the resting order id it filled.
+    pub fn push_order_event(&self, sequence: u64, time: DateTime<Utc>, event: OrderEvent) {
+        let mut trades = Vec::new();
+        self.update(|live| {
+            live.sample_book(time);
+            let book = live
+                .orders
+                .get_or_insert_with(|| OrderQueue::new(live.tick_size));
+            let result = book.event(sequence, time, event);
+            trades = book.take_executions();
+            live.sync_orders(sequence, result);
+        });
+        for trade in trades {
+            self.push_tick(trade);
+        }
     }
 
     /// Latest best bid and ask. Bursts coalesce to the newest timestamp (last arrival on a tie).
@@ -702,7 +770,7 @@ impl Live {
     /// opens a new period of the depth history. An update stamped more than a minute after the
     /// feed's time samples nothing: it would hold the open period, and every later column, until
     /// that time passed.
-    fn depth(&mut self, ts: DateTime<Utc>, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
+    fn sample_book(&mut self, ts: DateTime<Utc>) {
         if let Some(sampler) = &mut self.sampler
             && (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
                 .is_some_and(|limit| ts <= limit)
@@ -714,7 +782,32 @@ impl Live {
             }
             columns.push_back(column);
         }
-        match apply(&mut self.book) {
+    }
+
+    fn sync_orders(&mut self, sequence: u64, result: Result<(), Lost>) {
+        self.orders_changed = true;
+        let levels = self
+            .orders
+            .as_ref()
+            .expect("order book")
+            .aggregate(&self.symbol, 0.0);
+        let sequence = self
+            .orders
+            .as_ref()
+            .and_then(OrderQueue::sequence)
+            .unwrap_or(sequence);
+        let derived = self.book.snapshot(sequence, levels);
+        self.depth_result(result.and(derived));
+    }
+
+    fn depth(&mut self, ts: DateTime<Utc>, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
+        self.sample_book(ts);
+        let result = apply(&mut self.book);
+        self.depth_result(result);
+    }
+
+    fn depth_result(&mut self, result: Result<(), Lost>) {
+        match result {
             // The book holds a snapshot newer than any loss, so a pending request is moot.
             Ok(()) => self.updates.resnapshot = false,
             Err(lost) => {
@@ -732,6 +825,59 @@ mod tests {
     use crate::model::{OrderBookLevel, Timeframe};
     use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn order_events_feed_aggregated_depth_and_link_execution_trades() {
+        use crate::model::TradeSide::{Buy, Sell};
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+        let time = at(0, 0);
+        sink.set_server_time(time);
+        sink.push_order_snapshot(
+            1,
+            time,
+            vec![
+                RestingOrder::new(7, Buy, 99.0, 3.0),
+                RestingOrder::new(8, Sell, 100.0, 5.0),
+            ],
+        );
+        sink.push_order_event(
+            2,
+            time,
+            OrderEvent::Execute {
+                id: 8,
+                size: 2.0,
+                trade: Some(
+                    Tick::new(time, 100.0, 2.0, Some(Buy))
+                        .with_id(42)
+                        .with_aggressor_order_id(9),
+                ),
+            },
+        );
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let book = updates.depth.unwrap();
+        assert_eq!(
+            (book.bids[0].size, book.asks[0].size, book.asks[0].order_cnt),
+            (3.0, 3.0, Some(1))
+        );
+        let trades: Vec<_> = updates.trades.iter().collect();
+        assert_eq!(
+            (
+                trades.len(),
+                trades[0].resting_order_id,
+                trades[0].aggressor_order_id
+            ),
+            (1, Some(8), Some(9))
+        );
+        sink.push_order_event(4, time, OrderEvent::Cancel { id: 7 });
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert!(updates.resnapshot);
+        assert!(updates.depth.unwrap().bids.is_empty());
+        sink.push_order_snapshot(3, time, vec![RestingOrder::new(7, Buy, 99.0, 3.0)]);
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert!(!updates.resnapshot);
+        assert!(updates.orders.unwrap().orders().next().is_none());
+    }
 
     /// `minute` and `second` after 10:00.
     fn at(minute: i64, second: i64) -> DateTime<Utc> {

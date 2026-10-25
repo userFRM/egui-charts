@@ -51,6 +51,7 @@ pub(crate) struct FeedLink {
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
+    order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
@@ -125,6 +126,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             order_book: None,
+            order_queue: None,
             depth_history: None,
             depth_complete: false,
             paging_stopped: false,
@@ -313,6 +315,18 @@ impl Chart {
         link.order_book.as_ref()
     }
 
+    /// Individual resting orders and their queue priority, when the feed sends order-level data.
+    /// Use `OrderQueue::aggregate` with a minimum size for filtered ladders or heatmaps, and
+    /// `largest_order` for the largest resting order at a level. Aggregated-only feeds return
+    /// `None`; a lost order book has no orders until a replacement snapshot arrives.
+    pub fn order_queue(&self, series: SeriesId) -> Option<&crate::data::OrderQueue> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)?
+            .order_queue
+            .as_ref()
+    }
+
     /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
     /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
     /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
@@ -497,6 +511,9 @@ impl Chart {
             };
             link.trades.append(updates.trades, fold);
             link.order_book = updates.depth.or(link.order_book.take());
+            if updates.orders_changed {
+                link.order_queue = updates.orders;
+            }
             if let Some(history) = &mut link.depth_history {
                 updates
                     .depth_columns
@@ -566,6 +583,7 @@ impl Chart {
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
+        link.order_queue = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
         link.depth_complete = false;
         self.set_quote(None);

@@ -48,6 +48,9 @@ pub struct Tick {
     /// Exchange aggressor order id, unique per symbol. Only explicit matching ids combine fills.
     #[serde(default)]
     pub aggressor_order_id: Option<u64>,
+    /// Resting order filled by this execution, when supplied by an order-level feed.
+    #[serde(default)]
+    pub resting_order_id: Option<u64>,
 }
 
 impl Tick {
@@ -61,12 +64,19 @@ impl Tick {
             id: None,
             conditions: TradeConditions::NONE,
             aggressor_order_id: None,
+            resting_order_id: None,
         }
     }
 
     /// Sets [`id`](Self::id).
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = Some(id);
+        self
+    }
+
+    /// Sets [`resting_order_id`](Self::resting_order_id).
+    pub fn with_resting_order_id(mut self, id: u64) -> Self {
+        self.resting_order_id = Some(id);
         self
     }
 

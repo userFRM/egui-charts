@@ -203,7 +203,7 @@ fn valid(book: &OrderBook) -> bool {
 
 /// Orders finite prices: by their nearest integer multiple of `tick`, as an `i64` with its sign
 /// bit flipped, or like `f64::total_cmp` without a tick, with -0.0 and 0.0 as one price.
-fn key(tick: Option<f64>, price: f64) -> u64 {
+pub(crate) fn key(tick: Option<f64>, price: f64) -> u64 {
     if let Some(tick) = tick {
         return (price / tick).round() as i64 as u64 ^ 1 << 63;
     }
