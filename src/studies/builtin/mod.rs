@@ -279,6 +279,8 @@ mod performance;
 mod relative_volume_at_time;
 mod seasonality;
 mod trading_sessions;
+mod up_down_volume;
+mod visible_average_price;
 mod volume_24h;
 
 // Re-exports - Original indicators
@@ -470,6 +472,8 @@ pub use performance::Performance;
 pub use relative_volume_at_time::{RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode};
 pub use seasonality::Seasonality;
 pub use trading_sessions::TradingSessions;
+pub use up_down_volume::UpDownVolume;
+pub use visible_average_price::VisibleAveragePrice;
 pub use volume_24h::Volume24h;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors

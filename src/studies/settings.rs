@@ -108,6 +108,10 @@ impl ConfiguredStudy {
 }
 
 impl Indicator for ConfiguredStudy {
+    fn projections(&self) -> &[super::StudyProjection] {
+        self.study.projections()
+    }
+
     fn table(&self) -> Option<&super::StudyTable> {
         self.study.table()
     }
@@ -144,6 +148,19 @@ impl Indicator for ConfiguredStudy {
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
         self.study.set_timeframe(timeframe);
+    }
+    fn set_visible_range(&mut self, range: std::ops::Range<usize>) -> bool {
+        self.study.set_visible_range(range)
+    }
+    fn lower_timeframe(&self) -> Option<Timeframe> {
+        self.study.lower_timeframe()
+    }
+    fn set_lower_timeframe_bars(
+        &mut self,
+        timeframe: Timeframe,
+        bars: Vec<Bar>,
+    ) -> Result<(), &'static str> {
+        self.study.set_lower_timeframe_bars(timeframe, bars)
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.study.set_bar_clock(clock)

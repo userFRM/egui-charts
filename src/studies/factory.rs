@@ -203,6 +203,7 @@ impl IndicatorFactory {
             ],
             "Volume" => [
                 Volume,
+                UpDownVolume,
                 OnBalanceVolume,
                 VolumeWeightedAvgPrice,
                 AnchoredVWAP,
@@ -253,6 +254,7 @@ impl IndicatorFactory {
                 MedianPrice,
                 WeightedClose,
                 OHLC4,
+                VisibleAveragePrice,
             ],
             "Market structure" => [
                 Week52HighLow,
@@ -414,6 +416,217 @@ mod tests {
                 |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Change")
             ));
         }
+    }
+
+    /// The visible mean uses exactly the supplied bars and changes with the viewport.
+    #[test]
+    fn visible_average_follows_the_visible_range() {
+        let bars: Vec<_> = [2.0, 4.0, 12.0, 20.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+            .collect();
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Visible Average Price")
+                .expect("Visible Average Price study"),
+        );
+        for (range, expected) in [(0..2, Some(3.0)), (1..4, Some(12.0)), (4..99, None)] {
+            study.set_visible_range(range.clone());
+            study.calculate(&bars);
+            for i in 0..bars.len() {
+                assert_eq!(study.values().value(0, i), expected);
+            }
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::widget::{Chart, test_frames::frame};
+            let bars: Vec<_> = (0..100)
+                .map(|i| {
+                    let c = i as f64;
+                    Bar::new(Utc.timestamp_opt(i, 0).unwrap(), c, c, c, c, 1.0)
+                })
+                .collect();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+            chart.add_indicator(Box::new(study));
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.set_visible_bars(20);
+            for (time, start) in [(1.0, 10), (2.0, 50)] {
+                chart.set_start_idx(start);
+                frame(&ctx, &mut chart, time, Vec::new());
+                let (start, end) = chart.state().visible_range();
+                let expected = (start + end - 1) as f64 / 2.0;
+                assert!(
+                    (chart
+                        .indicators()
+                        .next()
+                        .unwrap()
+                        .1
+                        .values()
+                        .value(0, start)
+                        .unwrap()
+                        - expected)
+                        .abs()
+                        < 1e-10
+                );
+            }
+        }
+    }
+
+    /// Candle direction, doji ties across parent bars and missing intrabar history stay distinct.
+    #[test]
+    fn up_down_volume_uses_host_intrabar_directions() {
+        use crate::model::{BarClock, Timeframe};
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Up/Down Volume")
+                .expect("Up/Down Volume study"),
+        );
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        assert_eq!(study.lower_timeframe(), Some(Timeframe::Min1));
+        let bars: Vec<_> = [0, 5, 10, 15]
+            .into_iter()
+            .map(|m| {
+                Bar::new(
+                    Utc.timestamp_opt(m * 60, 0).unwrap(),
+                    10.0,
+                    10.0,
+                    10.0,
+                    10.0,
+                    999.0,
+                )
+            })
+            .collect();
+        let intrabars: Vec<_> = [
+            (0, 10.0, 11.0, 10.0),
+            (1, 11.0, 10.0, 20.0),
+            (2, 10.0, 10.0, 30.0),
+            (5, 9.0, 9.0, 40.0),
+            (6, 9.0, 9.0, 50.0),
+            (15, 12.0, 13.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(m, o, c, v)| {
+            Bar::new(
+                Utc.timestamp_opt(m * 60, 0).unwrap(),
+                o,
+                o.max(c),
+                o.min(c),
+                c,
+                v,
+            )
+        })
+        .collect();
+        study
+            .set_lower_timeframe_bars(Timeframe::Min1, intrabars.clone())
+            .unwrap();
+        study.calculate(&bars);
+        // First parent: up=10+30, down=-20, delta=20. Next: -40+50=10.
+        for (i, want) in [
+            [Some(40.0), Some(-20.0), Some(20.0)],
+            [Some(50.0), Some(-40.0), Some(10.0)],
+            [None; 3],
+            [Some(0.0); 3],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (line, expected) in want.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, i),
+                    expected,
+                    "bar {i}, line {line}"
+                );
+            }
+        }
+        // Invalid responses must retain the accepted data. A correction replaces it atomically.
+        assert!(
+            study
+                .set_lower_timeframe_bars(Timeframe::Min5, intrabars.clone())
+                .is_err()
+        );
+        let mut invalid = intrabars.clone();
+        invalid[1].time = invalid[0].time;
+        assert!(
+            study
+                .set_lower_timeframe_bars(Timeframe::Min1, invalid)
+                .is_err()
+        );
+        let mut corrected = intrabars;
+        corrected[0].volume = 15.0;
+        study
+            .set_lower_timeframe_bars(Timeframe::Min1, corrected)
+            .unwrap();
+        study.update(&bars, 0);
+        assert_eq!(study.values().value(2, 0), Some(25.0));
+        study
+            .set_lower_timeframe_bars(Timeframe::Min1, Vec::new())
+            .unwrap();
+        study.calculate(&bars);
+        assert_eq!(study.values().value(0, 0), None);
+    }
+
+    /// Latest table metrics include the developing month; projections use earlier years only.
+    #[test]
+    fn seasonality_heatmap_and_remaining_month_use_calendar_changes() {
+        let bars: Vec<_> = [
+            (2022, 12, 28, 100.0),
+            (2023, 1, 28, 110.0),
+            (2023, 2, 28, 99.0),
+            (2023, 12, 28, 200.0),
+            (2024, 1, 15, 210.0),
+        ]
+        .into_iter()
+        .map(|(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
+        study.set_bar_clock(&crate::model::BarClock::new(crate::model::Timeframe::Day1));
+        study.calculate(&bars);
+        let table = study.table().expect("Seasonality heatmap");
+        let percent = |label: &str, month| {
+            let row = table
+                .rows
+                .iter()
+                .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
+                .unwrap();
+            let StudyCell::Percent(value) = row[month] else {
+                panic!("percentage cell")
+            };
+            value
+        };
+        for (label, month, expected) in [
+            ("2023", 1, 10.0),
+            ("2023", 2, -10.0),
+            ("2024", 1, 5.0),
+            ("Average", 1, 7.5),
+            ("Standard deviation", 1, 2.5),
+            ("Positive", 1, 100.0),
+        ] {
+            assert!(
+                (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                "{label}"
+            );
+        }
+        assert_eq!(percent("2024", 2), None);
+        let zone = study
+            .projections()
+            .last()
+            .expect("remaining month projection");
+        assert_eq!(zone.bars.start, 4.0);
+        // The last two bars are 18 days apart. February 1 is 17/18 of a slot after January 15.
+        assert!((zone.bars.end - (4.0 + 17.0 / 18.0)).abs() < 1e-10);
+        assert!((zone.top - 220.0).abs() < 1e-9);
+        assert_eq!(zone.bottom, 200.0);
     }
 
     #[test]
@@ -661,6 +874,7 @@ mod tests {
             ),
             Box::new(Median::new(l(0), l(1), x(2.0))),
             Box::new(Volume::new(l(0))),
+            Box::new(UpDownVolume::new()),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),
@@ -710,6 +924,7 @@ mod tests {
             Box::new(HL2::new()),
             Box::new(HLC3::new()),
             Box::new(OHLC4::new()),
+            Box::new(VisibleAveragePrice::new()),
             Box::new(Week52HighLow::new()),
             Box::new(Week52HighLowLevels::new()),
             Box::new(AcceleratorOscillator::new()),

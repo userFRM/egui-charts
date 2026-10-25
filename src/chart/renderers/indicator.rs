@@ -284,9 +284,6 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
-        if let Some(table) = indicator.table() {
-            crate::studies::table::paint(context.painter, context.rect, table);
-        }
         if !indicator.candles().is_empty() {
             crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
             return;
@@ -305,6 +302,7 @@ impl IndicatorRenderer {
             coords,
         );
         crate::studies::plots::paint_zones(&painter, indicator, price_scale, coords);
+        crate::studies::projection::paint(&painter, indicator, coords, price_scale);
 
         // Handle multi-line indicators
         let line_cnt = indicator.line_cnt();
@@ -553,6 +551,11 @@ impl IndicatorRenderer {
                 at + egui::vec2(4.0, sign * 11.0),
             ];
             painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
+        }
+        if !indicator.is_overlay()
+            && let Some(table) = indicator.table()
+        {
+            crate::studies::table::paint(context.painter, context.rect, table);
         }
     }
 

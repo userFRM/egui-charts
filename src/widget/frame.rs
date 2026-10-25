@@ -891,6 +891,19 @@ impl Chart {
 
         // Get visible range
         let (start_idx, end_idx) = self.state.visible_range();
+        let (registry, bars) = if self.chart_type.is_time_independent() {
+            (
+                &mut self.element_studies.studies,
+                &self.element_studies.bars[..],
+            )
+        } else {
+            (&mut self.studies, self.state.data().bars.as_slice())
+        };
+        for study in registry.indicators_mut() {
+            if study.set_visible_range(start_idx..end_idx) {
+                study.calculate(bars);
+            }
+        }
         self.start_idx = start_idx;
 
         // Capture near_live status for button
@@ -1488,6 +1501,17 @@ impl Chart {
             _ => {}
         }
         self.paint_primitives(&painter, &coords, PrimitivePass::Series);
+        let mut table_rect = price_rect;
+        for study in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.is_overlay())
+        {
+            if let Some(table) = study.table() {
+                table_rect.max.y =
+                    crate::studies::table::paint(&painter, table_rect, table).top() - 8.0;
+            }
+        }
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area

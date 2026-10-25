@@ -9,7 +9,7 @@ pub enum StudyCell {
     Percent(Option<f64>),
 }
 
-/// A labelled table drawn in the upper right of the study's pane.
+/// A labelled table drawn in the lower right of the study's pane.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StudyTable {
     /// Caption above the column headings.
@@ -21,7 +21,7 @@ pub struct StudyTable {
 }
 
 #[cfg(feature = "widget")]
-pub(crate) fn paint(painter: &egui::Painter, rect: egui::Rect, table: &StudyTable) {
+pub(crate) fn paint(painter: &egui::Painter, rect: egui::Rect, table: &StudyTable) -> egui::Rect {
     use crate::theme::ThemeExt;
     use egui::{Align2, FontId, Rect, Stroke, StrokeKind, pos2, vec2};
 
@@ -59,7 +59,7 @@ pub(crate) fn paint(painter: &egui::Painter, rect: egui::Rect, table: &StudyTabl
     let bounds = Rect::from_min_size(
         pos2(
             (rect.right() - width - 8.0).max(rect.left()),
-            rect.top() + 8.0,
+            (rect.bottom() - height - 8.0).max(rect.top()),
         ),
         vec2(width, height),
     );
@@ -98,12 +98,19 @@ pub(crate) fn paint(painter: &egui::Painter, rect: egui::Rect, table: &StudyTabl
                     } else {
                         theme.chart.candle_down
                     };
+                    let tint =
+                        color.gamma_multiply(0.15 + 0.5 * (value.abs() / 10.0).min(1.0) as f32);
                     painter.rect_filled(
                         Rect::from_min_size(pos2(x, y), vec2(*width, 22.0)),
                         0.0,
-                        color.gamma_multiply(0.15),
+                        tint,
                     );
-                    color
+                    crate::theme::readable_color(
+                        color,
+                        theme.ui.text,
+                        &[theme.ui.panel_bg_floating.blend(tint)],
+                        4.5,
+                    )
                 }
                 _ => theme.ui.text,
             };
@@ -118,4 +125,5 @@ pub(crate) fn paint(painter: &egui::Painter, rect: egui::Rect, table: &StudyTabl
         }
         y += 22.0;
     }
+    bounds
 }

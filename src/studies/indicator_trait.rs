@@ -140,6 +140,11 @@ pub struct StudyPane {
 /// contain it without a value. The chart's datafeed drops such bars before they reach a
 /// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
 pub trait Indicator: Send {
+    /// Sparse projected price bands, with fractional endpoints in future whitespace.
+    fn projections(&self) -> &[super::StudyProjection] {
+        &[]
+    }
+
     /// A labelled table of the latest study statistics, drawn independently of the plots.
     fn table(&self) -> Option<&super::StudyTable> {
         None
@@ -212,6 +217,31 @@ pub trait Indicator: Send {
     ) -> Result<(), &'static str> {
         let _ = (inputs, settings);
         Err("wrap the study in ConfiguredStudy to edit its presentation")
+    }
+
+    /// Visible source bars, end exclusive, supplied after pan, zoom and resize and before
+    /// autoscaling. Returns whether values need recalculation. Direct callers may supply it too.
+    fn set_visible_range(&mut self, range: std::ops::Range<usize>) -> bool {
+        let _ = range;
+        false
+    }
+
+    /// Intrabar interval the host should request for the chart symbol, or no request.
+    /// Hosts supply history and streaming corrections with `set_lower_timeframe_bars`.
+    fn lower_timeframe(&self) -> Option<crate::model::Timeframe> {
+        None
+    }
+
+    /// Replaces lower-timeframe history for this study. An empty vector clears it. Hosts must
+    /// supply the requested interval again after a symbol or interval change. On success,
+    /// calculate again; `Chart::indicator_mut` schedules that refresh for chart-owned studies.
+    fn set_lower_timeframe_bars(
+        &mut self,
+        timeframe: crate::model::Timeframe,
+        bars: Vec<Bar>,
+    ) -> Result<(), &'static str> {
+        let _ = (timeframe, bars);
+        Err("study does not use lower-timeframe bars")
     }
 
     /// The chart's current interval, supplied when added and when the interval changes.
