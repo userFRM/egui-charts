@@ -4194,7 +4194,7 @@ mod tests {
                         })
                         .collect(),
                 );
-                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                app.chart.set_theme(&ctx, &theme);
                 app.chart.set_instrument(Some(
                     egui_charts::model::Instrument::new("SAMPLE").with_price_decimals(2),
                 ));
@@ -5129,9 +5129,7 @@ mod tests {
                     let ctx = egui::Context::default();
                     let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                     app.theme = theme.clone();
-                    egui_charts::theme::apply_to_egui(&ctx, &theme);
-                    let config = app.chart.config_mut();
-                    *config = theme.apply_to_config(config.clone());
+                    app.chart.set_theme(&ctx, &theme);
                     app.switch_timeframe(interval);
                     app.timeframe_toolbar.set_session(SessionType::ETH);
                     app.apply_session();
