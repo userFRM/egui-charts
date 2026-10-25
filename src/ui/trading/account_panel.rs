@@ -58,8 +58,9 @@ pub enum AccountPanelAction {
 /// balance, equity, realised and unrealised profit and loss, margin, available funds and the
 /// margin of working orders, each shown when the broker reports it. Below are the positions,
 /// working orders, finished orders, balance changes and trading journal the broker pushes, each
-/// with a column chooser and an export. A position or order row offers edit and close or cancel
-/// buttons on hover, which wait for the user's confirmation like the chart's lines, and clicking
+/// with a column chooser and an export. Order History also lists individual executions. A
+/// position offers close, and an order offers edit and cancel on hover; each waits for the
+/// user's confirmation like the chart's lines. Clicking
 /// a symbol asks the host to show it.
 #[derive(Default)]
 pub struct AccountPanel {
