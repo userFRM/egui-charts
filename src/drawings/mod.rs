@@ -108,6 +108,9 @@
 //! ```
 
 mod api;
+/// Host-defined drawing tools and built-in availability.
+pub mod registry;
+pub use registry::{DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool, ToolAvailability};
 
 /// Static category and toolbar grouping definitions for the drawing tools.
 pub mod categories;

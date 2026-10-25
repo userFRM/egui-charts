@@ -69,6 +69,12 @@ pub struct Drawing {
     /// Host-defined group identity, retained through saving and undo.
     #[serde(default)]
     pub group: Option<String>,
+    /// Stable id of a host-registered tool; `None` uses the built-in renderer.
+    #[serde(default)]
+    pub custom_tool: Option<String>,
+    /// Host-defined settings passed to the registered renderer and saved without interpretation.
+    #[serde(default)]
+    pub custom_settings: serde_json::Value,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -162,6 +168,8 @@ impl Drawing {
             listed: true,
             group: None,
             tool_type,
+            custom_tool: None,
+            custom_settings: serde_json::Value::Null,
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
@@ -207,6 +215,14 @@ impl Drawing {
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
+    }
+
+    /// Creates a host-defined drawing. The manager looks up `tool` in its registry; the
+    /// built-in polyline identity supplies anchor handles and multi-click input only.
+    pub fn custom(tool: impl Into<String>) -> Self {
+        let mut drawing = Self::new(0, DrawingToolType::Polyline);
+        drawing.custom_tool = Some(tool.into());
+        drawing
     }
 
     /// Create a new drawing with a specific color

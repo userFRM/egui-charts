@@ -145,9 +145,13 @@ impl Chart {
             ));
         }
         let mut manager = DrawingManager::new();
+        manager.registry = self.drawings.registry.clone();
         manager.options = self.drawings.options.clone();
         manager.tool_defaults = self.drawings.tool_defaults.clone();
         manager.active_tool = self.drawings.active_tool;
+        if let Some(id) = self.drawings.active_custom_tool() {
+            let _ = manager.set_custom_tool(id);
+        }
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();

@@ -67,10 +67,7 @@ pub struct DrawingToolbarDomainState {
 // Import from modular components
 use super::{
     DrawingToolShortcuts, DrawingToolbarAction, DrawingToolbarConfig,
-    categories::{
-        AnnotationCategory, CursorsCategory, FibonacciCategory, PatternsCategory,
-        ProjectionCategory, ShapesCategory, ToolCategory, TrendLinesCategory,
-    },
+    categories::{CursorsCategory, ToolCategory, trend_lines::render_registered_tool_submenu},
     components::{draw_separator_styled, draw_tool_button, render_svg_at_rect_themed},
     data, icons,
     state::{MagnetType, ToolbarState},
@@ -84,6 +81,9 @@ use super::{
 /// Drawing toolbar - main UI component
 #[derive(Clone, Default)]
 pub struct DrawingToolbar {
+    /// Built-in availability for the bar, flyouts and shortcuts. Clone the chart manager's
+    /// registry here after changing it; hosts use its custom catalogue for their own picker.
+    pub registry: crate::drawings::DrawingToolRegistry,
     /// Toolbar state (selected tool, favorites, recent, etc.)
     pub state: ToolbarState,
     /// Configuration (width, spacing, colors, etc.)
@@ -156,7 +156,9 @@ impl DrawingToolbar {
     // === State management methods ===
 
     pub fn select_tool(&mut self, tool: DrawingToolType) {
-        self.state.select_tool(tool);
+        if self.registry.availability(tool).enabled {
+            self.state.select_tool(tool);
+        }
     }
 
     pub fn add_to_recent(&mut self, tool: DrawingToolType) {
@@ -205,6 +207,7 @@ impl DrawingToolbar {
             && !Popup::is_any_open(ui.ctx())
             && !ui.ctx().text_edit_focused()
             && let Some(tool) = DrawingToolShortcuts::default().check(ui.ctx())
+            && self.registry.availability(tool).enabled
         {
             self.select_tool(tool);
             action = DrawingToolbarAction::SelectTool(tool);
@@ -430,6 +433,8 @@ impl DrawingToolbar {
                 .copied()
                 .collect();
 
+            tools.retain(|tool| self.registry.availability(*tool).visible);
+
             // Filter by search
             if !self.state.search_query.is_empty() {
                 let query = self.state.search_query.to_lowercase();
@@ -437,7 +442,7 @@ impl DrawingToolbar {
             }
 
             let is_icons = category == "Icons/Emojis";
-            if tools.is_empty() && !is_icons {
+            if tools.is_empty() {
                 continue;
             }
 
@@ -452,6 +457,7 @@ impl DrawingToolbar {
                         .category_last_tool
                         .get(category)
                         .copied()
+                        .filter(|tool| tools.contains(tool))
                         .or_else(|| tools.first().copied())
                 }
             } else {
@@ -459,6 +465,7 @@ impl DrawingToolbar {
                     .category_last_tool
                     .get(category)
                     .copied()
+                    .filter(|tool| tools.contains(tool))
                     .or_else(|| tools.first().copied())
             };
 
@@ -489,7 +496,14 @@ impl DrawingToolbar {
 
         // Measure tool
         let measure_active = self.state.sel_tool == Some(DrawingToolType::Measure);
-        if let Some(a) = MeasureButton::show(ui, measure_active) {
+        let measure = self.registry.availability(DrawingToolType::Measure);
+        if measure.visible
+            && let Some(a) = ui
+                .add_enabled_ui(measure.enabled, |ui| {
+                    MeasureButton::show(ui, measure_active)
+                })
+                .inner
+        {
             self.select_tool(DrawingToolType::Measure);
             action = a;
         }
@@ -578,6 +592,7 @@ impl DrawingToolbar {
         let templates = !self.hidden.contains(&Control::Templates);
         let sel_tool = self.state.sel_tool;
         let state = &mut self.state;
+        let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
             "Magnet" => MagnetButton::show_submenu(ui, state.magnet_mode, state.magnet_type),
             "Hide" => {
@@ -590,20 +605,19 @@ impl DrawingToolbar {
                 action
             }
             "Remove" => RemoveMenu::show_submenu(ui),
-            "Icons/Emojis" => state.glyph_picker.show(ui),
+            "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
                 let favorites = &mut state.favorites;
-                let action = match category {
-                    "Cursors" => CursorsCategory.render_submenu(ui, sel_tool, favorites),
-                    "Lines" => TrendLinesCategory.render_submenu(ui, sel_tool, favorites),
-                    "Fibonacci" => FibonacciCategory.render_submenu(ui, sel_tool, favorites),
-                    "Patterns" => PatternsCategory.render_submenu(ui, sel_tool, favorites),
-                    "Projection" => ProjectionCategory.render_submenu(ui, sel_tool, favorites),
-                    "Brushes/Shapes" => ShapesCategory.render_submenu(ui, sel_tool, favorites),
-                    "Text/Annotations" => {
-                        AnnotationCategory.render_submenu(ui, sel_tool, favorites)
-                    }
-                    _ => DrawingToolbarAction::None,
+                let action = if category == "Cursors" {
+                    CursorsCategory.render_submenu(ui, sel_tool, favorites)
+                } else {
+                    render_registered_tool_submenu(
+                        ui,
+                        data::get_category_sections(category),
+                        sel_tool,
+                        favorites,
+                        registry,
+                    )
                 };
                 (action != DrawingToolbarAction::None).then_some(action)
             }
@@ -629,6 +643,19 @@ impl DrawingToolbar {
     /// `None` when the pick has no effect to report.
     fn apply_pick(&mut self, action: DrawingToolbarAction) -> Option<DrawingToolbarAction> {
         use DrawingToolbarAction as A;
+        let tool = match &action {
+            A::SelectTool(tool) => Some(*tool),
+            A::InsertEmoji { .. } => Some(DrawingToolType::FontIcon),
+            A::InsertGlyph { icon_name, .. } => Some(if icon_name.starts_with("sticker:") {
+                DrawingToolType::Sticker
+            } else {
+                DrawingToolType::FontIcon
+            }),
+            _ => None,
+        };
+        if tool.is_some_and(|tool| !self.registry.availability(tool).enabled) {
+            return None;
+        }
         match &action {
             A::SelectTool(tool) => self.select_tool(*tool),
             A::SetCursorType(cursor) => {
@@ -1240,6 +1267,35 @@ mod tests {
             assert_eq!(toolbar.state.eraser_mode_enabled, eraser);
             assert_eq!(toolbar.state.current_cursor_type, CursorType::Dot);
         }
+        toolbar.registry.set_availability(
+            TrendLine,
+            crate::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
+        assert_eq!(toolbar.apply_pick(SelectTool(TrendLine)), None);
+        let ctx = Context::default();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            render_registered_tool_submenu(
+                ui,
+                data::get_category_sections("Lines"),
+                None,
+                &mut vec![],
+                &toolbar.registry,
+            );
+        });
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!labels.contains(&TrendLine.as_str()));
+        assert!(labels.contains(&DrawingToolType::HorizontalLine.as_str()));
+        output.drop_without_applying_deltas();
     }
 
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.

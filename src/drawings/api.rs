@@ -60,7 +60,7 @@ impl Chart {
             return Err("Drawing is locked");
         }
         drawing.chart_points = self.map_drawing_points(points)?;
-        validate(&drawing)?;
+        self.drawings().validate_drawing(&drawing)?;
         self.drawings_mut().edit_drawing(id, |target| {
             target.chart_points = drawing.chart_points;
         });
@@ -97,7 +97,7 @@ pub(super) fn validate(drawing: &Drawing) -> Result<(), &'static str> {
         DrawingToolType::LongPos | DrawingToolType::ShortPos => Some(3),
         _ => tool.required_points(),
     };
-    if required.map_or(count < 2, |required| count != required) {
+    if drawing.custom_tool.is_none() && required.map_or(count < 2, |required| count != required) {
         return Err("Invalid drawing anchor count");
     }
     if drawing

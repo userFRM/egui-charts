@@ -163,6 +163,9 @@ pub(crate) struct TextEditState {
 /// # }
 /// ```
 pub struct DrawingManager {
+    /// Host tools and built-in availability. Register tools before restoring their drawings.
+    pub registry: super::DrawingToolRegistry,
+    active_custom_tool: Option<String>,
     /// Per-tool defaults, exportable with serde for host-owned application storage.
     /// New drawings use these properties without copying geometry, identity or layer.
     pub tool_defaults: std::collections::HashMap<DrawingToolType, super::DrawingTemplate>,
@@ -233,6 +236,8 @@ impl DrawingManager {
     /// Creates a new `DrawingManager` with default options and empty drawing list.
     pub fn new() -> Self {
         Self {
+            registry: Default::default(),
+            active_custom_tool: None,
             drawings: Vec::new(),
             tool_defaults: Default::default(),
             active_tool: None,
@@ -265,7 +270,9 @@ impl DrawingManager {
     /// Sync drawing manager state from central AppState
     /// Called at the start of each frame to ensure consistency
     pub fn sync_from_app_state(&mut self, drawing_state: &DrawingState) {
-        self.active_tool = drawing_state.active_tool;
+        if self.active_tool != drawing_state.active_tool {
+            self.set_active_tool(drawing_state.active_tool);
+        }
         self.options.magnet_mode = drawing_state.magnet_mode;
         self.options.default_color = drawing_state.curr_color;
         self.stay_in_drawing_mode = drawing_state.stay_in_drawing_mode;
@@ -665,11 +672,52 @@ impl DrawingManager {
     /// return to selection/pointer mode. A tool cancels any in-progress drawing and leaves
     /// eraser mode.
     pub fn set_active_tool(&mut self, tool: Option<DrawingToolType>) {
+        self.active_custom_tool = None;
+        let tool = tool.filter(|tool| self.registry.availability(*tool).enabled);
         self.active_tool = tool;
+        self.cancel_curr_drawing();
         if tool.is_some() {
-            self.cancel_curr_drawing();
             self.eraser_mode = false;
         }
+    }
+
+    /// The registered tool selected for the next placement, or `None` for a built-in tool.
+    pub fn active_custom_tool(&self) -> Option<&str> {
+        self.active_custom_tool.as_deref()
+    }
+
+    /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
+    /// first click. The host picker uses `registry.custom_tools()` for its ids and names.
+    pub fn set_custom_tool(&mut self, id: &str) -> Result<(), &'static str> {
+        if self.registry.get(id).is_none() {
+            return Err("Unknown drawing tool");
+        }
+        self.cancel_curr_drawing();
+        self.eraser_mode = false;
+        self.active_tool = Some(DrawingToolType::Polyline);
+        self.active_custom_tool = Some(id.into());
+        Ok(())
+    }
+
+    /// Shows a registered tool's settings and records a changed draft as one undoable edit.
+    /// Unknown tools and locked drawings show no editor and return false.
+    pub fn show_custom_settings(&mut self, ui: &mut egui::Ui, id: usize) -> bool {
+        let Some(drawing) = self.drawings.iter().find(|d| d.id == id && !d.locked) else {
+            return false;
+        };
+        let Some(tool) = drawing
+            .custom_tool
+            .as_deref()
+            .and_then(|id| self.registry.get(id))
+        else {
+            return false;
+        };
+        let mut settings = drawing.custom_settings.clone();
+        if !tool.implementation.settings(ui, &mut settings) || settings == drawing.custom_settings {
+            return false;
+        }
+        self.edit_drawing(id, |drawing| drawing.custom_settings = settings);
+        true
     }
 
     /// Switches eraser mode on or off. In eraser mode a click on the chart deletes the
@@ -679,6 +727,7 @@ impl DrawingManager {
     pub fn set_eraser_mode(&mut self, on: bool) {
         self.eraser_mode = on;
         if on {
+            self.active_custom_tool = None;
             self.active_tool = None;
             self.cancel_curr_drawing();
         }
@@ -702,6 +751,9 @@ impl DrawingManager {
         } else {
             DrawingToolType::FontIcon
         };
+        if !self.registry.availability(tool).enabled {
+            return;
+        }
         self.set_active_tool(Some(tool));
 
         // Create a new drawing with the icon name
@@ -737,6 +789,9 @@ impl DrawingManager {
         F: Fn(f32) -> f32,
         G: Fn(f32) -> f64,
     {
+        if self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled {
+            return;
+        }
         let point = self.snap_point(point, &self.drawings);
         // A drawing prepared before its first anchor, such as a picked icon, starts here.
         let mut drawing = match self.curr_drawing.take() {
@@ -752,6 +807,9 @@ impl DrawingManager {
                 drawing
             }
         };
+        if let Some(id) = &self.active_custom_tool {
+            drawing.custom_tool = Some(id.clone());
+        }
         drawing.pane = self.pane;
         drawing.z_order = self.top_z_order();
         self.preview_point = false;
@@ -776,6 +834,13 @@ impl DrawingManager {
             ]);
         }
 
+        if let Some(tool) = drawing
+            .custom_tool
+            .as_deref()
+            .and_then(|id| self.registry.get(id))
+        {
+            drawing.completed = drawing.chart_points.len() == tool.anchors;
+        }
         let completed = drawing.completed;
         self.curr_drawing = Some(drawing);
         if completed {
@@ -801,6 +866,13 @@ impl DrawingManager {
                 drawing.chart_points.pop();
             }
             drawing.add_point_with_chart_coords(point, &x_to_bar, &y_to_price);
+            if let Some(tool) = drawing
+                .custom_tool
+                .as_deref()
+                .and_then(|id| self.registry.get(id))
+            {
+                drawing.completed = drawing.chart_points.len() == tool.anchors;
+            }
             if drawing.completed {
                 self.finish_curr_drawing();
             }
@@ -841,7 +913,14 @@ impl DrawingManager {
             drawing.chart_points.pop();
         }
         if let Some(ref mut drawing) = self.curr_drawing
-            && drawing.points.len() >= drawing.tool_type.anchors_needed().max(2)
+            && drawing.custom_tool.as_deref().map_or_else(
+                || drawing.points.len() >= drawing.tool_type.anchors_needed().max(2),
+                |id| {
+                    self.registry
+                        .get(id)
+                        .is_some_and(|tool| drawing.points.len() == tool.anchors)
+                },
+            )
         {
             drawing.completed = true;
             self.finish_curr_drawing();
@@ -852,6 +931,11 @@ impl DrawingManager {
     /// In keep-drawing mode the icon tool goes on placing the icon that was picked.
     fn finish_curr_drawing(&mut self) {
         if let Some(mut drawing) = self.curr_drawing.take() {
+            if drawing.custom_tool.is_none()
+                && !self.registry.availability(drawing.tool_type).enabled
+            {
+                return;
+            }
             drawing.update_pane_coords(self.pane_rect);
             let icon = matches!(
                 drawing.tool_type,
@@ -866,6 +950,7 @@ impl DrawingManager {
             self.queue(DrawingSyncAction::SaveDrawing(id));
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
+                self.active_custom_tool = None;
             } else if let Some(icon) = icon {
                 self.start_icon_insertion(icon);
                 if let Some(prepared) = &mut self.curr_drawing {
@@ -1253,6 +1338,12 @@ impl DrawingManager {
                         .is_some_and(|rect| rect.contains(point))
             })
             .find(|drawing| {
+                if let Some(id) = &drawing.custom_tool {
+                    return self
+                        .registry
+                        .get(id)
+                        .is_some_and(|tool| tool.implementation.hit_test(drawing, point, 6.0));
+                }
                 let paint = painted
                     .iter()
                     .find(|p| p.id == drawing.id && p.points == drawing.points);
@@ -1376,7 +1467,10 @@ impl DrawingManager {
     /// step. Assigns a fresh id, retains the supplied layer, and queues a save if `saveable`.
     /// Use `Chart::create_drawing` when the anchors are UTC times rather than bar indices.
     pub fn add_drawing(&mut self, mut drawing: Drawing) -> Result<usize, &'static str> {
-        super::api::validate(&drawing)?;
+        self.validate_drawing(&drawing)?;
+        if drawing.custom_tool.is_none() && !self.registry.availability(drawing.tool_type).enabled {
+            return Err("Drawing tool is disabled");
+        }
         drawing.id = self.take_id();
         drawing.stored_id = None;
         drawing.created_at = None;
@@ -1388,6 +1482,19 @@ impl DrawingManager {
         self.drawings.push(drawing);
         self.queue(DrawingSyncAction::SaveDrawing(id));
         Ok(id)
+    }
+
+    pub(crate) fn validate_drawing(&self, drawing: &Drawing) -> Result<(), &'static str> {
+        super::api::validate(drawing)?;
+        if let Some(id) = &drawing.custom_tool {
+            let tool = self.registry.get(id).ok_or("Unknown drawing tool")?;
+            if drawing.tool_type != DrawingToolType::Polyline
+                || drawing.chart_points.len() != tool.anchors
+            {
+                return Err("Invalid custom drawing anchors");
+            }
+        }
+        Ok(())
     }
 
     /// Drawings included in host object lists, in drawing-list order.
@@ -1456,6 +1563,22 @@ impl DrawingManager {
         self.drawings.push(drawing);
     }
 
+    fn render_drawing(
+        &self,
+        drawing: &Drawing,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+    ) {
+        if let Some(id) = &drawing.custom_tool {
+            if let Some(tool) = self.registry.get(id) {
+                tool.implementation.render(drawing, painter, rect, view);
+            }
+        } else {
+            drawing.render(painter, rect, view);
+        }
+    }
+
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         let painter = &painter.with_clip_rect(price_rect);
@@ -1468,9 +1591,10 @@ impl DrawingManager {
         painted.retain(|paint| others.contains(&paint.id));
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
-            let off_pane = drawing
-                .paint_span()
-                .is_some_and(|span| !span.intersects(price_rect.x_range()));
+            let off_pane = drawing.custom_tool.is_none()
+                && drawing
+                    .paint_span()
+                    .is_some_and(|span| !span.intersects(price_rect.x_range()));
             if self.owns_pane(drawing)
                 && drawing.is_visible_on_timeframe(&self.curr_timeframe)
                 && !off_pane
@@ -1479,7 +1603,7 @@ impl DrawingManager {
                     g.get(painter.layer_id())
                         .map_or(0, |list| list.next_idx().0)
                 });
-                drawing.render(painter, price_rect, view);
+                self.render_drawing(drawing, painter, price_rect, view);
                 let shapes = painter.ctx().graphics(|g| {
                     g.get(painter.layer_id())
                         .map(|list| list.all_entries().skip(start).cloned().collect())
@@ -1497,7 +1621,7 @@ impl DrawingManager {
         if let Some(ref drawing) = self.curr_drawing
             && self.owns_pane(drawing)
         {
-            drawing.render(painter, price_rect, view);
+            self.render_drawing(drawing, painter, price_rect, view);
         }
 
         // Render handles for every visible selected drawing.
