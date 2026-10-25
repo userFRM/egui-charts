@@ -12,7 +12,7 @@ pub(super) struct DrawingStore {
     /// The document of each symbol shown since storage was attached.
     documents: HashMap<String, StoredDocument>,
     /// Drawings read for a symbol that was no longer shown when they arrived.
-    loaded: HashMap<String, (String, bool)>,
+    loaded: HashMap<String, String>,
     /// The chart's drawing edit count when the shown symbol's drawings were last saved.
     saved: u64,
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
@@ -88,6 +88,10 @@ impl Chart {
                             }
                             Ok(loaded) => {
                                 if let Some((mut pending, merge)) = store.pending.remove(name) {
+                                    let merged = merge
+                                        && loaded.as_ref().is_some_and(|(drawings, _)| {
+                                            !drawings.drawings().is_empty()
+                                        });
                                     if merge && let Some((mut drawings, _)) = loaded {
                                         for mut drawing in pending.drawings().iter().cloned() {
                                             // Edits before the first read are new drawings, even if ids collide.
@@ -101,7 +105,10 @@ impl Chart {
                                     match pending.to_json() {
                                         Ok(json) => {
                                             document.save(&*store.storage, json.clone());
-                                            store.loaded.insert(name.clone(), (json, merge));
+                                            // Only a real merge needs to replace local drawings and history.
+                                            if merged {
+                                                store.loaded.insert(name.clone(), json);
+                                            }
                                         }
                                         Err(error) => {
                                             store.error = Some(format!(
@@ -110,7 +117,7 @@ impl Chart {
                                         }
                                     }
                                 } else if let Some(json) = json {
-                                    store.loaded.insert(name.clone(), (json, true));
+                                    store.loaded.insert(name.clone(), json);
                                 }
                             }
                         }
@@ -119,22 +126,20 @@ impl Chart {
                 }
             }
         }
-        if let Some((json, remap)) = store.loaded.remove(&symbol) {
-            self.restore_stored_drawings(&json, remap);
+        if let Some(json) = store.loaded.remove(&symbol) {
+            self.restore_stored_drawings(&json);
         }
         self.save_stored_drawings();
     }
 
     /// Replaces the drawings with the stored ones in `json`.
-    fn restore_stored_drawings(&mut self, json: &str, remap: bool) {
+    fn restore_stored_drawings(&mut self, json: &str) {
         let refused = match self.load_drawings(json) {
             Ok(skipped) if skipped.is_empty() => None,
             Ok(skipped) => Some(format!("{} drawings could not be read", skipped.len())),
             Err(error) => Some(error.to_string()),
         };
-        if remap {
-            self.remap_drawing_panes();
-        }
+        self.remap_drawing_panes();
         let store = self.drawing_store.as_mut().expect("drawing storage");
         if let Some(error) = refused {
             if let Some(document) = store.documents.get_mut(&self.symbol) {
