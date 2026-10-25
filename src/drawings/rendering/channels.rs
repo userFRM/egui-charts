@@ -682,7 +682,7 @@ mod tests {
         let flat = Moments::of(&vec![
             Bar {
                 close: 0.1,
-                ..bars[0]
+                ..bars[0].clone()
             };
             100
         ])

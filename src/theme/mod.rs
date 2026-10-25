@@ -610,7 +610,11 @@ mod tests {
             assert_eq!(chart.config().background_color, theme.chart.bg);
             let crosshair = chart.chart_options().crosshair.resolved(&ctx);
             assert_eq!(
-                crosshair.label_background_color,
+                crosshair.vert_label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(
+                crosshair.horz_label_background_color,
                 theme.chart.crosshair_label_bg
             );
             assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);

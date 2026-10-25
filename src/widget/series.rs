@@ -5,24 +5,52 @@ use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
-use crate::model::{Bar, BarClock, BarData, Marker, MarkerOptions, PriceLine};
+use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, MarkerOptions, PriceLine};
 use crate::studies::Indicator;
+use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 use web_time::Instant;
+
+/// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MismatchDirection {
+    /// Only a bar opened at the time.
+    Exact,
+    /// The latest bar opened before the time.
+    NearestLeft,
+    /// The earliest bar opened after the time.
+    NearestRight,
+}
+
+/// The bars of a series inside a range of logical indices, from
+/// [`Chart::bars_in_logical_range`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarsInRange {
+    /// Indices into [`Chart::bars`] of the bars inside the range, empty when none is.
+    pub bars: std::ops::Range<usize>,
+    /// The number of bars before the range. When there are none, the logical distance from
+    /// the range's left edge to the first bar, negated: zero or less.
+    pub bars_before: f64,
+    /// The number of bars after the range. When there are none, the logical distance from the
+    /// last bar to the range's right edge, negated: zero or less.
+    pub bars_after: f64,
+}
 
 /// Handle of a price line added with [`Chart::add_price_line`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PriceLineId(u64);
 
 impl Chart {
-    /// Take the study settings request from a legend button or a double-click in a study pane.
+    /// Take the settings request from a legend button or a double-click in a pane: a study, or
+    /// a bar series shown in a pane other than the main one.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
         self.indicator_settings_request.take()
     }
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
-    /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
+    /// and counted in [`feed_state`](Self::feed_state), except [whitespace](Bar::whitespace) bars,
+    /// which keep their slots empty. The rest are sorted by time, and of several
     /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
@@ -40,11 +68,13 @@ impl Chart {
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let (bars, rejected) = clean(bars, &self.clock());
-            self.price_series[at].bars = bars;
-            if let Some(marks) = &mut self.price_series[at].change_marks {
+            let item = &mut self.price_series[at];
+            item.bars = bars;
+            item.revision = crate::model::next_revision();
+            if let Some(marks) = &mut item.change_marks {
                 marks.clear();
             }
-            self.price_series[at].feed.rejected_bars += rejected;
+            item.feed.rejected_bars += rejected;
             self.data_loaded(series);
             return;
         }
@@ -78,20 +108,20 @@ impl Chart {
     /// a bar that matches a stored bar replaces it, a newer one is appended and an older one is
     /// inserted in order. An invalid bar is dropped and counted in
     /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
-    /// next [`show`](Self::show), and near the live edge the view follows a new last bar.
+    /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A merged
+    /// bar is reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
-        if (series == SeriesId::MAIN && self.main_series_present
+        let changed = if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay.is_some()
         {
-            self.replay_update(series, bar);
-            return;
-        }
-        if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
+            self.replay_update(series, bar)
+        } else if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
             let clock = self.clock();
             let item = &mut self.price_series[at];
+            let len = item.bars.len();
             let incoming = vec![(bar, Origin::Live)];
             let before = ChangeMarks::before(&item.bars, &clock, &incoming);
             let merged = merge(&mut item.bars, &mut BTreeSet::new(), &clock, incoming);
@@ -99,14 +129,63 @@ impl Chart {
             if let Some(marks) = &mut item.change_marks {
                 marks.record(&item.bars, &clock, before);
             }
-            return;
-        }
-        if self.main_series_present && holds_bars(series, "update") {
-            self.apply(vec![(bar, Origin::Live)]);
+            if merged.first_changed.is_some_and(|first| first + 1 < len) {
+                item.revision = crate::model::next_revision();
+            }
+            merged.first_changed.is_some()
+        } else if self.main_series_present && holds_bars(series, "update") {
+            self.apply(vec![(bar, Origin::Live)])
+                .first_changed
+                .is_some()
+        } else {
+            false
+        };
+        if changed {
+            self.data_updated(series);
         }
     }
 
-    /// The bars of `series`, oldest first. Removed series, volume and studies hold no bars.
+    /// Removes the last `count` bars of `series`, or all of them for a larger count, and returns
+    /// them oldest first, leaving the other bars in place. Drawings, studies and the view follow
+    /// as for [`update`](Self::update), and [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated)
+    /// reports the removal. During a replay the bars are removed from the retained history.
+    ///
+    /// Bar series accept this; unknown ids and study ids are ignored with a warning.
+    pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
+        let present = series == SeriesId::MAIN && self.main_series_present
+            || self.price_series.iter().any(|item| item.id == series);
+        let removed = if present && self.replay.is_some() {
+            self.replay_pop(series, count)
+        } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
+            item.revision = crate::model::next_revision();
+            item.bars.split_off(item.bars.len().saturating_sub(count))
+        } else if self.main_series_present && holds_bars(series, "pop_bars") {
+            let before = self.edge();
+            self.anchor_drawing_points();
+            let mut removed = Vec::new();
+            let first_changed = self.state.edit_bars(|bars| {
+                let at = bars.len().saturating_sub(count);
+                removed = bars.split_off(at);
+                (!removed.is_empty()).then_some(at)
+            });
+            if let Some(first) = removed.first() {
+                self.from_ticks.split_off(&first.time);
+            }
+            self.project_drawing_points();
+            self.bars_changed(before, first_changed);
+            removed
+        } else {
+            return Vec::new();
+        };
+        if !removed.is_empty() {
+            self.data_updated(series);
+        }
+        removed
+    }
+
+    /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
+    /// is the bar at an index and `bars(id).last()` the last bar, which can be a
+    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
         if series == SeriesId::MAIN && self.main_series_present {
             &self.state.data().bars
@@ -116,6 +195,60 @@ impl Chart {
                 .find(|item| item.id == series)
                 .map_or(&[], |item| item.bars.as_slice())
         }
+    }
+
+    /// The index in [`bars`](Self::bars) of the bar of `series` opened at `time`, or else of its
+    /// nearest neighbour in `direction`. `None` when there is no such bar.
+    pub fn bar_index_at(
+        &self,
+        series: SeriesId,
+        time: DateTime<Utc>,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
+        let bars = self.bars(series);
+        let at = bars.partition_point(|bar| bar.time < time);
+        if bars.get(at).is_some_and(|bar| bar.time == time) {
+            return Some(at);
+        }
+        match direction {
+            MismatchDirection::Exact => None,
+            MismatchDirection::NearestLeft => at.checked_sub(1),
+            MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+        }
+    }
+
+    /// The bars of `series` inside `range`, a range of logical indices of the time scale such as
+    /// [`visible_logical_range`](Self::visible_logical_range) returns, with the bars before and
+    /// after it, for example to request older history before the user scrolls to its start. The range's edges are rounded to whole indices; a bar's logical index is
+    /// the position of its open time on the time scale. `None` for a series without bars or a
+    /// chart without a time scale.
+    pub fn bars_in_logical_range(
+        &self,
+        series: SeriesId,
+        range: LogicalRange,
+    ) -> Option<BarsInRange> {
+        let bars = self.bars(series);
+        let shown = self.state.shown();
+        let (first, last) = (bars.first()?, bars.last()?);
+        let index = |bar: &Bar| super::sync::index_at(shown, bar.time).unwrap_or(f64::NAN);
+        let left = f64::from(range.left).round();
+        let right = f64::from(range.right).round();
+        shown.first()?;
+        let start = bars.partition_point(|bar| index(bar) < left);
+        let end = bars.partition_point(|bar| index(bar) <= right).max(start);
+        Some(BarsInRange {
+            bars: start..end,
+            bars_before: if start > 0 {
+                start as f64
+            } else {
+                left - index(first)
+            },
+            bars_after: if end < bars.len() {
+                (bars.len() - end) as f64
+            } else {
+                index(last) - right
+            },
+        })
     }
 
     /// Replaces the markers drawn on the bars of `series` (trade signals, events).
@@ -280,8 +413,8 @@ impl Chart {
     }
 
     /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
-    /// main pane if [`Indicator::is_overlay`], otherwise in a pane below it. Returns the study's
-    /// id, which stays valid when other studies are removed.
+    /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
+    /// study's id, which stays valid when other studies are removed.
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
@@ -295,12 +428,16 @@ impl Chart {
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);
+        let overlay = indicator.is_overlay();
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
         self.pending_from.push(None);
         self.next_refresh.push(f64::NEG_INFINITY);
+        if !overlay {
+            self.add_study_pane(id);
+        }
         id
     }
 
@@ -407,6 +544,16 @@ impl Chart {
         self.record_study(id);
         self.study_autoscale[at] = autoscale;
         true
+    }
+
+    /// Pins study `id` to the pane's price scale, a scale of its own or no scale. Returns `false`
+    /// for an id that is not a study of the chart, or a custom presentation that keeps its scale.
+    pub fn set_indicator_scale(&mut self, id: SeriesId, scale: crate::studies::StudyScale) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.studies.indicators_mut()[at].set_scale(scale)
     }
 
     /// The chart's studies with their ids, in the order they were added. Their values reflect the
@@ -541,8 +688,10 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
-        let tail_changed =
-            tail.is_some_and(|(old, new)| old.time != new.time || old.close != new.close);
+        // Bitwise, so that the NaN close of an unchanged whitespace bar is unchanged.
+        let tail_changed = tail.is_some_and(|(old, new)| {
+            old.time != new.time || old.close.to_bits() != new.close.to_bits()
+        });
         let options = &self.chart_options.time_scale;
         let shift_for_whitespace = tail_changed
             && !appended
@@ -1314,9 +1463,11 @@ mod tests {
                 continue;
             }
             let line = |color| {
-                let at = |shape: &Shape| {
-                    matches!(shape,
-                    Shape::LineSegment { stroke, .. } if stroke.color == color)
+                // The series line is one path, a price line a segment.
+                let at = |shape: &Shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
                 };
                 (
                     painted.iter().position(at).unwrap(),

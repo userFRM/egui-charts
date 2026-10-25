@@ -202,13 +202,8 @@ pub fn render_price_line(
     let start = Pos2::new(x0, y);
     let end = Pos2::new(price_rect.max.x, y);
     let stroke = Stroke::new(line.width, line.color);
-    let pattern = match line.style {
-        crate::model::LineStyle::Dashed => Some((4.0, 4.0)),
-        crate::model::LineStyle::Dotted => Some((1.0, 3.0)),
-        crate::model::LineStyle::Solid => None,
-    };
     if line.width > 0.0 {
-        if let Some((dash, gap)) = pattern {
+        if let Some((dash, gap)) = line.style.hairline_pattern() {
             draw_dashed_line(painter, start, end, stroke, dash, gap);
         } else {
             painter.line_segment([start, end], stroke);
