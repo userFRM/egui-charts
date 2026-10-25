@@ -246,7 +246,9 @@ impl Sampler {
 /// Start of the period of `cadence` that holds `ts`, counted from the Unix epoch.
 fn start(ts: DateTime<Utc>, cadence: TimeDelta) -> Option<DateTime<Utc>> {
     let (ts, cadence) = (ts.timestamp_nanos_opt()?, cadence.num_nanoseconds()?);
-    Some(DateTime::from_timestamp_nanos(ts - ts.rem_euclid(cadence)))
+    Some(DateTime::from_timestamp_nanos(
+        ts.checked_sub(ts.rem_euclid(cadence))?,
+    ))
 }
 
 /// One column spanning `older` and `newer`, adjacent, each row's size averaged over their spans.
@@ -392,6 +394,11 @@ mod tests {
             assert_eq!(history.columns().next_back().unwrap().bids, [(100, 30.0)]);
             let before: Vec<_> = history.columns().cloned().collect();
             assert!(history.merge_page(vec![column(1, -1, 1.0)]).is_err());
+            let edge = DepthColumn {
+                time: DateTime::from_timestamp_nanos(i64::MIN),
+                ..column(1, 1, 1.0)
+            };
+            assert!(history.merge_page(vec![edge]).is_err());
             assert_eq!(history.columns().cloned().collect::<Vec<_>>(), before);
         }
     }
