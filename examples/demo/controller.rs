@@ -860,7 +860,7 @@ impl DemoApp {
     fn open_chart_settings_dialog(&mut self) {
         let (alerts, trading) = (
             self.settings_state.alerts.clone(),
-            self.settings_state.trading.clone(),
+            self.trading.display.clone(),
         );
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
@@ -5208,7 +5208,11 @@ mod tests {
                 egui_charts::scales::PriceScaleMode::Percentage;
             app.chart.price_scale_mut().set_range(-5.0, 5.0);
             *app.chart.config_mut() = config.clone();
+            // The ticket menu changes the live trading options before settings are reopened.
+            app.trading.display.instant_orders = true;
             app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
+            assert!(app.settings_state.trading.instant_orders);
+            assert!(app.settings_dialog.settings().trading.instant_orders);
             let state = app.settings_state.clone();
             apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
             let applied = app.chart.config();

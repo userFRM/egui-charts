@@ -24,7 +24,9 @@ use crate::model::{
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
-/// pays the commission rate times its value. Every change is pushed as an [`AccountEvent`], with
+/// pays the commission rate times its value. Orders that increase exposure beyond the balance
+/// at the account's leverage are rejected. Position exits only reduce the remaining position.
+/// Every change is pushed as an [`AccountEvent`], with
 /// the most recent 1,000 finished orders, executions, balance changes and journal entries.
 /// The history bound keeps a reconnect snapshot below the event stream's burst limit for
 /// ordinary interactive accounts.
