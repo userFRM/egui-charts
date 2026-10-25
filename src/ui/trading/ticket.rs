@@ -450,13 +450,13 @@ impl OrderTicket {
             ui.label(format!("Value  {}", money(entry * per_price)));
             if let Some(exit) = request.take_profit {
                 ui.colored_label(
-                    theme.ui.success,
+                    theme.ui.take_profit,
                     format!("Reward  {}", money((exit - entry).abs() * per_price)),
                 );
             }
             if let Some(exit) = request.stop_loss {
                 ui.colored_label(
-                    theme.ui.error,
+                    theme.ui.stop_loss,
                     format!("Risk  {}", money((exit - entry).abs() * per_price)),
                 );
             }

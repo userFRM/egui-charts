@@ -187,6 +187,10 @@ impl Chart {
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
             #[cfg(feature = "ui")]
+            trading_outlined: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_bid_ask: false,
+            #[cfg(feature = "ui")]
             order_quantity: None,
             #[cfg(feature = "ui")]
             quantity_clicked: None,

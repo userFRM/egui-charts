@@ -1249,11 +1249,18 @@ impl Chart {
             }
         }
         #[cfg(feature = "ui")]
-        pending_values.extend(
-            std::mem::take(&mut self.trading_tags)
-                .into_iter()
-                .map(|(value, fill)| (value, (rendering::axes::tag_text_color(fill), fill))),
-        );
+        let trading_outlined = std::mem::take(&mut self.trading_outlined);
+        #[cfg(feature = "ui")]
+        pending_values.extend(std::mem::take(&mut self.trading_tags).into_iter().map(
+            |(value, fill)| {
+                let colors = if trading_outlined.contains(&value) {
+                    (fill, ui.active_theme().chart.bg)
+                } else {
+                    (rendering::axes::tag_text_color(fill), fill)
+                };
+                (value, colors)
+            },
+        ));
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
@@ -1353,7 +1360,7 @@ impl Chart {
                         price_map.transform().to_scale(*value),
                         price_map.price_precision().unwrap_or(2),
                     );
-                    tags.push(rendering::axes::render_axis_value(
+                    let tag = rendering::axes::render_axis_value(
                         &painter,
                         price_rect,
                         axis_edge,
@@ -1361,7 +1368,19 @@ impl Chart {
                         label,
                         *colors,
                         &tags,
-                    ));
+                    );
+                    #[cfg(feature = "ui")]
+                    if trading_outlined.contains(value)
+                        && let Some(rect) = tag
+                    {
+                        painter.rect_stroke(
+                            rect,
+                            2.0,
+                            egui::Stroke::new(1.0, colors.0),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    tags.push(tag);
                 }
             }
         }
@@ -1481,7 +1500,17 @@ impl Chart {
                     (low, "Low", self.config.bearish_color),
                 ]);
             }
-            if self.config.show_bid_ask
+            let trading_bid_ask = {
+                #[cfg(feature = "ui")]
+                {
+                    std::mem::take(&mut self.trading_bid_ask)
+                }
+                #[cfg(not(feature = "ui"))]
+                {
+                    false
+                }
+            };
+            if (self.config.show_bid_ask || trading_bid_ask)
                 && let Some(quote) = self.quote.as_ref().filter(|quote| {
                     quote.bid.is_finite()
                         && quote.ask.is_finite()
@@ -1490,12 +1519,19 @@ impl Chart {
                 })
             {
                 values.extend([
-                    (quote.bid, "Bid", self.config.bearish_color),
-                    (quote.ask, "Ask", self.config.bullish_color),
+                    (quote.bid, "Bid", ui.active_theme().ui.accent),
+                    (quote.ask, "Ask", ui.active_theme().ui.error),
                 ]);
             }
             for (value, name, color) in values {
                 let line = PriceLine::new(value, color)
+                    .with_width(
+                        if (name == "Bid" || name == "Ask") && !self.config.show_bid_ask {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    )
                     .with_style(crate::model::LineStyle::Dotted)
                     .with_axis_label(false);
                 rendering::render_price_line(
@@ -1511,14 +1547,17 @@ impl Chart {
                     .range()
                     .contains(price_map.transform().to_scale(value))
                 {
-                    let label = format!(
-                        "{name} {}",
-                        price_map.transform().label(
-                            price_map.transform().to_scale(value),
-                            price_map.price_precision().unwrap_or(2)
-                        )
+                    let price = price_map.transform().label(
+                        price_map.transform().to_scale(value),
+                        price_map.price_precision().unwrap_or(2),
                     );
-                    tags.push(rendering::axes::render_axis_value(
+                    let quote = name == "Bid" || name == "Ask";
+                    let label = if quote {
+                        price
+                    } else {
+                        format!("{name} {price}")
+                    };
+                    let tag = rendering::axes::render_axis_value(
                         &painter,
                         price_rect,
                         axis_edge,
@@ -1526,7 +1565,25 @@ impl Chart {
                         label,
                         (egui::Color32::WHITE, color),
                         &tags,
-                    ));
+                    );
+                    if quote && let Some(rect) = tag {
+                        let badge = painter.layout_no_wrap(
+                            name.to_owned(),
+                            rendering::axes::axis_font(ui.ctx()),
+                            egui::Color32::WHITE,
+                        );
+                        let box_rect = Rect::from_min_size(
+                            egui::pos2(rect.left() - badge.size().x - 8.0, rect.top()),
+                            egui::vec2(badge.size().x + 7.0, rect.height()),
+                        );
+                        painter.rect_filled(box_rect, 2.0, color);
+                        painter.galley(
+                            box_rect.center() - badge.size() / 2.0,
+                            badge,
+                            egui::Color32::WHITE,
+                        );
+                    }
+                    tags.push(tag);
                 }
             }
         }

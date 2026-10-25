@@ -59,6 +59,15 @@ pub enum OrderType {
     StopLimit { stop: f64, limit: f64 },
 }
 
+/// The role of an exit order attached to the net position in its symbol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionBracket {
+    /// A profit-taking limit exit.
+    TakeProfit,
+    /// A protective stop exit.
+    StopLoss,
+}
+
 /// An order as the user or the host asks for it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -79,6 +88,9 @@ pub struct OrderRequest {
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
+    /// Explicit link to the net position in this symbol. Ordinary opposite-side orders are
+    /// not brackets. Brokers should preserve this role on updates.
+    pub position_bracket: Option<PositionBracket>,
 }
 
 impl OrderRequest {
@@ -97,6 +109,7 @@ impl OrderRequest {
             take_profit: None,
             stop_loss: None,
             time_in_force: TimeInForce::Day,
+            position_bracket: None,
         }
     }
 }

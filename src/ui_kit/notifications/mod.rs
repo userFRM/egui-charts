@@ -32,5 +32,5 @@ mod toast;
 mod toasts;
 
 pub use panel::{NotificationPanel, NotificationPanelConfig, NotificationPosition};
-pub use toast::{Toast, ToastKind};
+pub use toast::{Toast, ToastKind, TradingToast};
 pub use toasts::Toasts;

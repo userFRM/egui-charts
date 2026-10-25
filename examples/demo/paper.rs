@@ -141,6 +141,10 @@ impl State {
             let mut exit =
                 OrderRequest::new(&request.symbol, side, request.quantity, order_type(price));
             exit.time_in_force = TimeInForce::GoodTillCancelled;
+            exit.position_bracket = Some(match exit.order_type {
+                OrderType::Limit(_) => egui_charts::model::PositionBracket::TakeProfit,
+                _ => egui_charts::model::PositionBracket::StopLoss,
+            });
             exit
         };
         let exits: Vec<_> = [

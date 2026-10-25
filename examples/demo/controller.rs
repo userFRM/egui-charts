@@ -2077,11 +2077,18 @@ impl DemoApp {
                 }
                 // Trading follows the live stream, so it rests while replay rewinds the chart.
                 if let Some(side) = self.chart.take_quote_action().filter(|_| self.replay.is_none()) {
+                    if side == egui_charts::widget::QuoteSide::Ticket {
+                        self.trading.open_ticket(egui_charts::model::OrderRequest::new(
+                            self.chart.symbol(), egui_charts::model::OrderSide::Buy,
+                            self.trading.quantity, egui_charts::model::OrderType::Market));
+                    } else {
                     let side = match side {
                         egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
                         egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                        egui_charts::widget::QuoteSide::Ticket => unreachable!(),
                     };
                     self.trading.trade(self.chart.symbol().to_owned(), side);
+                    }
                 }
                 if self.replay.is_none() {
                     if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {

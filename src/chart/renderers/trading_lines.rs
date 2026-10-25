@@ -5,7 +5,9 @@ use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
-use crate::model::{LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PriceLine};
+use crate::model::{
+    LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
+};
 use crate::theme::ThemeExt;
 
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
@@ -61,9 +63,12 @@ pub struct TradingLines {
     /// price axis: for example as [`PriceLine`]s of width 0 passed to
     /// [`Chart::set_price_lines`](crate::Chart::set_price_lines) with the chart's other lines.
     pub tags: Vec<(f64, Color32)>,
+    /// Entry tags use chart background and a coloured outline.
+    pub outlined: Vec<f64>,
 }
 
 /// What [`render_trading_lines`] draws and offers.
+#[derive(Clone)]
 pub struct TradingLineOptions<'a> {
     /// Order and bracket lines can be dragged, and brackets removed.
     pub modify: bool,
@@ -104,7 +109,9 @@ enum Button {
     Reverse,
 }
 
-const HEIGHT: f32 = 18.0;
+const HEIGHT: f32 = 22.0;
+const LABEL_INSET: f32 = 84.0;
+const NODE_INSET: f32 = 42.0;
 const PADDING: f32 = 6.0;
 
 /// Draws the working orders with their brackets and the open positions of one symbol on the
@@ -123,11 +130,26 @@ pub fn render_trading_lines<'a>(
         OrderSide::Buy => theme.ui.accent,
         OrderSide::Sell => theme.ui.error,
     };
+    let positions: Vec<_> = positions.into_iter().collect();
+    let orders: Vec<_> = orders.into_iter().collect();
     let mut action = None;
     let mut tags = Vec::new();
+    let mut outlined = Vec::new();
 
-    for position in positions {
-        let pressed = show_position(ui, mapping, options, position, &mut tags);
+    for position in &positions {
+        let mut position_options = options.clone();
+        for order in &orders {
+            if order.request.symbol == position.symbol
+                && (order.request.side == OrderSide::Buy) != (position.quantity > 0.0)
+            {
+                match order.request.position_bracket {
+                    Some(PositionBracket::TakeProfit) => position_options.take_profit = false,
+                    Some(PositionBracket::StopLoss) => position_options.stop_loss = false,
+                    None => {}
+                }
+            }
+        }
+        let pressed = show_position(ui, mapping, &position_options, position, &mut tags);
         action = action.or(pressed);
     }
 
@@ -135,43 +157,69 @@ pub fn render_trading_lines<'a>(
         let request = &order.request;
         let open = request.quantity - order.filled;
         let kind = match request.order_type {
-            OrderType::Limit(_) => "LMT",
-            OrderType::Stop(_) => "STP",
-            OrderType::StopLimit { .. } => "STP LMT",
-            _ => "MKT",
+            OrderType::Limit(_) => "Limit",
+            OrderType::Stop(_) => "Stop",
+            OrderType::StopLimit { .. } => "Stop limit",
+            _ => "Market",
+        };
+        let parent = request.position_bracket.and_then(|_| {
+            positions.iter().find(|p| {
+                p.symbol == request.symbol && (p.quantity > 0.0) != (request.side == OrderSide::Buy)
+            })
+        });
+        let entry_level = match request.position_bracket {
+            Some(PositionBracket::TakeProfit) => Level::TakeProfit,
+            Some(PositionBracket::StopLoss) => Level::StopLoss,
+            None => Level::Entry,
         };
         let levels = [
             (Level::Entry, entry_price(&request.order_type)),
             (Level::TakeProfit, request.take_profit),
             (Level::StopLoss, request.stop_loss),
         ];
+        let initial_entry = entry_price(&request.order_type);
+        let mut parent_price = initial_entry;
         for (level, price) in levels {
             let Some(price) = price.filter(|price| price.is_finite()) else {
                 continue;
             };
-            let (name, color) = match level {
-                Level::Entry => (
-                    format!("{} {kind}", request.side.label()),
-                    side_color(request.side),
-                ),
-                Level::TakeProfit => ("TP".to_owned(), theme.ui.success),
-                Level::StopLoss => ("SL".to_owned(), theme.ui.error),
+            let price = if level != Level::Entry {
+                price
+                    + parent_price
+                        .zip(initial_entry)
+                        .map_or(0.0, |(moved, original)| moved - original)
+            } else {
+                price
+            };
+            let appearance = if level == Level::Entry {
+                entry_level
+            } else {
+                level
+            };
+            let (name, color) = match appearance {
+                Level::Entry => (kind.to_owned(), side_color(request.side)),
+                Level::TakeProfit => ("TP".to_owned(), theme.ui.take_profit),
+                Level::StopLoss => ("SL".to_owned(), theme.ui.stop_loss),
             };
             // A bracket's result if it is reached, from the entry or, for a market order, the
             // last price.
-            let entry = entry_price(&request.order_type).or(options.last_price);
-            let body = |price: f64| match (level, options.bracket_pnl, entry) {
+            let entry = parent
+                .map(|p| p.average_price)
+                .or(parent_price)
+                .or(options.last_price);
+            let body = |price: f64| match (appearance, options.bracket_pnl, entry) {
                 (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                    let gain = (price - entry) * direction(request.side);
+                    let gain = (price - entry)
+                        * parent.map_or(direction(request.side), |p| p.quantity.signum());
                     let money = gain * open * options.point_value;
-                    format!("{name} {}", pnl_text(unit, money, gain, entry, options).0)
+                    pnl_text(unit, money, gain, entry, options).0
                 }
                 _ => name.clone(),
             };
-            let line = PriceLine::new(price, color).with_style(if level == Level::Entry {
+            let line = PriceLine::new(price, color).with_style(if appearance == Level::Entry {
                 LineStyle::Dashed
             } else {
-                LineStyle::Dotted
+                LineStyle::Solid
             });
             // Removing a bracket changes the order, so it needs the same support as a drag.
             let cancel = level == Level::Entry || options.modify;
@@ -188,6 +236,28 @@ pub fn render_trading_lines<'a>(
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
                 .inner;
+            let drawn = tags.last().map_or(price, |(price, _)| *price);
+            if appearance == Level::Entry {
+                outlined.push(drawn);
+                parent_price = Some(drawn);
+            }
+            if let Some(parent) = parent {
+                connector(
+                    ui,
+                    mapping,
+                    parent.average_price,
+                    drawn,
+                    side_color(if parent.quantity > 0.0 {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    }),
+                );
+            } else if level != Level::Entry
+                && let Some(entry) = entry
+            {
+                connector(ui, mapping, entry, drawn, side_color(request.side));
+            }
             let price = match (dragged, pressed) {
                 (Some(price), _) => Some(price),
                 (None, Some(Button::Cancel)) if level == Level::Entry => {
@@ -224,7 +294,11 @@ pub fn render_trading_lines<'a>(
             action = action.or(Some(TradingLineAction::Modify(order.clone(), changed)));
         }
     }
-    TradingLines { action, tags }
+    TradingLines {
+        action,
+        tags,
+        outlined,
+    }
 }
 
 /// 1 for a buy and -1 for a sell: the sign of a price move in the side's favour.
@@ -341,7 +415,7 @@ fn show_position(
             _ => result(unit, gain),
         };
         let text_color = if value > 0.0 {
-            theme.ui.success
+            theme.ui.take_profit
         } else if value < 0.0 {
             theme.ui.error
         } else {
@@ -350,8 +424,8 @@ fn show_position(
         Some((layout(text, text_color), text_color))
     });
     let exits = [
-        (options.take_profit, "TP", theme.ui.success),
-        (options.stop_loss, "SL", theme.ui.error),
+        (options.take_profit, "TP", theme.ui.take_profit),
+        (options.stop_loss, "SL", theme.ui.stop_loss),
     ]
     .map(|(offered, name, color)| offered.then(|| (name, layout(name.to_owned(), color), color)));
     let quantity = layout(format!("{size}"), Color32::WHITE);
@@ -363,10 +437,21 @@ fn show_position(
         .sum::<f32>()
         + width(&quantity)
         + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley))
-        + close;
-    let right = mapping.rect.right() - 8.0;
+        + close
+        - if options.take_profit && options.stop_loss {
+            1.0
+        } else {
+            0.0
+        }
+        + if exits.iter().any(Option::is_some) {
+            HEIGHT * 0.65
+        } else {
+            0.0
+        };
+    let right = mapping.rect.right()
+        - LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
     let reverse = options.close && options.reverse;
-    let left = right - total - if reverse { HEIGHT } else { 0.0 };
+    let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
     let hovered = ui.rect_contains_pointer(label.intersect(mapping.rect));
     let cell = |x: f32, w: f32| Rect::from_min_size(pos2(x, label.top()), vec2(w, HEIGHT));
@@ -382,7 +467,7 @@ fn show_position(
                 Sense::click(),
             )
             .on_hover_text("Reverse position");
-        painter.rect(rect, 2.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        painter.rect(rect, 4.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
         }
@@ -395,7 +480,12 @@ fn show_position(
     let mut x = right - total;
     for (name, galley, exit_color) in exits.into_iter().flatten() {
         let rect = cell(x, width(&galley));
-        x = rect.right();
+        x = rect.right()
+            - if name == "TP" && options.stop_loss {
+                1.0
+            } else {
+                0.0
+            };
         let id = key.with(name);
         let response = ui
             .interact(rect.intersect(mapping.rect), id, Sense::drag())
@@ -409,17 +499,35 @@ fn show_position(
         }
         painter.rect_filled(rect, 2.0, theme.chart.bg);
         let r = rect.shrink(0.5);
+        let left_radius = if name == "SL" && options.take_profit {
+            0.0
+        } else {
+            4.0
+        };
+        let right_radius = if name == "TP" && options.stop_loss {
+            0.0
+        } else {
+            4.0
+        };
         draw_dashed_polyline(
             &painter,
             &[
-                r.left_top(),
-                r.right_top(),
-                r.right_bottom(),
-                r.left_bottom(),
-                r.left_top(),
+                r.left_top() + vec2(left_radius, 0.0),
+                r.right_top() - vec2(right_radius, 0.0),
+                r.right_top() + vec2(-right_radius / 4.0, right_radius / 4.0),
+                r.right_top() + vec2(0.0, right_radius),
+                r.right_bottom() - vec2(0.0, right_radius),
+                r.right_bottom() - vec2(right_radius / 4.0, right_radius / 4.0),
+                r.right_bottom() - vec2(right_radius, 0.0),
+                r.left_bottom() + vec2(left_radius, 0.0),
+                r.left_bottom() + vec2(left_radius / 4.0, -left_radius / 4.0),
+                r.left_bottom() - vec2(0.0, left_radius),
+                r.left_top() + vec2(0.0, left_radius),
+                r.left_top() + vec2(left_radius / 4.0, left_radius / 4.0),
+                r.left_top() + vec2(left_radius, 0.0),
             ],
             Stroke::new(1.0, exit_color),
-            3.0,
+            1.0,
             2.0,
         );
         painter.galley(
@@ -439,7 +547,7 @@ fn show_position(
             continue;
         };
         if response.drag_stopped() {
-            let exit = OrderRequest::new(
+            let mut exit = OrderRequest::new(
                 position.symbol.clone(),
                 match side {
                     OrderSide::Buy => OrderSide::Sell,
@@ -452,11 +560,16 @@ fn show_position(
                     OrderType::Stop(price)
                 },
             );
+            exit.position_bracket = Some(if name == "TP" {
+                PositionBracket::TakeProfit
+            } else {
+                PositionBracket::StopLoss
+            });
             action = action.or(Some(TradingLineAction::Exit(position.clone(), exit)));
             continue;
         }
         // The exit being dragged: its line and a label like a bracket's.
-        let line = PriceLine::new(price, exit_color).with_style(LineStyle::Dotted);
+        let line = PriceLine::new(price, exit_color).with_style(LineStyle::Solid);
         render_price_line(
             &painter,
             mapping.rect,
@@ -494,9 +607,30 @@ fn show_position(
         );
     }
 
+    if options.take_profit || options.stop_loss {
+        x += HEIGHT * 0.65;
+    }
+    let group_rect = Rect::from_min_max(pos2(x, label.top()), pos2(right, label.bottom()));
+    painter.rect(
+        group_rect,
+        4.0,
+        theme.chart.bg,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    painter.circle_filled(pos2(mapping.rect.right() - NODE_INSET, y), 3.0, color);
     let rect = cell(x, width(&quantity));
     x = rect.right();
-    painter.rect_filled(rect, 0.0, color);
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius {
+            nw: 4,
+            sw: 4,
+            ne: 0,
+            se: 0,
+        },
+        color,
+    );
     painter.galley(
         pos2(rect.left() + PADDING, y - quantity.size().y / 2.0),
         quantity,
@@ -505,7 +639,7 @@ fn show_position(
     if let Some((pnl, text_color)) = pnl {
         let rect = cell(x, width(&pnl));
         x = rect.right();
-        painter.rect(rect, 0.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        painter.vline(rect.left(), rect.y_range(), stroke);
         painter.galley(
             pos2(rect.left() + PADDING, y - pnl.size().y / 2.0),
             pnl,
@@ -521,7 +655,7 @@ fn show_position(
                 Sense::click(),
             )
             .on_hover_text("Close position");
-        painter.rect(rect, 2.0, theme.chart.bg, stroke, egui::StrokeKind::Inside);
+        painter.vline(rect.left(), rect.y_range(), stroke);
         if response.hovered() {
             painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
         }
@@ -595,12 +729,12 @@ impl Label<'_> {
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
         let body = (self.body)(staged.unwrap_or(line.price));
         let body = (!body.is_empty()).then(|| layout(body, self.body_color));
-        let quantity = layout(format!("{}", self.quantity), Color32::WHITE);
+        let quantity = layout(format!("{}", self.quantity), line.color);
         let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
         let total = body.as_deref().map_or(0.0, width)
             + width(&quantity)
             + HEIGHT * self.buttons.len() as f32;
-        let mut x = mapping.rect.right() - 8.0 - total;
+        let mut x = mapping.rect.right() - LABEL_INSET - total;
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
 
         let mut dragged = None;
@@ -618,6 +752,17 @@ impl Label<'_> {
                 Sense::hover()
             },
         );
+        let node = pos2(mapping.rect.right() - NODE_INSET, y);
+        let node_response = ui.interact(
+            Rect::from_center_size(node, vec2(14.0, HEIGHT)).intersect(mapping.rect),
+            key.with("node"),
+            if self.draggable {
+                Sense::drag()
+            } else {
+                Sense::hover()
+            },
+        );
+        let grab = grab.union(node_response);
         if self.draggable {
             if grab.hovered() || grab.dragged() {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
@@ -654,16 +799,36 @@ impl Label<'_> {
             f32::INFINITY,
         );
         tags.push((value, line.color));
+        let node = pos2(mapping.rect.right() - NODE_INSET, mapping.price_to_y(value));
+        clipped.circle(
+            node,
+            3.5,
+            ui.active_theme().chart.bg,
+            Stroke::new(1.0, line.color),
+        );
 
         let y = mapping
             .price_to_y(value)
             .clamp(mapping.rect.top(), mapping.rect.bottom());
         let rect = rect.translate(vec2(0.0, y - rect.center().y));
         let stroke = Stroke::new(1.0, line.color);
-        clipped.rect_filled(rect, 2.0, ui.active_theme().ui.panel_bg);
-        clipped.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+        clipped.rect(
+            rect,
+            4.0,
+            ui.active_theme().chart.bg,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
         x = rect.left();
+        let w = width(&quantity);
+        clipped.galley(
+            pos2(x + PADDING, y - quantity.size().y / 2.0),
+            quantity,
+            line.color,
+        );
+        x += w;
         if let Some(body) = body {
+            clipped.vline(x, rect.y_range(), stroke);
             let w = width(&body);
             clipped.galley(
                 pos2(x + PADDING, y - body.size().y / 2.0),
@@ -672,18 +837,6 @@ impl Label<'_> {
             );
             x += w;
         }
-        let w = width(&quantity);
-        clipped.rect_filled(
-            Rect::from_min_size(pos2(x, rect.top()), vec2(w, HEIGHT)),
-            0.0,
-            line.color,
-        );
-        clipped.galley(
-            pos2(x + PADDING, y - quantity.size().y / 2.0),
-            quantity,
-            Color32::WHITE,
-        );
-        x += w;
 
         let mut pressed = None;
         for (index, button) in self.buttons.iter().enumerate() {
@@ -713,19 +866,35 @@ impl Label<'_> {
 fn paint_glyph(painter: &egui::Painter, button: Button, center: Pos2, color: Color32) {
     let stroke = Stroke::new(1.5, color);
     let r = 3.5;
+    let segment = |a, b| {
+        painter.line_segment([a, b], stroke);
+        painter.circle_filled(a, 0.75, color);
+        painter.circle_filled(b, 0.75, color);
+    };
     match button {
         Button::Cancel => {
-            painter.line_segment([center + vec2(-r, -r), center + vec2(r, r)], stroke);
-            painter.line_segment([center + vec2(-r, r), center + vec2(r, -r)], stroke);
+            segment(center + vec2(-r, -r), center + vec2(r, r));
+            segment(center + vec2(-r, r), center + vec2(r, -r));
         }
         Button::Reverse => {
             for (dx, dir) in [(-2.5, -1.0), (2.5, 1.0)] {
                 let top = center + vec2(dx, dir * -r);
                 let tip = center + vec2(dx, dir * r);
-                painter.line_segment([top, tip], stroke);
-                painter.line_segment([tip, tip + vec2(-2.0, dir * -2.0)], stroke);
-                painter.line_segment([tip, tip + vec2(2.0, dir * -2.0)], stroke);
+                segment(top, tip);
+                segment(tip, tip + vec2(-2.0, dir * -2.0));
+                segment(tip, tip + vec2(2.0, dir * -2.0));
             }
         }
     }
+}
+
+/// A parent-coloured connector with hollow bracket nodes and a filled parent node.
+fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Color32) {
+    let painter = ui.painter().with_clip_rect(mapping.rect);
+    let x = mapping.rect.right() - NODE_INSET;
+    let a = pos2(x, mapping.price_to_y(entry));
+    let b = pos2(x, mapping.price_to_y(exit));
+    painter.line_segment([a, b], Stroke::new(1.0, color));
+    painter.circle(b, 3.5, ui.active_theme().chart.bg, Stroke::new(1.0, color));
+    painter.circle_filled(a, 3.0, color);
 }

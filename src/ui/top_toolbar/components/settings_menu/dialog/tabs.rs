@@ -671,6 +671,7 @@ impl SettingsDialog {
         ui.add_space(24.0);
         self.draw_section_header(ui, "APPEARANCE", style);
         let trading = &mut self.settings.trading;
+        styled_checkbox(ui, &mut trading.bid_ask_labels, "Bid and ask labels", text);
         styled_checkbox(ui, &mut trading.show_poss, "Positions", text);
         ui.add_enabled_ui(trading.show_poss, |ui| {
             let unit = &mut trading.position_pnl_unit;

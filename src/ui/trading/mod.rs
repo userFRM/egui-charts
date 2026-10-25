@@ -44,8 +44,13 @@ use ticket::{Market, OrderTicket, order_quantity};
 /// trading.poll(ui.ctx(), toasts);
 /// chart.show(ui);
 /// if let Some(side) = chart.take_quote_action() {
-///     let side = if side == QuoteSide::Buy { OrderSide::Buy } else { OrderSide::Sell };
-///     trading.trade(chart.symbol().to_owned(), side);
+///     if side == QuoteSide::Ticket {
+///         trading.open_ticket(egui_charts::model::OrderRequest::new(chart.symbol(),
+///             OrderSide::Buy, trading.quantity, egui_charts::model::OrderType::Market));
+///     } else {
+///         let side = if side == QuoteSide::Buy { OrderSide::Buy } else { OrderSide::Sell };
+///         trading.trade(chart.symbol().to_owned(), side);
+///     }
 /// }
 /// trading.show(ui, chart);
 /// # }
@@ -61,7 +66,7 @@ pub struct Trading {
     /// The fills of this account, oldest first.
     executions: Vec<Execution>,
     /// The symbol and requested quantity of every order the broker reported, for its fills.
-    order_symbols: HashMap<OrderId, (String, f64)>,
+    order_symbols: HashMap<OrderId, OrderRequest>,
     rules: TradingRules,
     rules_key: u64,
     rules_ready: bool,
@@ -292,10 +297,29 @@ impl Trading {
                     self.pending = None;
                 }
                 self.orders.retain(|working| working.id != order.id);
-                self.order_symbols.insert(
-                    order.id.clone(),
-                    (order.request.symbol.clone(), order.request.quantity),
-                );
+                let first = !self.order_symbols.contains_key(&order.id);
+                self.order_symbols
+                    .insert(order.id.clone(), order.request.clone());
+                if first
+                    && order.status == OrderStatus::Working
+                    && order.request.order_type != OrderType::Market
+                {
+                    let price = match order.request.order_type {
+                        OrderType::Limit(price) | OrderType::Stop(price) => price,
+                        OrderType::StopLimit { stop, .. } => stop,
+                        _ => unreachable!(),
+                    };
+                    self.notify(
+                        toasts,
+                        order_toast(
+                            &order.request,
+                            price,
+                            order.request.quantity,
+                            self.decimals,
+                            false,
+                        ),
+                    );
+                }
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
                     OrderStatus::Rejected(reason) => {
@@ -321,8 +345,8 @@ impl Trading {
             AccountEvent::Execution(fill) => {
                 let order = self.order_symbols.get(&fill.order);
                 let mut text = format!("{} {}", executions::side_name(fill.side), fill.quantity);
-                if let Some((symbol, _)) = order {
-                    text += &format!(" {symbol}");
+                if let Some(order) = order {
+                    text += &format!(" {}", order.symbol);
                 }
                 text += &format!(" at {:.*}", self.decimals, fill.price);
                 let filled = fill.quantity
@@ -333,12 +357,23 @@ impl Trading {
                         .map(|earlier| earlier.quantity)
                         .sum::<f64>();
                 // Fills that add up to the order within rounding complete it.
-                let toast = match order {
-                    Some((_, quantity)) if filled < quantity * (1.0 - 1e-9) => {
-                        Toast::info(format!("Partially filled: {text} ({filled} of {quantity})"))
+                let mut toast = match order {
+                    Some(order) => {
+                        let mut executed = order.clone();
+                        executed.side = fill.side;
+                        order_toast(&executed, fill.price, fill.quantity, self.decimals, true)
                     }
-                    _ => Toast::success(format!("Filled: {text}")),
+                    None => Toast::success(format!("Filled: {text}")),
                 };
+                if let Some(order) = order
+                    && filled < order.quantity * (1.0 - 1e-9)
+                {
+                    toast.kind = ToastKind::Info;
+                    toast.title =
+                        Some(format!("{} order partially executed on", order_name(order)));
+                    toast.message =
+                        format!("Partially filled: {text} ({filled} of {})", order.quantity);
+                }
                 self.notify(toasts, toast);
                 if self.display.play_execution_sound {
                     self.sound = Some(self.display.execution_sound.clone());
@@ -376,6 +411,7 @@ impl Trading {
     /// over the marks. Sends the order the user submits, and asks the user to confirm a change
     /// made on a line before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
+        chart.trading_bid_ask = self.service.is_some() && self.display.bid_ask_labels;
         let symbol = chart.symbol().to_owned();
         let symbol = symbol.as_str();
         let instrument = chart
@@ -421,6 +457,19 @@ impl Trading {
                 currency,
                 tick_size: tick,
             };
+            let mut shown_orders = self.orders.clone();
+            if let Some(TradingLineAction::Modify(old, request)) = &self.pending
+                && let Some(order) = shown_orders.iter_mut().find(|order| order.id == old.id)
+            {
+                order.request = request.clone();
+            }
+            if let Some(TradingLineAction::Exit(_, request)) = &self.pending {
+                shown_orders.push(Order::new(
+                    OrderId::new("pending-exit"),
+                    request.clone(),
+                    OrderStatus::Working,
+                ));
+            }
             let lines = {
                 let _theme = chart
                     .theme_override
@@ -434,7 +483,7 @@ impl Trading {
                         .filter(|fill| {
                             self.order_symbols
                                 .get(&fill.order)
-                                .is_some_and(|(of, _)| of == symbol)
+                                .is_some_and(|request| request.symbol == symbol)
                         })
                         .collect();
                     executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
@@ -442,7 +491,7 @@ impl Trading {
                 render_trading_lines(
                     ui,
                     &mapping,
-                    self.orders
+                    shown_orders
                         .iter()
                         .filter(|o| display.show_orders && o.request.symbol == symbol),
                     self.positions
@@ -452,7 +501,12 @@ impl Trading {
                 )
             };
             chart.trading_tags = lines.tags;
+            chart.trading_outlined = lines.outlined;
             self.pending = self.pending.take().or(lines.action);
+        }
+        if self.display.instant_orders {
+            let action = self.pending.take();
+            self.execute(action);
         }
         if let Some(action) = &self.pending {
             let money = |value: f64| format!("{value:.decimals$}");
@@ -460,7 +514,7 @@ impl Trading {
             let mut open = true;
             let result = ConfirmDialog::new("trading_confirm", title, message)
                 .confirm_text(confirm)
-                .cancel_text("Back")
+                .cancel_text("Discard")
                 .show(ui.ctx(), &mut open);
             if result.is_confirmed() {
                 let action = self.pending.take();
@@ -509,6 +563,94 @@ impl Trading {
             rules: &self.rules,
             rules_ready: self.rules_ready,
         };
+        if let Ok(request) = self.ticket.request(&market)
+            && request.order_type != OrderType::Market
+        {
+            let _theme = chart
+                .theme_override
+                .as_ref()
+                .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+            let mapping = chart.get_chart_mapping();
+            let options = TradingLineOptions {
+                modify: true,
+                close: false,
+                reverse: false,
+                take_profit: false,
+                stop_loss: false,
+                pnl: None,
+                bracket_pnl: self
+                    .display
+                    .bracket_pnl
+                    .then_some(self.display.bracket_pnl_unit),
+                last_price: last,
+                point_value: self.rules.point_value,
+                currency,
+                tick_size: tick,
+            };
+            let order = Order::new(
+                OrderId::new("projected"),
+                request.clone(),
+                OrderStatus::Working,
+            );
+            let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
+            let projected_price = lines.tags.first().map(|(price, _)| *price);
+            chart.trading_tags.extend(lines.tags);
+            chart.trading_outlined.extend(lines.outlined);
+            match lines.action {
+                Some(TradingLineAction::Cancel(_)) => self.ticket.open = false,
+                Some(TradingLineAction::Modify(_, changed)) => self.ticket.open(&changed),
+                _ => {}
+            }
+            let theme = chart.theme_override.clone().unwrap_or_else(|| {
+                use crate::theme::ThemeExt;
+                ui.ctx().active_theme()
+            });
+            let color = if request.side == OrderSide::Buy {
+                theme.ui.accent
+            } else {
+                theme.ui.error
+            };
+            let (price, kind) = match request.order_type {
+                OrderType::Limit(price) => (price, "Limit"),
+                OrderType::Stop(price) => (price, "Stop"),
+                OrderType::StopLimit { stop, .. } => (stop, "Stop limit"),
+                _ => unreachable!(),
+            };
+            let price = projected_price.unwrap_or(price);
+            let label_width = [request.quantity.to_string(), kind.to_owned()]
+                .iter()
+                .map(|text| {
+                    ui.painter()
+                        .layout_no_wrap(text.clone(), egui::FontId::proportional(11.0), color)
+                        .size()
+                        .x
+                        + 12.0
+                })
+                .sum::<f32>()
+                + 22.0;
+            let button = egui::Rect::from_min_size(
+                egui::pos2(
+                    mapping.rect.right() - 84.0 - label_width - 72.0,
+                    mapping.price_to_y(price) - 11.0,
+                ),
+                egui::vec2(58.0, 22.0),
+            );
+            if mapping.is_y_visible(mapping.price_to_y(price))
+                && ui
+                    .put(
+                        button.intersect(mapping.rect),
+                        egui::Button::new(
+                            egui::RichText::new(executions::side_name(request.side))
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(color),
+                    )
+                    .clicked()
+            {
+                self.ticket.open = false;
+                self.place(request);
+            }
+        }
         let anchor = chart.get_rendered_price_rect().right_top() + egui::vec2(-8.0, 8.0);
         if let Some(request) = self
             .ticket
@@ -555,6 +697,55 @@ impl Trading {
             _ => {}
         }
     }
+}
+
+fn order_name(request: &OrderRequest) -> &'static str {
+    use crate::model::PositionBracket;
+    match request.position_bracket {
+        Some(PositionBracket::TakeProfit) => "Take profit",
+        Some(PositionBracket::StopLoss) => "Stop loss",
+        None => match request.order_type {
+            OrderType::Market => "Market",
+            OrderType::Limit(_) => "Limit",
+            OrderType::Stop(_) => "Stop",
+            OrderType::StopLimit { .. } => "Stop limit",
+        },
+    }
+}
+
+fn order_toast(
+    request: &OrderRequest,
+    price: f64,
+    quantity: f64,
+    decimals: usize,
+    executed: bool,
+) -> Toast {
+    let side = executions::side_name(request.side);
+    let mut toast = Toast::new(
+        if executed {
+            ToastKind::Success
+        } else {
+            ToastKind::Info
+        },
+        format!(
+            "{}: {side} {quantity} {} at {price:.decimals$}",
+            if executed { "Filled" } else { "Placed" },
+            request.symbol
+        ),
+    )
+    .with_title(format!(
+        "{} order {} on",
+        order_name(request),
+        if executed { "executed" } else { "placed" }
+    ));
+    toast.trading = Some(crate::ui_kit::notifications::TradingToast {
+        symbol: request.symbol.clone(),
+        side: request.side,
+        quantity,
+        price: format!("{price:.decimals$}"),
+        executed,
+    });
+    toast
 }
 
 /// The quantity calculator: a field for the quantity, minus and plus by the quantity step, preset
@@ -823,198 +1014,255 @@ mod tests {
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
             for width in [800.0, 320.0] {
-                for (operation, edge) in [
-                    ("Cancel order", false),
-                    ("Modify order", false),
-                    ("Modify order", true),
-                    ("Close position", false),
-                    ("Reverse position", false),
-                    ("Place take profit", false),
-                    ("Place stop loss", false),
-                ] {
-                    let mut request =
-                        OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
-                    request.take_profit = Some(102.0);
-                    request.stop_loss = Some(108.0);
-                    let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
-                    let position = Position::new("SYM", -2.0, 100.0);
-                    let broker = Arc::new(Recorder {
-                        state: vec![
-                            AccountEvent::Order(order.clone()),
-                            AccountEvent::Position(position.clone()),
-                        ],
-                        ..Recorder::default()
-                    });
-                    let mut trading = Trading::default();
-                    trading.set_service(broker.clone());
-                    let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-                    chart.symbol = "SYM".into();
-                    if edge {
-                        let mut instrument = crate::model::Instrument::new("SYM");
-                        instrument.tick_size = Some(64.0);
-                        chart.set_instrument(Some(instrument));
-                    }
-                    let ctx = egui::Context::default();
-                    apply_to_egui(
-                        &ctx,
-                        &if theme == Theme::light() {
-                            Theme::dark()
-                        } else {
-                            Theme::light()
-                        },
-                    );
-                    chart.set_theme_override(Some(theme.clone()));
-                    let frame = |trading: &mut Trading, chart: &mut Chart, events| {
-                        let output = ctx.run_ui(
-                            egui::RawInput {
-                                screen_rect: Some(egui::Rect::from_min_size(
-                                    egui::Pos2::ZERO,
-                                    egui::vec2(width, 600.0),
-                                )),
-                                events,
-                                ..Default::default()
-                            },
-                            |ui| {
-                                trading.poll(ui.ctx(), &mut Toasts::new());
-                                chart.show(ui);
-                                trading.show(ui, chart);
+                for instant in [false, true] {
+                    for (operation, edge, handle) in [
+                        ("Cancel order", false, false),
+                        ("Modify order", false, false),
+                        ("Modify order", false, true),
+                        ("Modify order", true, false),
+                        ("Close position", false, false),
+                        ("Reverse position", false, false),
+                        ("Place take profit", false, false),
+                        ("Place stop loss", false, false),
+                    ] {
+                        let mut request =
+                            OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
+                        request.take_profit = Some(102.0);
+                        request.stop_loss = Some(108.0);
+                        let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
+                        let position = Position::new("SYM", -2.0, 100.0);
+                        let broker = Arc::new(Recorder {
+                            state: vec![
+                                AccountEvent::Order(order.clone()),
+                                AccountEvent::Position(position.clone()),
+                            ],
+                            ..Recorder::default()
+                        });
+                        let mut trading = Trading::default();
+                        trading.set_service(broker.clone());
+                        trading.display.instant_orders = instant;
+                        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                        chart.symbol = "SYM".into();
+                        if edge {
+                            let mut instrument = crate::model::Instrument::new("SYM");
+                            instrument.tick_size = Some(64.0);
+                            chart.set_instrument(Some(instrument));
+                        }
+                        let ctx = egui::Context::default();
+                        apply_to_egui(
+                            &ctx,
+                            &if theme == Theme::light() {
+                                Theme::dark()
+                            } else {
+                                Theme::light()
                             },
                         );
-                        let texts: Vec<_> = output
-                            .shapes
-                            .iter()
-                            .filter_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) => Some((
-                                    text.galley.text().to_owned(),
-                                    text.galley.rect.translate(text.pos.to_vec2()),
-                                )),
-                                _ => None,
-                            })
-                            .collect();
-                        output.drop_without_applying_deltas();
-                        texts
-                    };
-                    let find = |texts: Vec<(String, egui::Rect)>, wanted: &str| {
-                        texts
-                            .into_iter()
-                            .rev()
-                            .find(|(text, _)| text == wanted)
-                            .map(|(_, rect)| rect)
-                    };
-                    let click = |pos, pressed| egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    };
-                    frame(&mut trading, &mut chart, vec![]);
-                    frame(&mut trading, &mut chart, vec![]);
-                    assert!(
-                        chart
-                            .trading_tags
-                            .iter()
-                            .any(|(_, color)| *color == theme.ui.error)
-                    );
-                    let mapping = chart.get_chart_mapping();
-                    let y = mapping.price_to_y(if operation.ends_with("order") {
-                        105.0
-                    } else {
-                        100.0
-                    });
-                    // Hovering the label shows the reverse button, left of TP.
-                    let close = egui::pos2(mapping.rect.right() - 17.0, y);
-                    let texts = frame(
-                        &mut trading,
-                        &mut chart,
-                        vec![egui::Event::PointerMoved(close)],
-                    );
-                    let take_profit = find(texts.clone(), "TP").expect("a TP button");
-                    let x = match operation {
-                        "Modify order" => mapping.rect.center().x,
-                        "Reverse position" => take_profit.left() - 15.0,
-                        "Place take profit" => take_profit.center().x,
-                        "Place stop loss" => find(texts, "SL").expect("an SL button").center().x,
-                        _ => close.x,
-                    };
-                    let start = egui::pos2(x, y);
-                    frame(
-                        &mut trading,
-                        &mut chart,
-                        vec![egui::Event::PointerMoved(start)],
-                    );
-                    frame(&mut trading, &mut chart, vec![click(start, true)]);
-                    let end = if edge {
-                        egui::pos2(x, mapping.rect.top())
-                    } else if operation == "Modify order" {
-                        egui::pos2(x, mapping.price_to_y(103.07))
-                    } else if operation == "Place take profit" {
-                        egui::pos2(x, mapping.price_to_y(95.0))
-                    } else if operation == "Place stop loss" {
-                        egui::pos2(x, mapping.price_to_y(104.0))
-                    } else {
-                        start
-                    };
-                    frame(
-                        &mut trading,
-                        &mut chart,
-                        vec![egui::Event::PointerMoved(end)],
-                    );
-                    frame(&mut trading, &mut chart, vec![click(end, false)]);
-                    assert!(trading.pending.is_some(), "{operation} at {width}");
-                    assert!(broker.placed.lock().unwrap().is_empty());
-                    assert!(broker.cancelled.lock().unwrap().is_empty());
-                    assert!(broker.modified.lock().unwrap().is_empty());
-                    frame(&mut trading, &mut chart, vec![]);
-                    let confirm = find(frame(&mut trading, &mut chart, vec![]), operation)
-                        .expect(operation)
-                        .center();
-                    assert!(
-                        confirm.x >= 0.0 && confirm.x <= width,
-                        "confirmation stays reachable"
-                    );
-                    frame(
-                        &mut trading,
-                        &mut chart,
-                        vec![egui::Event::PointerMoved(confirm)],
-                    );
-                    frame(&mut trading, &mut chart, vec![click(confirm, true)]);
-                    frame(&mut trading, &mut chart, vec![click(confirm, false)]);
-                    frame(&mut trading, &mut chart, vec![]);
-                    assert!(trading.pending.is_none());
-                    match operation {
-                        "Cancel order" => assert_eq!(*broker.cancelled.lock().unwrap(), [order.id]),
-                        "Modify order" => {
-                            let changed = broker.modified.lock().unwrap();
-                            assert_eq!(changed.len(), 1);
-                            assert_eq!(changed[0].0, order.id);
-                            // Prices are written at the tick's decimals, brackets included.
-                            let (price, take_profit, stop_loss) = if edge {
-                                (128.0, 125.0, 131.0)
-                            } else {
-                                (103.07, 100.07, 106.07)
-                            };
-                            assert_eq!(changed[0].1.order_type, OrderType::Limit(price));
-                            assert_eq!(changed[0].1.take_profit, Some(take_profit));
-                            assert_eq!(changed[0].1.stop_loss, Some(stop_loss));
-                        }
-                        _ => {
-                            // Closing and the exits are for the position's size, reversing for
-                            // twice it.
-                            let (quantity, order_type) = match operation {
-                                "Reverse position" => (4.0, OrderType::Market),
-                                "Place take profit" => (2.0, OrderType::Limit(95.0)),
-                                "Place stop loss" => (2.0, OrderType::Stop(104.0)),
-                                _ => (2.0, OrderType::Market),
-                            };
-                            assert_eq!(
-                                *broker.placed.lock().unwrap(),
-                                [OrderRequest::new(
-                                    "SYM",
-                                    OrderSide::Buy,
-                                    quantity,
-                                    order_type
-                                )]
+                        chart.set_theme_override(Some(theme.clone()));
+                        let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+                            let output = ctx.run_ui(
+                                egui::RawInput {
+                                    screen_rect: Some(egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        egui::vec2(width, 600.0),
+                                    )),
+                                    events,
+                                    ..Default::default()
+                                },
+                                |ui| {
+                                    trading.poll(ui.ctx(), &mut Toasts::new());
+                                    chart.show(ui);
+                                    trading.show(ui, chart);
+                                },
                             );
+                            let texts: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) => Some((
+                                        text.galley.text().to_owned(),
+                                        text.galley.rect.translate(text.pos.to_vec2()),
+                                    )),
+                                    _ => None,
+                                })
+                                .collect();
+                            output.drop_without_applying_deltas();
+                            texts
+                        };
+                        let find = |texts: Vec<(String, egui::Rect)>, wanted: &str| {
+                            texts
+                                .into_iter()
+                                .rev()
+                                .find(|(text, _)| text == wanted)
+                                .map(|(_, rect)| rect)
+                        };
+                        let click = |pos, pressed| egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        };
+                        frame(&mut trading, &mut chart, vec![]);
+                        frame(&mut trading, &mut chart, vec![]);
+                        assert!(
+                            chart
+                                .trading_tags
+                                .iter()
+                                .any(|(_, color)| *color == theme.ui.error)
+                        );
+                        let mapping = chart.get_chart_mapping();
+                        let y = mapping.price_to_y(if operation.ends_with("order") {
+                            105.0
+                        } else {
+                            100.0
+                        });
+                        // Hovering the label shows the reverse button, left of TP.
+                        let texts = frame(&mut trading, &mut chart, vec![]);
+                        let right = texts
+                            .iter()
+                            .filter(|(_, rect)| {
+                                (rect.center().y - y).abs() < 2.0
+                                    && rect.right() < mapping.rect.right() - 20.0
+                            })
+                            .map(|(_, rect)| rect.right())
+                            .max_by(f32::total_cmp)
+                            .unwrap();
+                        let close = egui::pos2(right + 17.0, y);
+                        let texts = frame(
+                            &mut trading,
+                            &mut chart,
+                            vec![egui::Event::PointerMoved(close)],
+                        );
+                        let take_profit = find(texts.clone(), "TP").expect("a TP button");
+                        let x = match operation {
+                            "Modify order" if handle => mapping.rect.right() - 42.0,
+                            "Modify order" => mapping.rect.center().x,
+                            "Reverse position" => take_profit.left() - 30.2,
+                            "Place take profit" => take_profit.center().x,
+                            "Place stop loss" => {
+                                find(texts, "SL").expect("an SL button").center().x
+                            }
+                            _ => close.x,
+                        };
+                        let start = egui::pos2(x, y);
+                        frame(
+                            &mut trading,
+                            &mut chart,
+                            vec![egui::Event::PointerMoved(start)],
+                        );
+                        frame(&mut trading, &mut chart, vec![click(start, true)]);
+                        let end = if edge {
+                            egui::pos2(x, mapping.rect.top())
+                        } else if operation == "Modify order" {
+                            egui::pos2(x, mapping.price_to_y(103.07))
+                        } else if operation == "Place take profit" {
+                            egui::pos2(x, mapping.price_to_y(95.0))
+                        } else if operation == "Place stop loss" {
+                            egui::pos2(x, mapping.price_to_y(104.0))
+                        } else {
+                            start
+                        };
+                        frame(
+                            &mut trading,
+                            &mut chart,
+                            vec![egui::Event::PointerMoved(end)],
+                        );
+                        frame(&mut trading, &mut chart, vec![click(end, false)]);
+                        if !instant {
+                            assert!(
+                                trading.pending.is_some(),
+                                "{operation} at {width}, handle={handle}, instant={instant}"
+                            );
+                            assert!(broker.placed.lock().unwrap().is_empty());
+                            assert!(broker.cancelled.lock().unwrap().is_empty());
+                            assert!(broker.modified.lock().unwrap().is_empty());
+                            if operation == "Modify order" && !edge && !handle {
+                                let discard =
+                                    find(frame(&mut trading, &mut chart, vec![]), "Discard")
+                                        .unwrap()
+                                        .center();
+                                frame(
+                                    &mut trading,
+                                    &mut chart,
+                                    vec![egui::Event::PointerMoved(discard)],
+                                );
+                                frame(&mut trading, &mut chart, vec![click(discard, true)]);
+                                frame(&mut trading, &mut chart, vec![click(discard, false)]);
+                                frame(&mut trading, &mut chart, vec![]);
+                                assert!(trading.pending.is_none());
+                                assert!(broker.modified.lock().unwrap().is_empty());
+                                assert!(
+                                    chart.trading_tags.iter().any(|(price, _)| *price == 105.0),
+                                    "discard restores the broker's price"
+                                );
+                                for events in [
+                                    vec![egui::Event::PointerMoved(start)],
+                                    vec![click(start, true)],
+                                    vec![egui::Event::PointerMoved(end)],
+                                    vec![click(end, false)],
+                                ] {
+                                    frame(&mut trading, &mut chart, events);
+                                }
+                            }
+                            frame(&mut trading, &mut chart, vec![]);
+                            let confirm = find(frame(&mut trading, &mut chart, vec![]), operation)
+                                .expect(operation)
+                                .center();
+                            assert!(
+                                confirm.x >= 0.0 && confirm.x <= width,
+                                "confirmation stays reachable"
+                            );
+                            frame(
+                                &mut trading,
+                                &mut chart,
+                                vec![egui::Event::PointerMoved(confirm)],
+                            );
+                            frame(&mut trading, &mut chart, vec![click(confirm, true)]);
+                            frame(&mut trading, &mut chart, vec![click(confirm, false)]);
+                            frame(&mut trading, &mut chart, vec![]);
+                            assert!(trading.pending.is_none());
+                        } else {
+                            assert!(trading.pending.is_none());
+                        }
+                        match operation {
+                            "Cancel order" => {
+                                assert_eq!(*broker.cancelled.lock().unwrap(), [order.id])
+                            }
+                            "Modify order" => {
+                                let changed = broker.modified.lock().unwrap();
+                                assert_eq!(changed.len(), 1);
+                                assert_eq!(changed[0].0, order.id);
+                                // Prices are written at the tick's decimals, brackets included.
+                                let (price, take_profit, stop_loss) = if edge {
+                                    (128.0, 125.0, 131.0)
+                                } else {
+                                    (103.07, 100.07, 106.07)
+                                };
+                                assert_eq!(changed[0].1.order_type, OrderType::Limit(price));
+                                assert_eq!(changed[0].1.take_profit, Some(take_profit));
+                                assert_eq!(changed[0].1.stop_loss, Some(stop_loss));
+                            }
+                            _ => {
+                                // Closing and the exits are for the position's size, reversing for
+                                // twice it.
+                                let (quantity, order_type) = match operation {
+                                    "Reverse position" => (4.0, OrderType::Market),
+                                    "Place take profit" => (2.0, OrderType::Limit(95.0)),
+                                    "Place stop loss" => (2.0, OrderType::Stop(104.0)),
+                                    _ => (2.0, OrderType::Market),
+                                };
+                                let mut expected =
+                                    OrderRequest::new("SYM", OrderSide::Buy, quantity, order_type);
+                                expected.position_bracket = match operation {
+                                    "Place take profit" => {
+                                        Some(crate::model::PositionBracket::TakeProfit)
+                                    }
+                                    "Place stop loss" => {
+                                        Some(crate::model::PositionBracket::StopLoss)
+                                    }
+                                    _ => None,
+                                };
+                                assert_eq!(*broker.placed.lock().unwrap(), [expected]);
+                            }
                         }
                     }
                 }
@@ -1074,14 +1322,16 @@ mod tests {
         // Each notification level shows its share of the events; fills ask for the chosen sound
         // once, and only when the user turned it on.
         let all = [
+            "Placed: Buy 3 SYM at 95.00",
             "Partially filled: Buy 1 SYM at 95.00 (1 of 3)",
             "Filled: Buy 2 SYM at 98.00",
             "Filled: Sell 3 OTHER at 95.00",
             "Filled: Sell 3 SYM at 95.00",
             "Order rejected: Insufficient margin",
+            "Placed: Buy 3 SYM at 95.00",
         ];
         for (level, expected, sound) in [
-            (TradingNotifications::Errors, &all[4..], true),
+            (TradingNotifications::Errors, &all[5..6], true),
             (TradingNotifications::Off, &[][..], false),
             (TradingNotifications::All, &all[..], false),
         ] {
@@ -1303,6 +1553,135 @@ mod tests {
             find(&texts, "25").is_some(),
             "the legend shows the new quantity"
         );
+    }
+
+    #[test]
+    fn projected_orders_only_send_from_their_submit_button() {
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            for submit in [false, true] {
+                let broker = Arc::new(Recorder::default());
+                let mut trading = Trading::default();
+                trading.set_service(broker.clone());
+                trading.poll(&egui::Context::default(), &mut Toasts::new());
+                trading.display.instant_orders = true;
+                let request = OrderRequest::new("SYM", side, 20.0, OrderType::Limit(94.0));
+                trading.open_ticket(request.clone());
+                trading.rules_ready = true;
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                let ctx = egui::Context::default();
+                let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1000.0, 800.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            trading.show(ui, chart);
+                        },
+                    );
+                    let y = chart.get_chart_mapping().price_to_y(94.0);
+                    let at = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == executions::side_name(side)
+                                && (text.pos.y + text.galley.size().y / 2.0 - y).abs() < 3.0 =>
+                        {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                    at
+                };
+                frame(&mut trading, &mut chart, vec![]);
+                let button =
+                    frame(&mut trading, &mut chart, vec![]).expect("projected submit button");
+                assert!(broker.placed.lock().unwrap().is_empty());
+                let map = chart.get_chart_mapping();
+                let at = if submit {
+                    button
+                } else {
+                    egui::pos2(map.rect.right() - 95.0, map.price_to_y(94.0))
+                };
+                frame(
+                    &mut trading,
+                    &mut chart,
+                    vec![egui::Event::PointerMoved(at)],
+                );
+                for pressed in [true, false] {
+                    frame(
+                        &mut trading,
+                        &mut chart,
+                        vec![egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+                frame(&mut trading, &mut chart, vec![]);
+                assert!(!trading.ticket.open);
+                assert_eq!(
+                    *broker.placed.lock().unwrap(),
+                    if submit { vec![request] } else { vec![] }
+                );
+                assert!(
+                    broker.cancelled.lock().unwrap().is_empty(),
+                    "a projected cancel never reaches the broker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn order_notifications_keep_roles_and_do_not_repeat_updates() {
+        use crate::model::PositionBracket;
+        for (kind, role, name) in [
+            (OrderType::Limit(101.0), None, "Limit"),
+            (OrderType::Stop(99.0), None, "Stop"),
+            (
+                OrderType::StopLimit {
+                    stop: 101.0,
+                    limit: 102.0,
+                },
+                None,
+                "Stop limit",
+            ),
+            (
+                OrderType::Limit(105.0),
+                Some(PositionBracket::TakeProfit),
+                "Take profit",
+            ),
+            (
+                OrderType::Stop(95.0),
+                Some(PositionBracket::StopLoss),
+                "Stop loss",
+            ),
+        ] {
+            let mut trading = Trading::default();
+            let mut toasts = Toasts::new();
+            let mut request = OrderRequest::new("SYM", OrderSide::Sell, 10.0, kind);
+            request.position_bracket = role;
+            let order = Order::new(OrderId::new("one"), request, OrderStatus::Working);
+            trading.apply(AccountEvent::Order(order.clone()), &mut toasts);
+            trading.apply(AccountEvent::Order(order), &mut toasts);
+            assert_eq!(toasts.toasts().len(), 1);
+            let toast = &toasts.toasts()[0];
+            assert_eq!(
+                toast.title.as_deref(),
+                Some(format!("{name} order placed on").as_str())
+            );
+            let details = toast.trading.as_ref().unwrap();
+            assert_eq!(details.side, OrderSide::Sell);
+            assert_eq!(details.quantity, 10.0);
+            assert!(!details.executed);
+        }
     }
 
     #[test]

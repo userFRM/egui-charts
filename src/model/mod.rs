@@ -110,7 +110,7 @@ pub use tpo::{
 };
 pub use trading::{
     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-    OrderType, Position, TimeInForce, TradingRules,
+    OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
 
 #[cfg(test)]

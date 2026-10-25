@@ -272,6 +272,8 @@ pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
     pub instant_orders: bool,
+    /// Show current Bid and Ask tags supplied by the quote source.
+    pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
     pub play_execution_sound: bool,
@@ -305,6 +307,7 @@ impl Default for TradingSettings {
     fn default() -> Self {
         Self {
             instant_orders: false,
+            bid_ask_labels: true,
             play_execution_sound: false,
             execution_sound: String::new(),
             notifications: TradingNotifications::All,
