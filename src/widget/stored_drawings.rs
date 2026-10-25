@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(super) struct DrawingStore {
+    // Only attaching storage links the drawing readers and writers into an application.
+    sync: fn(&mut Chart, &egui::Context),
+    save: fn(&mut Chart),
     storage: Arc<dyn Storage>,
     /// The document of each symbol shown since storage was attached.
     documents: HashMap<String, StoredDocument>,
@@ -42,6 +45,8 @@ impl Chart {
     /// [`ChartLayout`](super::ChartLayout) drawing sync or give storage to one of them.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
         self.drawing_store = Some(DrawingStore {
+            sync: Self::poll_stored_drawings,
+            save: Self::write_stored_drawings,
             storage,
             documents: HashMap::new(),
             loaded: HashMap::new(),
@@ -59,6 +64,12 @@ impl Chart {
 
     /// Reads the shown symbol's drawings when it is first shown and saves edited drawings.
     pub(super) fn sync_stored_drawings(&mut self, ctx: &egui::Context) {
+        if let Some(store) = &self.drawing_store {
+            (store.sync)(self, ctx);
+        }
+    }
+
+    fn poll_stored_drawings(&mut self, ctx: &egui::Context) {
         self.save_stored_drawings();
         let symbol = self.symbol.clone();
         let Some(store) = &mut self.drawing_store else {
@@ -154,6 +165,12 @@ impl Chart {
 
     /// Writes the shown symbol's drawings if they changed since they were last written.
     pub(super) fn save_stored_drawings(&mut self) {
+        if let Some(store) = &self.drawing_store {
+            (store.save)(self);
+        }
+    }
+
+    fn write_stored_drawings(&mut self) {
         let edits = self.history.drawing_edits;
         if self.symbol.is_empty()
             || self
