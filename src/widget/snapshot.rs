@@ -1,7 +1,7 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, PaneId, SeriesId};
+use super::{Chart, ChartLayoutMode, PaneId};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{ChartType, ChartTypeParams, Timeframe};
 use crate::ui::dialogs::templates::StudyTemplate;
@@ -109,11 +109,12 @@ impl Chart {
         let panes = self.panes();
         let studies: Vec<_> = self
             .indicators()
-            .map(|(id, study)| SavedStudy {
+            .enumerate()
+            .map(|(index, (id, study))| SavedStudy {
                 id: id.0,
                 study: StudyTemplate::from_study(study),
                 caption: self.indicator_inputs(id).unwrap_or_default().to_owned(),
-                autoscale: self.study_autoscale[self.study_index(id)],
+                autoscale: self.study_autoscale[index],
                 pane: self
                     .series_pane(id)
                     .and_then(|pane| panes.iter().position(|p| *p == pane))
@@ -325,13 +326,6 @@ impl Chart {
         };
         self.history.clear();
         Ok(skipped)
-    }
-
-    fn study_index(&self, id: SeriesId) -> usize {
-        self.study_ids
-            .iter()
-            .position(|study| *study == id)
-            .expect("a study of the chart")
     }
 }
 

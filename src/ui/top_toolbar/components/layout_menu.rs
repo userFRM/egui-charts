@@ -487,7 +487,7 @@ impl LayoutMenu {
         ui.separator();
         ui.colored_label(ui.active_theme().ui.text_secondary, "Layouts");
         egui::ScrollArea::vertical()
-            .max_height(ui.available_height().min(240.0).max(0.0))
+            .max_height(ui.available_height().clamp(0.0, 240.0))
             .show(ui, |ui| {
                 for layout in &self.layouts {
                     ui.horizontal(|ui| {
