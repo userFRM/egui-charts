@@ -209,7 +209,7 @@ fn cached_profiles(
         tick_size: *grid,
         ..config.clone()
     };
-    // Session ends, leaving sessions that open in one composite together.
+    // Cache whole trading days, joining days when their adjacent profiles share a composite.
     let composite = |bar: &Bar| {
         config
             .composites
@@ -222,14 +222,19 @@ fn cached_profiles(
     let mut profile_open = starts.first().copied().unwrap_or(0);
     let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
-        if bars.get(end).is_some_and(|next| {
-            composite(&bars[profile_open]).is_some_and(|group| composite(next) == Some(group))
-        }) {
-            continue;
+        if let Some(next) = bars.get(end) {
+            let previous = &bars[profile_open];
+            let same_day = sessions
+                .session_break_between(&previous.time, &next.time)
+                .is_none();
+            let merged = composite(previous).is_some_and(|group| composite(next) == Some(group));
+            profile_open = end;
+            if same_day || merged {
+                continue;
+            }
         }
         ends.push(end - open);
         open = end;
-        profile_open = end;
     }
     PROFILE_CACHE.with_borrow_mut(|cache| {
         let mut profiles = Vec::new();
@@ -812,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_composites_merge_split_profiles_across_trading_days() {
+    fn cached_sessions_keep_intraday_splits_and_cross_day_composites() {
         use crate::model::{Session, SessionWindow, TimezoneId};
         use chrono::{NaiveTime, TimeZone, Weekday::*};
         let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
@@ -860,6 +865,29 @@ mod tests {
                 .collect();
             assert_eq!(counts, expected, "{first}..={last}");
         }
+        let config = TPOConfig {
+            split_sessions: true,
+            latest_session_only: true,
+            ..Default::default()
+        };
+        let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config);
+        let cached = cached_profiles(
+            &bars[span.clone()],
+            1,
+            span.start,
+            &config,
+            &clock,
+            &clock.sessions(),
+        );
+        // Latest keeps every split of the newest trading day, as the study did before merging.
+        let counts: Vec<_> = cached
+            .last()
+            .unwrap()
+            .2
+            .iter()
+            .map(|profile| profile.tpo_count_at(100.0, profile.tick_size))
+            .collect();
+        assert_eq!(counts, [3, 13, 3]);
     }
 
     #[test]

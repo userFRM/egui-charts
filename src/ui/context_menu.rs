@@ -1848,7 +1848,12 @@ mod tests {
         use crate::model::{Bar, BarData, ChartType, Timeframe, to_tpo_profiles};
         use chrono::{DateTime, Duration};
         use egui::{Event, PointerButton, RawInput, Shape};
-        for theme in [Theme::dark(), Theme::light()] {
+        for (theme, width) in [
+            (Theme::dark(), 900.0),
+            (Theme::light(), 900.0),
+            (Theme::dark(), 320.0),
+            (Theme::light(), 320.0),
+        ] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let day = |d| DateTime::UNIX_EPOCH + Duration::days(d);
@@ -1876,7 +1881,7 @@ mod tests {
                 let mut action = None;
                 let mut output = ctx.run_ui(
                     RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 600.0))),
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
                         events,
                         ..Default::default()
                     },
