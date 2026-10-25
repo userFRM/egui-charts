@@ -110,6 +110,9 @@ impl DialogFrame {
         let input_blocked = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let auto_height = self.auto_height;
         window.show(ctx, |ui| {
+            ui.response().widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Dialog, ui.is_enabled(), &self.id)
+            });
             ui.data_mut(|d| {
                 d.insert_temp(ui.layer_id().id.with("dialog_input_blocked"), input_blocked)
             });

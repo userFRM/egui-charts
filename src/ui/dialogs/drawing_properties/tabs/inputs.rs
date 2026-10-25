@@ -72,9 +72,11 @@ impl InputsTab {
                     PositionSize::RiskPercent { .. } => 2,
                 };
                 FormGrid::new("position_inputs").show(ui, |ui| {
-                    ui.label("Size by");
-                    ui.combo_select("position_size_mode", &mut mode, [0, 1, 2], |v| {
-                        ["Quantity", "Risk amount", "Risk percent"][*v].into()
+                    let label = ui.label("Size by");
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select("position_size_mode", &mut mode, [0, 1, 2], |v| {
+                            ["Quantity", "Risk amount", "Risk percent"][*v].into()
+                        });
                     });
                     ui.end_row();
                     if mode
@@ -123,8 +125,9 @@ impl InputsTab {
                 let mut rows = config.rows();
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
-                    ui.label("Rows");
-                    ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS));
+                    let label = ui.label("Rows");
+                    ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS))
+                        .labelled_by(label.id);
                     ui.end_row();
                     number(
                         ui,
@@ -156,8 +159,9 @@ impl InputsTab {
 }
 
 fn number(ui: &mut Ui, label: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>) {
-    ui.label(label);
-    ui.add(egui::DragValue::new(value).range(range).speed(0.1));
+    let label = ui.label(label);
+    ui.add(egui::DragValue::new(value).range(range).speed(0.1))
+        .labelled_by(label.id);
     ui.end_row();
 }
 
@@ -195,15 +199,18 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     for (i, level) in config.levels.iter_mut().enumerate() {
         ui.push_id(i, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut level.visible, "");
+                ui.checkbox(&mut level.visible, "")
+                    .accessible_name(format!("Level {} visible", i + 1));
                 ui.add(
                     egui::DragValue::new(&mut level.value)
                         .speed(0.001)
                         .max_decimals(6),
-                );
+                )
+                .accessible_name(format!("Level {} ratio", i + 1));
                 if !wedge {
                     if !channel {
-                        ui.add(egui::TextEdit::singleline(&mut level.label).desired_width(72.0));
+                        ui.add(egui::TextEdit::singleline(&mut level.label).desired_width(72.0))
+                            .accessible_name(format!("Level {} label", i + 1));
                     }
                     level_color(ui, &mut level.color, &mut pickers[i]);
                     if !channel {
@@ -260,19 +267,25 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     for (i, level) in config.levels.iter_mut().enumerate() {
         ui.push_id(i, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut level.visible, "");
+                ui.checkbox(&mut level.visible, "")
+                    .accessible_name(format!("Level {} visible", i + 1));
                 ui.add(
                     egui::DragValue::new(&mut level.value)
                         .range(0.0..=f32::MAX)
                         .speed(0.01),
-                );
+                )
+                .accessible_name(format!("Level {} ratio", i + 1));
                 level_color(ui, &mut level.color, &mut pickers[i]);
-                ui.combo_select(
-                    "level_style",
-                    &mut level.line_style,
-                    LineStyle::all().iter().copied(),
-                    |v| v.name().to_owned(),
-                );
+                egui::ComboBox::from_id_salt("level_style")
+                    .icon(crate::ui_kit::buttons::combo_chevron)
+                    .selected_text(level.line_style.name())
+                    .show_ui(ui, |ui| {
+                        for style in LineStyle::all() {
+                            ui.selectable_value(&mut level.line_style, *style, style.name());
+                        }
+                    })
+                    .response
+                    .accessible_name(format!("Level {} line style", i + 1));
                 if Button::new("Remove").ghost().show(ui).clicked() {
                     remove = Some(i);
                 }
@@ -309,7 +322,8 @@ fn fractions(ui: &mut Ui, title: &str, levels: &mut Vec<f32>) {
         .num_columns(columns * 2)
         .show(ui, |ui| {
             for (i, value) in levels.iter_mut().enumerate() {
-                ui.add(egui::DragValue::new(value).range(0.0..=1.0).speed(0.001));
+                ui.add(egui::DragValue::new(value).range(0.0..=1.0).speed(0.001))
+                    .accessible_name(format!("{title} {}", i + 1));
                 if Button::icon(&crate::icons::icons::TRASH)
                     .ghost()
                     .tooltip("Remove division")

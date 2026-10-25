@@ -283,6 +283,10 @@ fn custom_controls_report_names_roles_and_states() {
 
 #[test]
 fn dialogs_expose_titles_and_label_their_fields() {
+    use super::dialogs::{
+        drawing_properties::{DrawingId, DrawingPropertiesDialog, DrawingProps, PropertiesTab},
+        series_settings::{SeriesSettingsDialog, SeriesSettingsTab},
+    };
     use super::top_toolbar::components::{
         indicator_dialog::IndicatorSettingsDialog,
         settings_menu::SettingsDialog,
@@ -294,6 +298,130 @@ fn dialogs_expose_titles_and_label_their_fields() {
         &'static [(Role, &'static str)],
     );
     let dialogs: &[Dialog] = &[
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.active_tab = PropertiesTab::Text;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::MultilineTextInput, "Label"),
+                (Role::ComboBox, "Font size"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.coordinates.points.push(Default::default());
+                dialog.active_tab = PropertiesTab::Coordinates;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::TextInput, "Price"),
+                (Role::TextInput, "Date (UTC)"),
+                (Role::TextInput, "Time (UTC)"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&crate::drawings::Drawing::new(
+                        1,
+                        crate::drawings::DrawingToolType::FibonacciRetracement,
+                    )),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Level 1 visible"),
+                (Role::SpinButton, "Level 1 ratio"),
+                (Role::TextInput, "Level 1 label"),
+            ],
+        ),
+        (
+            "Main series · Candles",
+            |ctx| {
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(crate::widget::SeriesId::MAIN, Default::default());
+                dialog.active_tab = SeriesSettingsTab::StatusLine;
+                dialog.settings.chart_type = crate::model::ChartType::Candles;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::CheckBox, "Show OHLC values"),
+                (Role::SpinButton, "Decimal places"),
+            ],
+        ),
+        (
+            "Main series · Candles",
+            |ctx| {
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(crate::widget::SeriesId::MAIN, Default::default());
+                dialog.active_tab = SeriesSettingsTab::ScalesAndLines;
+                dialog.settings.chart_type = crate::model::ChartType::Candles;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Scale mode"),
+                (Role::CheckBox, "Invert scale"),
+            ],
+        ),
+        (
+            "Main series · Candles",
+            |ctx| {
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(crate::widget::SeriesId::MAIN, Default::default());
+                dialog.active_tab = SeriesSettingsTab::Canvas;
+                dialog.settings.chart_type = crate::model::ChartType::Candles;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Type"),
+                (Role::ComboBox, "Mode"),
+                (Role::CheckBox, "Vertical grid lines"),
+            ],
+        ),
+        (
+            "Main series · Line",
+            |ctx| {
+                let mut dialog = SeriesSettingsDialog::new();
+                dialog.open(crate::widget::SeriesId::MAIN, Default::default());
+                dialog.active_tab = SeriesSettingsTab::Symbol;
+                dialog.settings.chart_type = crate::model::ChartType::Line;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Price source"),
+                (Role::ComboBox, "Line style"),
+                (Role::SpinButton, "Line width"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(DrawingId(1), "Trend Line".into(), DrawingProps::default());
+                dialog.show(ctx);
+            },
+            &[(Role::ComboBox, "Line style")],
+        ),
+        (
+            "Main series · Candles",
+            |ctx| {
+                let mut dialog = super::dialogs::series_settings::SeriesSettingsDialog::new();
+                dialog.open(crate::widget::SeriesId::MAIN, Default::default());
+                dialog.show(ctx);
+            },
+            &[(Role::Tab, "Symbol")],
+        ),
         (
             "Create Alert",
             |ctx| {
@@ -376,7 +504,11 @@ fn dialogs_expose_titles_and_label_their_fields() {
                     .build_ui(|ui| show(ui.ctx()));
                 harness.run();
                 let dialog = harness.get_by_role_and_label(Role::Dialog, title);
-                assert!(dialog.accesskit_node().data().is_modal(), "{title}");
+                assert_eq!(
+                    dialog.accesskit_node().data().is_modal(),
+                    title != "Drawing Properties",
+                    "{title}"
+                );
                 for &(role, label) in controls {
                     harness.get_by_role_and_label(role, label);
                 }

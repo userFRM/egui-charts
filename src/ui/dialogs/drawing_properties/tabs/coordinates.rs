@@ -145,11 +145,12 @@ impl CoordinatesTab {
 }
 
 fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
-    ui.label(label);
+    let label = ui.label(label);
     ui.add(
         egui::TextEdit::singleline(value)
             .desired_width(DESIGN_TOKENS.sizing.dialog.input_width)
             .hint_text(hint),
-    );
+    )
+    .labelled_by(label.id);
     ui.end_row();
 }

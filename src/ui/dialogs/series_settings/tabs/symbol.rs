@@ -25,8 +25,10 @@ impl SymbolTab {
         ui.space_sm();
         FormGrid::new("symbol_style_grid").show(ui, |ui| {
             if !settings.chart_type.uses_ohlc() {
-                ui.label("Price source");
-                Self::price_source_dropdown(ui, &mut settings.price_source);
+                let label = ui.label("Price source");
+                ui.label_inputs_by(label.id, |ui| {
+                    Self::price_source_dropdown(ui, &mut settings.price_source);
+                });
                 ui.end_row();
             }
             Self::parameters(ui, settings);
@@ -36,12 +38,13 @@ impl SymbolTab {
                 ChartType::StepLine => Self::line_style(ui, &mut styles.step_line, "line_style"),
                 ChartType::LineWithMarkers => {
                     Self::line_style(ui, &mut styles.line_with_markers, "line_style");
-                    ui.label("Marker radius");
+                    let label = ui.label("Marker radius");
                     ui.add(
                         egui::DragValue::new(&mut styles.marker_radius)
                             .range(0.0..=20.0)
                             .suffix(" pt"),
-                    );
+                    )
+                    .labelled_by(label.id);
                     ui.end_row();
                 }
                 ChartType::Area => {
@@ -74,8 +77,9 @@ impl SymbolTab {
                     &mut params.renko_brick_size,
                 );
                 Self::transform_source(ui, &mut params.renko_source);
-                ui.label("Wicks");
-                ui.checkbox(&mut params.renko_wicks, "");
+                let label = ui.label("Wicks");
+                ui.checkbox(&mut params.renko_wicks, "")
+                    .labelled_by(label.id);
                 ui.end_row();
             }
             ChartType::Kagi => {
@@ -87,25 +91,28 @@ impl SymbolTab {
             }
             ChartType::PointAndFigure => {
                 Self::box_size(ui, &mut params.pnf_size_method, &mut params.pnf_box_size);
-                ui.label("Reversal boxes");
-                ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100));
+                let label = ui.label("Reversal boxes");
+                ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
+                    .labelled_by(label.id);
                 ui.end_row();
             }
             ChartType::LineBreak => {
-                ui.label("Number of lines");
-                ui.add(egui::DragValue::new(&mut params.line_break_count).range(1..=10));
+                let label = ui.label("Number of lines");
+                ui.add(egui::DragValue::new(&mut params.line_break_count).range(1..=10))
+                    .labelled_by(label.id);
                 ui.end_row();
                 Self::transform_source(ui, &mut params.line_break_source);
             }
             ChartType::TimePriceOpportunity => {
-                ui.label("Period");
+                let label = ui.label("Period");
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_period_minutes)
                         .range(1..=1440)
                         .suffix(" min"),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
-                ui.label("Ticks per row");
+                let label = ui.label("Ticks per row");
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_row_ticks)
                         .range(0..=100_000)
@@ -116,25 +123,30 @@ impl SymbolTab {
                                 ticks.to_string()
                             }
                         }),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
-                ui.label("Value area");
+                let label = ui.label("Value area");
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_value_area)
                         .range(1.0..=100.0)
                         .suffix("%"),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
-                ui.label("Split extended hours");
-                ui.checkbox(&mut params.tpo_split_sessions, "");
+                let label = ui.label("Split extended hours");
+                ui.checkbox(&mut params.tpo_split_sessions, "")
+                    .labelled_by(label.id);
                 ui.end_row();
             }
             ChartType::Baseline => {
-                ui.label("Base level");
+                let label = ui.label("Base level");
                 let mut price = matches!(params.baseline, BaselineLevel::Price(_));
                 let was_price = price;
-                ui.combo_select("base_level", &mut price, [false, true], |p| {
-                    if *p { "Price" } else { "Pane %" }.to_owned()
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select("base_level", &mut price, [false, true], |p| {
+                        if *p { "Price" } else { "Pane %" }.to_owned()
+                    });
                 });
                 if price != was_price {
                     params.baseline = if price {
@@ -144,15 +156,15 @@ impl SymbolTab {
                     };
                 }
                 ui.end_row();
-                ui.label("Base value");
-                match &mut params.baseline {
+                let label = ui.label("Base value");
+                ui.label_inputs_by(label.id, |ui| match &mut params.baseline {
                     BaselineLevel::Price(value) => {
                         ui.add(egui::DragValue::new(value).speed(0.1));
                     }
                     BaselineLevel::PercentOfPane(value) => {
                         ui.add(egui::DragValue::new(value).range(0.0..=100.0).suffix("%"));
                     }
-                }
+                });
                 ui.end_row();
             }
             _ => {}
@@ -160,16 +172,18 @@ impl SymbolTab {
     }
 
     fn transform_source(ui: &mut Ui, source: &mut PriceBasedSource) {
-        ui.label("Price source");
-        ui.combo_select(
-            "transform_source",
-            source,
-            [PriceBasedSource::Close, PriceBasedSource::HighLow],
-            |s| match s {
-                PriceBasedSource::Close => "Close".to_owned(),
-                PriceBasedSource::HighLow => "High / low".to_owned(),
-            },
-        );
+        let label = ui.label("Price source");
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "transform_source",
+                source,
+                [PriceBasedSource::Close, PriceBasedSource::HighLow],
+                |s| match s {
+                    PriceBasedSource::Close => "Close".to_owned(),
+                    PriceBasedSource::HighLow => "High / low".to_owned(),
+                },
+            );
+        });
         ui.end_row();
     }
 
@@ -180,14 +194,16 @@ impl SymbolTab {
             BoxSizeMethod::Percentage(_) => 2,
         };
         let previous = choice;
-        ui.label("Size method");
-        ui.combo_select("size_method", &mut choice, [0, 1, 2], |c| {
-            match c {
-                0 => "Fixed",
-                1 => "Average true range",
-                _ => "Percentage",
-            }
-            .to_owned()
+        let label = ui.label("Size method");
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select("size_method", &mut choice, [0, 1, 2], |c| {
+                match c {
+                    0 => "Fixed",
+                    1 => "Average true range",
+                    _ => "Percentage",
+                }
+                .to_owned()
+            });
         });
         if choice != previous {
             *method = match choice {
@@ -202,34 +218,38 @@ impl SymbolTab {
         ui.end_row();
         match method {
             BoxSizeMethod::Fixed => {
-                ui.label("Size");
+                let label = ui.label("Size");
                 ui.add(
                     egui::DragValue::new(size)
                         .range(f64::MIN_POSITIVE..=f64::MAX)
                         .speed(0.1),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
             }
             BoxSizeMethod::Atr { period, multiplier } => {
-                ui.label("ATR period");
-                ui.add(egui::DragValue::new(period).range(1..=10000));
+                let label = ui.label("ATR period");
+                ui.add(egui::DragValue::new(period).range(1..=10000))
+                    .labelled_by(label.id);
                 ui.end_row();
-                ui.label("ATR multiplier");
+                let label = ui.label("ATR multiplier");
                 ui.add(
                     egui::DragValue::new(multiplier)
                         .range(0.01..=1000.0)
                         .speed(0.1),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
             }
             BoxSizeMethod::Percentage(percent) => {
-                ui.label("Percentage");
+                let label = ui.label("Percentage");
                 ui.add(
                     egui::DragValue::new(percent)
                         .range(0.001..=100.0)
                         .speed(0.1)
                         .suffix("%"),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
             }
         }
@@ -243,21 +263,24 @@ impl SymbolTab {
 
     fn line_style(ui: &mut Ui, style: &mut LinePlotStyle, id: &str) {
         Self::fill_row(ui, "Line colour", &mut style.color);
-        ui.label("Line width");
+        let label = ui.label("Line width");
         ui.add(
             egui::DragValue::new(&mut style.width)
                 .range(0.0..=10.0)
                 .speed(0.1)
                 .suffix(" pt"),
-        );
+        )
+        .labelled_by(label.id);
         ui.end_row();
-        ui.label("Line style");
-        ui.combo_select(
-            id,
-            &mut style.style,
-            LineStyle::all().iter().copied(),
-            |s| s.name().to_owned(),
-        );
+        let label = ui.label("Line style");
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                id,
+                &mut style.style,
+                LineStyle::all().iter().copied(),
+                |s| s.name().to_owned(),
+            );
+        });
         ui.end_row();
     }
 
