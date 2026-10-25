@@ -892,6 +892,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "log",
+ "png 0.17.16",
  "resvg",
  "serde",
  "serde_json",
