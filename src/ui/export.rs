@@ -364,6 +364,9 @@ impl ExportDialog {
                             .checkbox(&mut self.config.image.include_timestamp, "Export timestamp")
                             .changed();
                         changed |= ui
+                            .checkbox(&mut self.config.image.include_crosshair, "Crosshair")
+                            .changed();
+                        changed |= ui
                             .checkbox(
                                 &mut self.config.image.transparent_background,
                                 "Transparent background",

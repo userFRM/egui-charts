@@ -1,10 +1,11 @@
 //! The chart's bars, merged by one set of rules for history and live updates, and the studies
 //! computed from them.
 
+use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
-use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, PriceLine};
+use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, MarkerOptions, PriceLine};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -34,6 +35,10 @@ pub struct BarsInRange {
     /// last bar to the range's right edge, negated: zero or less.
     pub bars_after: f64,
 }
+
+/// Handle of a price line added with [`Chart::add_price_line`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PriceLineId(u64);
 
 impl Chart {
     /// Take the settings request from a legend button or a double-click in a pane: a study, or
@@ -66,6 +71,9 @@ impl Chart {
             let item = &mut self.price_series[at];
             item.bars = bars;
             item.revision = crate::model::next_revision();
+            if let Some(marks) = &mut item.change_marks {
+                marks.clear();
+            }
             item.feed.rejected_bars += rejected;
             self.data_loaded(series);
             return;
@@ -81,6 +89,9 @@ impl Chart {
         let (bars, rejected) = clean(bars, &self.clock());
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
+        if let Some(marks) = &mut self.change_marks {
+            marks.clear();
+        }
         self.pending_box_sizes = self
             .chart_type_params
             .size_methods()
@@ -111,13 +122,13 @@ impl Chart {
             let clock = self.clock();
             let item = &mut self.price_series[at];
             let len = item.bars.len();
-            let merged = merge(
-                &mut item.bars,
-                &mut BTreeSet::new(),
-                &clock,
-                vec![(bar, Origin::Live)],
-            );
+            let incoming = vec![(bar, Origin::Live)];
+            let before = ChangeMarks::before(&item.bars, &clock, &incoming);
+            let merged = merge(&mut item.bars, &mut BTreeSet::new(), &clock, incoming);
             item.feed.rejected_bars += merged.rejected;
+            if let Some(marks) = &mut item.change_marks {
+                marks.record(&item.bars, &clock, before);
+            }
             if merged.first_changed.is_some_and(|first| first + 1 < len) {
                 item.revision = crate::model::next_revision();
             }
@@ -251,15 +262,96 @@ impl Chart {
         }
     }
 
-    /// Replaces the price lines drawn on the scale of `series`.
+    /// The markers of `series` from [`set_markers`](Self::set_markers), without those of a
+    /// [mark source](Self::set_mark_source). Empty for ids that hold no bars.
+    pub fn markers(&self, series: SeriesId) -> &[Marker] {
+        if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
+            &item.markers
+        } else if series == SeriesId::MAIN && self.main_series_present {
+            &self.marks
+        } else {
+            &[]
+        }
+    }
+
+    /// Sets whether the markers of `series` widen its autoscaled price range and where they
+    /// are painted. The main series' options also apply to the bar marks of a mark source.
+    ///
+    /// Bar series accept options; unknown ids and study ids are ignored with a warning.
+    pub fn set_marker_options(&mut self, series: SeriesId, options: MarkerOptions) {
+        if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
+            item.marker_options = options;
+        } else if self.main_series_present && holds_bars(series, "set_marker_options") {
+            self.marker_options = options;
+        }
+    }
+
+    /// Replaces the price lines drawn on the scale of `series`. Handles of its previous lines,
+    /// from [`add_price_line`](Self::add_price_line), no longer refer to a line.
     ///
     /// Every bar series accepts price lines. The price
     /// scale does not fit to them: a line whose price is off the scale or not finite is not drawn.
     pub fn set_price_lines(&mut self, series: SeriesId, lines: Vec<PriceLine>) {
+        let first = self.next_price_line;
+        self.next_price_line += lines.len() as u64;
+        if let Some(stored) = self.price_lines_mut(series, "set_price_lines") {
+            *stored = (first..).map(PriceLineId).zip(lines).collect();
+        }
+    }
+
+    /// Adds `line` to the price lines drawn on the scale of `series` and returns its handle,
+    /// with which [`update_price_line`](Self::update_price_line) moves or restyles it and
+    /// [`remove_price_line`](Self::remove_price_line) removes it. `None` when `series` holds no
+    /// bars, as with [`set_price_lines`](Self::set_price_lines).
+    pub fn add_price_line(&mut self, series: SeriesId, line: PriceLine) -> Option<PriceLineId> {
+        let id = PriceLineId(self.next_price_line);
+        self.price_lines_mut(series, "add_price_line")?
+            .push((id, line));
+        self.next_price_line += 1;
+        Some(id)
+    }
+
+    /// The price line of `id`, or `None` once it is removed, replaced by
+    /// [`set_price_lines`](Self::set_price_lines) or its series is removed.
+    pub fn price_line(&self, id: PriceLineId) -> Option<&PriceLine> {
+        std::iter::once(&self.price_lines)
+            .chain(self.price_series.iter().map(|item| &item.lines))
+            .flatten()
+            .find_map(|(line_id, line)| (*line_id == id).then_some(line))
+    }
+
+    /// Replaces the price line of `id`, keeping its place in the drawing order. Returns `false`
+    /// when `id` no longer refers to a line.
+    pub fn update_price_line(&mut self, id: PriceLineId, line: PriceLine) -> bool {
+        let stored = std::iter::once(&mut self.price_lines)
+            .chain(self.price_series.iter_mut().map(|item| &mut item.lines))
+            .flatten()
+            .find(|(line_id, _)| *line_id == id);
+        stored.map(|(_, stored)| *stored = line).is_some()
+    }
+
+    /// Removes the price line of `id`. Returns `false` when `id` no longer refers to a line.
+    pub fn remove_price_line(&mut self, id: PriceLineId) -> bool {
+        std::iter::once(&mut self.price_lines)
+            .chain(self.price_series.iter_mut().map(|item| &mut item.lines))
+            .any(|lines| {
+                let len = lines.len();
+                lines.retain(|(line_id, _)| *line_id != id);
+                lines.len() < len
+            })
+    }
+
+    fn price_lines_mut(
+        &mut self,
+        series: SeriesId,
+        call: &str,
+    ) -> Option<&mut Vec<(PriceLineId, PriceLine)>> {
         if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
-            item.lines = lines;
-        } else if self.main_series_present && holds_bars(series, "set_price_lines") {
-            self.price_lines = lines;
+            Some(&mut item.lines)
+        } else if self.main_series_present && holds_bars(series, call) {
+            Some(&mut self.price_lines)
+        } else {
+            None
         }
     }
 
@@ -289,11 +381,18 @@ impl Chart {
         let tail = before.tail.as_ref().map(|bar| bar.time);
         self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
+        let closes = self
+            .change_marks
+            .as_ref()
+            .map(|_| ChangeMarks::before(&self.state.data().bars, clock, &incoming));
         let mut merged = Merged::default();
         self.state.edit_bars(|bars| {
             merged = merge(bars, from_ticks, clock, incoming);
             merged.first_changed
         });
+        if let (Some(marks), Some(closes)) = (&mut self.change_marks, closes) {
+            marks.record(&self.state.data().bars, clock, closes);
+        }
         self.feed.rejected_bars += merged.rejected;
         self.project_drawing_points();
         if !self.bars_changed(before, merged.first_changed)
@@ -314,8 +413,8 @@ impl Chart {
     }
 
     /// Adds a study, computed at once from the bars, which [`show`](Self::show) draws: on the
-    /// main pane if [`Indicator::is_overlay`], otherwise in a pane below it. Returns the study's
-    /// id, which stays valid when other studies are removed.
+    /// main pane if [`Indicator::is_overlay`], otherwise in a new pane at the bottom. Returns the
+    /// study's id, which stays valid when other studies are removed.
     pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
@@ -329,12 +428,16 @@ impl Chart {
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);
+        let overlay = indicator.is_overlay();
         self.studies.add(indicator);
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
         self.pending_from.push(None);
         self.next_refresh.push(f64::NEG_INFINITY);
+        if !overlay {
+            self.add_study_pane(id);
+        }
         id
     }
 
@@ -441,6 +544,16 @@ impl Chart {
         self.record_study(id);
         self.study_autoscale[at] = autoscale;
         true
+    }
+
+    /// Pins study `id` to the pane's price scale, a scale of its own or no scale. Returns `false`
+    /// for an id that is not a study of the chart, or a custom presentation that keeps its scale.
+    pub fn set_indicator_scale(&mut self, id: SeriesId, scale: crate::studies::StudyScale) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        self.record_study(id);
+        self.studies.indicators_mut()[at].set_scale(scale)
     }
 
     /// The chart's studies with their ids, in the order they were added. Their values reflect the
@@ -668,7 +781,7 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
 }
 
 /// Warn about an id that was not handled as a secondary bar series.
-fn holds_bars(series: SeriesId, call: &str) -> bool {
+pub(super) fn holds_bars(series: SeriesId, call: &str) -> bool {
     if series != SeriesId::MAIN {
         log::warn!("Chart::{call} ignored: {series:?} is not a present bar series");
     }
@@ -686,9 +799,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    /// Bars span 100..110 and the overlay reaches 120: 10% margins give 98..122. Every line of a
-    /// study counts and non-finite values do not; without eligible values, or with a volume
-    /// profile, the bars alone give 99..111. Relative modes use close 110.
+    /// Bars span 100..110 and the overlay reaches 120: 10% of the pane above and below adds an
+    /// eighth of the span on each side, 97.5..122.5. Every line of a study counts and non-finite
+    /// values do not; without eligible values, or with a volume profile, the bars alone give
+    /// 98.75..111.25. Relative modes use close 110.
     #[test]
     fn autoscale_includes_only_visible_overlay_values() {
         use crate::scales::PriceScaleMode;
@@ -696,16 +810,16 @@ mod tests {
         use crate::widget::test_frames::chart;
 
         for (mode, fitted, bars_only) in [
-            (PriceScaleMode::Normal, (98.0, 122.0), (99.0, 111.0)),
+            (PriceScaleMode::Normal, (97.5, 122.5), (98.75, 111.25)),
             (
                 PriceScaleMode::Percentage,
-                (-120.0 / 11.0, 120.0 / 11.0),
-                (-10.0, 10.0 / 11.0),
+                (-125.0 / 11.0, 125.0 / 11.0),
+                (-112.5 / 11.0, 12.5 / 11.0),
             ),
             (
                 PriceScaleMode::IndexedTo100,
-                (980.0 / 11.0, 1220.0 / 11.0),
-                (90.0, 1110.0 / 11.0),
+                (975.0 / 11.0, 1225.0 / 11.0),
+                (987.5 / 11.0, 1112.5 / 11.0),
             ),
         ] {
             for case in [
@@ -810,7 +924,7 @@ mod tests {
                 frame(&ctx, &mut chart, 0.04, Vec::new());
                 let expected = if case == "main_hidden" {
                     let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
-                    (value - value.abs() * 0.001, value + value.abs() * 0.001)
+                    (value - value.abs() * 0.00125, value + value.abs() * 0.00125)
                 } else if matches!(case, "single" | "multiple" | "displaced_future") {
                     fitted
                 } else {
@@ -1226,5 +1340,232 @@ mod tests {
             let after: Vec<f32> = points.iter().map(|point| point.bar_idx).collect();
             assert_eq!(after, moved, "{name}");
         }
+    }
+
+    /// A handle moves, restyles and removes only its own line, on the main series and on an
+    /// added series. Replacing a series' lines or removing the series retires its handles, and a
+    /// study takes no line. The moved line's tag and title use their own colours.
+    #[test]
+    fn price_line_handles_change_only_their_own_line() {
+        use crate::model::PriceLine;
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::{Color32, Shape};
+
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.config.show_volume = false;
+        let kept = PriceLine::new(105.0, Color32::GOLD);
+        let kept_id = chart.add_price_line(SeriesId::MAIN, kept.clone()).unwrap();
+        let moved = chart
+            .add_price_line(SeriesId::MAIN, PriceLine::new(112.0, Color32::RED))
+            .unwrap();
+        let (fill, text, title) = (
+            Color32::from_rgb(10, 20, 30),
+            Color32::from_rgb(200, 210, 220),
+            Color32::from_rgb(1, 2, 3),
+        );
+        let restyled = PriceLine::new(115.0, Color32::BLUE)
+            .with_axis_label_colors(fill, text)
+            .with_title("Target")
+            .with_title_color(title);
+        assert!(chart.update_price_line(moved, restyled.clone()));
+        assert_eq!(chart.price_line(kept_id), Some(&kept));
+        assert_eq!(chart.price_line(moved), Some(&restyled));
+
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+        let y = chart.last_price_map.price_to_y(115.0);
+        let tag = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(tag) if tag.fill == fill => Some(tag.rect),
+                _ => None,
+            })
+            .expect("the moved line's tag");
+        assert!((tag.center().y - y).abs() < 1.0);
+        assert!(painted.iter().any(|shape| matches!(shape,
+            Shape::Text(t) if t.galley.text() == "Target"
+                && t.galley.job.sections[0].format.color == title)));
+        assert!(painted.iter().any(|shape| matches!(shape,
+            Shape::Text(t) if t.galley.text() == "115.00"
+                && t.galley.job.sections[0].format.color == text)));
+
+        assert!(chart.remove_price_line(kept_id));
+        assert!(!chart.remove_price_line(kept_id));
+        assert!(!chart.update_price_line(kept_id, kept.clone()));
+        assert_eq!(chart.price_line(moved), Some(&restyled));
+        chart.set_price_lines(SeriesId::MAIN, vec![kept.clone()]);
+        assert_eq!(chart.price_line(moved), None);
+
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        let line = chart.add_price_line(series, kept.clone()).unwrap();
+        assert!(chart.update_price_line(line, restyled.clone()));
+        assert_eq!(chart.price_line(line), Some(&restyled));
+        assert!(chart.remove_series(series));
+        assert_eq!(chart.price_line(line), None);
+        let study = chart.add_indicator(Box::new(SMA::new(3)));
+        assert_eq!(chart.add_price_line(study, kept), None);
+    }
+
+    /// A price-anchored marker in view widens the fit unless its options say otherwise, and one
+    /// out of view never does. Each layer paints the main series' marker under or over a series
+    /// added after it and a price line.
+    #[test]
+    fn marker_options_fit_and_layer_the_markers() {
+        use crate::model::{MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder, PriceLine};
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::{Color32, Shape};
+
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.set_visible_bars(20);
+        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        let series = chart.add_series(crate::widget::SeriesOptions {
+            color: Color32::GREEN,
+            ..Default::default()
+        });
+        chart.set_data(series, bars.clone());
+        chart.set_price_lines(
+            SeriesId::MAIN,
+            vec![PriceLine::new(105.0, Color32::BLUE).with_style(crate::model::LineStyle::Solid)],
+        );
+        let marker = |time, price| {
+            Marker::new(time)
+                .with_shape(MarkerShape::Circle)
+                .with_color(Color32::RED)
+                .at_price(price, MarkerPos::AtPriceMiddle)
+        };
+        let markers = vec![marker(bars[95].time, 150.0), marker(bars[0].time, 300.0)];
+        chart.set_markers(SeriesId::MAIN, markers.clone());
+        assert_eq!(chart.markers(SeriesId::MAIN).len(), markers.len());
+        assert!(chart.markers(series).is_empty());
+
+        for (auto_scale, z_order) in [
+            (false, MarkerZOrder::Normal),
+            (true, MarkerZOrder::Normal),
+            (true, MarkerZOrder::AboveSeries),
+            (true, MarkerZOrder::Top),
+        ] {
+            chart.set_marker_options(
+                SeriesId::MAIN,
+                MarkerOptions {
+                    auto_scale,
+                    z_order,
+                },
+            );
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+            let max = chart.state.price_scale().range().max;
+            assert_eq!(max > 150.0, auto_scale, "{max}");
+            assert!(max < 300.0, "{max}");
+            if !auto_scale {
+                continue;
+            }
+            let line = |color| {
+                // The series line is one path, a price line a segment.
+                let at = |shape: &Shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
+                };
+                (
+                    painted.iter().position(at).unwrap(),
+                    painted.iter().rposition(at).unwrap(),
+                )
+            };
+            let mark = painted
+                .iter()
+                .position(|shape| matches!(shape, Shape::Circle(c) if c.fill == Color32::RED))
+                .unwrap();
+            let (series_line, price_line) = (line(Color32::GREEN), line(Color32::BLUE));
+            assert!(
+                match z_order {
+                    MarkerZOrder::Normal => mark < series_line.0,
+                    MarkerZOrder::AboveSeries => series_line.1 < mark && mark < price_line.0,
+                    MarkerZOrder::Top => price_line.1 < mark,
+                },
+                "{z_order:?}: marker {mark}, series {series_line:?}, price line {price_line:?}"
+            );
+        }
+    }
+
+    /// A live update that raises or lowers the close of a stored bar marks its new close in the
+    /// rise or the fall colour, replacing the bar's previous mark, on the main and on an added
+    /// series. An unchanged close, a new bar and replaced history add no mark, and a mark goes
+    /// once its duration has passed.
+    #[test]
+    fn change_markers_mark_rises_and_falls_of_the_close() {
+        use crate::model::ChangeMarkers;
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::{Color32, Pos2, Shape};
+
+        let (up, down) = (Color32::from_rgb(1, 200, 1), Color32::from_rgb(200, 1, 1));
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let options = ChangeMarkers {
+            up_color: up,
+            down_color: down,
+            duration: Duration::from_secs(600),
+        };
+        chart.set_change_markers(SeriesId::MAIN, Some(options));
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        chart.set_data(series, bars.clone());
+        chart.set_change_markers(series, Some(options));
+        let last = bars.last().unwrap().time;
+        let bar = |close: f64| Bar::new(last, 100.0, close.max(110.0), 100.0, close, 1.0);
+        let marks = |chart: &mut Chart| {
+            shapes(&ctx, chart, 0.0, Vec::new())
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Circle(c) if c.radius == 4.0 && (c.fill == up || c.fill == down) => {
+                        Some((c.center, c.fill))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        marks(&mut chart);
+        let at = |chart: &Chart, close| {
+            Pos2::new(
+                chart.get_chart_mapping().idx_to_x(99),
+                chart.last_price_map.price_to_y(close),
+            )
+        };
+        for (close, color) in [(108.0, down), (109.0, up), (109.0, up)] {
+            chart.update(SeriesId::MAIN, bar(close));
+            let painted = marks(&mut chart);
+            assert_eq!(painted, vec![(at(&chart, close), color)], "close {close}");
+        }
+        chart.update(
+            SeriesId::MAIN,
+            Bar::new(last + TimeDelta::days(1), 1.0, 2.0, 1.0, 2.0, 1.0),
+        );
+        assert_eq!(marks(&mut chart).len(), 1, "a new bar is not a change");
+        chart.update(series, bar(120.0));
+        assert_eq!(
+            marks(&mut chart).iter().filter(|mark| mark.1 == up).count(),
+            2
+        );
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        chart.set_data(series, bars);
+        assert!(
+            marks(&mut chart).is_empty(),
+            "replaced history drops the marks"
+        );
+        chart.set_change_markers(
+            SeriesId::MAIN,
+            Some(ChangeMarkers {
+                duration: Duration::ZERO,
+                ..options
+            }),
+        );
+        chart.update(SeriesId::MAIN, bar(105.0));
+        assert!(
+            marks(&mut chart).is_empty(),
+            "an expired mark is not painted"
+        );
     }
 }

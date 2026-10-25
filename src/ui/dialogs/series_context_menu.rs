@@ -160,7 +160,7 @@ impl SeriesContextMenu {
                     SeriesContextMenuAction::OpenSettings => Control::Settings,
                     _ => return true,
                 },
-                MenuEntry::Separator => return true,
+                MenuEntry::Submenu { .. } | MenuEntry::Separator => return true,
             };
             !self.hidden.contains(&control)
         });

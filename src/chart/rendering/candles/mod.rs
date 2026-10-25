@@ -22,12 +22,47 @@ mod range;
 pub mod tpo;
 pub(crate) mod volume;
 
+pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
 };
 
-use crate::model::ChartType;
+use crate::model::{BaselineLevel, ChartType, ChartTypeStyles};
+use crate::scales::PriceMap;
 use crate::styles::typography;
+
+/// The line colour of a line-based chart type at `value`, or `None` for other chart types. The
+/// Baseline chart takes the colour of the side of `baseline` that `value` lies on, in the price
+/// pane `rect` mapped by `price_map`.
+pub(crate) fn line_color_at(
+    chart_type: ChartType,
+    styles: &ChartTypeStyles,
+    baseline: BaselineLevel,
+    price_map: &PriceMap,
+    rect: egui::Rect,
+    value: f64,
+) -> Option<egui::Color32> {
+    match chart_type {
+        ChartType::Line => Some(styles.line.color),
+        ChartType::StepLine => Some(styles.step_line.color),
+        ChartType::LineWithMarkers => Some(styles.line_with_markers.color),
+        ChartType::Area => Some(styles.area.line.color),
+        ChartType::Baseline => {
+            let base = match baseline {
+                BaselineLevel::Price(price) => price,
+                BaselineLevel::PercentOfPane(percent) => {
+                    price_map.y_to_price(rect.max.y - percent / 100.0 * rect.height())
+                }
+            };
+            Some(if value >= base {
+                styles.baseline.above.color
+            } else {
+                styles.baseline.below.color
+            })
+        }
+        _ => None,
+    }
+}
 
 /// Renders all chart types
 ///
@@ -110,6 +145,7 @@ pub fn render_chart_type(
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
+                &params.type_params.styles.bars,
             );
         }
         ChartType::HollowCandles => {
@@ -251,6 +287,7 @@ pub fn render_chart_type(
                 &idx_to_coord,
                 params.bullish_color(),
                 params.bearish_color(),
+                params.type_params.columns_base,
             );
         }
         ChartType::Baseline => {
@@ -464,9 +501,16 @@ mod tests {
                 .count();
             let has_bottom = output.shapes.iter().any(|s| matches!(&s.shape,
                 Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == settings.chart_type_params.styles.area.bottom_fill)));
-            let baseline_fills = output.shapes.iter().filter(|s| matches!(&s.shape,
-                Shape::Path(path) if path.fill == settings.chart_type_params.styles.baseline.above_fill
-                    || path.fill == settings.chart_type_params.styles.baseline.below_fill)).count();
+            let baseline = &settings.chart_type_params.styles.baseline;
+            let baseline_fills = [baseline.above_fill, baseline.below_fill]
+                .into_iter()
+                .filter(|fill| {
+                    output.shapes.iter().any(|s| {
+                        matches!(&s.shape,
+                        Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == *fill))
+                    })
+                })
+                .count();
             output.drop_without_applying_deltas();
             if kind != ChartType::Candles {
                 assert!(has_line, "{kind:?} ignored its line style");
@@ -478,7 +522,7 @@ mod tests {
                 assert!(has_bottom, "custom bottom fill was lost");
             }
             if kind == ChartType::Baseline {
-                assert!(baseline_fills >= 2, "baseline fills were lost");
+                assert_eq!(baseline_fills, 2, "baseline fills were lost");
             }
         }
         // Subpixel segments still carry a continuous 8-on, 4-off pattern: 22 points of ink

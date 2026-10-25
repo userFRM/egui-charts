@@ -1,196 +1,604 @@
 //! Pane placement, layout state and interaction controls.
 
 use super::{Chart, SeriesId};
-use egui::{Pos2, Rect, Sense, Ui};
+use egui::{Color32, Pos2, Rect, Sense, Ui};
 
-#[derive(Clone, Default)]
+/// Identifies a pane of a chart. [`PaneId::MAIN`] is the price pane; [`Chart::add_pane`] and
+/// [`Chart::panes`] return the others. An id stays valid until its pane is removed and is never
+/// reused by the chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaneId(pub(super) usize);
+
+impl PaneId {
+    /// The price pane, which draws the main series and its overlays.
+    pub const MAIN: PaneId = PaneId(0);
+}
+
+/// Behaviour and colours of the separators between panes, set with
+/// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaneOptions {
+    /// Dragging a separator resizes the panes on either side of it, and a double click returns
+    /// both to their default stretch factors. `true` by default.
+    pub resizable: bool,
+    /// Separator colour; `None` uses the theme's grid line colour.
+    pub separator_color: Option<Color32>,
+    /// Colour of a separator under the pointer or being dragged; `None` uses the selection
+    /// colour. Unused when the panes are not resizable.
+    pub separator_hover_color: Option<Color32>,
+}
+
+impl Default for PaneOptions {
+    fn default() -> Self {
+        Self {
+            resizable: true,
+            separator_color: None,
+            separator_hover_color: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct PaneLayout {
+    /// Every pane from top to bottom, the price pane included.
     pub(super) panes: Vec<Pane>,
-    pub(super) maximized: Option<SeriesId>,
+    pub(super) maximized: Option<PaneId>,
+    /// Overlay draw order from back to front, with the main series as the divider.
+    pub(super) main: Vec<SeriesId>,
+}
+
+impl Default for PaneLayout {
+    fn default() -> Self {
+        Self {
+            panes: vec![Pane::new(PaneId::MAIN)],
+            maximized: None,
+            main: vec![SeriesId::MAIN],
+        }
+    }
+}
+
+/// A change of a study's place in the draw order of its pane, where each item is drawn over the
+/// ones before it. In the main pane the price series is one of the items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualOrder {
+    /// Draw over every other item of the pane.
+    BringToFront,
+    /// Swap places with the item drawn just over it.
+    BringForward,
+    /// Swap places with the item drawn just under it.
+    SendBackward,
+    /// Draw under every other item of the pane.
+    SendToBack,
 }
 
 #[derive(Clone)]
 pub(super) struct Pane {
-    pub(super) id: SeriesId,
-    /// Studies and added bar series shown in the pane, in placement order.
-    pub(super) studies: Vec<SeriesId>,
+    pub(super) id: PaneId,
+    /// Studies and host series drawn in the pane, in legend order; empty for the price pane.
+    pub(super) members: Vec<SeriesId>,
+    /// Share of the expanded panes' height, relative to the factors of the others.
+    pub(super) stretch: f32,
+    /// Height to reach on the next layout, which turns it into a stretch factor.
     pub(super) height: Option<f32>,
+    /// Keep the pane when its last member leaves it.
+    pub(super) preserve: bool,
     pub(super) collapsed: Option<bool>,
     pub(super) scale: crate::scales::PriceScale,
+    /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
+    pub(super) rect: Rect,
+}
+
+impl Pane {
+    fn new(id: PaneId) -> Self {
+        Self {
+            id,
+            members: Vec::new(),
+            stretch: Self::default_stretch(id),
+            height: None,
+            preserve: false,
+            collapsed: None,
+            scale: crate::scales::PriceScale::new(crate::scales::PriceScaleOptions {
+                scale_margins: crate::scales::PriceScaleMargins {
+                    top: 0.0,
+                    bottom: 0.0,
+                },
+                ..Default::default()
+            }),
+            rect: Rect::NOTHING,
+        }
+    }
+
+    /// The price mapping of the pane's scale over its panel rect in the last frame.
+    pub(super) fn price_map(&self) -> crate::scales::PriceMap {
+        self.scale
+            .map(self.scale.transform(), self.rect.top(), self.rect.bottom())
+    }
+
+    /// The price pane takes three shares of the height and every other pane one.
+    pub(super) fn default_stretch(id: PaneId) -> f32 {
+        if id == PaneId::MAIN { 3.0 } else { 1.0 }
+    }
 }
 
 impl Chart {
+    /// Whether `id` is drawn below the price pane when placed there: a host series or a study
+    /// that is not an overlay.
+    fn pane_member(&self, id: SeriesId) -> bool {
+        self.price_series.iter().any(|item| item.id == id)
+            || self
+                .study_ids
+                .iter()
+                .position(|study| *study == id)
+                .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
+    }
+
+    /// Whether the host series `id` is drawn by a pane below the price pane.
+    pub(super) fn in_pane(&self, id: SeriesId) -> bool {
+        self.pane_layout
+            .panes
+            .iter()
+            .any(|pane| pane.members.contains(&id))
+    }
+
+    /// Whether `pane` stays in the layout at the next sync, which drops a pane whose members
+    /// have all left it unless it is preserved.
+    fn pane_listed(&self, pane: &Pane) -> bool {
+        pane.preserve
+            || pane.members.is_empty()
+            || pane.members.iter().any(|id| self.pane_member(*id))
+    }
+
+    /// Whether `pane` is drawn below or above the price pane: it is empty or has a visible member.
+    pub(super) fn pane_shown(&self, pane: &Pane) -> bool {
+        pane.id != PaneId::MAIN
+            && self.pane_listed(pane)
+            && (pane.members.is_empty()
+                || pane
+                    .members
+                    .iter()
+                    .any(|id| self.pane_member(*id) && self.is_series_visible(*id)))
+    }
+
+    /// Whether the chart draws any pane besides the price pane.
+    pub(super) fn has_panes(&self) -> bool {
+        self.pane_layout
+            .panes
+            .iter()
+            .any(|pane| self.pane_shown(pane))
+    }
+
+    fn pane_index(&self, pane: PaneId) -> Option<usize> {
+        self.pane_layout
+            .panes
+            .iter()
+            .position(|item| item.id == pane && self.pane_listed(item))
+    }
+
+    /// The legend name of a study or host series.
+    fn member_name(&self, id: SeriesId) -> &str {
+        if let Some(idx) = self.study_ids.iter().position(|study| *study == id) {
+            self.studies.indicators()[idx].name()
+        } else {
+            self.price_series
+                .iter()
+                .find(|item| item.id == id)
+                .map_or("Series", |item| item.options.name.as_str())
+        }
+    }
+
+    /// Removes `id` from its pane and drops that pane if it became empty and is not preserved.
+    fn leave_panes(&mut self, id: SeriesId) {
+        self.pane_layout.panes.retain_mut(|pane| {
+            let before = pane.members.len();
+            pane.members.retain(|member| *member != id);
+            pane.members.len() == before || !pane.members.is_empty() || pane.preserve
+        });
+    }
+
     pub(super) fn sync_panes(&mut self) {
-        for pane in &mut self.pane_layout.panes {
-            pane.studies.retain(|id| {
-                self.price_series.iter().any(|item| item.id == *id)
-                    || self
-                        .study_ids
-                        .iter()
-                        .position(|study| study == id)
-                        .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
-            });
-            if !pane.studies.contains(&pane.id)
-                && let Some(id) = pane.studies.first().copied()
-            {
-                if self.pane_layout.maximized == Some(pane.id) {
-                    self.pane_layout.maximized = Some(id);
-                }
-                pane.id = id;
+        let mut emptied = Vec::new();
+        for at in 0..self.pane_layout.panes.len() {
+            let mut members = std::mem::take(&mut self.pane_layout.panes[at].members);
+            let before = members.len();
+            members.retain(|id| self.pane_member(*id));
+            let pane = &mut self.pane_layout.panes[at];
+            if before > 0 && members.is_empty() && !pane.preserve {
+                emptied.push(pane.id);
             }
+            pane.members = members;
         }
         self.pane_layout
             .panes
-            .retain(|pane| !pane.studies.is_empty());
-        for (idx, study) in self.studies.indicators().iter().enumerate() {
+            .retain(|pane| !emptied.contains(&pane.id));
+        for idx in 0..self.study_ids.len() {
             let id = self.study_ids[idx];
-            if !study.is_overlay()
+            if !self.studies.indicators()[idx].is_overlay() && !self.in_pane(id) {
+                self.add_study_pane(id);
+            }
+        }
+        let overlays: Vec<_> = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .filter(|(_, study)| study.is_overlay())
+            .map(|(id, _)| *id)
+            .collect();
+        let main = &mut self.pane_layout.main;
+        main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id));
+        if !main.contains(&SeriesId::MAIN) {
+            main.insert(0, SeriesId::MAIN);
+        }
+        for id in overlays {
+            if !main.contains(&id) {
+                main.push(id);
+            }
+        }
+        if self.pane_layout.maximized.is_some_and(|id| {
+            id != PaneId::MAIN
                 && !self
                     .pane_layout
                     .panes
                     .iter()
-                    .any(|pane| pane.studies.contains(&id))
-            {
-                self.pane_layout.panes.push(Pane {
-                    id,
-                    studies: vec![id],
-                    height: study
-                        .pane()
-                        .height
-                        .filter(|height| height.is_finite() && *height >= 40.0),
-                    collapsed: None,
-                    scale: crate::scales::PriceScale::new(crate::scales::PriceScaleOptions {
-                        scale_margins: crate::scales::PriceScaleMargins {
-                            top: 0.0,
-                            bottom: 0.0,
-                        },
-                        ..Default::default()
-                    }),
-                });
-            }
-        }
-        if self.pane_layout.maximized.is_some_and(|id| {
-            id != SeriesId::MAIN
-                && !self.pane_layout.panes.iter().any(|pane| {
-                    pane.id == id
-                        && pane.studies.iter().any(|study| {
-                            self.price_series
-                                .iter()
-                                .any(|item| item.id == *study && item.visible)
-                                || self
-                                    .study_ids
-                                    .iter()
-                                    .position(|id| id == study)
-                                    .is_some_and(|idx| self.studies.indicators()[idx].is_visible())
-                        })
-                })
+                    .any(|pane| pane.id == id && self.pane_shown(pane))
         }) {
             self.pane_layout.maximized = None;
         }
     }
 
-    /// Moves a study to the main pane, another study's pane, or its own new pane.
-    /// Use `SeriesId::MAIN`, the destination study id, or the moved study's own id respectively.
-    /// Returns `false` for an unknown id or a custom presentation that rejects placement edits.
-    pub fn move_indicator_to_pane(&mut self, study: SeriesId, target: SeriesId) -> bool {
+    /// The pane height the study `id` prefers, if it declares a usable one.
+    fn study_pane_height(&self, id: SeriesId) -> Option<f32> {
+        self.study_ids
+            .iter()
+            .position(|study| *study == id)
+            .and_then(|idx| self.studies.indicators()[idx].pane().height)
+            .filter(|height| height.is_finite() && *height >= 40.0)
+    }
+
+    /// Appends a pane holding the study `id`, at the study's preferred height.
+    pub(super) fn add_study_pane(&mut self, id: SeriesId) {
+        let height = self.study_pane_height(id);
+        self.add_pane();
+        let pane = self.pane_layout.panes.last_mut().expect("pane was added");
+        pane.height = height;
+        pane.members.push(id);
+    }
+
+    /// Adds an empty pane at the bottom and returns its id. Fill it with
+    /// [`move_series_to_pane`](Self::move_series_to_pane). Once its last series or study leaves
+    /// it the pane is removed, unless [`set_preserve_empty_pane`](Self::set_preserve_empty_pane)
+    /// keeps it.
+    pub fn add_pane(&mut self) -> PaneId {
+        let id = PaneId(self.next_series);
+        self.next_series += 1;
+        self.pane_layout.panes.push(Pane::new(id));
+        id
+    }
+
+    /// Removes a pane with the series and studies it draws. Returns `false` for the price pane
+    /// or an unknown id.
+    pub fn remove_pane(&mut self, pane: PaneId) -> bool {
         self.sync_panes();
-        let Some(idx) = self.study_ids.iter().position(|id| *id == study) else {
+        if pane == PaneId::MAIN {
+            return false;
+        }
+        let Some(at) = self.pane_index(pane) else {
             return false;
         };
-        let destination = self
+        for id in self.pane_layout.panes[at].members.clone() {
+            self.remove_series(id);
+        }
+        self.pane_layout.panes.retain(|item| item.id != pane);
+        self.sync_panes();
+        true
+    }
+
+    /// The panes from top to bottom, the price pane included. A study that is not an overlay
+    /// starts in a new pane at the bottom.
+    pub fn panes(&self) -> Vec<PaneId> {
+        self.pane_layout
+            .panes
+            .iter()
+            .filter(|pane| self.pane_listed(pane))
+            .map(|pane| pane.id)
+            .collect()
+    }
+
+    /// The bar series and studies drawn in `pane`, in legend order. For the price pane these
+    /// are the main series, the host series not moved to another pane and the overlay studies.
+    /// Empty for an unknown pane.
+    pub fn pane_series(&self, pane: PaneId) -> Vec<SeriesId> {
+        if pane == PaneId::MAIN {
+            self.main_series_present
+                .then_some(SeriesId::MAIN)
+                .into_iter()
+                .chain(
+                    self.price_series
+                        .iter()
+                        .map(|item| item.id)
+                        .filter(|id| !self.in_pane(*id)),
+                )
+                .chain(
+                    self.indicators()
+                        .filter(|(_, study)| study.is_overlay())
+                        .map(|(id, _)| id),
+                )
+                .collect()
+        } else {
+            self.pane_index(pane)
+                .map(|at| {
+                    self.pane_layout.panes[at]
+                        .members
+                        .iter()
+                        .copied()
+                        .filter(|id| self.pane_member(*id))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+    }
+
+    /// The pane drawing the bar series or study `series`, or `None` for an unknown id.
+    pub fn series_pane(&self, series: SeriesId) -> Option<PaneId> {
+        if let Some(pane) = self
             .pane_layout
             .panes
             .iter()
-            .position(|pane| pane.studies.contains(&target));
-        if target != SeriesId::MAIN && target != study && destination.is_none() {
+            .find(|pane| pane.members.contains(&series))
+            .filter(|_| self.pane_member(series))
+        {
+            return Some(pane.id);
+        }
+        let main = if series == SeriesId::MAIN {
+            self.main_series_present
+        } else {
+            self.price_series.iter().any(|item| item.id == series)
+                || self
+                    .indicators()
+                    .any(|(id, study)| id == series && study.is_overlay())
+        };
+        main.then_some(PaneId::MAIN)
+    }
+
+    /// Moves a host series or study into `pane`, after the series and studies already there.
+    /// A study moved to the price pane becomes an overlay. Below the price pane a host series
+    /// shares the pane's price scale instead of its [`SeriesScale`](crate::model::SeriesScale).
+    /// Returns `false` for the main series, an unknown id or pane, or a custom study
+    /// presentation that rejects placement edits.
+    pub fn move_series_to_pane(&mut self, series: SeriesId, pane: PaneId) -> bool {
+        self.sync_panes();
+        if self.pane_index(pane).is_none() {
             return false;
         }
-        self.record_study(study);
-        if !self.studies.indicators_mut()[idx].set_overlay(target == SeriesId::MAIN) {
+        if let Some(idx) = self.study_ids.iter().position(|id| *id == series) {
+            self.record_study(series);
+            if !self.studies.indicators_mut()[idx].set_overlay(pane == PaneId::MAIN) {
+                return false;
+            }
+        } else if !self.price_series.iter().any(|item| item.id == series) {
             return false;
         }
-        let destination_id = destination.map(|idx| self.pane_layout.panes[idx].id);
-        for pane in &mut self.pane_layout.panes {
-            pane.studies.retain(|id| *id != study);
-        }
-        if target != SeriesId::MAIN && target != study {
-            self.pane_layout
+        if self.series_pane(series) != Some(pane) {
+            self.leave_panes(series);
+            if let Some(target) = self
+                .pane_layout
                 .panes
                 .iter_mut()
-                .find(|pane| Some(pane.id) == destination_id)
-                .unwrap()
-                .studies
-                .push(study);
+                .find(|item| item.id == pane && pane != PaneId::MAIN)
+            {
+                target.members.push(series);
+            }
         }
         self.sync_panes();
         true
     }
 
-    /// Moves an added bar series to the main pane, the pane of another series or study, or a
-    /// new pane of its own below the others. Pass `SeriesId::MAIN`, a series or study shown in
-    /// the destination pane, or the moved series' own id respectively. In another pane than
-    /// the main one, the series uses that pane's price scale. Returns `false` for an unknown id
-    /// or destination.
-    pub fn move_series_to_pane(&mut self, id: SeriesId, target: SeriesId) -> bool {
-        if !self.price_series.iter().any(|item| item.id == id) {
+    /// Moves a host series or study into a new pane at the bottom.
+    fn move_to_new_pane(&mut self, series: SeriesId) -> bool {
+        self.sync_panes();
+        let pane = self.add_pane();
+        let moved = self.move_series_to_pane(series, pane);
+        if moved {
+            let height = self.study_pane_height(series);
+            if let Some(item) = self
+                .pane_layout
+                .panes
+                .iter_mut()
+                .find(|item| item.id == pane)
+            {
+                item.height = height;
+            }
+        } else {
+            self.pane_layout.panes.retain(|item| item.id != pane);
+        }
+        moved
+    }
+
+    /// Moves a study to the main pane, another study's pane, or its own new pane.
+    /// Use `SeriesId::MAIN`, the destination study id, or the moved study's own id respectively.
+    /// Returns `false` for an unknown id or a custom presentation that rejects placement edits.
+    /// [`move_series_to_pane`](Self::move_series_to_pane) addresses panes by [`PaneId`].
+    pub fn move_indicator_to_pane(&mut self, study: SeriesId, target: SeriesId) -> bool {
+        self.sync_panes();
+        if !self.study_ids.contains(&study) {
             return false;
         }
-        self.sync_panes();
-        let pane_of = |member| {
-            self.pane_layout
-                .panes
-                .iter()
-                .position(|pane| pane.studies.contains(&member))
+        if target == study {
+            return self.move_to_new_pane(study);
+        }
+        let pane = if target == SeriesId::MAIN {
+            PaneId::MAIN
+        } else {
+            match self.series_pane(target) {
+                Some(pane) if pane != PaneId::MAIN && self.study_ids.contains(&target) => pane,
+                _ => return false,
+            }
         };
-        if target == id && pane_of(id).is_some_and(|at| self.pane_layout.panes[at].studies == [id])
-        {
-            return true;
-        }
-        let destination = pane_of(target).map(|at| self.pane_layout.panes[at].id);
-        if target != SeriesId::MAIN && target != id && destination.is_none() {
-            return false;
-        }
-        for pane in &mut self.pane_layout.panes {
-            pane.studies.retain(|member| *member != id);
-        }
-        if target == id {
-            self.pane_layout.panes.push(Pane {
-                id,
-                studies: vec![id],
-                height: None,
-                collapsed: None,
-                scale: crate::scales::PriceScale::new(crate::scales::PriceScaleOptions::default()),
-            });
-        } else if let Some(pane) = self
-            .pane_layout
-            .panes
-            .iter_mut()
-            .find(|pane| Some(pane.id) == destination)
-        {
-            pane.studies.push(id);
-        }
+        self.move_series_to_pane(study, pane)
+    }
+
+    /// Moves `pane` to position `index` from the top, the price pane counting as a pane; an
+    /// index past the bottom moves it to the bottom. Returns `false` for an unknown pane.
+    pub fn move_pane(&mut self, pane: PaneId, index: usize) -> bool {
         self.sync_panes();
+        let Some(at) = self.pane_index(pane) else {
+            return false;
+        };
+        let item = self.pane_layout.panes.remove(at);
+        let index = index.min(self.pane_layout.panes.len());
+        self.pane_layout.panes.insert(index, item);
         true
     }
 
-    /// The pane showing a bar series: `SeriesId::MAIN` for the main pane, otherwise the id of
-    /// one of the pane's series or studies, which names the pane until it leaves the pane.
-    /// `None` for an absent series or a study.
-    pub fn series_pane(&self, id: SeriesId) -> Option<SeriesId> {
-        if id == SeriesId::MAIN {
-            return self.main_series_present.then_some(SeriesId::MAIN);
+    /// Swaps the positions of two panes, either of which may be the price pane. Returns `false`
+    /// for an unknown pane.
+    pub fn swap_panes(&mut self, first: PaneId, second: PaneId) -> bool {
+        self.sync_panes();
+        let (Some(first), Some(second)) = (self.pane_index(first), self.pane_index(second)) else {
+            return false;
+        };
+        self.pane_layout.panes.swap(first, second);
+        true
+    }
+
+    /// The height of `pane` in logical pixels as drawn in the last frame, or `None` when it was
+    /// not drawn, such as a hidden pane or one left out while another is maximized.
+    pub fn pane_height(&self, pane: PaneId) -> Option<f32> {
+        self.pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .map(|item| item.rect.height())
+            .filter(|height| *height > 0.0)
+    }
+
+    /// Gives `pane` this height in logical pixels from the next frame by setting its stretch
+    /// factor, so that later resizes keep the proportions. The other expanded panes share the
+    /// rest by their own factors, and every pane keeps at least 40 pixels. Returns `false` for
+    /// an unknown pane or a height that is not finite and positive.
+    pub fn set_pane_height(&mut self, pane: PaneId, height: f32) -> bool {
+        self.sync_panes();
+        let Some(at) = self.pane_index(pane) else {
+            return false;
+        };
+        if !(height.is_finite() && height > 0.0) {
+            return false;
         }
-        self.price_series.iter().any(|item| item.id == id).then(|| {
-            self.pane_layout
-                .panes
-                .iter()
-                .find(|pane| pane.studies.contains(&id))
-                .map_or(SeriesId::MAIN, |pane| pane.id)
-        })
+        self.pane_layout.panes[at].height = Some(height);
+        true
+    }
+
+    /// The stretch factor of `pane`, or `None` for an unknown pane. Expanded panes share the
+    /// chart height in proportion to their factors: 3 for the price pane and 1 for the others
+    /// by default. A study's preferred pane height, a dragged separator and
+    /// [`set_pane_height`](Self::set_pane_height) set it on the frame that lays the pane out.
+    pub fn pane_stretch_factor(&self, pane: PaneId) -> Option<f32> {
+        self.pane_index(pane)
+            .map(|at| self.pane_layout.panes[at].stretch)
+    }
+
+    /// Sets the stretch factor of `pane`, replacing a height not yet applied. Returns `false`
+    /// for an unknown pane or a factor that is not finite and positive.
+    pub fn set_pane_stretch_factor(&mut self, pane: PaneId, factor: f32) -> bool {
+        self.sync_panes();
+        let Some(at) = self.pane_index(pane) else {
+            return false;
+        };
+        if !(factor.is_finite() && factor > 0.0) {
+            return false;
+        }
+        let pane = &mut self.pane_layout.panes[at];
+        pane.stretch = factor;
+        pane.height = None;
+        true
+    }
+
+    /// Keeps `pane` when its last series or study leaves it, instead of removing it. Returns
+    /// `false` for the price pane or an unknown id.
+    pub fn set_preserve_empty_pane(&mut self, pane: PaneId, preserve: bool) -> bool {
+        self.sync_panes();
+        let Some(at) = self.pane_index(pane).filter(|_| pane != PaneId::MAIN) else {
+            return false;
+        };
+        self.pane_layout.panes[at].preserve = preserve;
+        true
+    }
+
+    /// Whether `pane` is kept when it becomes empty; the price pane always is.
+    pub fn preserves_empty_pane(&self, pane: PaneId) -> bool {
+        pane == PaneId::MAIN
+            || self
+                .pane_index(pane)
+                .is_some_and(|at| self.pane_layout.panes[at].preserve)
+    }
+
+    /// Sets the behaviour and colours of the pane separators (builder pattern).
+    pub fn with_pane_options(mut self, options: PaneOptions) -> Self {
+        self.pane_options = options;
+        self
+    }
+
+    /// The behaviour and colours of the pane separators.
+    pub fn pane_options(&self) -> &PaneOptions {
+        &self.pane_options
+    }
+
+    /// The behaviour and colours of the pane separators, to change them from the next frame.
+    pub fn pane_options_mut(&mut self) -> &mut PaneOptions {
+        &mut self.pane_options
     }
 }
 
 impl Chart {
+    /// Moves a study to a new pane directly above or below its current pane.
+    /// Returns `false` for an unknown study or a presentation that rejects placement edits.
+    #[cfg(feature = "ui")]
+    pub(crate) fn move_indicator_to_new_pane(&mut self, study: SeriesId, above: bool) -> bool {
+        self.sync_panes();
+        let Some(from) = self
+            .series_pane(study)
+            .and_then(|pane| self.pane_index(pane))
+        else {
+            return false;
+        };
+        let source = &self.pane_layout.panes[from];
+        let kept = source.id == PaneId::MAIN || source.preserve || source.members.len() > 1;
+        if !self.move_indicator_to_pane(study, study) {
+            return false;
+        }
+        let to = from + usize::from(kept && !above);
+        let pane = self
+            .series_pane(study)
+            .expect("study was moved to a new pane");
+        self.move_pane(pane, to)
+    }
+
+    /// Moves study `id` in the draw order of its pane, among the pane's studies and, in the main
+    /// pane, the price series. Returns `false` for an id that is not a study of the chart.
+    pub fn reorder_indicator(&mut self, id: SeriesId, order: VisualOrder) -> bool {
+        if !self.study_ids.contains(&id) {
+            return false;
+        }
+        self.sync_panes();
+        let layout = &mut self.pane_layout;
+        let Some(items) = std::iter::once(&mut layout.main)
+            .chain(layout.panes.iter_mut().map(|pane| &mut pane.members))
+            .find(|items| items.contains(&id))
+        else {
+            return false;
+        };
+        let at = items.iter().position(|item| *item == id).unwrap();
+        let last = items.len() - 1;
+        let to = match order {
+            VisualOrder::BringToFront => last,
+            VisualOrder::BringForward => (at + 1).min(last),
+            VisualOrder::SendBackward => at.saturating_sub(1),
+            VisualOrder::SendToBack => 0,
+        };
+        let item = items.remove(at);
+        items.insert(to, item);
+        true
+    }
+
     pub(super) fn pane_scale_interaction(
         &mut self,
         ui: &mut Ui,
@@ -290,21 +698,15 @@ impl Chart {
         }
         let hovered = ui.rect_contains_pointer(rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
-        if self
-            .studies
-            .indicators()
-            .iter()
-            .any(|study| !study.is_overlay() && study.is_visible())
-        {
-            self.pane_maximize_button(ui, SeriesId::MAIN, rect, plot);
+        if self.has_panes() {
+            self.pane_maximize_button(ui, PaneId::MAIN, rect, plot);
         }
-        if !self
-            .studies
-            .indicators()
-            .iter()
-            .any(|study| study.is_overlay())
-            || !(hovered || egui::Popup::is_any_open(ui.ctx()))
-        {
+        let movable: Vec<_> = self
+            .pane_series(PaneId::MAIN)
+            .into_iter()
+            .filter(|id| *id != SeriesId::MAIN)
+            .collect();
+        if movable.is_empty() || !(hovered || egui::Popup::is_any_open(ui.ctx())) {
             return;
         }
         let button = Rect::from_min_size(
@@ -321,39 +723,37 @@ impl Chart {
             egui::Button::new("...").frame_when_inactive(false),
         )
         .ui(&mut child, |ui| {
-            for (idx, study) in self
-                .studies
-                .indicators()
-                .iter()
-                .enumerate()
-                .filter(|(_, study)| study.is_overlay())
-            {
-                ui.menu_button(study.name(), |ui| {
+            for id in movable {
+                ui.menu_button(self.member_name(id), |ui| {
                     if ui.button("Move to new pane").clicked() {
-                        moved = Some((self.study_ids[idx], self.study_ids[idx]));
+                        moved = Some((id, None));
                         ui.close();
                     }
                     for pane in &self.pane_layout.panes {
+                        if pane.id == PaneId::MAIN || !self.pane_listed(pane) {
+                            continue;
+                        }
                         let title = pane
-                            .studies
-                            .iter()
-                            .find_map(|id| self.study_ids.iter().position(|study| study == id))
-                            .map(|idx| self.studies.indicators()[idx].name())
-                            .unwrap_or("Study");
+                            .members
+                            .first()
+                            .map_or("empty", |member| self.member_name(*member));
                         if ui.button(format!("Move to {title} pane")).clicked() {
-                            moved = Some((self.study_ids[idx], pane.studies[0]));
+                            moved = Some((id, Some(pane.id)));
                             ui.close();
                         }
                     }
                 });
             }
         });
-        if let Some((study, target)) = moved {
-            self.user_action(|chart| chart.move_indicator_to_pane(study, target));
+        if let Some((id, pane)) = moved {
+            self.user_action(|chart| match pane {
+                Some(pane) => chart.move_series_to_pane(id, pane),
+                None => chart.move_to_new_pane(id),
+            });
         }
     }
 
-    fn pane_maximize_button(&mut self, ui: &mut Ui, id: SeriesId, rect: Rect, plot: Rect) {
+    fn pane_maximize_button(&mut self, ui: &mut Ui, id: PaneId, rect: Rect, plot: Rect) {
         if rect.height() < 24.0 {
             return;
         }
@@ -399,7 +799,7 @@ impl Chart {
         &mut self,
         ui: &mut Ui,
         pane_idx: usize,
-        id: SeriesId,
+        id: PaneId,
         rect: Rect,
         plot: Rect,
         collapsed: bool,
@@ -410,20 +810,19 @@ impl Chart {
             egui::vec2(20.0, 20.0),
         );
         let mut action = None;
-        let mut move_study = None;
+        let mut move_member = None;
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt((id, "pane_actions"))
                 .max_rect(button),
         );
+        let panes = &self.pane_layout.panes;
+        let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
+        let below = panes.get(pane_idx + 1).map(|pane| pane.id);
         child.menu_button("...", |ui| {
             for (label, enabled, command) in [
-                ("Move pane up", pane_idx > 0, 0),
-                (
-                    "Move pane down",
-                    pane_idx + 1 < self.pane_layout.panes.len(),
-                    1,
-                ),
+                ("Move pane up", above.is_some(), 0),
+                ("Move pane down", below.is_some(), 1),
                 (
                     if collapsed {
                         "Expand pane"
@@ -433,10 +832,14 @@ impl Chart {
                     true,
                     2,
                 ),
-                ("Merge with pane above", pane_idx > 0, 3),
+                (
+                    "Merge with pane above",
+                    above.is_some_and(|pane| pane != PaneId::MAIN),
+                    3,
+                ),
                 (
                     "Merge with pane below",
-                    pane_idx + 1 < self.pane_layout.panes.len(),
+                    below.is_some_and(|pane| pane != PaneId::MAIN),
                     4,
                 ),
                 ("Remove pane", true, 5),
@@ -446,30 +849,23 @@ impl Chart {
                     ui.close();
                 }
             }
-            ui.separator();
-            for study in self.pane_layout.panes[pane_idx].studies.clone() {
-                let name = match self.study_ids.iter().position(|id| *id == study) {
-                    Some(idx) => self.studies.indicators()[idx].name(),
-                    None => match self.price_series.iter().find(|item| item.id == study) {
-                        Some(item) => &item.options.name,
-                        None => continue,
-                    },
-                };
-                ui.menu_button(name, |ui| {
+            let members = self.pane_series(id);
+            if !members.is_empty() {
+                ui.separator();
+            }
+            for member in &members {
+                ui.menu_button(self.member_name(*member), |ui| {
                     if ui.button("Move to main pane").clicked() {
                         action = Some(6);
-                        move_study = Some(study);
+                        move_member = Some(*member);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(
-                            self.pane_layout.panes[pane_idx].studies.len() > 1,
-                            egui::Button::new("Move to new pane"),
-                        )
+                        .add_enabled(members.len() > 1, egui::Button::new("Move to new pane"))
                         .clicked()
                     {
                         action = Some(7);
-                        move_study = Some(study);
+                        move_member = Some(*member);
                         ui.close();
                     }
                 });
@@ -488,26 +884,21 @@ impl Chart {
                 } else {
                     pane_idx + 1
                 };
-                let members = std::mem::take(&mut self.pane_layout.panes[pane_idx].studies);
-                self.pane_layout.panes[target].studies.extend(members);
+                let members = std::mem::take(&mut self.pane_layout.panes[pane_idx].members);
+                self.pane_layout.panes[target].members.extend(members);
+                if !self.pane_layout.panes[pane_idx].preserve {
+                    self.pane_layout.panes.remove(pane_idx);
+                }
                 self.sync_panes();
             }
             Some(5) => {
-                for study in self.pane_layout.panes[pane_idx].studies.clone() {
-                    self.remove_series(study);
-                }
-                self.sync_panes();
+                self.remove_pane(id);
             }
-            Some(6 | 7) => {
-                let study = move_study.unwrap();
-                let target = if action == Some(6) {
-                    SeriesId::MAIN
-                } else {
-                    study
-                };
-                if !self.move_indicator_to_pane(study, target) {
-                    self.move_series_to_pane(study, target);
-                }
+            Some(6) => {
+                self.move_series_to_pane(move_member.unwrap(), PaneId::MAIN);
+            }
+            Some(7) => {
+                self.move_to_new_pane(move_member.unwrap());
             }
             _ => {}
         }
@@ -517,55 +908,59 @@ impl Chart {
         }
     }
 
-    pub(super) fn pane_separators(
-        &mut self,
-        ui: &mut Ui,
-        panes: &[(usize, SeriesId, Rect, bool)],
-        main: Rect,
-    ) {
+    /// Separators between consecutive drawn panes, given top to bottom as the pane index, its
+    /// panel rect and whether it is collapsed.
+    pub(super) fn pane_separators(&mut self, ui: &mut Ui, panes: &[(usize, Rect, bool)]) {
         if self.pane_layout.maximized.is_some() {
             return;
         }
-        for (at, (idx, id, rect, collapsed)) in panes.iter().copied().enumerate() {
-            let upper = if at == 0 { main } else { panes[at - 1].2 };
+        let options = self.pane_options;
+        for pair in panes.windows(2) {
+            let [(upper_idx, upper, upper_collapsed), (idx, rect, collapsed)] = [pair[0], pair[1]];
             let line = Rect::from_min_max(
                 Pos2::new(rect.left(), upper.bottom()),
                 Pos2::new(rect.right(), rect.top()),
             );
-            let response = ui
-                .interact(
-                    line.expand2(egui::vec2(0.0, 3.0)),
-                    ui.scope_id().with((id, "separator")),
-                    Sense::click_and_drag(),
-                )
-                .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            let response = ui.interact(
+                line.expand2(egui::vec2(0.0, 3.0)),
+                ui.scope_id()
+                    .with((self.pane_layout.panes[idx].id, "separator")),
+                if options.resizable {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::hover()
+                },
+            );
             use crate::theme::ThemeExt;
-            let color = if response.hovered() || response.dragged() {
-                ui.visuals().selection.bg_fill
+            let color = if options.resizable && (response.hovered() || response.dragged()) {
+                options
+                    .separator_hover_color
+                    .unwrap_or(ui.visuals().selection.bg_fill)
             } else {
-                ui.active_theme().chart.grid_line
+                options
+                    .separator_color
+                    .unwrap_or(ui.active_theme().chart.grid_line)
             };
             ui.painter().rect_filled(line, 0.0, color);
-            if response.dragged() && !collapsed && (at == 0 || !panes[at - 1].3) {
+            if !options.resizable {
+                continue;
+            }
+            let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            if response.dragged() && !collapsed && !upper_collapsed {
                 let delta = response.drag_delta().y.clamp(
                     40.0 - upper.height(),
                     (rect.height() - 40.0).max(40.0 - upper.height()),
                 );
-                for (idx, _, rect, collapsed) in panes {
-                    if !collapsed {
-                        self.pane_layout.panes[*idx].height = Some(rect.height());
-                    }
-                }
+                // The other panes keep their heights: these two exchange pixels.
+                self.pane_layout.panes[upper_idx].height = Some(upper.height() + delta);
                 self.pane_layout.panes[idx].height = Some(rect.height() - delta);
-                if at > 0 {
-                    self.pane_layout.panes[panes[at - 1].0].height = Some(upper.height() + delta);
-                }
                 ui.ctx().request_repaint();
             }
             if response.double_clicked() {
-                self.pane_layout.panes[idx].height = None;
-                if at > 0 {
-                    self.pane_layout.panes[panes[at - 1].0].height = None;
+                for at in [upper_idx, idx] {
+                    let pane = &mut self.pane_layout.panes[at];
+                    pane.height = None;
+                    pane.stretch = Pane::default_stretch(pane.id);
                 }
                 ui.ctx().request_repaint();
             }

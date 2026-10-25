@@ -15,42 +15,81 @@ type PanelContent = Box<dyn FnMut(&mut Ui)>;
 /// Section grouping for widget bar icons
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidgetBarSection {
-    /// Top section: Alerts, ObjectTree
+    /// Top section: host entries, then Watchlist, Alerts and ObjectTree
     Top,
-    /// Bottom section, at the foot of the bar: host entries, then a line, then Help
+    /// Bottom section, at the foot of the bar: host entries, then the market and communication
+    /// entries, then a line, then Help
     Bottom,
 }
 
-/// Available icons in the right edge bar
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Built-in entries of the right edge bar, in the order the bar draws them.
+///
+/// [`WidgetBar::default`] lists Alerts, ObjectTree and Help. Add the entry of each panel whose
+/// feed the host supplies to [`WidgetBar::icons`]; entries draw in this order whatever their
+/// order in that list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum RightBarIcon {
+    /// The watchlist and the details of the chart's symbol.
+    Watchlist,
     Alerts,
+    /// The object tree, with the data window.
     ObjectTree,
+    Highlights,
+    Screener,
+    Hotlists,
+    /// The economic and corporate event calendars.
+    Calendar,
+    News,
+    /// The alert and event log.
+    Notifications,
+    Chats,
+    /// The products launcher, drawn as a filled round button.
+    Products,
     Help,
 }
 
 impl RightBarIcon {
     pub fn icon(&self) -> &'static Icon {
         match self {
+            RightBarIcon::Watchlist => &embedded_icons::WIDGET_BAR_WATCHLIST,
             RightBarIcon::Alerts => &embedded_icons::WIDGET_BAR_ALERTS,
             RightBarIcon::ObjectTree => &embedded_icons::WIDGET_BAR_LAYERS,
+            RightBarIcon::Highlights => &embedded_icons::WIDGET_BAR_HIGHLIGHTS,
+            RightBarIcon::Screener => &embedded_icons::WIDGET_BAR_SCREENER,
+            RightBarIcon::Hotlists => &embedded_icons::WIDGET_BAR_HOTLISTS,
+            RightBarIcon::Calendar => &embedded_icons::WIDGET_BAR_CALENDAR,
+            RightBarIcon::News => &embedded_icons::WIDGET_BAR_NEWS,
+            RightBarIcon::Notifications => &embedded_icons::WIDGET_BAR_NOTIFICATIONS,
+            RightBarIcon::Chats => &embedded_icons::WIDGET_BAR_CHATS,
+            RightBarIcon::Products => &embedded_icons::WIDGET_BAR_PRODUCTS,
             RightBarIcon::Help => &embedded_icons::WIDGET_BAR_HELP,
         }
     }
 
     pub fn tooltip(&self) -> &'static str {
         match self {
+            RightBarIcon::Watchlist => "Watchlist and details",
             RightBarIcon::Alerts => "Alerts",
             RightBarIcon::ObjectTree => "Object Tree",
+            RightBarIcon::Highlights => "Highlights",
+            RightBarIcon::Screener => "Screener",
+            RightBarIcon::Hotlists => "Hotlists",
+            RightBarIcon::Calendar => "Calendars",
+            RightBarIcon::News => "News",
+            RightBarIcon::Notifications => "Notifications",
+            RightBarIcon::Chats => "Chats",
+            RightBarIcon::Products => "Products",
             RightBarIcon::Help => "Help",
         }
     }
 
     /// Get the section this icon belongs to
     pub fn section(&self) -> WidgetBarSection {
-        match self {
-            RightBarIcon::Alerts | RightBarIcon::ObjectTree => WidgetBarSection::Top,
-            RightBarIcon::Help => WidgetBarSection::Bottom,
+        if *self <= RightBarIcon::ObjectTree {
+            WidgetBarSection::Top
+        } else {
+            WidgetBarSection::Bottom
         }
     }
 }
@@ -114,6 +153,7 @@ pub enum WidgetBarAction {
 /// Right Edge Icon Bar
 pub struct WidgetBar {
     pub config: WidgetBarConfig,
+    /// Built-in entries shown, drawn in [`RightBarIcon`] order.
     pub icons: Vec<RightBarIcon>,
     /// Currently open built-in panel. Clicks toggle this value; the host must keep it
     /// in step with panels opened or closed elsewhere before calling `show`.
@@ -128,12 +168,13 @@ pub struct WidgetBar {
     panels: HashMap<u64, PanelContent>,
 }
 
-/// The host control that hides `icon`.
-fn control(icon: RightBarIcon) -> Control {
+/// The host control that hides `icon`, if any.
+fn control(icon: RightBarIcon) -> Option<Control> {
     match icon {
-        RightBarIcon::Alerts => Control::Alerts,
-        RightBarIcon::ObjectTree => Control::ObjectTree,
-        RightBarIcon::Help => Control::Help,
+        RightBarIcon::Alerts => Some(Control::Alerts),
+        RightBarIcon::ObjectTree => Some(Control::ObjectTree),
+        RightBarIcon::Help => Some(Control::Help),
+        _ => None,
     }
 }
 
@@ -236,7 +277,7 @@ impl WidgetBar {
     /// Other controls are ignored. Hosts close any corresponding panel they render.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
-        if !visible && self.active_icon.map(self::control) == Some(control) {
+        if !visible && self.active_icon.and_then(self::control) == Some(control) {
             self.active_icon = None;
         }
     }
@@ -255,12 +296,15 @@ impl WidgetBar {
                 .id_salt("widget_bar")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let count = self
+                    let mut shown: Vec<RightBarIcon> = self
                         .icons
                         .iter()
-                        .filter(|&&i| !self.hidden.contains(&control(i)))
-                        .count()
-                        + self.widgets.len();
+                        .copied()
+                        .filter(|&i| control(i).is_none_or(|c| !self.hidden.contains(&c)))
+                        .collect();
+                    shown.sort();
+                    shown.dedup();
+                    let count = shown.len() + self.widgets.len();
                     let pitch = self.config.btn_size + self.config.btn_spacing;
                     let height = ui.available_height().max(
                         self.config.top_padding + count as f32 * pitch + DESIGN_TOKENS.spacing.lg,
@@ -275,12 +319,7 @@ impl WidgetBar {
                     );
                     let mut y = rect.top() + self.config.top_padding;
                     for section in [WidgetBarSection::Top, WidgetBarSection::Bottom] {
-                        let built_in = self
-                            .icons
-                            .iter()
-                            .filter(|i| i.section() == section)
-                            .filter(|&&i| !self.hidden.contains(&control(i)))
-                            .count();
+                        let built_in = shown.iter().filter(|i| i.section() == section).count();
                         if section == WidgetBarSection::Bottom {
                             // Host entries sit just above the line, the built-in entries below it.
                             let count = built_in
@@ -301,6 +340,7 @@ impl WidgetBar {
                                 &widget.tooltip,
                                 self.active_widget == Some(widget.id),
                                 0,
+                                false,
                                 rect.center().x,
                                 y,
                             );
@@ -309,21 +349,14 @@ impl WidgetBar {
                             }
                             y += pitch;
                         }
-                        if section == WidgetBarSection::Bottom && built_in > 0 {
-                            let sep = Rect::from_min_size(
-                                Pos2::new(rect.left() + 8.0, y),
-                                Vec2::new(self.config.width - 16.0, 1.0),
-                            );
-                            painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
-                            y += 1.0 + DESIGN_TOKENS.spacing.md;
-                        }
-                        for icon in self
-                            .icons
-                            .iter()
-                            .filter(|i| i.section() == section)
-                            .filter(|&&i| !self.hidden.contains(&control(i)))
-                        {
+                        for icon in shown.iter().filter(|i| i.section() == section) {
                             if *icon == RightBarIcon::Help {
+                                let sep = Rect::from_min_size(
+                                    Pos2::new(rect.left() + 8.0, y),
+                                    Vec2::new(self.config.width - 16.0, 1.0),
+                                );
+                                painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
+                                y += 1.0 + DESIGN_TOKENS.spacing.md;
                                 // Centre Help on the adjacent 38 px bottom row.
                                 y = y.max(rect.bottom() - 19.0 - self.config.btn_size / 2.0);
                             }
@@ -335,6 +368,7 @@ impl WidgetBar {
                                 icon.tooltip(),
                                 self.active_icon == Some(*icon),
                                 self.notification_counts.get(icon).copied().unwrap_or(0),
+                                *icon == RightBarIcon::Products,
                                 rect.center().x,
                                 y,
                             );
@@ -368,7 +402,7 @@ impl WidgetBar {
         action
     }
 
-    /// Render a single icon button with hover rect
+    /// Render a single icon button with hover rect, `filled` drawing the icon cut out of a disc.
     fn render_icon_button(
         &self,
         ui: &mut Ui,
@@ -377,6 +411,7 @@ impl WidgetBar {
         tooltip: &str,
         is_active: bool,
         count: u32,
+        filled: bool,
         center_x: f32,
         y: f32,
     ) -> egui::Response {
@@ -441,7 +476,14 @@ impl WidgetBar {
         let icon_rect =
             Rect::from_center_size(btn_rect.center(), Vec2::splat(self.config.icon_size));
         if ui.is_rect_visible(icon_rect) {
-            icon.as_image_tinted(Vec2::splat(self.config.icon_size), curr_icon_color)
+            let tint = if filled {
+                // A 34 px disc in the icon colour, the glyph in the bar's fill.
+                painter.circle_filled(btn_rect.center(), 17.0, curr_icon_color);
+                ui.visuals().panel_fill
+            } else {
+                curr_icon_color
+            };
+            icon.as_image_tinted(Vec2::splat(self.config.icon_size), tint)
                 .paint_at(ui, icon_rect);
         }
 
@@ -627,6 +669,98 @@ mod tests {
                 bar.active_widget, None,
                 "removing metadata closes the panel"
             );
+        }
+    }
+
+    /// Built-in entries draw in their fixed order whatever the order of `icons`, a duplicate draws
+    /// once, the line sits between the second group and Help, and Products is a disc in the icon
+    /// colour with its glyph in the bar's fill.
+    #[test]
+    fn built_in_entries_keep_their_order_with_help_below_the_line() {
+        use RightBarIcon::*;
+        let all = [
+            Watchlist,
+            Alerts,
+            ObjectTree,
+            Highlights,
+            Screener,
+            Hotlists,
+            Calendar,
+            News,
+            Notifications,
+            Chats,
+            Products,
+            Help,
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            apply_to_egui(&ctx, &theme);
+            let mut bar = WidgetBar::new();
+            bar.icons = all.iter().rev().copied().chain([Alerts]).collect();
+            let frame = |bar: &mut WidgetBar, events| {
+                let mut action = WidgetBarAction::None;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(45.0, 900.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| action = bar.show(ui),
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                (action, shapes)
+            };
+            frame(&mut bar, vec![]);
+            let (_, shapes) = frame(&mut bar, vec![]);
+            let icons: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.brush.is_some() => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(icons.len(), all.len());
+            let mut clicked = Vec::new();
+            for (rect, _) in &icons {
+                let pos = rect.center();
+                frame(&mut bar, vec![Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    let (action, _) = frame(
+                        &mut bar,
+                        vec![Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                    if let WidgetBarAction::Clicked(icon) = action {
+                        clicked.push(icon);
+                    }
+                }
+            }
+            assert_eq!(clicked, all);
+            let lines: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.rect.height() == 1.0 => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let (products, help) = (icons[10].0, icons[11].0);
+            assert!(
+                lines.len() == 1
+                    && products.bottom() < lines[0].top()
+                    && lines[0].bottom() < help.top(),
+                "{lines:?}"
+            );
+            assert_eq!(icons[10].1, ctx.global_style().visuals.panel_fill);
+            assert!(shapes.iter().any(|s| matches!(&s.shape, Shape::Circle(c)
+                if c.radius == 17.0
+                    && c.center.distance(products.center()) <= 1.0
+                    && c.fill == theme.ui.text)));
         }
     }
 

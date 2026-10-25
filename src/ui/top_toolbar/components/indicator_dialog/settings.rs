@@ -167,6 +167,8 @@ impl IndicatorSettingsDialog {
                                                     PlotPattern::Solid,
                                                     PlotPattern::Dashed,
                                                     PlotPattern::Dotted,
+                                                    PlotPattern::LargeDashed,
+                                                    PlotPattern::SparseDotted,
                                                 ] {
                                                     ui.selectable_value(
                                                         &mut plot.pattern,

@@ -2,20 +2,23 @@
 //! import and export. The host supplies quotes and persists the lists.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use egui::text::{LayoutJob, TextFormat};
 use egui::{
-    Align, Align2, Color32, EventFilter, Key, Label, Layout, Modifiers, RichText, Sense, Shape,
-    Stroke, TextStyle, Ui, pos2, vec2,
+    Align, Align2, Color32, EventFilter, FontId, Key, Label, Layout, Modifiers, RichText, Sense,
+    Shape, Stroke, TextStyle, Ui, pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::{format_price, price_decimals};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
-use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
+use crate::ui_kit::{EmptyState, IconButton};
 
 const ROW_HEIGHT: f32 = 26.0;
+/// Height of a panel header row, which fits its title and action buttons.
+pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
 /// A colour flag marking a watchlist symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -187,6 +190,11 @@ pub enum WatchlistAction {
     None,
     /// Show this symbol on the chart. The panel already marks it selected.
     SelectSymbol(String),
+    /// Let the user pick a symbol, such as with symbol search, and pass it to
+    /// [`WatchlistPanel::add_symbol`].
+    AddSymbol,
+    /// Show the active list in the host's full-size view.
+    AdvancedView,
     /// Read a text file the user chooses and pass it to [`WatchlistPanel::import`].
     Import,
     /// Save `text`, the active list in the [`Watchlist::from_text`] format, to a file the user
@@ -201,18 +209,20 @@ struct RowDrag(egui::Id, usize);
 ///
 /// Feed quotes with [`set_quote`](Self::set_quote) for the [`symbols`](Self::symbols) of the
 /// active list, and keep the chart symbol selected with [`set_selected`](Self::set_selected).
-/// Clicking a symbol, or moving through the list with the up and down arrow keys after a click,
-/// returns [`WatchlistAction::SelectSymbol`]. Column headers cycle through ascending, descending
-/// and list order; sorting keeps symbols inside their section. Unsorted rows are dragged to
-/// reorder, and rows are right-clicked to flag, rename or remove. The host persists
-/// [`lists`](Self::lists) and handles file intents.
+/// The list name in the header opens the list menu; beside it, the add button returns
+/// [`WatchlistAction::AddSymbol`], the advanced view button [`WatchlistAction::AdvancedView`],
+/// and the more button opens the actions on the active list. Clicking a symbol, or moving
+/// through the list with the up and down arrow keys after a click, returns
+/// [`WatchlistAction::SelectSymbol`]. Column headers cycle through ascending, descending and
+/// list order; sorting keeps symbols inside their section. Clicking a section collapses or
+/// expands its symbols. Unsorted rows are dragged to reorder, and rows are right-clicked to
+/// flag, rename or remove. The host persists [`lists`](Self::lists) and handles file intents.
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
     quotes: HashMap<String, WatchlistQuote>,
     sort: Option<(WatchlistColumn, bool)>,
     selected: Option<String>,
-    draft: String,
 }
 
 impl Default for WatchlistPanel {
@@ -233,7 +243,6 @@ impl WatchlistPanel {
             quotes: HashMap::new(),
             sort: None,
             selected: None,
-            draft: String::new(),
         }
     }
 
@@ -257,6 +266,12 @@ impl WatchlistPanel {
         self.selected = Some(symbol.to_owned());
     }
 
+    /// Appends `symbol` to the active list as [`Watchlist::add_symbol`] does, such as the symbol
+    /// picked after [`WatchlistAction::AddSymbol`]. Returns false when the list is unchanged.
+    pub fn add_symbol(&mut self, symbol: &str) -> bool {
+        self.lists[self.active].add_symbol(symbol)
+    }
+
     /// Adds a list read with [`Watchlist::from_text`] and shows it.
     pub fn import(&mut self, name: impl Into<String>, text: &str) {
         self.lists.push(Watchlist::from_text(name, text));
@@ -272,18 +287,53 @@ impl WatchlistPanel {
             quotes,
             sort,
             selected,
-            draft,
         } = self;
-        let mut more = None;
-        PanelHeader::new(&lists[*active].name).show(ui, |ui| {
+        let theme = ui.active_theme();
+        let (mut menu, mut more) = (None, None);
+        let header = vec2(ui.available_width(), HEADER_HEIGHT);
+        ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
+            ui.set_min_height(header.y);
+            ui.spacing_mut().item_spacing.x = theme.spacing.sm;
             more = Some(
                 IconButton::new(&icons::UI_MORE_HORIZONTAL)
-                    .tooltip("Lists")
+                    .tooltip("More")
                     .show(ui),
             );
+            if IconButton::new(&icons::TABLE)
+                .tooltip("Advanced view")
+                .show(ui)
+                .clicked()
+            {
+                action = WatchlistAction::AdvancedView;
+            }
+            if IconButton::new(&icons::PLUS)
+                .tooltip("Add symbol")
+                .show(ui)
+                .clicked()
+            {
+                action = WatchlistAction::AddSymbol;
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let chevron = icons::CHEVRON_DOWN.as_image_square(16.0);
+                let title = LayoutJob::single_section(
+                    lists[*active].name.clone(),
+                    weighted(theme.text.title, 700.0, theme.ui.text),
+                );
+                menu = Some(
+                    ui.add(
+                        egui::Button::new((title, chevron))
+                            .frame_when_inactive(false)
+                            .image_tint_follows_text_color(true)
+                            .truncate(),
+                    )
+                    .on_hover_text("Lists"),
+                );
+            });
         });
-        let Some(more) = more else { return action };
-        egui::Popup::menu(&more).show(|ui| {
+        let (Some(menu), Some(more)) = (menu, more) else {
+            return action;
+        };
+        egui::Popup::menu(&menu).show(|ui| {
             for (index, list) in lists.iter().enumerate() {
                 if ui.selectable_label(index == *active, &list.name).clicked() {
                     *active = index;
@@ -298,17 +348,19 @@ impl WatchlistPanel {
                 lists.push(Watchlist::new(format!("Watchlist {}", lists.len() + 1)));
                 *active = lists.len() - 1;
             }
+            if ui
+                .add_enabled(lists.len() > 1, egui::Button::new("Delete list"))
+                .clicked()
+            {
+                lists.remove(*active);
+                *active = active.saturating_sub(1);
+            }
+        });
+        egui::Popup::menu(&more).show(|ui| {
             if ui.button("Add section").clicked() {
-                let title = draft.trim();
-                let title = if title.is_empty() {
-                    "New section"
-                } else {
-                    title
-                };
                 lists[*active]
                     .items
-                    .push(WatchlistItem::Section(title.to_owned()));
-                draft.clear();
+                    .push(WatchlistItem::Section("New section".to_owned()));
             }
             if ui.button("Import list…").clicked() {
                 action = WatchlistAction::Import;
@@ -319,35 +371,23 @@ impl WatchlistPanel {
                     text: lists[*active].to_text(),
                 };
             }
-            if ui
-                .add_enabled(lists.len() > 1, egui::Button::new("Delete list"))
-                .clicked()
-            {
-                lists.remove(*active);
-                *active = active.saturating_sub(1);
-            }
         });
         let list = &mut lists[*active];
 
-        let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
-        ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-            let add = IconButton::new(&icons::PLUS)
-                .tooltip("Add symbol")
-                .show(ui)
-                .clicked();
-            let field = ui.add(
-                egui::TextEdit::singleline(draft)
-                    .hint_text("Add symbol")
-                    .desired_width(f32::INFINITY),
-            );
-            let entered = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if (add || entered) && list.add_symbol(draft) {
-                draft.clear();
-            }
-        });
-
-        let order = display_order(&list.items, quotes, *sort);
         let list_id = ui.scope_id().with(("watchlist_rows", *active));
+        // Keyed by title, so a section stays collapsed when rows move or the list is sorted.
+        let collapsed_id = |title: &str| list_id.with(("collapsed", title));
+        let collapsed: HashSet<usize> = ui.data(|data| {
+            (0..list.items.len())
+                .filter(|&i| match &list.items[i] {
+                    WatchlistItem::Section(title) => {
+                        data.get_temp(collapsed_id(title)).unwrap_or(false)
+                    }
+                    WatchlistItem::Symbol { .. } => false,
+                })
+                .collect()
+        });
+        let order = display_order(&list.items, quotes, *sort, &collapsed);
         // Arrow keys move the selection instead of the keyboard focus.
         let arrows = EventFilter {
             vertical_arrows: true,
@@ -383,7 +423,6 @@ impl WatchlistPanel {
             }
         }
 
-        let theme = ui.active_theme();
         let font = TextStyle::Body.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
         let columns = |rect: egui::Rect| {
@@ -431,7 +470,7 @@ impl WatchlistPanel {
                 ),
                 align,
                 label,
-                small.clone(),
+                font.clone(),
                 theme.ui.text_secondary,
             );
             if let Some((sorted, descending)) = *sort
@@ -480,7 +519,7 @@ impl WatchlistPanel {
         if list.items.is_empty() {
             EmptyState::new("This list is empty")
                 .icon(&icons::WATCHLIST)
-                .description("Add a symbol above.")
+                .description("Add symbols with the add button above.")
                 .fill_height()
                 .show(ui);
             return action;
@@ -529,9 +568,32 @@ impl WatchlistPanel {
                     let painter = ui.painter().clone();
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
+                            let is_collapsed = collapsed.contains(&index);
+                            if response.clicked() {
+                                let id = collapsed_id(title);
+                                ui.data_mut(|data| data.insert_temp(id, !is_collapsed));
+                            }
+                            if response.hovered() {
+                                painter.rect_filled(rect, 0.0, theme.ui.btn_bg_hover);
+                            }
+                            let chevron = if is_collapsed {
+                                &icons::CHEVRON_RIGHT
+                            } else {
+                                &icons::CHEVRON_DOWN
+                            };
+                            let icon = egui::Rect::from_center_size(
+                                pos2(rect.left() + 16.0, rect.center().y),
+                                vec2(14.0, 14.0),
+                            );
+                            chevron
+                                .as_image_tinted(icon.size(), theme.ui.text_secondary)
+                                .paint_at(ui, icon);
                             ui.new_child(
                                 egui::UiBuilder::new()
-                                    .max_rect(rect.shrink2(vec2(10.0, 0.0)))
+                                    .max_rect(
+                                        rect.with_min_x(icon.right() + 6.0)
+                                            .with_max_x(rect.right() - 10.0),
+                                    )
                                     .layout(Layout::left_to_right(Align::Center)),
                             )
                             .add(
@@ -662,6 +724,13 @@ impl WatchlistPanel {
     }
 }
 
+/// Text in the bundled face at `weight`, such as 700 for bold.
+pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
+    let mut format = TextFormat::simple(FontId::proportional(size), color);
+    format.coords.push("wght", weight);
+    format
+}
+
 /// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
 pub(super) fn signed(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
@@ -675,13 +744,22 @@ pub(super) fn signed(value: f64, decimals: usize) -> String {
 
 /// Item indices in display order: list order, or with `sort`, each run of symbols between
 /// sections sorted while sections keep their place. Symbols without a value sort last in both
-/// directions; ties keep list order.
+/// directions; ties keep list order. The symbols of the `collapsed` sections are left out.
 fn display_order(
     items: &[WatchlistItem],
     quotes: &HashMap<String, WatchlistQuote>,
     sort: Option<(WatchlistColumn, bool)>,
+    collapsed: &HashSet<usize>,
 ) -> Vec<usize> {
     let mut order: Vec<usize> = (0..items.len()).collect();
+    let mut hidden = false;
+    order.retain(|&i| {
+        if matches!(items[i], WatchlistItem::Section(_)) {
+            hidden = collapsed.contains(&i);
+            return true;
+        }
+        !hidden
+    });
     let Some((column, descending)) = sort else {
         return order;
     };
@@ -764,7 +842,7 @@ mod tests {
     }
 
     /// Sorting stays inside each section, puts symbols without a value last in both directions
-    /// and keeps list order on ties.
+    /// and keeps list order on ties. A collapsed section keeps its title and hides its symbols.
     #[test]
     fn sorting_keeps_sections_in_place_and_missing_values_last() {
         let items = vec![
@@ -790,8 +868,8 @@ mod tests {
             ("DOWN".to_owned(), quote(90.0, 100.0)),
             ("TIE".to_owned(), quote(10.0, 10.0)),
         ]);
-        let names = |sort| {
-            display_order(&items, &quotes, sort)
+        let names = |sort, collapsed: &[usize]| {
+            display_order(&items, &quotes, sort, &collapsed.iter().copied().collect())
                 .into_iter()
                 .map(|i| match &items[i] {
                     WatchlistItem::Symbol { symbol, .. } => symbol.as_str(),
@@ -800,6 +878,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         use WatchlistColumn::*;
+        assert_eq!(names(Some((Symbol, true)), &[2]), ["C", "A", "|"]);
         for (sort, expected) in [
             (None, ["C", "A", "|", "NONE", "UP", "FLAT", "DOWN", "TIE"]),
             (
@@ -819,7 +898,7 @@ mod tests {
                 ["C", "A", "|", "UP", "DOWN", "FLAT", "TIE", "NONE"],
             ),
         ] {
-            assert_eq!(names(sort), expected, "{sort:?}");
+            assert_eq!(names(sort, &[]), expected, "{sort:?}");
         }
         assert_eq!(quote(-37.63, -10.0).change_percent(), -276.3);
     }
