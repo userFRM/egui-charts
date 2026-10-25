@@ -70,28 +70,31 @@ struct Window {
     events: VecDeque<(DateTime<Utc>, [f64; 2])>,
     sum: [f64; 2],
     lost_until: Option<DateTime<Utc>>,
+    now: Option<DateTime<Utc>>,
 }
 
 impl Window {
     fn push(&mut self, time: DateTime<Utc>, value: [f64; 2], seconds: usize) -> [f64; 2] {
-        let now = self.events.back().map_or(time, |(last, _)| time.max(*last));
+        let now = self.now.map_or(time, |last| time.max(last));
+        self.now = Some(now);
         let cutoff = now
             .checked_sub_signed(TimeDelta::seconds(seconds.clamp(1, 86400) as i64))
             .unwrap_or(DateTime::<Utc>::MIN_UTC);
         while self.events.front().is_some_and(|(t, _)| *t <= cutoff) {
             let (_, old) = self.events.pop_front().unwrap();
             for (line, old) in old.into_iter().enumerate() {
-                self.sum[line] = if !self.sum[line].is_finite() || old >= self.sum[line] * 0.5 {
-                    self.events.iter().map(|(_, value)| value[line]).sum()
-                } else {
-                    self.sum[line] - old
-                };
+                self.sum[line] =
+                    if !self.sum[line].is_finite() || (old > 0.0 && old >= self.sum[line] * 0.5) {
+                        self.events.iter().map(|(_, value)| value[line]).sum()
+                    } else {
+                        self.sum[line] - old
+                    };
             }
         }
         if self.events.is_empty() {
             self.sum = [0.0; 2];
         }
-        if time > cutoff {
+        if time > cutoff && value != [0.0; 2] {
             let at = self.events.partition_point(|(t, _)| *t <= time);
             self.events.insert(at, (time, value));
             for (sum, x) in self.sum.iter_mut().zip(value) {
@@ -292,27 +295,33 @@ impl OrderFlowInput {
         state.finish(latest, open);
     }
 
-    /// Advances rates during an idle part of a bar that has already received executions.
-    /// A bar without executions remains missing. Hosts without a feed call this on a heartbeat.
+    /// Expires rolling rates and movement during an idle part of a bar with stream data.
+    /// A bar without that data remains missing. Hosts without a feed call this on a heartbeat.
     pub fn advance_time(&self, clock: &BarClock, now: DateTime<Utc>) {
         let mut state = self.state();
         if state.last.is_some_and(|t| now < t) {
             return;
         }
-        let OrderFlowKind::TradeRate {
-            seconds, instant, ..
-        } = state.kind
-        else {
-            return;
-        };
         let open = clock.bar_open(now);
         let Some((row, _)) = state.bars.get(&open) else {
             return;
         };
         let total = row[0];
-        let rolling = state.window.push(now, [0.0; 2], seconds)[0] / seconds.clamp(1, 86400) as f64;
-        let fast = state.instant.push(now, [0.0; 2], instant)[0] / instant.clamp(1, 86400) as f64;
-        state.bars.insert(open, ([total, rolling, fast], 0));
+        let row = match state.kind {
+            OrderFlowKind::TradeRate {
+                seconds, instant, ..
+            } => {
+                let rolling = state.window.push(now, [0.0; 2], seconds)[0] / seconds as f64;
+                let fast = state.instant.push(now, [0.0; 2], instant)[0] / instant as f64;
+                [total, rolling, fast]
+            }
+            OrderFlowKind::LevelsTradedThrough { seconds } if seconds > 0 => {
+                let values = state.window.push(now, [0.0; 2], seconds);
+                [values[0], values[1], values[0] + values[1]]
+            }
+            _ => return,
+        };
+        state.bars.insert(open, (row, 0));
         state.finish(now, open);
     }
 
@@ -413,6 +422,64 @@ impl State {
             #[cfg(feature = "widget")]
             {
                 self.reset_revision = self.revision;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Timeframe;
+
+    #[test]
+    fn rolling_windows_expire_without_counting_heartbeats_as_events() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        for kind in [
+            OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::TradeRate {
+                volume: true,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsTradedThrough { seconds: 3 },
+        ] {
+            let input = OrderFlowInput::new(kind);
+            for second in [0, 1] {
+                input.push_trade(
+                    &clock,
+                    &Tick::new(start + TimeDelta::seconds(second), 100.0, 2.0, None),
+                );
+                input.push_quote(
+                    &clock,
+                    &Level1Quote {
+                        ts: start + TimeDelta::seconds(second),
+                        symbol: "A".into(),
+                        bid: 99.0 + second as f64,
+                        ask: 101.0 + second as f64,
+                        bid_size: 1.0,
+                        ask_size: 1.0,
+                    },
+                    1.0,
+                );
+            }
+            for _ in 0..100_001 {
+                input.advance_time(&clock, start + TimeDelta::seconds(2));
+            }
+            assert!(
+                input.values()[&start].iter().all(|x| x.is_finite()),
+                "{kind:?}: heartbeats consume no event capacity"
+            );
+            input.advance_time(&clock, start + TimeDelta::seconds(4));
+            let row = input.values()[&start];
+            assert_eq!(row[2], 0.0, "{kind:?}: events at the cutoff expire");
+            if matches!(kind, OrderFlowKind::LevelsTradedThrough { .. }) {
+                assert_eq!(row, [0.0; 3]);
             }
         }
     }

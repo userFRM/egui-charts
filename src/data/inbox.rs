@@ -135,6 +135,8 @@ pub(crate) struct Updates {
     pub(crate) depth_columns: VecDeque<DepthColumn>,
     /// Latest top-of-book quote pushed in this frame.
     pub(crate) quote: Option<Level1Quote>,
+    /// Latest accepted heartbeat, applied to studies after the queued trades are merged.
+    pub(crate) time: Option<DateTime<Utc>>,
     /// The book lost its snapshot: call `Datafeed::request_depth_snapshot`.
     pub(crate) resnapshot: bool,
     pub(crate) symbols_changed: bool,
@@ -159,6 +161,7 @@ impl Updates {
             depth: None,
             depth_columns: VecDeque::new(),
             quote: None,
+            time: None,
             resnapshot: false,
             symbols_changed: false,
             status: None,
@@ -553,16 +556,15 @@ impl Sink {
             {
                 return false;
             }
-            if !live.ahead(live.clock.bar_open(now), system) {
-                for input in &live.study_inputs {
-                    input.advance_time(&live.clock, now);
-                }
+            if live.ahead(live.clock.bar_open(now), system) {
+                return false;
             }
+            live.updates.time = live.updates.time.max(Some(now));
             let open = live.clock.bar_open(now);
             let Some(close) = live.last_close else {
-                return false;
+                return !live.study_inputs.is_empty();
             };
-            if live.forming.is_none_or(|last| open <= last) || live.ahead(open, system) {
+            if live.forming.is_none_or(|last| open <= last) {
                 return !live.study_inputs.is_empty();
             }
             live.updates.bars.insert(

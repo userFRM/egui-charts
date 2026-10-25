@@ -73,36 +73,13 @@ impl IndicatorFactory {
         };
 
         factory.register_builtin();
-        for kind in [
-            OrderFlowKind::Spread,
-            OrderFlowKind::BookSize {
-                levels: 10,
-                distance: 0.0,
-            },
-            OrderFlowKind::TradeRate {
-                volume: false,
-                seconds: 60,
-                instant: 3,
-            },
-            OrderFlowKind::LevelsTradedThrough { seconds: 0 },
-        ] {
-            let name = OrderFlowStudy::new(kind).name().to_owned();
-            factory.constructors.insert(
-                name,
-                (
-                    "Order flow",
-                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
-                ),
-            );
-        }
         factory
     }
 
     /// Register every built-in indicator under its canonical name.
     ///
-    /// The list below is the single registration site for built-ins: adding a
-    /// new indicator type here makes it constructible by name with zero further
-    /// wiring. Each entry is instantiated via its [`Default`] implementation.
+    /// Entries use their [`Default`] implementation or the fixed stream aggregation
+    /// parameters below. Names come from the constructed study in both cases.
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
@@ -285,6 +262,28 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
+        for kind in [
+            OrderFlowKind::Spread,
+            OrderFlowKind::BookSize {
+                levels: 10,
+                distance: 0.0,
+            },
+            OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+        ] {
+            let name = OrderFlowStudy::new(kind).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Order flow",
+                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                ),
+            );
+        }
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.

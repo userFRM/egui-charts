@@ -59,17 +59,19 @@ The factory supplies four studies, each in its own pane:
 | Levels Traded Through | Sum of absolute changes of best bid and best ask, in integer instrument ticks, plus their total. Per bar by default; Window seconds selects a rolling window instead. This measures inside-market movement, not an inference about how an order swept the book. |
 
 Rolling windows include events in `(now - window, now]`. Rates divide by the full configured
-window even during startup. Feed heartbeats advance rates in a bar that has received trades;
-a bar without trades remains missing. Quotes seed the movement path, and a lost book breaks
-it so the next quote does not count an unobserved jump. A loss leaves book size missing until
+window even during startup. Feed heartbeats expire rates after queued executions are merged
+and expire rolling movement in bars with quotes. A bar without the relevant events remains
+missing; heartbeats consume no event capacity. Newly attached rate studies use the last
+accepted heartbeat when replaying retained executions. Quotes seed the movement path, and a
+lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
 
 `Indicator::order_flow_input` returns the study's `OrderFlowInput`. Charts connect quote and
 book inputs before feed updates are coalesced and feed rates from the deduplicated trade store.
 A historical page rebuilds rate inputs from retained trades in timestamp order. Custom hosts
 can push chronological events and book loss through the same handle, then call `calculate` or
-`update`. Cloned studies share their market-data source. Replacing aggregation inputs creates a
-new source; hosts replay their history, while a chart replays the executions it still retains
+`update`. Cloned studies share their market-data source, which receives each event once.
+Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
 for a newly attached rate study. Other studies keep their sources and accumulated bar totals
 when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give

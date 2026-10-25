@@ -55,6 +55,7 @@ pub(crate) struct FeedLink {
     depth_history: Option<DepthHistory>,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     study_inputs: Vec<(crate::studies::OrderFlowInput, u64)>,
+    time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -128,6 +129,7 @@ impl Chart {
             depth_history: None,
             heatmap: None,
             study_inputs: Vec::new(),
+            time: None,
             paging_stopped: false,
         });
     }
@@ -464,12 +466,14 @@ impl Chart {
             });
         }
 
-        let inputs: Vec<_> = self
-            .studies
-            .indicators()
-            .iter()
-            .filter_map(|s| s.order_flow_input())
-            .collect();
+        let mut inputs: Vec<crate::studies::OrderFlowInput> = Vec::new();
+        for study in self.studies.indicators() {
+            if let Some(input) = study.order_flow_input()
+                && !inputs.iter().any(|old| input.same_source(old))
+            {
+                inputs.push(input);
+            }
+        }
         if inputs.len() != link.study_inputs.len()
             || inputs
                 .iter()
@@ -488,6 +492,9 @@ impl Chart {
                         (input.clone(), seen)
                     } else {
                         input.replace_trades(&link.clock, link.trades.iter());
+                        if let Some(now) = link.time {
+                            input.advance_time(&link.clock, now);
+                        }
                         (input.clone(), u64::MAX)
                     }
                 })
@@ -573,6 +580,12 @@ impl Chart {
                 }
             };
             link.trades.append(updates.trades, fold);
+            link.time = link.time.max(updates.time);
+            if let Some(now) = link.time {
+                for (input, _) in &link.study_inputs {
+                    input.advance_time(&link.clock, now);
+                }
+            }
             link.order_book = updates.depth.or(link.order_book.take());
             if let Some(history) = &mut link.depth_history {
                 updates
@@ -663,6 +676,7 @@ impl Chart {
             }
         }
         link.study_inputs.clear();
+        link.time = None;
         link.order_book = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
         self.set_quote(None);
@@ -743,10 +757,9 @@ impl Chart {
         link.inbox.sample_depth(sink.id, config);
         link.inbox.study_inputs(
             sink.id,
-            self.studies
-                .indicators()
+            link.study_inputs
                 .iter()
-                .filter_map(|s| s.order_flow_input())
+                .map(|(input, _)| input.clone())
                 .collect(),
         );
         link.subscription = Some(sink.id);
@@ -1999,5 +2012,37 @@ mod tests {
         );
         assert_eq!(study.values().value(0, 1), None);
         assert_eq!(study.values().value(0, 2), Some(1.0));
+
+        let copy = study.clone_box();
+        let copy_id = chart.add_indicator(copy);
+        frames.run(&mut chart);
+        sink.push_tick(Tick::new(at(130), 100.0, 2.0, None).with_id(4));
+        sink.advance_time(at(134));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        for id in [ids[2], copy_id] {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            assert_eq!(
+                study.values().value(0, 2),
+                Some(2.0),
+                "shared sources count once"
+            );
+            assert_eq!(
+                study.values().value(2, 2),
+                Some(0.0),
+                "heartbeat follows queued trades"
+            );
+        }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(2, 2),
+            Some(0.0),
+            "new sources retain the idle clock"
+        );
     }
 }
