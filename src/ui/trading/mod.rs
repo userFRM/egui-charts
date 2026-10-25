@@ -979,7 +979,7 @@ mod tests {
     fn line_changes_wait_for_confirmation_and_send_one_call() {
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
-            for width in [800.0, 320.0] {
+            for width in [800.0, 320.0, 260.0] {
                 for instant in [false, true] {
                     for (operation, edge, handle) in [
                         ("Cancel order", false, false),
@@ -1081,7 +1081,7 @@ mod tests {
                         } else {
                             100.0
                         });
-                        // Hovering the label shows the reverse button, left of TP.
+                        // Hovering the label shows the reverse button.
                         let texts = frame(&mut trading, &mut chart, vec![]);
                         let right = texts
                             .iter()
@@ -1101,7 +1101,7 @@ mod tests {
                         let take_profit = find(texts.clone(), "TP").expect("a TP button");
                         let x = match operation {
                             "Modify order" if handle => mapping.rect.right() - 42.0,
-                            "Modify order" => mapping.rect.center().x,
+                            "Modify order" => find(texts.clone(), "Limit").unwrap().center().x,
                             "Reverse position" => take_profit.left() - 30.2,
                             "Place take profit" => take_profit.center().x,
                             "Place stop loss" => {
@@ -1109,7 +1109,13 @@ mod tests {
                             }
                             _ => close.x,
                         };
-                        let start = egui::pos2(x, y);
+                        let start =
+                            if operation == "Reverse position" && x - 11.0 < mapping.rect.left() {
+                                egui::pos2(take_profit.left() - 6.0 + 11.0, y + 26.0)
+                            } else {
+                                egui::pos2(x, y)
+                            };
+                        assert!(mapping.rect.contains(start), "{operation} at {width}");
                         frame(
                             &mut trading,
                             &mut chart,

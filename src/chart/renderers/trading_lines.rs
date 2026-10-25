@@ -473,13 +473,28 @@ fn show_position(
     let reverse = options.close && options.reverse;
     let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
-    let hovered = ui.rect_contains_pointer(label.intersect(mapping.rect));
     let cell = |x: f32, w: f32| Rect::from_min_size(pos2(x, label.top()), vec2(w, HEIGHT));
+    let reverse_rect = if left < mapping.rect.left() {
+        let top = if label.bottom() + 4.0 + HEIGHT <= mapping.rect.bottom() {
+            label.bottom() + 4.0
+        } else {
+            label.top() - 4.0 - HEIGHT
+        };
+        Rect::from_min_size(pos2(right - total, top), vec2(HEIGHT, HEIGHT))
+    } else {
+        cell(left, HEIGHT)
+    };
+    let hover_rect = if reverse {
+        label.union(reverse_rect)
+    } else {
+        label
+    };
+    let hovered = ui.rect_contains_pointer(hover_rect.intersect(mapping.rect));
     let stroke = Stroke::new(1.0, color);
     let mut action = None;
 
     if reverse && hovered {
-        let rect = cell(left, HEIGHT);
+        let rect = reverse_rect;
         let response = ui
             .interact(
                 rect.intersect(mapping.rect),
