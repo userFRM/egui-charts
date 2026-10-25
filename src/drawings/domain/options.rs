@@ -348,6 +348,7 @@ fn profile_down_color() -> [u8; 4] {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VolumeProfileFields")]
 pub struct VolumeProfileConfig {
+    row_size: Option<f64>,
     rows: usize,
     value_area: f64,
     /// Volume displayed in each row. Totals still determine POC and value area.
@@ -361,6 +362,8 @@ pub struct VolumeProfileConfig {
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
 #[derive(Deserialize)]
 struct VolumeProfileFields {
+    #[serde(default)]
+    row_size: Option<f64>,
     rows: usize,
     value_area: f64,
     #[serde(default)]
@@ -380,7 +383,9 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.display = fields.display;
         config.up_color = fields.up_color;
         config.down_color = fields.down_color;
-        Ok(config)
+        config
+            .with_row_size(fields.row_size)
+            .ok_or("volume profile row height must be finite and positive")
     }
 }
 
@@ -399,6 +404,22 @@ impl VolumeProfileConfig {
         })
     }
 
+    /// Fix each row to a price height, aligned to multiples of that height.
+    /// `None` restores equal rows over the span. Rejects nonpositive or nonfinite heights.
+    /// Profiles spanning more than 10,000 fixed rows are not drawn.
+    pub fn with_row_size(mut self, height: Option<f64>) -> Option<Self> {
+        if height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
+            return None;
+        }
+        self.row_size = height;
+        Some(self)
+    }
+
+    /// Fixed price height per row, or equal rows over the span when absent.
+    pub fn row_size(&self) -> Option<f64> {
+        self.row_size
+    }
+
     /// Number of price rows.
     pub fn rows(&self) -> usize {
         self.rows
@@ -414,6 +435,7 @@ impl Default for VolumeProfileConfig {
     /// 24 rows and a value area of 70% of the volume.
     fn default() -> Self {
         Self {
+            row_size: None,
             rows: 24,
             value_area: 0.7,
             display: ProfileDisplay::Total,
@@ -547,7 +569,7 @@ mod tests {
     fn volume_profile_display_round_trips() {
         for mode in ["Total", "UpDown", "Delta"] {
             let stored = serde_json::json!({
-                "rows": 24, "value_area": 0.7, "display": mode,
+                "rows": 24, "value_area": 0.7, "display": mode, "row_size": 0.25,
                 "up_color": [1, 2, 3, 240], "down_color": [4, 5, 6, 200]
             });
             let config: VolumeProfileConfig = serde_json::from_value(stored.clone()).unwrap();
@@ -564,6 +586,13 @@ mod tests {
         assert!(VolumeProfileConfig::new(1000, 0.01).is_some());
         for (rows, value_area) in [(0, 0.7), (1001, 0.7), (24, 0.0), (24, 1.01), (24, f64::NAN)] {
             assert!(VolumeProfileConfig::new(rows, value_area).is_none());
+        }
+        for height in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(
+                VolumeProfileConfig::default()
+                    .with_row_size(Some(height))
+                    .is_none()
+            );
         }
         assert!(RegressionTrendConfig::new(10.0).is_some());
         for deviations in [0.0, -1.0, 10.5, f64::INFINITY, f64::NAN] {

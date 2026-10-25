@@ -123,11 +123,31 @@ impl InputsTab {
                 let original = drawing.volume_profile.unwrap_or_default();
                 let mut config = original;
                 let mut rows = config.rows();
+                let mut fixed = config.row_size().is_some();
+                let mut height = config.row_size().unwrap_or(1.0);
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
-                    ui.label("Rows");
-                    ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS));
+                    ui.label("Row layout");
+                    ui.combo_select("profile_layout", &mut fixed, [false, true], |fixed| {
+                        if *fixed {
+                            "Price height".into()
+                        } else {
+                            "Number of rows".into()
+                        }
+                    });
                     ui.end_row();
+                    if fixed {
+                        number(
+                            ui,
+                            "Price height",
+                            &mut height,
+                            f64::MIN_POSITIVE..=f64::MAX,
+                        );
+                    } else {
+                        ui.label("Rows");
+                        ui.add(egui::DragValue::new(&mut rows).range(VolumeProfileConfig::ROWS));
+                        ui.end_row();
+                    }
                     number(
                         ui,
                         "Value area (%)",
@@ -160,7 +180,9 @@ impl InputsTab {
                         ui.end_row();
                     }
                 });
-                if let Some(mut updated) = VolumeProfileConfig::new(rows, percent / 100.0) {
+                if let Some(mut updated) = VolumeProfileConfig::new(rows, percent / 100.0)
+                    .and_then(|c| c.with_row_size(fixed.then_some(height)))
+                {
                     updated.display = config.display;
                     updated.up_color = config.up_color;
                     updated.down_color = config.down_color;
