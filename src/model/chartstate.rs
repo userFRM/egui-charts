@@ -429,6 +429,12 @@ impl ChartState {
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
                     )
+                    .chain(
+                        study
+                            .volume_profiles(study_start.max(start)..study_end.max(end))
+                            .into_iter()
+                            .flat_map(|plot| [plot.profile.low(), plot.profile.high()]),
+                    )
             });
         let main = main_visible
             .then(|| {

@@ -215,6 +215,10 @@ impl IndicatorFactory {
                 KlingerOscillator,
                 VolProfileVisible,
                 VolProfileFixed,
+                VolProfileSession,
+                VolProfilePeriodic,
+                VolProfileAnchored,
+                VolProfileAutoAnchored,
                 TimePriceOpportunity,
                 NetVolume,
                 VolumePriceTrend,
@@ -449,6 +453,12 @@ mod tests {
             let shapes = vec![
                 format!("{:?}", study.zones()),
                 study.tpo().is_some().to_string(),
+                format!("{:?}", study.volume_profiles(200..400)),
+                if study.volume_profiles(200..400).is_empty() {
+                    String::new()
+                } else {
+                    format!("{:?}", study.inputs())
+                },
             ];
             let lines: Vec<Vec<String>> = std::iter::once(shapes)
                 .chain(study.values().to_rows().iter().map(|v| {
@@ -605,6 +615,10 @@ mod tests {
             Box::new(CVD::new()),
             Box::new(VolProfileVisible::new(l(0))),
             Box::new(VolProfileFixed::new(l(0))),
+            Box::new(VolProfileSession::new(l(0))),
+            Box::new(VolProfilePeriodic::new(l(0))),
+            Box::new(VolProfileAnchored::new(l(0))),
+            Box::new(VolProfileAutoAnchored::new(l(0))),
             Box::new(TimePriceOpportunity::default()),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
@@ -882,8 +896,7 @@ mod tests {
         }
 
         // Every value has one entry per declared line and every line a name; a study of
-        // several lines never emits `Single`. The volume profiles emit a histogram per bar
-        // instead of lines (#167).
+        // several lines never emits `Single`.
         let fits = |v: &IndicatorValue, lines: usize| match v {
             IndicatorValue::Single(_) => lines == 1,
             IndicatorValue::Multiple(xs) => xs.len() == lines,
@@ -906,7 +919,6 @@ mod tests {
                             study.name(),
                             bars.len()
                         )),
-                        Ok(_) if study.name().starts_with("Vol Profile") => {}
                         Ok(_) => {
                             let lines = study.line_cnt();
                             if study.line_names().len() != lines {

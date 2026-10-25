@@ -10,7 +10,6 @@
 pub use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::ops::RangeInclusive;
 
 /// Identifies a selection handle position on a drawing.
 ///
@@ -325,125 +324,7 @@ impl FibonacciConfig {
     }
 }
 
-/// Volume shown in each price row of a profile built from bars.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum ProfileDisplay {
-    /// Total volume, with the point of control and value area highlighted.
-    #[default]
-    Total,
-    /// Up-bar and down-bar volume in adjacent segments.
-    UpDown,
-    /// Absolute up minus down volume, coloured by its sign.
-    Delta,
-}
-
-fn profile_up_color() -> [u8; 4] {
-    [38, 166, 154, 180]
-}
-fn profile_down_color() -> [u8; 4] {
-    [239, 83, 80, 180]
-}
-
-/// Settings of the fixed range and anchored volume profile drawings.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "VolumeProfileFields")]
-pub struct VolumeProfileConfig {
-    row_size: Option<f64>,
-    rows: usize,
-    value_area: f64,
-    /// Volume displayed in each row. Totals still determine POC and value area.
-    pub display: ProfileDisplay,
-    /// Colour of rising bars, including an unchanged close, in split and delta modes.
-    pub up_color: [u8; 4],
-    /// Colour of falling bars in split and delta modes.
-    pub down_color: [u8; 4],
-}
-
-/// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
-#[derive(Deserialize)]
-struct VolumeProfileFields {
-    #[serde(default)]
-    row_size: Option<f64>,
-    rows: usize,
-    value_area: f64,
-    #[serde(default)]
-    display: ProfileDisplay,
-    #[serde(default = "profile_up_color")]
-    up_color: [u8; 4],
-    #[serde(default = "profile_down_color")]
-    down_color: [u8; 4],
-}
-
-impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
-    type Error = &'static str;
-
-    fn try_from(fields: VolumeProfileFields) -> Result<Self, Self::Error> {
-        let mut config = Self::new(fields.rows, fields.value_area)
-            .ok_or("volume profile settings out of bounds")?;
-        config.display = fields.display;
-        config.up_color = fields.up_color;
-        config.down_color = fields.down_color;
-        config
-            .with_row_size(fields.row_size)
-            .ok_or("volume profile row height must be finite and positive")
-    }
-}
-
-impl VolumeProfileConfig {
-    /// Price rows a profile may have.
-    pub const ROWS: RangeInclusive<usize> = 1..=1000;
-
-    /// A profile of `rows` equal price rows whose value area holds the
-    /// `value_area` share of its volume (above 0, at most 1); `None` when
-    /// either is out of bounds.
-    pub fn new(rows: usize, value_area: f64) -> Option<Self> {
-        (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0).then_some(Self {
-            rows,
-            value_area,
-            ..Self::default()
-        })
-    }
-
-    /// Fix each row to a price height, aligned to multiples of that height.
-    /// `None` restores equal rows over the span. Rejects nonpositive or nonfinite heights.
-    /// Profiles spanning more than 10,000 fixed rows are not drawn.
-    pub fn with_row_size(mut self, height: Option<f64>) -> Option<Self> {
-        if height.is_some_and(|h| !h.is_finite() || h <= 0.0) {
-            return None;
-        }
-        self.row_size = height;
-        Some(self)
-    }
-
-    /// Fixed price height per row, or equal rows over the span when absent.
-    pub fn row_size(&self) -> Option<f64> {
-        self.row_size
-    }
-
-    /// Number of price rows.
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    /// Share of the volume inside the value area.
-    pub fn value_area(&self) -> f64 {
-        self.value_area
-    }
-}
-
-impl Default for VolumeProfileConfig {
-    /// 24 rows and a value area of 70% of the volume.
-    fn default() -> Self {
-        Self {
-            row_size: None,
-            rows: 24,
-            value_area: 0.7,
-            display: ProfileDisplay::Total,
-            up_color: profile_up_color(),
-            down_color: profile_down_color(),
-        }
-    }
-}
+pub use crate::studies::{ProfileDisplay, VolumeProfileConfig};
 
 /// Settings of the regression trend drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -574,6 +455,14 @@ mod tests {
             });
             let config: VolumeProfileConfig = serde_json::from_value(stored.clone()).unwrap();
             assert_eq!(serde_json::to_value(config).unwrap(), stored);
+            let mut drawing = crate::drawings::Drawing::new(
+                1,
+                crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
+            );
+            drawing.volume_profile = Some(config);
+            let loaded: crate::drawings::Drawing =
+                serde_json::from_str(&serde_json::to_string(&drawing).unwrap()).unwrap();
+            assert_eq!(loaded.volume_profile, Some(config));
         }
         let old: VolumeProfileConfig =
             serde_json::from_str(r#"{"rows":24,"value_area":0.7}"#).unwrap();

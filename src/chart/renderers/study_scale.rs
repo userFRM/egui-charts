@@ -41,6 +41,10 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
             high = high.max(0.0);
         }
     }
+    for plot in study.volume_profiles(start..end) {
+        low = low.min(plot.profile.low());
+        high = high.max(plot.profile.high());
+    }
     if !low.is_finite() {
         low = 0.0;
         high = 1.0;

@@ -130,6 +130,7 @@ mod mfi;
 mod obv;
 mod twap;
 mod volume;
+mod volume_profile;
 mod vwap;
 mod vwap_auto_anchored;
 
@@ -224,8 +225,6 @@ mod cvd;
 // Eighth batch - Volume indicators
 mod net_volume;
 mod price_volume_trend_study;
-mod vol_profile_fixed;
-mod vol_profile_visible;
 
 // Eighth batch - Volatility indicators
 mod close_to_close_vol;
@@ -320,6 +319,10 @@ pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
 pub use twap::TimeWeightedAvgPrice;
 pub use volume::{Volume, VolumeAverage, VolumeColorRule};
+pub use volume_profile::{
+    VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+    VolProfileSession, VolProfileVisible,
+};
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
 pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
@@ -414,8 +417,6 @@ pub use cvd::{CVD, CVDMode};
 // Re-exports - Eighth batch (Volume indicators)
 pub use net_volume::NetVolume;
 pub use price_volume_trend_study::PriceVolumeTrendStudy;
-pub use vol_profile_fixed::VolProfileFixed;
-pub use vol_profile_visible::VolProfileVisible;
 
 // Re-exports - Eighth batch (Volatility indicators)
 pub use close_to_close_vol::CloseToCloseVol;
@@ -526,6 +527,3 @@ fn over_finite_bars(
     }
     values
 }
-
-/// Most price rows a volume profile computes.
-const MAX_PROFILE_ROWS: usize = 10_000;

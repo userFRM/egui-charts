@@ -1,12 +1,12 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use super::draw_dashed_hline;
-use crate::drawings::domain::{Drawing, ProfileDisplay};
+use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
+use crate::studies::VolumeProfile;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Rect, Shape, Stroke};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -14,11 +14,13 @@ use std::rc::Rc;
 /// Bars between the saved running sums of an anchored VWAP.
 const VWAP_CHECKPOINT: usize = 1024;
 
+type ProfileCache = SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>;
+
 thread_local! {
     static VWAP_CHECKPOINTS: RefCell<SpanCache<Vec<VwapSums>>> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
     /// Profiles by their number of rows.
-    static PROFILES: RefCell<SpanCache<Option<VolumeProfile>, (usize, Option<f64>)>> =
+    static PROFILES: RefCell<ProfileCache> =
         const { RefCell::new(SpanCache::new(MAX_CACHED_SPANS)) };
 }
 
@@ -179,157 +181,14 @@ impl Drawing {
         let Some(profile) = profile.as_ref() else {
             return;
         };
-        let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
-            return;
-        };
-        let y_at_row =
-            |row: usize| (view.price_to_y)(profile.low + row as f64 * profile.row_height);
-        let max_width = (right - left) * 0.9;
-        let max_volume = profile.volume[poc];
-
-        for (row, &volume) in profile.volume.iter().enumerate() {
-            // Ordered on screen: the upper row edge is lower down on an inverted scale.
-            let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
-            let (top, bottom) = (upper.min(lower), upper.max(lower));
-            let width = (volume / max_volume) as f32 * max_width;
-
-            // Color coding: POC is bright, Value Area is medium, outside is dim
-            let bar_color = if row == poc {
-                DESIGN_TOKENS.semantic.extended.favorite_gold
-            } else if (va_low..=va_high).contains(&row) {
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 180)
-            } else {
-                Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80)
-            };
-
-            let paint = |start, width, color| {
-                painter.rect_filled(
-                    Rect::from_min_max(
-                        Pos2::new(start, top),
-                        Pos2::new(start + width, (bottom - 1.0).max(top)),
-                    ),
-                    0.0,
-                    color,
-                );
-            };
-            let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-            match config.display {
-                ProfileDisplay::Total => paint(left, width, bar_color),
-                ProfileDisplay::UpDown => {
-                    let up_width = (profile.up[row] / max_volume) as f32 * max_width;
-                    paint(left, up_width, rgba(config.up_color));
-                    paint(
-                        left + up_width,
-                        (width - up_width).max(0.0),
-                        rgba(config.down_color),
-                    );
-                }
-                ProfileDisplay::Delta => {
-                    let delta = profile.up[row] - profile.down[row];
-                    let color = if delta >= 0.0 {
-                        config.up_color
-                    } else {
-                        config.down_color
-                    };
-                    paint(
-                        left,
-                        (delta.abs() / max_volume) as f32 * max_width,
-                        rgba(color),
-                    );
-                }
-            }
-        }
-
-        let rect = Rect::from_two_pos(
-            Pos2::new(left, y_at_row(profile.volume.len())),
-            Pos2::new(right, y_at_row(0)),
-        );
-        let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
-        self.draw_volume_profile_lines(
+        crate::chart::renderers::volume_profile::paint_profile(
             painter,
-            &rect,
-            poc_y,
-            y_at_row(va_high + 1),
-            y_at_row(va_low),
-        );
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(stroke::HAIRLINE, self.color32()),
-            StrokeKind::Outside,
-        );
-    }
-
-    fn draw_volume_profile_lines(
-        &self,
-        painter: &egui::Painter,
-        rect: &Rect,
-        poc_y: f32,
-        vah_y: f32,
-        val_y: f32,
-    ) {
-        let font = egui::FontId::proportional(typography::XS);
-
-        // Draw POC line (dashed, extends across range)
-        let poc_color = DESIGN_TOKENS.semantic.extended.favorite_gold;
-        draw_dashed_hline(
-            painter,
-            poc_y,
-            rect.min.x,
-            rect.max.x,
-            Stroke::new(stroke::HAIRLINE, poc_color),
-            8.0,
-            4.0,
-        );
-
-        // POC label
-        let poc_bg =
-            Rect::from_center_size(Pos2::new(rect.max.x - 25.0, poc_y), egui::vec2(40.0, 14.0));
-        painter.rect_filled(poc_bg, DESIGN_TOKENS.rounding.sm, poc_color);
-        painter.text(
-            poc_bg.center(),
-            egui::Align2::CENTER_CENTER,
-            "POC",
-            font.clone(),
-            Color32::BLACK,
-        );
-
-        // Draw VAH line
-        let va_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
-        painter.hline(
-            rect.min.x..=rect.max.x,
-            vah_y,
-            Stroke::new(stroke::HAIRLINE, va_color),
-        );
-
-        // Each label sits outside the value area, away from the other line;
-        // the VAH line is the lower one on an inverted scale.
-        let away = if vah_y <= val_y { 8.0 } else { -8.0 };
-
-        // VAH label
-        painter.text(
-            Pos2::new(rect.max.x - 25.0, vah_y - away),
-            egui::Align2::CENTER_CENTER,
-            "VAH",
-            font.clone(),
-            va_color,
-        );
-
-        // Draw VAL line
-        painter.hline(
-            rect.min.x..=rect.max.x,
-            val_y,
-            Stroke::new(stroke::HAIRLINE, va_color),
-        );
-
-        // VAL label
-        painter.text(
-            Pos2::new(rect.max.x - 25.0, val_y + away),
-            egui::Align2::CENTER_CENTER,
-            "VAL",
-            font,
-            va_color,
+            profile,
+            config,
+            self.color,
+            left..right,
+            false,
+            view.price_to_y,
         );
     }
 
@@ -409,21 +268,6 @@ fn anchored_vwap<'a>(
     })
 }
 
-/// Volume traded at each price row of a span of bars.
-#[derive(Clone, Debug, PartialEq)]
-struct VolumeProfile {
-    /// Price at the bottom of row 0.
-    low: f64,
-    /// Highest price of the bars.
-    high: f64,
-    row_height: f64,
-    fixed_height: bool,
-    /// Volume per row, lowest prices first.
-    volume: Vec<f64>,
-    up: Vec<f64>,
-    down: Vec<f64>,
-}
-
 /// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
 /// While the last bar, which may be forming, trades inside the range of the
 /// bars before it, their profile is reused, so a tick or a new bar costs one
@@ -442,166 +286,9 @@ fn span_profile(
             first,
             bars,
             |bars| VolumeProfile::of(bars, rows, row_size),
-            |profile, bar| profile.as_ref()?.with(bar).map(Some),
+            |profile, bar| profile.as_ref()?.with_bar(bar).map(Some),
         )
     })
-}
-
-impl VolumeProfile {
-    /// Spreads each bar's volume evenly over its high-low range across
-    /// `rows` equal price rows (a bar without range puts it in the row of its
-    /// price). `None` when the bars span no price range.
-    fn of(bars: &[Bar], rows: usize, row_size: Option<f64>) -> Option<Self> {
-        let low = bars.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-        let high = bars
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let (low, high, row_height, rows) = if let Some(height) = row_size {
-            let (low, high, rows) = fixed_grid(low, high, height)?;
-            (low, high, height, rows)
-        } else {
-            (low, high, (high - low) / rows as f64, rows)
-        };
-        if !row_height.is_finite() || row_height <= 0.0 {
-            return None;
-        }
-        let mut profile = Self {
-            low,
-            high,
-            row_height,
-            fixed_height: row_size.is_some(),
-            volume: vec![0.0; rows],
-            up: vec![0.0; rows],
-            down: vec![0.0; rows],
-        };
-        bars.iter().for_each(|bar| profile.add(bar));
-        Some(profile)
-    }
-
-    /// This profile with `bar` added; `None` when the bar trades outside the
-    /// profile's price range, which would move the rows.
-    fn with(&self, bar: &Bar) -> Option<Self> {
-        let mut profile = self.clone();
-        if self.fixed_height {
-            let (low, high, _) = fixed_grid(bar.low, bar.high, self.row_height)?;
-            let low = low.min(self.low);
-            let high = high.max(self.high);
-            let count = ((high - low) / self.row_height).round();
-            if count > 10_000.0 {
-                return None;
-            }
-            let prepend = ((self.low - low) / self.row_height).round() as usize;
-            for rows in [&mut profile.volume, &mut profile.up, &mut profile.down] {
-                let old_len = rows.len();
-                rows.resize(count as usize, 0.0);
-                if prepend > 0 {
-                    rows.copy_within(..old_len, prepend);
-                    rows[..prepend].fill(0.0);
-                }
-            }
-            profile.low = low;
-            profile.high = high;
-        } else if bar.low < self.low || bar.high > self.high {
-            return None;
-        }
-        profile.add(bar);
-        Some(profile)
-    }
-
-    /// Adds the volume of `bar` to the rows that its high-low range covers,
-    /// in proportion to the overlap.
-    fn add(&mut self, bar: &Bar) {
-        let (low, row_height) = (self.low, self.row_height);
-        let direction = if bar.close >= bar.open {
-            &mut self.up
-        } else {
-            &mut self.down
-        };
-        let top_row = self.volume.len() - 1;
-        let row_of = |price: f64| (((price - low) / row_height) as usize).min(top_row);
-        if bar.high > bar.low {
-            let (first, last) = (row_of(bar.low), row_of(bar.high));
-            for (row, row_volume) in self
-                .volume
-                .iter_mut()
-                .enumerate()
-                .take(last + 1)
-                .skip(first)
-            {
-                let row_low = low + row as f64 * row_height;
-                let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
-                let amount = bar.volume * overlap.max(0.0) / (bar.high - bar.low);
-                *row_volume += amount;
-                direction[row] += amount;
-            }
-        } else {
-            self.volume[row_of(bar.low)] += bar.volume;
-            direction[row_of(bar.low)] += bar.volume;
-        }
-    }
-
-    /// The row with the most volume (point of control), and the lowest and
-    /// highest row of the value area, which holds `share` of the volume;
-    /// `None` when no volume traded.
-    fn poc_and_value_area(&self, share: f64) -> Option<(usize, (usize, usize))> {
-        let volume = &self.volume;
-        let total: f64 = volume.iter().sum();
-        if !total.is_finite() || total <= 0.0 {
-            return None;
-        }
-        let poc = (0..volume.len()).max_by(|&a, &b| volume[a].total_cmp(&volume[b]))?;
-        Some((poc, value_area(volume, poc, total * share)))
-    }
-}
-
-/// A zero-aligned grid, including the row of a zero-range bar on an edge.
-fn fixed_grid(low: f64, high: f64, height: f64) -> Option<(f64, f64, usize)> {
-    if !height.is_finite() || height <= 0.0 {
-        return None;
-    }
-    let first = (low / height).floor();
-    let last = (high / height).floor();
-    let count = last - first + 1.0;
-    if !first.is_finite()
-        || !last.is_finite()
-        || first.abs() >= 2_f64.powi(52)
-        || last.abs() >= 2_f64.powi(52)
-        || !(1.0..=10_000.0).contains(&count)
-    {
-        return None;
-    }
-    let bounds = (first * height, (last + 1.0) * height);
-    (bounds.0.is_finite() && bounds.1.is_finite() && bounds.1 > bounds.0).then_some((
-        bounds.0,
-        bounds.1,
-        count as usize,
-    ))
-}
-
-/// Rows around the POC that hold `target` volume. Market Profile rule: grow
-/// toward whichever of the next two rows above or the next two rows below
-/// holds more volume, one row at a time.
-fn value_area(volume: &[f64], poc: usize, target: f64) -> (usize, usize) {
-    let (mut low, mut high, mut sum) = (poc, poc, volume[poc]);
-    while sum < target && (low > 0 || high + 1 < volume.len()) {
-        let above: f64 = volume[high + 1..].iter().take(2).sum();
-        let below: f64 = volume[..low].iter().rev().take(2).sum();
-        let up = high + 1 < volume.len() && (low == 0 || above >= below);
-        for _ in 0..2 {
-            if up && high + 1 < volume.len() {
-                high += 1;
-                sum += volume[high];
-            } else if !up && low > 0 {
-                low -= 1;
-                sum += volume[low];
-            }
-            if sum >= target {
-                break;
-            }
-        }
-    }
-    (low, high)
 }
 
 #[cfg(test)]
@@ -681,73 +368,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Reference: rows of 1.5 from 9.0, each bar's volume split by how much of
-    /// its range falls in the row, the zero-range bar whole in the row of 13.0.
-    /// For 70% the value area takes the two rows below the POC (433.3) over
-    /// the one row above it (397.5); comparing single rows would take the row
-    /// above.
-    #[test]
-    fn volume_profile_matches_reference() {
-        let profile = VolumeProfile::of(&sample_bars(), 4, None).unwrap();
-        assert_close(profile.low, 9.0);
-        assert_close(profile.row_height, 1.5);
-        for (got, want) in
-            profile
-                .volume
-                .iter()
-                .zip([83.33333333333334, 350.0, 619.1666666666667, 397.5])
-        {
-            assert_close(*got, want);
-        }
-        // The down bars are 150 over 11..12.5 and 400 over 12..14.5.
-        for (row, (up, down)) in [
-            (250.0 / 3.0, 0.0),
-            (250.0, 100.0),
-            (3950.0 / 12.0, 290.0),
-            (237.5, 160.0),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            assert_close(profile.up[row], up);
-            assert_close(profile.down[row], down);
-            assert_close(profile.up[row] + profile.down[row], profile.volume[row]);
-        }
-        for (share, value_area) in [(0.5, (1, 2)), (0.7, (0, 2)), (1.0, (0, 3))] {
-            assert_eq!(
-                profile.poc_and_value_area(share),
-                Some((2, value_area)),
-                "share {share}"
-            );
-        }
-    }
-
-    /// Existing rows keep their prices and volume when a fixed grid grows at either edge.
-    #[test]
-    fn fixed_profile_grows_without_rebinning() {
-        let time = chrono::DateTime::UNIX_EPOCH;
-        let first = Bar::new(time, -0.5, 1.0, -1.0, 0.5, 20.0);
-        let mut bars = vec![first];
-        let mut profile = VolumeProfile::of(&bars, 24, Some(1.0)).unwrap();
-        assert_eq!(profile.volume, [10.0, 10.0, 0.0]);
-        for (low, high, volume, expected) in [
-            (-2.0, -1.0, 6.0, vec![6.0, 10.0, 10.0, 0.0]),
-            (1.0, 2.0, 8.0, vec![6.0, 10.0, 10.0, 8.0, 0.0]),
-            (2.0, 2.0, 3.0, vec![6.0, 10.0, 10.0, 8.0, 3.0]),
-        ] {
-            let bar = Bar::new(time, low, high, low, high, volume);
-            // Extension must succeed: a fallback rebuild would conceal the regression.
-            profile = profile.with(&bar).expect("extend fixed grid");
-            bars.push(bar);
-            assert_eq!(profile.volume, expected);
-            assert_eq!(
-                Some(profile.clone()),
-                VolumeProfile::of(&bars, 24, Some(1.0))
-            );
-        }
-        assert!(VolumeProfile::of(&bars, 24, Some(1e-12)).is_none());
     }
 
     /// The 24 default rows of the sample bars (9 to 15) are 0.25 apart, 12.5 px

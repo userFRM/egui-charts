@@ -845,6 +845,11 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for plot in indicator.volume_profiles(visible_range.clone()) {
+            min_val = min_val.min(plot.profile.low());
+            max_val = max_val.max(plot.profile.high());
+        }
+
         for zone in indicator.zones().iter().filter(|zone| {
             zone.bars.end > visible_range.start
                 && zone.bars.start < visible_range.end

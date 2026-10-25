@@ -343,6 +343,14 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Price-row volume profiles intersecting a half-open visible source-bar range.
+    /// Fixed and calendar profiles include their whole selected span, even offscreen bars.
+    /// Visible-range studies recompute for this range; ordinary studies return no profiles.
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+        let _ = visible;
+        Vec::new()
+    }
+
     /// Shapes attached to study values, empty by default.
     fn markers(&self) -> &[IndicatorMarker] {
         &[]

@@ -22,6 +22,7 @@ mod session_breaks;
 mod tooltip;
 mod trading_lines;
 mod volume;
+pub(crate) mod volume_profile;
 mod watermark;
 
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
