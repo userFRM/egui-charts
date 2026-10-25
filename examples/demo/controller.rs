@@ -1149,12 +1149,20 @@ impl DemoApp {
                 let mut profiles_enabled = self.profile_ranges.is_some();
                 let mut profile_ranges = self.profile_ranges.clone();
                 let profile_split = self
-                    .chart
-                    .bars(SeriesId::MAIN)
-                    .iter()
-                    .rev()
-                    .nth(5)
-                    .map(|bar| bar.time);
+                    .last_chart_click
+                    .as_ref()
+                    .filter(|click| click.series == SeriesId::MAIN)
+                    .and_then(|click| click.bar.as_ref())
+                    .map(|bar| self.chart.bar_clock().bar_open(bar.time));
+                let profile_index = profile_split
+                    .and_then(|time| {
+                        profile_ranges
+                            .as_ref()?
+                            .ranges()
+                            .iter()
+                            .position(|range| range.contains(&time))
+                    })
+                    .unwrap_or(0);
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
@@ -1175,7 +1183,7 @@ impl DemoApp {
                                     egui_charts::ui::trade_profile_menu(
                                         ui,
                                         ranges,
-                                        0,
+                                        profile_index,
                                         profile_split,
                                     );
                                 }
@@ -2615,12 +2623,12 @@ mod tests {
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
-    fn research_toolbar_reports_the_last_chart_click() {
+    fn chart_click_selects_research_and_the_profile_to_split() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = DemoApp::new(&cc);
         let frame = |app: &mut DemoApp, events| {
-            ctx.run_ui(
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2629,9 +2637,14 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| app.show_chart(ui, app.theme.ui.panel_bg),
-            )
-            .drop_without_applying_deltas();
+                |ui| {
+                    app.show_top_toolbar(ui, app.theme.ui.panel_bg);
+                    app.show_chart(ui, app.theme.ui.panel_bg);
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
         };
         for _ in 0..3 {
             frame(&mut app, vec![]);
@@ -2661,6 +2674,60 @@ mod tests {
         assert!(
             message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
             "{message}"
+        );
+        app.rebuild_footprint();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let start = bars[0].time;
+        let middle = bars[index - 2].time;
+        let end = bars.last().unwrap().time + chrono::TimeDelta::minutes(1);
+        app.profile_ranges = Some(
+            egui_charts::studies::TradeProfileRanges::new(vec![start..middle, middle..end])
+                .unwrap(),
+        );
+        let menu = egui::pos2(24.0, 20.0);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(menu),
+                    egui::Event::PointerButton {
+                        pos: menu,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let shapes = frame(&mut app, vec![]);
+        let split = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "Split profile at selected bar" =>
+                {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .unwrap();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(split),
+                    egui::Event::PointerButton {
+                        pos: split,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.profile_ranges.as_ref().unwrap().ranges(),
+            &[start..middle, middle..time, time..end]
         );
         app.replay_selecting = true;
         let index = index - 3;
