@@ -15,7 +15,11 @@ pub(super) fn dropdown(ui: &mut Ui, id: &str, text: &str, contents: impl FnOnce(
                 .min_size(vec2(0.0, 28.0))
                 .truncate(),
         );
-        egui::Popup::menu(&button).show(contents);
+        egui::Popup::menu(&button).show(|ui| {
+            egui::ScrollArea::vertical()
+                .max_height(ui.spacing().combo_height)
+                .show(ui, contents);
+        });
     });
 }
 
@@ -42,4 +46,75 @@ pub(super) fn cell(ui: &mut Ui, rect: Rect, text: &str, right: bool, color: Colo
             .truncate()
             .selectable(false),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{Theme, apply_to_egui};
+
+    /// Host lists can exceed the window height; their last choice must remain reachable.
+    #[test]
+    fn dropdowns_scroll_to_the_last_choice_in_short_windows() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for height in [180.0, 360.0] {
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &theme);
+                ctx.global_style_mut(|style| {
+                    style.scroll_animation = egui::style::ScrollAnimation::none()
+                });
+                let mut last = Rect::NOTHING;
+                let mut clip = Rect::NOTHING;
+                let mut frame = |events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(280.0, height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            dropdown(ui, "choices", "Choose", |ui| {
+                                for index in 0..80 {
+                                    let response =
+                                        ui.selectable_label(false, format!("Choice {index}"));
+                                    if index == 79 {
+                                        response.scroll_to_me(Some(Align::BOTTOM));
+                                        last = response.rect;
+                                        clip = ui.clip_rect();
+                                    }
+                                }
+                            });
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                frame(vec![]);
+                let pos = egui::pos2(20.0, 14.0);
+                frame(vec![egui::Event::PointerMoved(pos)]);
+                for pressed in [true, false] {
+                    frame(vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }]);
+                }
+                for _ in 0..3 {
+                    frame(vec![]);
+                }
+                assert!(last.is_positive(), "the menu must open");
+                assert!(
+                    clip.contains_rect(last),
+                    "last choice is clipped: {last:?}, {clip:?}"
+                );
+                assert!(
+                    last.bottom() <= height,
+                    "last choice is outside the window: {last:?}"
+                );
+            }
+        }
+    }
 }
