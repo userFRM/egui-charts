@@ -46,8 +46,10 @@ pub fn render_crosshair_full(
             horz_line_color: crosshair_color,
             vert_line_width: line_width,
             horz_line_width: line_width,
-            line_style,
-            label_background_color: label_bg,
+            vert_line_style: line_style,
+            horz_line_style: line_style,
+            vert_label_background_color: label_bg,
+            horz_label_background_color: label_bg,
             label_text_color: label_text,
             ..Default::default()
         },
@@ -82,8 +84,13 @@ pub fn render_crosshair_with_options(
     let mut pos = hover_pos;
     if let Some((idx, candle)) = bar {
         pos.x = coords.idx_to_x(idx);
-        if options.mode == CrosshairMode::Magnet && context.rect.contains(hover_pos) {
-            pos.y = price_scale.price_to_y(snap_to_nearest_ohlc(pos.y, price_scale, candle));
+        if options.mode.snaps() && context.rect.contains(hover_pos) {
+            let price = if options.mode == CrosshairMode::MagnetClose {
+                candle.close
+            } else {
+                snap_to_nearest_ohlc(pos.y, price_scale, candle)
+            };
+            pos.y = price_scale.price_to_y(price);
         }
     }
     render_crosshair_lines(context, pos, &options, chart_bottom);
@@ -101,7 +108,11 @@ pub fn render_crosshair_with_options(
         }),
     );
     let time_tag = bar
-        .filter(|_| options.label_visible && options.vert_line_visible)
+        .filter(|_| {
+            options.label_visible
+                && options.vert_line_visible
+                && options.style != CrosshairStyle::Hidden
+        })
         .map(|(_, candle)| {
             paint_crosshair_tag(
                 context.painter,
@@ -109,7 +120,10 @@ pub fn render_crosshair_with_options(
                 Align2::CENTER_TOP,
                 context.rect.left()..=axis_right.max(context.rect.right()),
                 formatter.format_crosshair(candle.time, bar_seconds),
-                (options.label_text_color, options.label_background_color),
+                (
+                    options.label_text_color,
+                    options.vert_label_background_color,
+                ),
                 25.0,
                 None,
             )
@@ -123,9 +137,9 @@ pub(crate) fn render_crosshair_lines(
     options: &CrosshairOptions,
     chart_bottom: f32,
 ) {
-    let line = |from, to, color, width| {
+    let line = |from, to, color, width, style| {
         let stroke = Stroke::new(width, color);
-        match options.line_style {
+        match style {
             CrosshairLineStyle::Solid => {
                 context.painter.line_segment([from, to], stroke);
             }
@@ -134,6 +148,12 @@ pub(crate) fn render_crosshair_lines(
             }
             CrosshairLineStyle::Dotted => {
                 draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0)
+            }
+            CrosshairLineStyle::LargeDashed => {
+                draw_dashed_line(context.painter, from, to, stroke, 10.0, 10.0)
+            }
+            CrosshairLineStyle::SparseDotted => {
+                draw_dashed_line(context.painter, from, to, stroke, 1.0, 7.0)
             }
         }
     };
@@ -145,6 +165,7 @@ pub(crate) fn render_crosshair_lines(
                     Pos2::new(pos.x, chart_bottom),
                     options.vert_line_color,
                     options.vert_line_width,
+                    options.vert_line_style,
                 );
             }
             if options.horz_line_visible && context.rect.y_range().contains(pos.y) {
@@ -153,6 +174,7 @@ pub(crate) fn render_crosshair_lines(
                     Pos2::new(context.rect.right(), pos.y),
                     options.horz_line_color,
                     options.horz_line_width,
+                    options.horz_line_style,
                 );
             }
         }
@@ -178,6 +200,7 @@ pub(crate) fn render_crosshair_price_tag(
 ) -> Option<Rect> {
     if !options.label_visible
         || !options.horz_line_visible
+        || options.style == CrosshairStyle::Hidden
         || !context.rect.y_range().contains(pos.y)
     {
         return None;
@@ -225,7 +248,10 @@ pub(crate) fn render_crosshair_price_tag(
             context.rect.right()..=axis_right
         },
         label,
-        (options.label_text_color, options.label_background_color),
+        (
+            options.label_text_color,
+            options.horz_label_background_color,
+        ),
         21.0,
         last_price_tag,
     ))
@@ -387,60 +413,81 @@ mod tests {
         for vertical in [false, true] {
             for horizontal in [false, true] {
                 for labels in [false, true] {
-                    let options = CrosshairOptions {
-                        vert_line_visible: vertical,
-                        horz_line_visible: horizontal,
-                        label_visible: labels,
-                        vert_line_color: Color32::RED,
-                        horz_line_color: Color32::BLUE,
-                        vert_line_width: 2.0,
-                        horz_line_width: 3.0,
-                        line_style: CrosshairLineStyle::Solid,
-                        ..Default::default()
-                    };
-                    let ctx = Context::default();
-                    let mut tags = [None; 2];
-                    let x = coords.idx_to_x(10);
-                    let output = ctx.run_ui(RawInput::default(), |ui| {
-                        tags = crate::chart::rendering::render_crosshair_with_options(
-                            &RenderContext::new(ui.painter(), rect),
-                            Pos2::new(x + 3.0, 100.0),
-                            &bars,
-                            &map,
-                            &coords,
-                            &options,
-                            300.0,
-                            480.0,
-                            None,
-                            TimeFormatterBuilder::new().build().as_ref(),
-                            3600,
-                            None,
-                        );
-                    });
-                    let lines: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match shape.shape {
-                            Shape::LineSegment { points, stroke } => Some((points, stroke)),
-                            _ => None,
-                        })
-                        .collect();
-                    output.drop_without_applying_deltas();
-                    assert_eq!(lines.len(), usize::from(vertical) + usize::from(horizontal));
-                    if vertical {
-                        assert!(lines.contains(&(
-                            [Pos2::new(x, 0.0), Pos2::new(x, 300.0)],
-                            Stroke::new(2.0, Color32::RED)
-                        )));
+                    for style in [CrosshairStyle::Full, CrosshairStyle::Hidden] {
+                        let shown = style != CrosshairStyle::Hidden;
+                        let (vertical_shown, horizontal_shown) =
+                            (vertical && shown, horizontal && shown);
+                        let options = CrosshairOptions {
+                            style,
+                            vert_line_visible: vertical,
+                            horz_line_visible: horizontal,
+                            label_visible: labels,
+                            vert_line_color: Color32::RED,
+                            horz_line_color: Color32::BLUE,
+                            vert_line_width: 2.0,
+                            horz_line_width: 3.0,
+                            vert_line_style: CrosshairLineStyle::Solid,
+                            horz_line_style: CrosshairLineStyle::Dotted,
+                            vert_label_background_color: Color32::DARK_RED,
+                            horz_label_background_color: Color32::DARK_GREEN,
+                            ..Default::default()
+                        };
+                        let ctx = Context::default();
+                        let mut tags = [None; 2];
+                        let x = coords.idx_to_x(10);
+                        let output = ctx.run_ui(RawInput::default(), |ui| {
+                            tags = crate::chart::rendering::render_crosshair_with_options(
+                                &RenderContext::new(ui.painter(), rect),
+                                Pos2::new(x + 3.0, 100.0),
+                                &bars,
+                                &map,
+                                &coords,
+                                &options,
+                                300.0,
+                                480.0,
+                                None,
+                                TimeFormatterBuilder::new().build().as_ref(),
+                                3600,
+                                None,
+                            );
+                        });
+                        let (lines, dots): (Vec<_>, Vec<_>) = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match shape.shape {
+                                Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                                _ => None,
+                            })
+                            .partition(|(_, stroke)| stroke.color == Color32::RED);
+                        // The dotted horizontal line is a row of one-point dots.
+                        assert!(dots.iter().all(|([a, b], stroke)| {
+                            *stroke == Stroke::new(3.0, Color32::BLUE)
+                                && a.y == 100.0
+                                && b.y == 100.0
+                                && b.x - a.x <= 1.0
+                        }));
+                        let dots = !dots.is_empty();
+                        let fill = |color| {
+                            output.shapes.iter().any(
+                                |shape| matches!(&shape.shape, Shape::Rect(r) if r.fill == color),
+                            )
+                        };
+                        let (time_fill, price_fill) =
+                            (fill(Color32::DARK_RED), fill(Color32::DARK_GREEN));
+                        output.drop_without_applying_deltas();
+                        assert_eq!(lines.len(), usize::from(vertical_shown));
+                        if vertical_shown {
+                            assert!(lines.contains(&(
+                                [Pos2::new(x, 0.0), Pos2::new(x, 300.0)],
+                                Stroke::new(2.0, Color32::RED)
+                            )));
+                        }
+                        assert_eq!(dots, horizontal_shown);
+                        assert_eq!(tags[0].is_some(), labels && horizontal_shown);
+                        assert_eq!(tags[1].is_some(), labels && vertical_shown);
+                        assert_eq!(price_fill, tags[0].is_some());
+                        assert_eq!(time_fill, tags[1].is_some());
                     }
-                    if horizontal {
-                        assert!(lines.contains(&(
-                            [Pos2::new(100.0, 100.0), Pos2::new(400.0, 100.0)],
-                            Stroke::new(3.0, Color32::BLUE)
-                        )));
-                    }
-                    assert_eq!(tags[0].is_some(), labels && horizontal);
-                    assert_eq!(tags[1].is_some(), labels && vertical);
                 }
             }
         }

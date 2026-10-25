@@ -397,7 +397,15 @@ impl super::Chart {
                     self.drawings.complete_curr_drawing();
                 }
             }
-            A::DeleteSelectedDrawing => self.drawings.delete_selected(),
+            // Without a selected drawing, the key removes the selected study.
+            A::DeleteSelectedDrawing => match self.selection.selected_id() {
+                Some(super::ChartElementId::Indicator(id))
+                    if self.drawings.selected_ids().next().is_none() =>
+                {
+                    self.remove_series(id);
+                }
+                _ => self.drawings.delete_selected(),
+            },
             A::Cancel => {
                 self.drawings.cancel_curr_drawing();
                 self.drawings.deselect();

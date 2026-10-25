@@ -600,6 +600,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "log",
+ "png 0.17.16",
  "rand",
  "resvg",
  "serde",

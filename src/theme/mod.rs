@@ -375,7 +375,14 @@ impl Theme {
         self
     }
 
-    /// Apply theme to chart config
+    /// Apply this theme's background, grid, axis text and candle colours to `config`.
+    ///
+    /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
+    /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
+    /// keeps for that chart, so switch a chart's theme with
+    /// [`Chart::set_theme`](crate::Chart::set_theme) or
+    /// [`Chart::set_theme_override`](crate::Chart::set_theme_override), which apply these
+    /// colours too.
     pub fn apply_to_config(
         &self,
         mut config: crate::config::ChartConfig,
@@ -603,7 +610,11 @@ mod tests {
             assert_eq!(chart.config().background_color, theme.chart.bg);
             let crosshair = chart.chart_options().crosshair.resolved(&ctx);
             assert_eq!(
-                crosshair.label_background_color,
+                crosshair.vert_label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(
+                crosshair.horz_label_background_color,
                 theme.chart.crosshair_label_bg
             );
             assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);

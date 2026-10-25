@@ -20,7 +20,8 @@ impl BarData {
     /// CSV format: ts,open,high,low,close,volume. The header row is required (any case, spaces
     /// around names ignored) and the columns must be in this order.
     /// Timestamps are in "YYYY-MM-DD HH:MM:SS" format (UTC), optionally with a fraction of a
-    /// second, such as "2024-03-15 10:00:00.250"
+    /// second, such as "2024-03-15 10:00:00.250", or a date alone, "2024-03-15", for midnight UTC
+    /// of that day, the open of its day bar. A row of `NaN` values is a whitespace bar.
     ///
     /// # Example
     /// ```no_run
@@ -57,6 +58,11 @@ impl BarData {
                 .get(0)
                 .ok_or_else(|| format!("Missing ts at line {}", line_num + 2))?;
             let naive_dt = chrono::NaiveDateTime::parse_from_str(ts, TIME_FORMAT)
+                .or_else(|e| {
+                    chrono::NaiveDate::parse_from_str(ts, "%Y-%m-%d")
+                        .map(|date| date.and_time(chrono::NaiveTime::MIN))
+                        .map_err(|_| e)
+                })
                 .map_err(|e| format!("Invalid ts '{}' at line {}: {}", ts, line_num + 2, e))?;
             let ts = DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc);
 
@@ -290,13 +296,39 @@ mod tests {
     #[test]
     fn test_json_round_trip() {
         let now = Utc::now();
-        let data = BarData::from_bars(vec![Bar::new(now, 100.0, 110.0, 95.0, 105.0, 1000.0)]);
+        let mut bar = Bar::new(now, 100.0, 110.0, 95.0, 105.0, 1000.0);
+        bar.colors = Some(Box::new(crate::model::BarColors {
+            color: Some(egui::Color32::RED),
+            ..Default::default()
+        }));
+        bar.payload = Some(std::sync::Arc::new(serde_json::json!({ "id": 7 })));
+        let data = BarData::from_bars(vec![bar.clone(), Bar::whitespace(now)]);
 
         let json = data.to_json_string().unwrap();
         let parsed = BarData::from_json_string(&json).unwrap();
 
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed.bars[0].open, 100.0);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed.bars[0], bar);
+        // JSON writes NaN as null, which reads back as NaN.
+        assert!(parsed.bars[1].is_whitespace());
+
+        // A date alone is midnight UTC, and a time alone is a whitespace bar.
+        let parsed = BarData::from_json_string(
+            r#"[{"time":"2024-03-15","open":1,"high":2,"low":0.5,"close":1.5,"volume":10},
+                {"time":"2024-03-16"}]"#,
+        )
+        .unwrap();
+        let midnight = |day| {
+            format!("2024-03-{day}T00:00:00Z")
+                .parse::<DateTime<Utc>>()
+                .unwrap()
+        };
+        assert_eq!(
+            parsed.bars[0],
+            Bar::new(midnight(15), 1.0, 2.0, 0.5, 1.5, 10.0)
+        );
+        assert_eq!(parsed.bars[1].time, midnight(16));
+        assert!(parsed.bars[1].is_whitespace());
     }
 
     #[test]
@@ -420,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn from_csv_refuses_a_missing_or_reordered_header() {
+    fn from_csv_checks_the_header_and_reads_date_only_times() {
         let refused = Err("Invalid CSV header: expected ts,open,high,low,close,volume".to_string());
         let cases = [
             (
@@ -433,7 +465,12 @@ mod tests {
             ),
             (
                 " TS , Open,HIGH,low,close,Volume\n2024-03-15 10:00:00,1,2,0.5,1.5,10\n",
-                Ok(vec![(1.0, 1.5)]),
+                Ok(vec![("2024-03-15 10:00:00 UTC".to_string(), 1.0, 1.5)]),
+            ),
+            // A date alone is midnight UTC.
+            (
+                "ts,open,high,low,close,volume\n2024-03-15,1,2,0.5,1.5,10\n",
+                Ok(vec![("2024-03-15 00:00:00 UTC".to_string(), 1.0, 1.5)]),
             ),
         ];
         let path = temp_csv("header");
@@ -443,7 +480,7 @@ mod tests {
                 .map(|data| {
                     data.bars
                         .iter()
-                        .map(|b| (b.open, b.close))
+                        .map(|b| (b.time.to_string(), b.open, b.close))
                         .collect::<Vec<_>>()
                 })
                 .map_err(|e| e.to_string());

@@ -17,6 +17,8 @@ pub enum DrawingLineStyle {
     Solid,
     Dashed,
     Dotted,
+    LargeDashed,
+    SparseDotted,
 }
 
 impl DrawingLineStyle {
@@ -25,11 +27,19 @@ impl DrawingLineStyle {
             Self::Solid => "Solid",
             Self::Dashed => "Dashed",
             Self::Dotted => "Dotted",
+            Self::LargeDashed => "Large dashed",
+            Self::SparseDotted => "Sparse dotted",
         }
     }
 
-    pub fn all() -> [Self; 3] {
-        [Self::Solid, Self::Dashed, Self::Dotted]
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Solid,
+            Self::Dashed,
+            Self::Dotted,
+            Self::LargeDashed,
+            Self::SparseDotted,
+        ]
     }
 }
 
@@ -113,6 +123,8 @@ impl DrawingProps {
                 LineStyle::Solid => DrawingLineStyle::Solid,
                 LineStyle::Dashed => DrawingLineStyle::Dashed,
                 LineStyle::Dotted => DrawingLineStyle::Dotted,
+                LineStyle::LargeDashed => DrawingLineStyle::LargeDashed,
+                LineStyle::SparseDotted => DrawingLineStyle::SparseDotted,
             },
             fill_color: drawing.fill_color32(),
             fill_enabled: drawing.fill_color.is_some(),
@@ -175,6 +187,8 @@ impl DrawingProps {
                     DrawingLineStyle::Solid => LineStyle::Solid,
                     DrawingLineStyle::Dashed => LineStyle::Dashed,
                     DrawingLineStyle::Dotted => LineStyle::Dotted,
+                    DrawingLineStyle::LargeDashed => LineStyle::LargeDashed,
+                    DrawingLineStyle::SparseDotted => LineStyle::SparseDotted,
                 };
                 drawing.extend_left = self.extend_left;
                 drawing.extend_right = self.extend_right;

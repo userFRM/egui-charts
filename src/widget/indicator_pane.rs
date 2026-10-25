@@ -262,6 +262,9 @@ pub struct PaneInteraction {
     pub visibility_response: Option<Response>,
     /// Settings button response, when the legend is shown.
     pub settings_response: Option<Response>,
+    /// Corner of the study menu, when the legend's more-actions button was clicked or its row
+    /// secondary-clicked this frame.
+    pub menu: Option<Pos2>,
 }
 
 /// A separate-pane indicator panel rendered via direct egui painting.
@@ -506,9 +509,13 @@ impl IndicatorPane {
             false,
             Some(crate::scales::PriceScaleId::Right),
             None,
+            &[],
+            false,
         )
     }
 
+    /// Shows the pane with attached `primitives`. For a bar series, `indicator` supplies only
+    /// its legend; the caller draws its bars and the series primitive pass afterwards.
     pub(super) fn show_aligned_interactive_in(
         &mut self,
         ui: &mut Ui,
@@ -519,6 +526,8 @@ impl IndicatorPane {
         collapsed: bool,
         axis: Option<crate::scales::PriceScaleId>,
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
+        primitives: &[&super::primitives::Attached],
+        bar_series: bool,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -583,10 +592,26 @@ impl IndicatorPane {
         if let Some(map) = self.price_map {
             mapping.price = map;
         }
+        let view = primitives
+            .first()
+            .map(|item| crate::chart::primitives::PrimitiveView {
+                series: item.series,
+                study: (!bar_series).then_some(indicator),
+                mapping,
+                bars,
+                visible: displayed_range.clone(),
+            });
+        let draw = |painter: &egui::Painter, pass| {
+            if let Some(view) = &view {
+                for item in primitives {
+                    item.get().draw(painter, view, pass);
+                }
+            }
+        };
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
-                if options.mode == crate::config::CrosshairMode::Magnet
+                if options.mode.snaps()
                     && chart_rect.contains(pos)
                     && let Some(value) = crate::chart::renderers::snap_to_values(
                         pos.y,
@@ -632,17 +657,62 @@ impl IndicatorPane {
                 self.draw_vertical_grid_aligned(plot_painter, chart_rect, &coords, grid_color);
             }
 
-            // Draw indicator lines with aligned coordinates
-            self.draw_indicator_lines_aligned(
-                plot_painter,
-                chart_rect,
-                indicator,
-                bars,
-                y_min,
-                y_max,
-                &coords,
-            );
+            use crate::chart::primitives::PrimitivePass;
+            draw(plot_painter, PrimitivePass::Below);
+            // Draw indicator lines with aligned coordinates, unless a renderer draws them
+            if !primitives.iter().any(|item| item.replaces) {
+                self.draw_indicator_lines_aligned(
+                    plot_painter,
+                    chart_rect,
+                    indicator,
+                    bars,
+                    y_min,
+                    y_max,
+                    &coords,
+                );
+            }
+            if !bar_series {
+                draw(plot_painter, PrimitivePass::Series);
+            }
 
+            if let (Some(view), Some(side)) = (&view, axis)
+                && indicator.scale() != crate::studies::StudyScale::None
+            {
+                let (axis_rect, axis_edge) = if side == crate::scales::PriceScaleId::Left {
+                    (
+                        Rect::from_x_y_ranges(rect.left()..=chart_rect.left(), rect.y_range()),
+                        chart_rect.left(),
+                    )
+                } else {
+                    (
+                        Rect::from_x_y_ranges(chart_rect.right()..=rect.right(), rect.y_range()),
+                        rect.right(),
+                    )
+                };
+                let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
+                for item in primitives {
+                    let primitive = item.get();
+                    primitive.draw_price_axis(&axis_painter, axis_rect, view);
+                    for label in primitive.price_axis_labels(view) {
+                        let map = mapping.price;
+                        if map.range().contains(map.transform().to_scale(label.price)) {
+                            let tag = crate::chart::rendering::axes::render_axis_value(
+                                painter,
+                                chart_rect,
+                                axis_edge,
+                                map.price_to_y(label.price),
+                                label.text,
+                                (
+                                    crate::chart::rendering::axes::tag_text_color(label.color),
+                                    label.color,
+                                ),
+                                &self.axis_tags,
+                            );
+                            self.axis_tags.push(tag);
+                        }
+                    }
+                }
+            }
             let context = crate::chart::renderers::RenderContext::new(painter, chart_rect);
             let tag = crosshair.and_then(|(pos, options)| {
                 crate::chart::renderers::render_crosshair_lines(
@@ -713,9 +783,11 @@ impl IndicatorPane {
             indicator,
             text_color,
         );
-        let (visibility_response, settings_response, close_response) = match responses {
-            Some([visibility, settings, close]) => (Some(visibility), Some(settings), Some(close)),
-            None => (None, None, None),
+        let (visibility_response, settings_response, close_response, menu) = match responses {
+            Some(([visibility, settings, close], menu)) => {
+                (Some(visibility), Some(settings), Some(close), menu)
+            }
+            None => (None, None, None, None),
         };
 
         // Return panel info for hit testing
@@ -728,6 +800,7 @@ impl IndicatorPane {
             close_response,
             visibility_response,
             settings_response,
+            menu,
         })
     }
 
@@ -737,7 +810,7 @@ impl IndicatorPane {
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
         if indicator.is_volume() {
-            return super::volume::range(indicator, visible_range);
+            return super::volume::range(indicator, visible_range, None);
         }
         if let Some((min, max)) = self.config.y_range {
             return (min, max);
@@ -770,6 +843,15 @@ impl IndicatorPane {
         }) {
             min_val = min_val.min(candle.bar.low);
             max_val = max_val.max(candle.bar.high);
+        }
+
+        for zone in indicator.zones().iter().filter(|zone| {
+            zone.bars.end > visible_range.start
+                && zone.bars.start < visible_range.end
+                && indicator.plot_style(zone.plot).visible
+        }) {
+            min_val = min_val.min(zone.bottom);
+            max_val = max_val.max(zone.top);
         }
 
         if min_val != f64::MAX
@@ -1063,6 +1145,7 @@ impl IndicatorPane {
                 &coords.to_mapping(rect, y_min, y_max),
                 y_min,
                 y_max,
+                None,
             );
             return;
         }
@@ -1274,12 +1357,12 @@ impl IndicatorPane {
         let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
         let x =
             (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
-                .min(rect.right() - if self.pane_controls { 100.0 } else { 60.0 })
+                .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
                 .max(rect.left());
         Some(
             Rect::from_min_size(
                 Pos2::new(x, rect.top() + self.legend_offset + 2.0),
-                egui::vec2(60.0, 20.0),
+                egui::vec2(80.0, 20.0),
             )
             .intersect(rect),
         )

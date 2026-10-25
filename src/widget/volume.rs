@@ -45,18 +45,37 @@ pub(super) fn overlay_rect(price: Rect, config: &crate::config::ChartConfig) -> 
     )
 }
 
-pub(super) fn range(study: &dyn Indicator, visible: &Range<usize>) -> (f64, f64) {
+/// The zero-based range of the visible values. With the main bars in `groups`, histograms are
+/// read at the highest volume of each group, as [`paint`] draws them.
+pub(super) fn range(
+    study: &dyn Indicator,
+    visible: &Range<usize>,
+    groups: Option<&super::merge::Groups>,
+) -> (f64, f64) {
+    let values = study.values();
     let max = (0..study.line_cnt())
-        .filter(|line| study.plot_style(*line).visible)
-        .flat_map(|line| {
-            visible
-                .clone()
-                .filter_map(move |bar| study.values().value(line, bar))
-        })
+        .map(|line| (line, study.plot_style(line)))
+        .filter(|(_, plot)| plot.visible)
+        .map(
+            |(line, plot)| match groups.filter(|groups| groups.factor() > 1) {
+                Some(groups) if plot.plot_type == PlotType::Histogram => groups.groups
+                    [groups.covering(visible.clone())]
+                .iter()
+                .filter_map(|group| values.value(line, group.peak))
+                .fold(0.0, f64::max),
+                _ => visible
+                    .clone()
+                    .filter_map(|bar| values.value(line, bar))
+                    .fold(0.0, f64::max),
+            },
+        )
         .fold(0.0, f64::max);
     (0.0, if max > 0.0 { max } else { 1.0 })
 }
 
+/// Paints the visible volume. With the main bars in `groups` of a factor, each histogram draws
+/// one column per group, the study's value at the group's highest volume, and each line the
+/// [`super::merge::column_points`] of the group.
 pub(super) fn paint(
     painter: &Painter,
     rect: Rect,
@@ -65,22 +84,52 @@ pub(super) fn paint(
     coords: &ChartMapping,
     min: f64,
     max: f64,
+    groups: Option<&super::merge::Groups>,
 ) {
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     let y = |value: f64| rect.bottom() - ((value - min) / (max - min)) as f32 * rect.height();
+    let groups = groups.filter(|groups| groups.factor() > 1);
+    let factor = groups.map_or(1, super::merge::Groups::factor);
+    let x = |bar| coords.idx_to_x(bar);
     for line in 0..study.line_cnt() {
         let mut plot = study.plot_style(line);
         if !plot.visible {
             continue;
         }
-        if plot.plot_type == PlotType::Histogram {
-            plot.width = coords.bar_spacing * 0.8;
+        let histogram = plot.plot_type == PlotType::Histogram;
+        if histogram {
+            plot.width = coords.bar_spacing * factor as f32 * 0.8;
         }
         let mut points = Vec::new();
-        for bar in visible.clone() {
-            if let Some(value) = study.values().value(line, bar) {
-                points.push(Pos2::new(coords.idx_to_x(bar), y(value)));
-            } else if !points.is_empty() {
+        for group in visible.start / factor..visible.end.div_ceil(factor) {
+            let start = points.len();
+            match groups {
+                None => {
+                    if let Some(value) = study.values().value(line, group) {
+                        points.push(Pos2::new(x(group), y(value)));
+                    }
+                }
+                Some(groups) if histogram => {
+                    let peak = groups.groups[group].peak;
+                    if let Some(value) = study.values().value(line, peak) {
+                        let last = ((group + 1) * factor).min(study.values().len()) - 1;
+                        let centre = (x(group * factor) + x(last)) / 2.0;
+                        points.push(Pos2::new(centre, y(value)));
+                    }
+                }
+                Some(_) => {
+                    let bars = (group * factor).max(visible.start)
+                        ..((group + 1) * factor).min(visible.end);
+                    let values =
+                        bars.filter_map(|bar| Some((bar, study.values().value(line, bar)?)));
+                    points.extend(
+                        super::merge::column_points(values)
+                            .into_iter()
+                            .map(|(bar, value)| Pos2::new(x(bar), y(value))),
+                    );
+                }
+            }
+            if points.len() == start && !points.is_empty() {
                 paint_study_plot(&painter, &points, plot, y(0.0));
                 points.clear();
             }
@@ -139,8 +188,9 @@ pub(super) fn mapping(
     rect: Rect,
     study: &dyn Indicator,
     visible: &Range<usize>,
+    groups: Option<&super::merge::Groups>,
 ) -> ChartMapping {
-    let (min, max) = range(study, visible);
+    let (min, max) = range(study, visible, groups);
     ChartMapping {
         rect,
         price: crate::scales::PriceMap::new(
