@@ -114,7 +114,9 @@ impl State {
         }
         // Exits may only reduce the remaining position, including after a manual close or reverse.
         for mut exit in self.working.clone() {
-            if exit.request.symbol != request.symbol || !self.exits.contains_key(&exit.id) {
+            if exit.request.symbol != request.symbol
+                || (!self.exits.contains_key(&exit.id) && exit.request.position_bracket.is_none())
+            {
                 continue;
             }
             let buy = exit.request.side == OrderSide::Buy;
@@ -269,6 +271,19 @@ impl Broker for PaperAccount {
             .positions
             .get(&order.symbol)
             .map_or(0.0, |p| p.quantity);
+        if order.position_bracket.is_some() {
+            if held == 0.0
+                || (order.side == OrderSide::Buy) == (held > 0.0)
+                || order.quantity > held.abs()
+            {
+                state.push(AccountEvent::Order(Order::new(
+                    id,
+                    order,
+                    OrderStatus::Rejected("A position exit must reduce the open position".into()),
+                )));
+                return;
+            }
+        }
         let after = held
             + match order.side {
                 OrderSide::Buy => order.quantity,
@@ -339,42 +354,71 @@ mod tests {
 
     #[test]
     fn bracket_exits_only_reduce_the_remaining_position() {
-        for stop_loss in [None, Some(95.0)] {
-            for closed in [1.0, 2.0, 4.0] {
-                let mut state = State::default();
-                let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
-                entry.take_profit = Some(105.0);
-                entry.stop_loss = stop_loss;
-                state.fill(
-                    Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
-                    100.0,
-                );
-                let close = OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market);
-                state.fill(
-                    Order::new(OrderId::new("close"), close, OrderStatus::Working),
-                    100.0,
-                );
-                if closed == 1.0 {
-                    assert!(
-                        state
-                            .working
-                            .iter()
-                            .all(|order| order.request.quantity == 1.0)
+        use egui_charts::model::PositionBracket;
+        for attached in [false, true] {
+            for stop_loss in [None, Some(95.0)] {
+                for closed in [1.0, 2.0, 4.0] {
+                    let mut state = State::default();
+                    let mut entry =
+                        OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
+                    if attached {
+                        entry.take_profit = Some(105.0);
+                        entry.stop_loss = stop_loss;
+                    }
+                    state.fill(
+                        Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
+                        100.0,
                     );
-                } else {
-                    assert!(state.working.is_empty());
-                }
-                state.reach("SYM", 106.0);
-                state.reach("SYM", 94.0);
-                assert_eq!(
-                    state.positions.get("SYM").map_or(0.0, |p| p.quantity),
-                    if closed == 4.0 { -2.0 } else { 0.0 }
-                );
-                if closed == 1.0 {
+                    if !attached {
+                        for (price, role) in [
+                            (Some(105.0), PositionBracket::TakeProfit),
+                            (stop_loss, PositionBracket::StopLoss),
+                        ] {
+                            if let Some(price) = price {
+                                let kind = match role {
+                                    PositionBracket::TakeProfit => OrderType::Limit(price),
+                                    PositionBracket::StopLoss => OrderType::Stop(price),
+                                };
+                                let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
+                                exit.position_bracket = Some(role);
+                                let id = state.id();
+                                state
+                                    .working
+                                    .push(Order::new(id, exit, OrderStatus::Working));
+                            }
+                        }
+                    }
+                    state.fill(
+                        Order::new(
+                            OrderId::new("close"),
+                            OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
+                            OrderStatus::Working,
+                        ),
+                        100.0,
+                    );
+                    if closed == 1.0 {
+                        assert!(!state.working.is_empty());
+                        assert!(
+                            state
+                                .working
+                                .iter()
+                                .all(|order| order.request.quantity == 1.0)
+                        );
+                    } else {
+                        assert!(state.working.is_empty());
+                    }
+                    state.reach("SYM", 106.0);
+                    state.reach("SYM", 94.0);
                     assert_eq!(
-                        state.balance, 6.0,
-                        "a marketable limit fills at the better price"
+                        state.positions.get("SYM").map_or(0.0, |p| p.quantity),
+                        if closed == 4.0 { -2.0 } else { 0.0 }
                     );
+                    if closed == 1.0 {
+                        assert_eq!(
+                            state.balance, 6.0,
+                            "a marketable limit fills at the better price"
+                        );
+                    }
                 }
             }
         }
