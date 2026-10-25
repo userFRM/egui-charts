@@ -3,7 +3,8 @@ use crate::model::Bar;
 use crate::scales::PriceMap;
 use egui::{Pos2, Rect, Stroke, Vec2};
 
-/// Renders a single candlestick with customizable body, border, and wick colors
+/// Renders a single candlestick with customizable body, border, and wick colors; the bar's own
+/// [`colors`](Bar::colors) replace them, and a whitespace bar draws nothing
 pub fn render_candle(
     context: &RenderContext,
     candle: &Bar,
@@ -11,9 +12,17 @@ pub fn render_candle(
     colors: &StyleColors,
     params: &BarRenderParams,
 ) {
+    if candle.is_whitespace() {
+        return;
+    }
     let is_bullish = candle.is_bullish();
-    let body_color = colors.bar_color(is_bullish);
-    let wick_color = colors.wick_color(is_bullish);
+    let own = candle.colors.as_deref();
+    let body_color = own
+        .and_then(|own| own.color)
+        .unwrap_or_else(|| colors.bar_color(is_bullish));
+    let wick_color = own
+        .and_then(|own| own.wick)
+        .unwrap_or_else(|| colors.wick_color(is_bullish));
 
     // Convert prices to screen coords
     let high_y = price_scale.price_to_y(candle.high);
@@ -42,7 +51,9 @@ pub fn render_candle(
 
     // Draw border if configured
     if colors.has_border() {
-        let border_color = colors.border_color(is_bullish);
+        let border_color = own
+            .and_then(|own| own.border)
+            .unwrap_or_else(|| colors.border_color(is_bullish));
         context.painter.rect_stroke(
             body_rect,
             0.0,

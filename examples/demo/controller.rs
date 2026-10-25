@@ -23,6 +23,8 @@ mod export;
 mod marks;
 #[path = "replay.rs"]
 mod replay;
+#[path = "storage.rs"]
+mod storage;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -31,8 +33,8 @@ use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, Templa
 mod feeds;
 #[path = "live.rs"]
 mod live;
-#[path = "paper.rs"]
-mod paper;
+#[path = "market.rs"]
+mod market;
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -106,6 +108,8 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
 const MAIN_SERIES_ID: usize = usize::MAX;
+/// The sounds the settings offer for fills; the demo shows the chosen one as a notification.
+const DEMO_SOUNDS: [&str; 3] = ["Chime", "Bell", "Beep"];
 const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
 fn indicator_tree_id(id: SeriesId) -> usize {
@@ -118,6 +122,35 @@ fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
     } else {
         id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
     }
+}
+
+/// How much of the window the account panel takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccountPanelSize {
+    Closed,
+    Normal,
+    Minimized,
+    Maximized,
+}
+
+/// Example tiles beside the paper account in the broker picker. They show what a host's tiles
+/// carry; connecting to them only reports that the demo has no broker behind them.
+fn example_brokers() -> Vec<egui_charts::ui::trading::BrokerTile> {
+    use egui_charts::ui::trading::BrokerTile;
+    [
+        ("example-stocks", "Example Stocks", 4.8, true),
+        ("example-futures", "Example Futures", 4.6, false),
+        ("example-crypto", "Example Crypto", 4.5, false),
+    ]
+    .into_iter()
+    .map(|(id, name, rating, featured)| {
+        let mut tile = BrokerTile::new(id, name);
+        tile.rating = Some(rating);
+        tile.featured = featured;
+        tile.description = format!("{name} is an example tile: a host lists its brokers here.");
+        tile
+    })
+    .collect()
 }
 
 /// Which right-hand side panel is open, if any.
@@ -274,7 +307,10 @@ pub struct DemoApp {
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
-    template_storage: Arc<templates::TemplateStorage>,
+    storage: Arc<storage::DemoStorage>,
+    settings: egui_charts::services::SettingsStore,
+    /// Changes of the chart arrangement, which autosave counts with the charts' edits.
+    grid_edits: u64,
     study_templates: TemplateDialog<Vec<StudyTemplate>>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
@@ -299,11 +335,17 @@ pub struct DemoApp {
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
-    // Session-only paper account, traded through the library's order ticket.
+    // Session-only paper account, connected from the broker picker and traded through the
+    // library's order ticket and account panel.
     trading: egui_charts::ui::trading::Trading,
-    paper: Arc<paper::PaperAccount>,
+    paper: Arc<egui_charts::services::PaperAccount>,
+    broker_picker: egui_charts::ui::trading::BrokerPicker,
+    account_panel: AccountPanelSize,
+    // The account settings ask whether to reset the paper account.
+    paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
+    quotes: Arc<live::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     // Symbol search is open for the watchlist's add button: the pick joins the list.
@@ -341,12 +383,11 @@ pub struct DemoApp {
     )>,
     // Reopening the dialog must not adopt an earlier readback result.
     export_generation: u64,
-    export_renderer: Option<eframe::egui_wgpu::RenderState>,
+    export_renderer: Option<Arc<eframe::glow::Context>>,
     image_jobs: usize,
     // GPU readback sends each image here for delivery on the next frame.
     screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
-    saved_drawings: std::collections::HashMap<String, String>,
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
@@ -397,6 +438,7 @@ impl DemoApp {
         options.time_scale.time_visible = true;
         options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
+        let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
             .with_symbol(symbol)
@@ -412,6 +454,8 @@ impl DemoApp {
         chart.config_mut().skip_background = true;
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
+        let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
+        chart.set_storage(storage.clone());
 
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
@@ -489,16 +533,18 @@ impl DemoApp {
             widget_bar,
             indicator_dialog: IndicatorDialog::new(),
             indicator_settings: IndicatorSettingsDialog::default(),
-            settings_dialog: SettingsDialog::new(),
+            settings_dialog: {
+                let mut dialog = SettingsDialog::new();
+                dialog.execution_sounds = DEMO_SOUNDS.map(str::to_owned).to_vec();
+                dialog
+            },
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparisons: Vec::new(),
-            template_storage: Arc::new(templates::TemplateStorage(std::sync::Mutex::new(
-                cc.storage
-                    .and_then(|storage| eframe::get_value(storage, "templates"))
-                    .unwrap_or_default(),
-            ))),
+            settings: egui_charts::services::SettingsStore::new(storage.clone()),
+            storage,
+            grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
             drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
@@ -520,7 +566,12 @@ impl DemoApp {
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
             trading: Default::default(),
-            paper: Arc::default(),
+            paper: Arc::new(
+                egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
+            ),
+            broker_picker: egui_charts::ui::trading::BrokerPicker::new(example_brokers()),
+            account_panel: AccountPanelSize::Normal,
+            paper_reset: false,
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
@@ -532,6 +583,7 @@ impl DemoApp {
                         )]
                     }),
             ),
+            quotes,
             watchlist_import: None,
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
@@ -583,13 +635,9 @@ impl DemoApp {
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
             export_generation: 0,
-            export_renderer: cc.wgpu_render_state.clone(),
+            export_renderer: cc.gl.clone(),
             image_jobs: 0,
             screenshots: mpsc::channel(),
-            saved_drawings: cc
-                .storage
-                .and_then(|storage| eframe::get_value(storage, "drawings"))
-                .unwrap_or_default(),
             toasts: Toasts::new(),
             demo_level: None,
             api_samples: false,
@@ -598,19 +646,21 @@ impl DemoApp {
             .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.study_templates
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.drawing_templates
             .templates
-            .set_storage(app.template_storage.clone());
+            .set_storage(app.storage.clone());
         app.alerts.set_service(app.alert_host.clone());
-        app.trading.set_service(app.paper.clone());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
+        app.watchlist.set_service(app.quotes.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
+        app.symbol_details.set_storage(app.storage.clone());
+        app.top_toolbar.layout_menu.set_storage(app.storage.clone());
         app.highlights.set_feed(app.live.clone());
         app.news.set_feed(app.live.clone());
         app.calendar.set_feed(app.live.clone());
@@ -623,50 +673,18 @@ impl DemoApp {
             .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
         app.calendar
             .set_countries(feeds::COUNTRIES.iter().map(|code| code.to_string()));
-        app.symbol_details.set_storage(app.template_storage.clone());
         app.apply_session();
-        app.restore_drawings();
         app.chart.drawings_mut().tool_defaults = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "drawing_defaults"))
             .unwrap_or_default();
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
+        // The demo's storage answers at once, so the settings apply before the first frame.
+        let current = app.user_settings();
+        if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+            app.apply_user_settings(&cc.egui_ctx, settings);
+        }
         app
-    }
-
-    fn remember_drawings(&mut self) {
-        match self
-            .chart
-            .save_drawings()
-            .and_then(|storage| storage.to_json())
-        {
-            Ok(json) => {
-                self.saved_drawings
-                    .insert(self.chart.symbol().to_owned(), json);
-            }
-            Err(error) => {
-                self.toasts
-                    .error(format!("Could not save drawings: {error}"));
-            }
-        }
-    }
-
-    fn restore_drawings(&mut self) {
-        let Some(json) = self.saved_drawings.get(self.chart.symbol()) else {
-            return;
-        };
-        match self.chart.load_drawings(json) {
-            Ok(skipped) => {
-                if !skipped.is_empty() {
-                    self.toasts
-                        .warning(format!("Skipped {} unreadable drawings", skipped.len()));
-                }
-            }
-            Err(error) => {
-                self.toasts
-                    .error(format!("Could not load drawings: {error}"));
-            }
-        }
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -715,7 +733,6 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
-        self.remember_drawings();
         self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
         self.live.set_symbol(spec.symbol);
@@ -724,7 +741,6 @@ impl DemoApp {
         self.timeframe_toolbar.state.session_menu_open = false;
         self.state.symbol = spec.symbol.to_string();
         self.chart.set_symbol(spec.symbol);
-        self.restore_drawings();
         for control in [
             egui_charts::ui::Control::Session,
             egui_charts::ui::Control::DividendAdjustment,
@@ -846,9 +862,13 @@ impl DemoApp {
     // --- selection / context helpers --------------------------------------
 
     fn open_chart_settings_dialog(&mut self) {
-        let alerts = self.settings_state.alerts.clone();
+        let (alerts, trading) = (
+            self.settings_state.alerts.clone(),
+            self.trading.display.clone(),
+        );
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
+        self.settings_state.trading = trading;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -984,6 +1004,7 @@ impl DemoApp {
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
         self.chart.begin_user_action();
         self.settings_state = state.clone();
+        self.trading.display = state.trading.clone();
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
     }
@@ -1095,22 +1116,17 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.remember_drawings();
-        eframe::set_value(storage, "drawings", &self.saved_drawings);
+        let current = self.user_settings();
+        self.settings.flush(&current);
         eframe::set_value(
             storage,
             "drawing_defaults",
             &self.chart.drawings().tool_defaults,
         );
-        eframe::set_value(storage, "dark_theme", &self.theme.dark);
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
-        eframe::set_value(
-            storage,
-            "templates",
-            &*self.template_storage.0.lock().unwrap(),
-        );
+        self.storage.persist(storage);
         eframe::set_value(
             storage,
             "interval_preferences",
@@ -1118,7 +1134,7 @@ impl eframe::App for DemoApp {
         );
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
@@ -1150,6 +1166,18 @@ impl eframe::App for DemoApp {
             self.notifications.unread() as u32,
         );
         self.trading.poll(&ctx, &mut self.toasts);
+        // The demo has no audio: the sound chosen for fills shows as a notification.
+        if let Some(sound) = self.trading.take_execution_sound() {
+            self.notify(format!(
+                "Sound: {}",
+                if sound.is_empty() {
+                    DEMO_SOUNDS[0]
+                } else {
+                    &sound
+                }
+            ));
+        }
+        self.poll_storage(&ctx);
         // The watchlist opens beside the chart by default, but a compact window starts with the
         // chart alone.
         if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {
@@ -1164,7 +1192,7 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
-        self.feed_market_panels();
+        self.feed_market_panels(&ctx);
 
         for (_, _, feed) in &self.comparisons {
             feed.set_paused(self.live.paused() || self.replay.is_some());
@@ -1210,7 +1238,15 @@ impl eframe::App for DemoApp {
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
+        self.trading.show_ticket(ui, &self.chart);
+        let narrow_account = ui.available_width() < 700.0 && self.trading.is_connected();
+        if narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_side_panel(ui);
+        if !narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -1220,6 +1256,7 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(&ctx);
+        self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
         if self
@@ -1393,7 +1430,13 @@ impl DemoApp {
                 return;
             }
             TopToolbarAction::ToggleTrading => {
-                self.trading.toggle_ticket(self.chart.symbol().to_owned());
+                if !self.trading.is_connected() {
+                    self.broker_picker.open();
+                } else if self.account_panel == AccountPanelSize::Closed {
+                    self.account_panel = AccountPanelSize::Normal;
+                } else {
+                    self.account_panel = AccountPanelSize::Closed;
+                }
                 return;
             }
             TopToolbarAction::Layout(action) => {
@@ -1745,12 +1788,14 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    egui::Panel::bottom("symbol_details")
-                        .resizable(true)
-                        .default_size(ui.available_height() / 2.0)
-                        .min_size(120.0)
-                        .frame(egui::Frame::NONE)
-                        .show(ui, |ui| self.symbol_details.show(ui));
+                    if ui.available_height() >= 400.0 {
+                        egui::Panel::bottom("symbol_details")
+                            .resizable(true)
+                            .default_size(ui.available_height() / 2.0)
+                            .min_size(120.0)
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| self.symbol_details.show(ui));
+                    }
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
@@ -1921,32 +1966,25 @@ impl DemoApp {
         }
     }
 
-    /// Feeds the watchlist its synthetic quotes, the chart symbol's from the live feed, the
-    /// details panel the chart symbol with its regular and extended-hours quotes and volume, and
-    /// time and sales the executions of the live feed. The demo has no audio: a filter's sound
-    /// shows as a notification.
-    fn feed_market_panels(&mut self) {
-        let now = chrono::Utc::now();
+    /// Publishes the quotes the watchlist subscribed to through the demo's quote service, and
+    /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
+    /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows
+    /// as a notification.
+    fn feed_market_panels(&mut self, ctx: &egui::Context) {
         let chart_symbol = self.chart.symbol().to_owned();
-        let chart_quote = live::watchlist_quote(&chart_symbol, now).map(|mut quote| {
-            if let Some((last, prev_close)) = self.live.day_change() {
-                quote.last = last;
-                quote.prev_close = prev_close;
-            }
-            quote
-        });
         let symbols: Vec<String> = self.watchlist.symbols().map(str::to_owned).collect();
+        let mut selected = chart_symbol.clone();
         for symbol in symbols {
-            let quote = if symbol.eq_ignore_ascii_case(&chart_symbol) {
-                self.watchlist.set_selected(&symbol);
-                chart_quote
-            } else {
-                live::watchlist_quote(&symbol, now)
-            };
-            if let Some(quote) = quote {
-                self.watchlist.set_quote(&symbol, quote);
+            if symbol.eq_ignore_ascii_case(&chart_symbol) {
+                selected.clone_from(&symbol);
+            }
+            if let Some(decimals) = live::price_decimals(&symbol) {
+                self.watchlist.set_price_decimals(&symbol, decimals);
             }
         }
+        self.watchlist.set_selected(&selected);
+        self.quotes.publish(chrono::Utc::now());
+        self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
             &self
                 .chart
@@ -1954,16 +1992,15 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
-        if let Some(mut quote) = chart_quote {
-            let (mut time, mut extended) = (now, None);
-            if let Some((regular, last, prev_close, after)) = self.live.regular_quote() {
-                (time, quote.last, quote.prev_close, extended) = (regular, last, prev_close, after);
-            }
-            self.symbol_details.set_quote(quote, time);
-            self.symbol_details.set_extended_hours(extended);
+        let quoted = (self.watchlist.symbols())
+            .find(|symbol| symbol.eq_ignore_ascii_case(&chart_symbol))
+            .unwrap_or(&chart_symbol);
+        if let Some(quote) = self.watchlist.quote(quoted).cloned() {
+            self.symbol_details.set_quote(quote.clone());
+            self.trading.set_quote(&chart_symbol, quote);
         }
-        let (volume, average) = self.live.daily_volume();
-        self.symbol_details.set_volume(volume, average);
+        self.symbol_details
+            .set_average_volume(self.live.daily_volume().1);
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
@@ -2085,6 +2122,85 @@ impl DemoApp {
                 });
             }
             AlertPanelAction::None => {}
+        }
+    }
+
+    /// The account panel of the connected broker, under the chart and its interval bar.
+    fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
+
+        match self.broker_picker.show(ui.ctx()) {
+            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
+                self.trading.set_service(self.paper.clone());
+                self.trading.account_panel.broker = "Paper Trading".to_owned();
+                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+                self.account_panel = AccountPanelSize::Normal;
+            }
+            Some(BrokerPickerAction::Connect(_)) => {
+                self.notify("Example brokers have no account behind them in this demo");
+            }
+            Some(BrokerPickerAction::NeedBroker) => {
+                self.notify("Host action: show how to open a broker account");
+            }
+            _ => {}
+        }
+        if self.paper_reset {
+            let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
+                "paper_reset",
+                "Reset paper account",
+                "Close every position, cancel every order and return the balance to 100,000 USD?",
+            )
+            .confirm_text("Reset")
+            .show(ui.ctx(), &mut self.paper_reset);
+            if result.is_confirmed() {
+                self.paper.reset();
+                self.trading.set_service(self.paper.clone());
+                self.paper_reset = false;
+            }
+        }
+        if !self.trading.is_connected() || self.account_panel == AccountPanelSize::Closed {
+            return;
+        }
+        let height = match self.account_panel {
+            AccountPanelSize::Minimized => 42.0,
+            AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
+            _ => 320.0,
+        };
+        let height = height.min((ui.available_height() - 96.0).max(42.0));
+        let symbol = self.chart.symbol().to_owned();
+        let trading = &mut self.trading;
+        let action = egui::Panel::bottom("account_panel")
+            .exact_size(height)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |ui| trading.show_account_panel(ui, &symbol))
+            .inner;
+        match action {
+            Some(AccountPanelAction::SelectSymbol(symbol)) => self.open_catalog_symbol(&symbol),
+            Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
+            Some(AccountPanelAction::Settings) => self.paper_reset = true,
+            Some(AccountPanelAction::Minimize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Minimized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Minimized
+                };
+            }
+            Some(AccountPanelAction::Maximize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Maximized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Maximized
+                };
+            }
+            Some(AccountPanelAction::Export { name, csv }) => {
+                let file = format!("{}.csv", name.to_lowercase().replace(' ', "_"));
+                self.save_text(&file, &csv);
+            }
+            _ => {}
         }
     }
 
@@ -2271,32 +2387,39 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                // Trading follows the live stream, so it rests while replay rewinds the chart.
-                if let Some(side) = self.chart.take_quote_action().filter(|_| self.replay.is_none()) {
-                    let side = match side {
-                        egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
-                        egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
-                    };
-                    self.trading.trade(self.chart.symbol().to_owned(), side);
-                }
-                if self.replay.is_none() {
-                    if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
-                        self.paper.set_price(self.chart.symbol(), bar.close);
+                if let Some(bar) = self.chart.bars(SeriesId::MAIN).iter().rfind(|bar| !bar.is_whitespace()) {
+                    self.paper.set_price(self.chart.symbol(), bar.close);
+                    if self.replay.is_some() {
+                        // Replay has no historical spread; its close prices both broker and ticket.
+                        self.trading.set_quote(
+                            self.chart.symbol(),
+                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                        );
                     }
-                    self.trading.show(ui, &mut self.chart);
                 }
+                if let Some(side) = self.chart.take_quote_action() {
+                    if !self.trading.is_connected() {
+                        self.broker_picker.open();
+                    } else if side == egui_charts::widget::QuoteSide::Ticket {
+                        self.trading.open_ticket(egui_charts::model::OrderRequest::new(
+                            self.chart.symbol(), egui_charts::model::OrderSide::Buy,
+                            self.trading.quantity, egui_charts::model::OrderType::Market));
+                    } else {
+                        let side = match side {
+                            egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
+                            egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                            egui_charts::widget::QuoteSide::Ticket => unreachable!(),
+                        };
+                        self.trading.trade(self.chart.symbol().to_owned(), side);
+                    }
+                }
+                self.trading.show(ui, &mut self.chart);
             });
         self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
-        // Right-click context actions resolve after the chart is shown. Order entries rest with
-        // the rest of trading during replay.
-        self.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
-        self.top_toolbar
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
@@ -2548,6 +2671,7 @@ impl DemoApp {
                     }
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
+                    A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
                     A::CreateAlert => {
                         let mapping = self.chart.get_chart_mapping();
                         if let Some(pos) = ctx
@@ -2666,9 +2790,6 @@ impl DemoApp {
             }
         }
         if self.image_jobs > 0 {
-            if let Some(renderer) = &self.export_renderer {
-                let _ = renderer.device.poll(eframe::wgpu::PollType::Poll);
-            }
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         while let Ok((image, target, generation)) = self.screenshots.1.try_recv() {
@@ -2804,6 +2925,89 @@ mod tests {
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
+    fn replay_prices_fill_the_connected_paper_account() {
+        use egui_charts::model::OrderSide;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new(&cc);
+        let symbol = app.chart.symbol().to_owned();
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = [100.0, 80.0, 110.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, price)| {
+                egui_charts::model::Bar::new(
+                    start + chrono::Duration::minutes(i as i64),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
+        let paper = app.paper.clone();
+        app.paper.set_price(&symbol, 999.0);
+        app.trading.set_service(app.paper.clone());
+        app.start_replay();
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.display.instant_orders = true;
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == format!("Filled: Buy 1 {symbol} at 100.00"))
+        );
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        app.trading.trade(symbol.clone(), OrderSide::Sell);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == format!("Filled: Sell 1 {symbol} at 110.00"))
+        );
+        assert!(Arc::ptr_eq(&paper, &app.paper));
+
+        // A live quote must not price the ticket while the broker follows replay closes.
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            app.trading.set_quote(
+                &symbol,
+                egui_charts::model::Quote::new(999.0, 990.0, chrono::Utc::now())
+                    .with_bid_ask(998.0, 1_000.0),
+            );
+            app.trading
+                .open_ticket(egui_charts::model::OrderRequest::new(
+                    &symbol,
+                    side,
+                    1.0,
+                    egui_charts::model::OrderType::Market,
+                ));
+            let mut value = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    app.trading.show_ticket(ui, &app.chart);
+                    app.show_chart(ui, app.theme.chart.bg);
+                });
+                let has_text = |label| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == label)
+                    })
+                };
+                value |= has_text("Trade value") && has_text("110.00");
+                output.drop_without_applying_deltas();
+            }
+            assert!(value, "{side:?} ticket must use the replay close");
+        }
+    }
+
+    #[test]
     fn research_toolbar_reports_the_last_chart_click() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -2907,11 +3111,20 @@ mod tests {
         props.line_width = 4.0;
         props.save_as_default = true;
         props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
+        // The chart writes its edited drawings to the demo's storage as it shows them.
+        let frame = |chart: &mut Chart| {
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut app.chart);
         let mut storage = AppStorage::default();
         eframe::App::save(&mut app, &mut storage);
-        let mut cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
+        frame(&mut restored.chart);
         assert_eq!(restored.chart.drawings().drawings.len(), 1);
         restored.chart.set_data(SeriesId::MAIN, original_bars);
         assert_eq!(restored.chart.drawings().drawings[0].chart_points, expected);
@@ -3660,28 +3873,50 @@ mod tests {
     }
 
     #[test]
-    fn save_keeps_a_session_layout_copy_instead_of_exporting() {
+    fn saved_layouts_open_again_and_after_a_restart() {
+        use eframe::App;
+        use egui_charts::model::ChartType;
         use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.chart.config_mut().candle_width = 0.42;
+        ctx.run_ui(Default::default(), |ui| {
+            app.chart.show(ui);
+        })
+        .drop_without_applying_deltas();
+        app.user_action(|app| {
+            app.chart
+                .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+        });
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         assert!(!app.export_dialog.is_open());
-        assert_eq!(app.layout_tabs.len(), 2);
-        app.chart.config_mut().candle_width = 0.8;
+        app.poll_storage(&ctx);
+        assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
+        assert_eq!(app.layout_tabs.len(), 1);
+        // Opening the current layout again returns to it as saved.
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
-        assert_eq!(app.chart.config().candle_width, 0.42);
-        let original_type = app.chart.chart_type();
-        app.handle_top_toolbar(
-            &ctx,
-            TopToolbarAction::ChartStyleSelected(egui_charts::model::ChartType::Line),
-        );
+        app.poll_storage(&ctx);
+        let saved = |app: &DemoApp| {
+            assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert!(app.chart.indicators().any(|(_, study)| {
+                study.inputs().first().map(|input| &input.value)
+                    == Some(&egui_charts::studies::InputValue::Length(7))
+            }));
+        };
+        saved(&app);
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        drop(app);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new(&cc);
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         assert!(app.chart.can_undo());
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
-        assert_eq!(app.chart.chart_type(), original_type);
-        app.execute_search_command(&ctx, "export");
-        assert!(app.export_dialog.is_open());
-        assert_eq!(app.layout_tabs.len(), 2);
+        assert_eq!(app.chart.chart_type(), ChartType::Line);
     }
 
     #[test]
@@ -3854,7 +4089,12 @@ mod tests {
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
         state.margins.right_bars = 17;
-        apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
+        state.trading.show_poss = false;
+        state.trading.show_orders = false;
+        state.trading.show_executions = false;
+        state.trading.show_execution_labels = true;
+        app.apply_chart_settings(state.clone());
+        assert_eq!(app.trading.display, state.trading);
         assert_eq!(
             app.chart.config().background_style,
             BackgroundStyle::VerticalGradient {
@@ -3890,6 +4130,8 @@ mod tests {
         app.open_chart_settings_dialog();
         assert_eq!(app.settings_state.alerts, state.alerts);
         assert_eq!(app.settings_dialog.settings().alerts, state.alerts);
+        assert_eq!(app.settings_state.trading, state.trading);
+        assert_eq!(app.settings_dialog.settings().trading, state.trading);
         assert_eq!(app.settings_state.grid_lines, state.grid_lines);
         assert_eq!(app.settings_state.crosshair, state.crosshair);
         assert_eq!(app.settings_state.precision, state.precision);
@@ -4202,7 +4444,7 @@ mod tests {
                         })
                         .collect(),
                 );
-                *app.chart.config_mut() = theme.apply_to_config(app.chart.config().clone());
+                app.chart.set_theme(&ctx, &theme);
                 app.chart.set_instrument(Some(
                     egui_charts::model::Instrument::new("SAMPLE").with_price_decimals(2),
                 ));
@@ -4974,7 +5216,11 @@ mod tests {
                 egui_charts::scales::PriceScaleMode::Percentage;
             app.chart.price_scale_mut().set_range(-5.0, 5.0);
             *app.chart.config_mut() = config.clone();
+            // The ticket menu changes the live trading options before settings are reopened.
+            app.trading.display.instant_orders = true;
             app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings);
+            assert!(app.settings_state.trading.instant_orders);
+            assert!(app.settings_dialog.settings().trading.instant_orders);
             let state = app.settings_state.clone();
             apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
             let applied = app.chart.config();
@@ -5137,9 +5383,7 @@ mod tests {
                     let ctx = egui::Context::default();
                     let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                     app.theme = theme.clone();
-                    egui_charts::theme::apply_to_egui(&ctx, &theme);
-                    let config = app.chart.config_mut();
-                    *config = theme.apply_to_config(config.clone());
+                    app.chart.set_theme(&ctx, &theme);
                     app.switch_timeframe(interval);
                     app.timeframe_toolbar.set_session(SessionType::ETH);
                     app.apply_session();

@@ -199,6 +199,8 @@ mod tests {
                 low: 99.0,
                 close: 101.5, // Bullish, close near high
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: ts,
@@ -207,6 +209,8 @@ mod tests {
                 low: 100.0,
                 close: 100.5, // Bearish, close near low
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: ts,
@@ -215,6 +219,8 @@ mod tests {
                 low: 99.0,
                 close: 101.8, // Bullish
                 volume: 1500.0,
+                colors: None,
+                payload: None,
             },
         ]
     }

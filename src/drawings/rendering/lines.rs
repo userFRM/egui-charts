@@ -285,7 +285,7 @@ impl Drawing {
             );
 
             let info_text = self
-                .measurement_label(view.bars, view.instrument)
+                .measurement_label(view.bars, view.instrument, view.time_axis)
                 .unwrap_or_default();
             let info_font = egui::FontId::proportional(typography::XS);
             let muted_color =

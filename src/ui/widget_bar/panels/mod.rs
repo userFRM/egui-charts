@@ -37,7 +37,7 @@ mod tests {
         Datafeed, FeedError, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, Reply,
         ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow,
     };
-    use crate::model::{Tick, TradeSide};
+    use crate::model::{Quote, Tick, TradeSide};
     use crate::theme::{Theme, apply_to_egui};
 
     struct Feed;
@@ -72,22 +72,11 @@ mod tests {
                         "A long watchlist name that must leave room for its menu",
                         &format!("{symbol},A"),
                     )]);
-                    watchlist.set_quote(
-                        symbol,
-                        WatchlistQuote {
-                            last: 123456.789,
-                            prev_close: 100000.0,
-                            price_decimals: Some(3),
-                        },
-                    );
-                    watchlist.set_quote(
-                        "A",
-                        WatchlistQuote {
-                            last: 10.0,
-                            prev_close: 10.0,
-                            price_decimals: Some(2),
-                        },
-                    );
+                    let time = Default::default();
+                    watchlist.set_quote(symbol, Quote::new(123456.789, 100000.0, time));
+                    watchlist.set_price_decimals(symbol, 3);
+                    watchlist.set_quote("A", Quote::new(10.0, 10.0, time));
+                    watchlist.set_price_decimals("A", 2);
                     let mut trades = TimeAndSalesPanel::default();
                     trades.config.price_decimals = Some(2);
                     trades.push(Tick::new(

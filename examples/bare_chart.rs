@@ -4,6 +4,9 @@
 //! cargo run --release --example bare_chart --no-default-features --features widget
 //! ```
 //!
+//! On `wasm32` it fills a canvas it adds to the page, in the dark theme, whose Roboto is the one
+//! font of its web build; `scripts/web-size.sh` builds it for the web.
+//!
 //! The prices are generated sample data. `benches/bare_chart.rs` runs this example's
 //! frame headlessly to measure its cost, and `benches/frame_time.rs` draws its sample bars.
 
@@ -11,6 +14,7 @@ use chrono::{TimeZone, Utc};
 use egui_charts::model::{Bar, BarData};
 use egui_charts::widget::{Chart, SeriesId};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let mut app = BareChart::new();
     eframe::run_ui_native(
@@ -21,6 +25,54 @@ fn main() -> eframe::Result {
             ui.ctx().request_repaint(); // a live chart: one sample tick per frame
         },
     )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use eframe::wasm_bindgen::JsCast as _;
+
+    struct WebApp(BareChart);
+    impl eframe::App for WebApp {
+        fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+            self.0.ui(ui);
+            ui.ctx().request_repaint(); // a live chart: one sample tick per frame
+        }
+    }
+
+    let document = eframe::web_sys::window()
+        .and_then(|window| window.document())
+        .expect("a document");
+    let canvas: eframe::web_sys::HtmlCanvasElement = document
+        .create_element("canvas")
+        .expect("a canvas element")
+        .unchecked_into();
+    canvas
+        .set_attribute(
+            "style",
+            "position: fixed; inset: 0; width: 100%; height: 100%",
+        )
+        .expect("a canvas style");
+    document
+        .body()
+        .expect("a body")
+        .append_child(&canvas)
+        .expect("the canvas on the page");
+    wasm_bindgen_futures::spawn_local(async move {
+        eframe::WebRunner::new()
+            .start(
+                canvas,
+                Default::default(),
+                Box::new(|cc| {
+                    egui_charts::theme::apply_to_egui(
+                        &cc.egui_ctx,
+                        &egui_charts::theme::Theme::dark(),
+                    );
+                    Ok(Box::new(WebApp(BareChart::new())))
+                }),
+            )
+            .await
+            .expect("the chart starts");
+    });
 }
 
 pub(crate) struct BareChart {

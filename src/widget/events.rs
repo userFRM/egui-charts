@@ -25,9 +25,12 @@ pub struct ChartPointer {
     /// Pane counted from the top among the panes drawn, the price pane with its volume band
     /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
-    /// Main series bar, or price-based element, at `index`; `None` in whitespace.
+    /// Main series bar, or price-based element, at `index`, with its colours and payload: a
+    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` in the whitespace before the
+    /// first bar or after the last.
     pub bar: Option<Bar>,
-    /// Close of the bar or element before `index`, from which legends measure the change.
+    /// Close of the last bar or element with a value before `index`, from which legends measure
+    /// the change.
     pub previous_close: Option<f64>,
     /// Each visible series added with `add_series` or `add_comparison` that has a bar at `time`.
     pub series_bars: Vec<(SeriesId, Bar)>,
@@ -284,8 +287,8 @@ impl Chart {
             pane,
             bar: bar_at.map(|index| shown[index].clone()),
             previous_close: bar_at
-                .and_then(|index| index.checked_sub(1))
-                .map(|index| shown[index].close),
+                .and_then(|index| crate::model::last_with_value(&shown[..index]))
+                .map(|bar| bar.close),
             series_bars: self
                 .price_series
                 .iter()
@@ -401,7 +404,11 @@ mod tests {
         chart.set_symbol("A");
         chart.set_timeframe(crate::model::Timeframe::Day1);
         chart.set_timeframe(crate::model::Timeframe::Day1);
-        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+        // A payload comes back with its bar, and a whitespace bar keeps its slot and is skipped
+        // for the previous close.
+        bars[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": 70 })));
+        bars[69] = Bar::whitespace(bars[69].time);
         chart.set_data(SeriesId::MAIN, bars.clone());
         chart.update(SeriesId::MAIN, bars[99].clone());
         assert_eq!(
@@ -495,7 +502,7 @@ mod tests {
             // Each candle spans 100..200, so the pointer is over the main series.
             assert_eq!((pointer.index, pointer.pos, pointer.pane), (70, pos, 0));
             assert_eq!(pointer.bar.as_ref(), Some(&bars[70]));
-            assert_eq!(pointer.previous_close, Some(bars[69].close));
+            assert_eq!(pointer.previous_close, Some(bars[68].close));
             assert!(pointer.series_bars.is_empty() && pointer.studies.is_empty());
             assert_eq!(
                 pointer.target,

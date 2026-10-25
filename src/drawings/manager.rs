@@ -17,8 +17,9 @@ use crate::drawings::services::{
     SnapService, ZOrderService, in_z_order,
 };
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Pos2, Rect};
-use std::collections::HashSet;
+use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::TSTransform};
+use egui::{Pos2, Rect, Shape};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// A change to the stored drawings, queued in [`DrawingManager::pending_sync`].
@@ -112,7 +113,83 @@ impl Default for DrawingManagerOptions {
 struct PaintedDrawing {
     id: usize,
     points: Vec<Pos2>,
-    shapes: Vec<egui::epaint::ClippedShape>,
+    shapes: Vec<ClippedShape>,
+    /// The tessellation of `shapes`, made once a second frame paints the same shapes.
+    tessellated: Option<Tessellated>,
+}
+
+/// Shapes tessellated at a scale and with options, as what to paint in place of each shape: a
+/// run of geometry becomes one mesh in place of its first shape and nothing in place of the rest,
+/// and text, circles and textured shapes, which point into texture atlases that can change, stay
+/// as they are (`None`).
+struct Tessellated {
+    pixels_per_point: f32,
+    options: TessellationOptions,
+    shapes: Vec<Option<Shape>>,
+}
+
+impl Tessellated {
+    fn new(shapes: &[ClippedShape], pixels_per_point: f32, options: TessellationOptions) -> Self {
+        // Neither the font atlas size nor its prepared discs are used without text and circles.
+        let mut tessellator = Tessellator::new(pixels_per_point, options, [1, 1], Vec::new());
+        let mut out: Vec<Option<Shape>> = vec![None; shapes.len()];
+        let mut run: Option<(usize, Mesh)> = None;
+        for (i, clipped) in shapes.iter().enumerate() {
+            let plain = is_plain(&clipped.shape)
+                && clipped.transform_after_tessellation == TSTransform::IDENTITY;
+            if (!plain
+                || run
+                    .as_ref()
+                    .is_some_and(|(first, _)| shapes[*first].clip_rect != clipped.clip_rect))
+                && let Some((first, mesh)) = run.take()
+            {
+                out[first] = Some(Shape::mesh(mesh));
+            }
+            if !plain {
+                continue;
+            }
+            let (_, mesh) = run.get_or_insert_with(|| (i, Mesh::default()));
+            tessellator.set_clip_rect(clipped.clip_rect);
+            tessellator.tessellate_shape(clipped.shape.clone(), mesh);
+            out[i] = Some(Shape::Noop);
+        }
+        if let Some((first, mesh)) = run {
+            out[first] = Some(Shape::mesh(mesh));
+        }
+        Self {
+            pixels_per_point,
+            options,
+            shapes: out,
+        }
+    }
+}
+
+/// Whether `a` tessellates as `b` does: the same plain shapes clipped alike, and the other shapes,
+/// which paint as they are, in the same places.
+fn same_geometry(a: &[ClippedShape], b: &[ClippedShape]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| match (is_plain(&a.shape), is_plain(&b.shape)) {
+                (true, true) => a == b,
+                (plain_a, plain_b) => !plain_a && !plain_b,
+            })
+}
+
+/// Whether the tessellation of `shape` depends only on the shape, the scale and the options.
+fn is_plain(shape: &Shape) -> bool {
+    match shape {
+        Shape::Vec(shapes) => shapes.iter().all(is_plain),
+        Shape::Rect(rect) => rect.fill_texture_id() == egui::TextureId::default(),
+        Shape::Noop
+        | Shape::Ellipse(_)
+        | Shape::LineSegment { .. }
+        | Shape::Path(_)
+        | Shape::Band(_)
+        | Shape::QuadraticBezier(_)
+        | Shape::CubicBezier(_) => true,
+        Shape::Circle(_) | Shape::Text(_) | Shape::Mesh(_) | Shape::Callback(_) => false,
+    }
 }
 
 /// Draft text stays separate from the drawing until the editor commits it.
@@ -158,7 +235,7 @@ pub(crate) struct TextEditState {
 /// // ... (start_drawing_with_coords, add_point_with_coords, etc.)
 ///
 /// // 4. Render against the chart's bars and coordinate mapping
-/// let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y };
+/// let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, time_axis: true };
 /// manager.render_all(painter, price_rect, &view);
 /// # }
 /// ```
@@ -1368,12 +1445,26 @@ impl DrawingManager {
             .filter(|d| !self.owns_pane(d))
             .map(|d| d.id)
             .collect();
-        painted.retain(|paint| others.contains(&paint.id));
+        let mut last: HashMap<usize, PaintedDrawing> = HashMap::new();
+        for paint in std::mem::take(&mut *painted) {
+            if others.contains(&paint.id) {
+                painted.push(paint);
+            } else {
+                last.insert(paint.id, paint);
+            }
+        }
+        let pixels_per_point = painter.pixels_per_point();
+        let options = painter.ctx().tessellation_options(|o| *o);
+        // A transformed layer, such as an `egui::Scene`, has its shapes transformed before they
+        // are tessellated, so a kept mesh would scale its feathering and rounding with the zoom.
+        let untransformed = (painter.ctx())
+            .layer_transform_to_global(painter.layer_id())
+            .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
             let off_pane = drawing
-                .paint_span()
-                .is_some_and(|span| !span.intersects(price_rect.x_range()));
+                .paint_bounds()
+                .is_some_and(|bounds| !bounds.intersects(price_rect));
             if self.owns_pane(drawing)
                 && drawing.is_visible_on_timeframe(&self.curr_timeframe)
                 && !off_pane
@@ -1383,15 +1474,43 @@ impl DrawingManager {
                         .map_or(0, |list| list.next_idx().0)
                 });
                 drawing.render(painter, price_rect, view);
-                let shapes = painter.ctx().graphics(|g| {
+                let shapes: Vec<ClippedShape> = painter.ctx().graphics(|g| {
                     g.get(painter.layer_id())
                         .map(|list| list.all_entries().skip(start).cloned().collect())
                         .unwrap_or_default()
                 });
+                // The same shapes as last frame paint last frame's tessellation, made on the
+                // second frame so that a drawing changing every frame is not tessellated twice.
+                let tessellated = last
+                    .remove(&drawing.id)
+                    .filter(|paint| untransformed && same_geometry(&paint.shapes, &shapes))
+                    .map(|paint| {
+                        paint
+                            .tessellated
+                            .filter(|t| {
+                                t.pixels_per_point == pixels_per_point && t.options == options
+                            })
+                            .unwrap_or_else(|| Tessellated::new(&shapes, pixels_per_point, options))
+                    });
+                if let Some(tessellated) = &tessellated {
+                    painter.ctx().graphics_mut(|g| {
+                        let list = g.entry(painter.layer_id());
+                        for (i, shape) in tessellated.shapes.iter().enumerate() {
+                            if let Some(shape) = shape {
+                                list.set(
+                                    egui::layers::ShapeIdx(start + i),
+                                    shapes[i].clip_rect,
+                                    shape.clone(),
+                                );
+                            }
+                        }
+                    });
+                }
                 painted.push(PaintedDrawing {
                     id: drawing.id,
                     points: drawing.points.clone(),
                     shapes,
+                    tessellated,
                 });
             }
         }
@@ -1510,6 +1629,7 @@ mod tests {
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
                         price_to_y: &|p| 500.0 - p as f32,
+                        time_axis: true,
                     };
                     manager.render_all(ui.painter(), pane, &view);
                 })
@@ -1538,6 +1658,71 @@ mod tests {
                 manager.painted.lock().unwrap().is_empty(),
                 "deleted geometry is released"
             );
+        }
+    }
+
+    /// Guards the tessellation cache: a drawing that paints the same shapes on consecutive frames
+    /// paints last frame's tessellation, which must come out as the triangles of its shapes, and a
+    /// moved drawing, or one in a layer that is then zoomed, must paint its shapes rather than the
+    /// old mesh.
+    #[test]
+    fn cached_tessellation_matches_the_painted_shapes() {
+        use egui::{Context, RawInput, epaint::Primitive};
+        let ctx = Context::default();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let mut manager = DrawingManager::new();
+        let mut drawing = Drawing::new(7, DrawingToolType::ElliottImpulse);
+        drawing.points = [
+            (50., 300.),
+            (100., 200.),
+            (150., 250.),
+            (250., 80.),
+            (300., 150.),
+            (350., 60.),
+        ]
+        .map(|(x, y)| Pos2::new(x, y))
+        .to_vec();
+        manager.drawings.push(drawing);
+        let meshes = |shapes: Vec<ClippedShape>| -> Vec<(Rect, Mesh)> {
+            (ctx.tessellate(shapes, 1.0).into_iter())
+                .filter_map(|p| match p.primitive {
+                    Primitive::Mesh(mesh) => Some((p.clip_rect, mesh)),
+                    Primitive::Callback(_) => None,
+                })
+                .collect()
+        };
+        for frame in 0..5 {
+            if frame == 3 {
+                manager.drawings[0].points[3].y = 40.0;
+            }
+            let layer = if frame == 4 {
+                TSTransform::from_scaling(2.0)
+            } else {
+                TSTransform::IDENTITY
+            };
+            let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                ctx.set_transform_layer(ui.layer_id(), layer);
+                let view = ChartView {
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|b| b * 10.0,
+                    price_to_y: &|p| 500.0 - p as f32,
+                    time_axis: true,
+                };
+                manager.render_all(ui.painter(), pane, &view);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            if frame == 2 {
+                assert!(
+                    (shapes.iter()).any(|s| matches!(s.shape, Shape::Mesh(_))),
+                    "an unchanged drawing paints its kept tessellation"
+                );
+            }
+            let mut painted = manager.painted.lock().unwrap()[0].shapes.clone();
+            painted.iter_mut().for_each(|s| s.transform(layer));
+            assert!(meshes(shapes) == meshes(painted), "frame {frame}");
         }
     }
 

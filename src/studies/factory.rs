@@ -434,6 +434,8 @@ mod tests {
                     low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
                     close,
                     volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect();
@@ -682,6 +684,8 @@ mod tests {
             low: prev_close.min(close) - rng.unit() * 0.2,
             close,
             volume: 100.0 + rng.unit() * 900.0,
+            colors: None,
+            payload: None,
         };
         if rng.unit() < 0.01 {
             bar.close = f64::NAN;
@@ -801,6 +805,8 @@ mod tests {
                 low: c - 1.0,
                 close: c,
                 volume: 1000.0 + i as f64,
+                colors: None,
+                payload: None,
             }
         };
         let normal: Vec<Bar> = (0..200).map(bar).collect();
@@ -1022,6 +1028,8 @@ mod tests {
                 low: c.min(o) - 1.0 - (x * 0.5).cos().abs(),
                 close: c,
                 volume: 1000.0 + ((i * 37) % 211) as f64 * 9.0,
+                colors: None,
+                payload: None,
             }
         };
         let long: Vec<Bar> = (0..600).map(real).collect();
