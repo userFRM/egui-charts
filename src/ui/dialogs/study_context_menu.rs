@@ -10,7 +10,7 @@ use crate::model::{Alert, AlertCondition, AlertSource, Timeframe};
 use crate::studies::StudyScale;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, trim_separators};
-use crate::widget::{Chart, VisualOrder};
+use crate::widget::{Chart, PaneId, VisualOrder};
 
 use std::collections::HashSet;
 
@@ -87,8 +87,8 @@ pub enum PaneTarget {
     NewPaneAbove,
     /// A new pane directly below the study's pane, or below the main pane.
     NewPaneBelow,
-    /// The pane drawing this study.
-    PaneOf(SeriesId),
+    /// An existing pane, addressed by its stable id.
+    Pane(PaneId),
     /// The main pane.
     Main,
 }
@@ -107,8 +107,8 @@ pub(crate) struct StudyContextMenu {
     scale: Option<StudyScale>,
     /// The side of the pane's price axis.
     axis_side: &'static str,
-    /// Other panes, by a study they draw, with their titles.
-    panes: Vec<(SeriesId, String)>,
+    /// Other panes by their stable ids, with their titles.
+    panes: Vec<(PaneId, String)>,
     has_interval: bool,
     /// Controls the host hid, set through
     /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible).
@@ -150,12 +150,24 @@ impl StudyContextMenu {
         } else {
             "left"
         };
-        let pane = chart.pane_of(id);
+        let pane = chart.series_pane(id);
         self.panes = chart
-            .indicator_panes()
+            .panes()
             .into_iter()
-            .filter(|(first, _)| Some(*first) != pane)
-            .map(|(first, title)| (first, format!("{title} pane")))
+            .filter(|other| *other != PaneId::MAIN && Some(*other) != pane)
+            .map(|other| {
+                let title = chart.pane_series(other).first().map_or("empty", |member| {
+                    chart.indicators().find(|(id, _)| id == member).map_or_else(
+                        || {
+                            chart
+                                .series_options(*member)
+                                .map_or("Series", |options| options.name.as_str())
+                        },
+                        |(_, study)| study.name(),
+                    )
+                });
+                (other, format!("{title} pane"))
+            })
             .collect();
         self.has_interval = chart.timeframe().is_some();
     }
@@ -232,12 +244,10 @@ impl StudyContextMenu {
             });
         }
         let mut moves = Vec::new();
-        if !self.overlay {
-            moves.push(item("New pane above", A::MoveTo(PaneTarget::NewPaneAbove)));
-        }
+        moves.push(item("New pane above", A::MoveTo(PaneTarget::NewPaneAbove)));
         moves.push(item("New pane below", A::MoveTo(PaneTarget::NewPaneBelow)));
         for (pane, title) in &self.panes {
-            moves.push(item(title, A::MoveTo(PaneTarget::PaneOf(*pane))));
+            moves.push(item(title, A::MoveTo(PaneTarget::Pane(*pane))));
         }
         if !self.overlay {
             moves.push(item("Main pane", A::MoveTo(PaneTarget::Main)));
@@ -346,8 +356,8 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
             match *target {
                 PaneTarget::NewPaneAbove => chart.move_indicator_to_new_pane(id, true),
                 PaneTarget::NewPaneBelow => chart.move_indicator_to_new_pane(id, false),
-                PaneTarget::PaneOf(pane) => chart.move_indicator_to_pane(id, pane),
-                PaneTarget::Main => chart.move_indicator_to_pane(id, SeriesId::MAIN),
+                PaneTarget::Pane(pane) => chart.move_series_to_pane(id, pane),
+                PaneTarget::Main => chart.move_series_to_pane(id, PaneId::MAIN),
             };
         }
         A::PinTo(scale) => {

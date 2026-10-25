@@ -196,6 +196,7 @@ pub(super) fn hit_test_main_chart(
     bars: &[crate::model::Bar],
     max_volume: f64,
     visible_range: std::ops::Range<usize>,
+    hit_tolerance: f32,
 ) -> Option<(ChartElementId, usize)> {
     if bars.is_empty() {
         return None;
@@ -270,7 +271,10 @@ pub(super) fn hit_test_main_chart(
         visible_range.clone(),
         coords,
         |price| coords.price_to_y(price),
-        &crate::chart::series::HitTestConfig::default(),
+        &crate::chart::series::HitTestConfig {
+            line_tolerance: hit_tolerance,
+            ..Default::default()
+        },
     ) {
         return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
     }
@@ -347,29 +351,42 @@ mod selection_tests {
             &bars,
             100.0,
             0..bars.len(),
+            crate::chart::hit_test::HIT_TOLERANCE,
         );
         assert!(hit.is_none());
     }
 
     #[test]
-    fn click_on_candle_selects_main_series() {
+    fn click_on_candle_or_near_its_wick_selects_main_series() {
         let (mapping, bars) = fixture();
-        // Click the center of bar 2's body (close = 12.4, open = 11.6).
+        // The center of bar 2's body (close = 12.4, open = 11.6), and its upper wick at 12.45,
+        // 8 points from the bar's centre: outside the default 5 point tolerance, inside 10.
         let bar = &bars[2];
         let mid_price = (bar.open + bar.close) / 2.0;
-        let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
-        let hit = hit_test_main_chart(
-            pos,
-            &IndicatorRegistry::new(),
-            &[],
-            &[],
-            &mapping,
-            None,
-            &bars,
-            100.0,
-            0..bars.len(),
-        );
-        assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
+        for (dx, price, tolerance, selected) in [
+            (0.0, mid_price, crate::chart::hit_test::HIT_TOLERANCE, true),
+            (8.0, 12.45, crate::chart::hit_test::HIT_TOLERANCE, false),
+            (8.0, 12.45, 10.0, true),
+        ] {
+            let pos = Pos2::new(mapping.idx_to_x(2) + dx, mapping.price_to_y(price));
+            let hit = hit_test_main_chart(
+                pos,
+                &IndicatorRegistry::new(),
+                &[],
+                &[],
+                &mapping,
+                None,
+                &bars,
+                100.0,
+                0..bars.len(),
+                tolerance,
+            );
+            assert_eq!(
+                hit,
+                selected.then_some((ChartElementId::Series(SeriesId::MAIN), 2)),
+                "{dx} {price} {tolerance}"
+            );
+        }
     }
 
     #[test]
@@ -421,6 +438,7 @@ mod selection_tests {
                 &bars,
                 100.0,
                 0..bars.len(),
+                crate::chart::hit_test::HIT_TOLERANCE,
             );
             assert_eq!(hit, Some((expected, 2)));
         }
@@ -453,6 +471,7 @@ mod selection_tests {
             &bars,
             100.0,
             0..bars.len(),
+            crate::chart::hit_test::HIT_TOLERANCE,
         );
         // Falls through to the series, since the pane indicator is not an overlay.
         assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
@@ -472,6 +491,7 @@ mod selection_tests {
             &[],
             100.0,
             0..0,
+            crate::chart::hit_test::HIT_TOLERANCE,
         );
         assert!(hit.is_none());
     }

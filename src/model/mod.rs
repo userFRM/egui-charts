@@ -44,6 +44,7 @@ pub mod quote;
 pub mod range_bar;
 pub mod renko;
 mod series_scale;
+mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
@@ -64,19 +65,27 @@ pub(crate) use bar::SpanCache;
 pub(crate) use bar::percent_change;
 pub use bar::{Bar, BarData};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
-pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
+pub use chart_style::{
+    AreaStyle, BarsStyle, BaselineStyle, ChartTypeStyles, LastPriceAnimation, LinePlotStyle,
+    LineType,
+};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+#[cfg(feature = "widget")]
+pub(crate) use chartstate::next_revision;
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{Instrument, Session, SessionWindow, SymbolType, TimezoneId};
+pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType, TimezoneId};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
     detect_signal as detect_line_break_signal, to_line_break_lines,
 };
-pub use markers::{LineStyle, Marker, MarkerPos, MarkerShape, PriceLine};
+pub use markers::{
+    ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
+    PriceLine,
+};
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;
 pub use quote::{
@@ -88,6 +97,7 @@ pub use range_bar::{
 };
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use series_scale::SeriesScale;
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,

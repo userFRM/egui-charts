@@ -6,6 +6,8 @@
 
 `assets/icons/lines/cursor-demonstration.svg`, `assets/icons/ui/compare-add.svg`, `assets/icons/ui/layout-single.svg`, `assets/icons/ui/drawing-keep.svg`, `assets/icons/ui/drawing-magnet.svg`, `assets/icons/ui/pin-scale.svg` and `assets/icons/ui/widget-bar-layers.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
+`assets/icons/ui/layout-2-columns.svg`, `layout-2-rows.svg`, `layout-3.svg` to `layout-16.svg`, `layout-tabs.svg`, `publish.svg`, `quick-search.svg` and `settings-nut.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
 `assets/icons/shapes-annotations/arrow-mark-left.svg`, `arrow-mark-right.svg`, `sector.svg` and `sticker.svg` in the same directory, and the vector glyphs in `src/drawings/glyphs.rs`, are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 ## Lucide icons
