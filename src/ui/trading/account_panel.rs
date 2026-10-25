@@ -397,9 +397,8 @@ impl Trading {
             .id_salt("account_summary")
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.set_min_width(1020.0);
                 // Account selectors, then the summary from the right edge as far as there is room.
-                let (row, _) = ui
+                let (mut row, _) = ui
                     .allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
                 let mut selectors = ui.new_child(
                     egui::UiBuilder::new()
@@ -469,24 +468,35 @@ impl Trading {
                     ];
                     let painter = ui.painter();
                     let value_font = FontId::proportional(theme.text.body);
+                    let figures: Vec<_> = figures
+                        .into_iter()
+                        .filter_map(|(label, value, signed, info)| {
+                            let value = value?;
+                            let text = grouped(value, 2, signed);
+                            let color = if signed {
+                                pnl_color(&theme, value, &text)
+                            } else {
+                                theme.ui.text
+                            };
+                            let label = painter.layout_job(semibold(
+                                label,
+                                theme.text.small,
+                                theme.ui.text,
+                            ));
+                            let value = painter.layout_no_wrap(text, value_font.clone(), color);
+                            let info_width = if info.is_some() { 18.0 } else { 0.0 };
+                            let width = (label.size().x + info_width).max(value.size().x);
+                            Some((label, value, color, info, width))
+                        })
+                        .collect();
+                    let summary_width: f32 = figures.iter().map(|figure| figure.4 + 28.0).sum();
+                    row.max.x = row
+                        .right()
+                        .max(selectors.min_rect().right() + 24.0 + summary_width);
+                    ui.expand_to_include_rect(row);
                     let mut right = row.right() - 16.0;
-                    for (label, value, signed, info) in figures.into_iter().rev() {
-                        let Some(value) = value else { continue };
-                        let text = grouped(value, 2, signed);
-                        let color = if signed {
-                            pnl_color(&theme, value, &text)
-                        } else {
-                            theme.ui.text
-                        };
-                        let label =
-                            painter.layout_job(semibold(label, theme.text.small, theme.ui.text));
-                        let value = painter.layout_no_wrap(text, value_font.clone(), color);
-                        let info_width = if info.is_some() { 18.0 } else { 0.0 };
-                        let width = (label.size().x + info_width).max(value.size().x);
+                    for (label, value, color, info, width) in figures.into_iter().rev() {
                         let left = right - width;
-                        if left < selectors.min_rect().right() + 24.0 {
-                            break;
-                        }
                         let top = row.center().y - (label.size().y + value.size().y + 2.0) / 2.0;
                         if let Some(info) = info {
                             let icon = Rect::from_min_size(
@@ -898,6 +908,11 @@ impl Trading {
                     });
 
                 if rows.is_empty() {
+                    let mut empty =
+                        ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                            egui::pos2(ui.clip_rect().left(), ui.cursor().top()),
+                            vec2(ui.clip_rect().width(), ui.available_height()),
+                        )));
                     EmptyState::new(match tab {
                         Tab::Positions => "No open positions",
                         Tab::Orders => "No working orders",
@@ -907,7 +922,7 @@ impl Trading {
                         Tab::Executions => "No executions",
                     })
                     .fill_height()
-                    .show(ui);
+                    .show(&mut empty);
                     return;
                 }
                 egui::ScrollArea::vertical()

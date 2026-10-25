@@ -1670,12 +1670,14 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    egui::Panel::bottom("symbol_details")
-                        .resizable(true)
-                        .default_size(ui.available_height() / 2.0)
-                        .min_size(120.0)
-                        .frame(egui::Frame::NONE)
-                        .show(ui, |ui| self.symbol_details.show(ui));
+                    if ui.available_height() >= 400.0 {
+                        egui::Panel::bottom("symbol_details")
+                            .resizable(true)
+                            .default_size(ui.available_height() / 2.0)
+                            .min_size(120.0)
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| self.symbol_details.show(ui));
+                    }
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
