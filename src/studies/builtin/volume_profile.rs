@@ -123,7 +123,7 @@ impl ProfileStudy {
             ),
             StudyInput::new(
                 "row_size",
-                "Price height (0 for equal rows)",
+                "Height (0 = equal)",
                 InputValue::Number(self.row_size),
                 InputKind::Number(0.0, f64::MAX),
             ),
@@ -137,7 +137,7 @@ impl ProfileStudy {
         if matches!(self.kind, Kind::Fixed | Kind::Anchored) {
             inputs.push(StudyInput::new(
                 "start_time",
-                "Start (Unix milliseconds)",
+                "Start (Unix ms)",
                 InputValue::Number(self.start_time),
                 InputKind::Number(-8e15, 8e15),
             ));
@@ -145,7 +145,7 @@ impl ProfileStudy {
         if self.kind == Kind::Fixed {
             inputs.push(StudyInput::new(
                 "end_time",
-                "End (Unix milliseconds, inclusive)",
+                "End (Unix ms)",
                 InputValue::Number(self.end_time),
                 InputKind::Number(-8e15, 8e15),
             ));

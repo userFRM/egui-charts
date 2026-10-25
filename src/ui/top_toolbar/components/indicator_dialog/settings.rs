@@ -265,16 +265,17 @@ mod tests {
     #[test]
     fn dialog_follows_the_window_when_it_shrinks() {
         for theme in [Theme::light(), Theme::dark()] {
-            for tab in [
-                None,
-                Some(Tab::Inputs),
-                Some(Tab::Style),
-                Some(Tab::Visibility),
+            for (name, tab) in [
+                ("MA Ribbon", None),
+                ("MA Ribbon", Some(Tab::Inputs)),
+                ("MA Ribbon", Some(Tab::Style)),
+                ("MA Ribbon", Some(Tab::Visibility)),
+                ("Vol Profile FR", Some(Tab::Inputs)),
             ] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let study = crate::studies::IndicatorFactory::new()
-                    .create("MA Ribbon")
+                    .create(name)
                     .unwrap();
                 let mut dialog = IndicatorSettingsDialog::default();
                 dialog.open(SeriesId(2), study.as_ref(), Some(Timeframe::Min1));
@@ -321,7 +322,7 @@ mod tests {
                         .unwrap();
                     assert!(
                         screen.contains_rect(shown),
-                        "tab {}: {shown:?} outside {screen:?}",
+                        "{name} tab {}: {shown:?} outside {screen:?}",
                         tab.map(|tab| tab as u8).unwrap_or(3)
                     );
                 }
