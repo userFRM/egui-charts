@@ -171,9 +171,13 @@ impl Chart {
             self.drawings.end_drag_handle();
             self.drawings.deselect();
             let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+            next.0.registry = self.drawings.registry.clone();
             next.0.options = self.drawings.options.clone();
             next.0.tool_defaults = self.drawings.tool_defaults.clone();
             next.0.active_tool = self.drawings.active_tool;
+            if let Some(id) = self.drawings.active_custom_tool() {
+                let _ = next.0.set_custom_tool(id);
+            }
             next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
             next.0.eraser_mode = self.drawings.eraser_mode;
             next.0.curr_timeframe = self.drawings.curr_timeframe.clone();

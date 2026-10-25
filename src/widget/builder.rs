@@ -891,7 +891,21 @@ mod tests {
         chart.drawings_mut().stay_in_drawing_mode = true;
         chart.drawings_mut().eraser_mode = true;
         chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
+        chart.drawings_mut().registry.set_availability(
+            DrawingToolType::TrendLine,
+            crate::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
         chart.set_symbol("B");
+        assert!(
+            !chart
+                .drawings()
+                .registry
+                .availability(DrawingToolType::TrendLine)
+                .enabled
+        );
         assert!(chart.drawings().drawings.is_empty());
         assert!(chart.marks.is_empty());
         assert!(chart.drawings().stay_in_drawing_mode);
