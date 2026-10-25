@@ -224,7 +224,7 @@ egui-charts = { version = "0.2", default-features = false, features = ["studies"
 
 `cargo bench --bench bare_chart --no-default-features --features widget` measures the frame cost of the bare chart example. `cargo bench --bench frame_time` covers large histories and multiple charts with studies.
 
-On Linux with glibc, freeing large tessellation buffers can cause heap trimming and page faults on every frame. Applications that encounter this can set both `M_MMAP_THRESHOLD` and `M_TRIM_THRESHOLD`, raise `M_TOP_PAD`, or choose another global allocator. Setting either threshold alone did not remove the overhead in the reported workload. The library leaves process-wide allocation policy to the host. See [performance notes](docs/performance.md) for the settings, measurements and tradeoffs.
+On Linux with glibc, freeing large tessellation buffers can cause heap trimming and page faults on every frame. In the reported 5,000,000-bar workload, setting both `M_MMAP_THRESHOLD` to 64 MiB and `M_TRIM_THRESHOLD` to 256 MiB reduced the frame from about 5.8 ms to 3.9 ms, within 2% of egui 0.33. Setting either threshold alone did not remove the overhead. Applications can instead raise `M_TOP_PAD` to 16 MiB or choose another global allocator. The library leaves process-wide allocation policy to the host. See [performance notes](docs/performance.md) for the `GLIBC_TUNABLES` commands, measurements and memory tradeoffs.
 
 ## Connect your data
 
