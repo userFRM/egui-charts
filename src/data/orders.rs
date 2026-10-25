@@ -271,8 +271,6 @@ impl OrderQueue {
                 }
                 if order.size == 0.0 {
                     self.orders.remove(at);
-                } else if !valid(&order) {
-                    return Err(invalid());
                 } else if !keep_priority || old_price != key(self.tick, order.price) {
                     self.orders.remove(at);
                     self.orders.push(order);

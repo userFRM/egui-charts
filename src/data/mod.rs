@@ -26,12 +26,6 @@ use std::time::Duration;
 pub(crate) mod depth;
 mod depth_history;
 mod footprint;
-mod orders;
-mod recording;
-mod replay;
-pub use orders::{OrderEvent, OrderQueue, RestingOrder};
-pub use recording::{RecordingReader, RecordingWriter};
-pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -42,6 +36,9 @@ pub(crate) mod inbox;
     expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod merge;
+mod orders;
+mod recording;
+mod replay;
 mod resample;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
@@ -52,6 +49,9 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
+pub use orders::{OrderEvent, OrderQueue, RestingOrder};
+pub use recording::{RecordingReader, RecordingWriter};
+pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
