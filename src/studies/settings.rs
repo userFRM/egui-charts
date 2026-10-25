@@ -84,6 +84,14 @@ pub struct ConfiguredStudy {
     instrument_precision: Option<u8>,
     overlay: Option<bool>,
     scale: Option<super::StudyScale>,
+    source: Option<super::StudySource>,
+    calculation_symbol: String,
+    calculation_timeframe: Option<Timeframe>,
+    wait_for_close: bool,
+    offset: i32,
+    clock: crate::model::BarClock,
+    aligned: Option<IndicatorValues>,
+    aligned_bars: Vec<Option<usize>>,
 }
 
 impl ConfiguredStudy {
@@ -103,6 +111,28 @@ impl ConfiguredStudy {
             instrument_precision: None,
             overlay: None,
             scale: None,
+            source: None,
+            calculation_symbol: String::new(),
+            calculation_timeframe: None,
+            wait_for_close: true,
+            offset: 0,
+            clock: crate::model::BarClock::new(Timeframe::Min1),
+            aligned: None,
+            aligned_bars: Vec::new(),
+        }
+    }
+    fn update_price(&mut self, data: &[Bar], from: usize) {
+        self.aligned = None;
+        match self.source() {
+            Some(super::StudySource::Price(source)) if self.source() != self.study.source() => {
+                let values: Vec<_> = data
+                    .iter()
+                    .map(|bar| source.compute(bar.open, bar.high, bar.low, bar.close))
+                    .collect();
+                self.study.update_source(data, from, &values);
+            }
+            Some(super::StudySource::Study { .. }) => self.study.update_source(data, from, &[]),
+            _ => self.study.update(data, from),
         }
     }
 }
@@ -118,31 +148,229 @@ impl Indicator for ConfiguredStudy {
     fn desc(&self) -> &str {
         self.study.desc()
     }
+    fn source(&self) -> Option<super::StudySource> {
+        self.source.or_else(|| self.study.source())
+    }
     fn inputs(&self) -> Vec<super::StudyInput> {
-        self.study.inputs()
+        let mut inputs = self.study.inputs();
+        if let Some(default) = self.study.source() {
+            let initial = inputs
+                .iter()
+                .find(|input| input.id == "source")
+                .and_then(|input| match input.default {
+                    InputValue::Choice(index) => crate::model::PriceSource::all()
+                        .get(index)
+                        .copied()
+                        .map(super::StudySource::Price),
+                    InputValue::Source(value) => Some(value),
+                    _ => None,
+                })
+                .unwrap_or(default);
+            inputs.retain(|input| input.id != "source");
+            inputs.push(
+                super::StudyInput::new(
+                    "source",
+                    "Source",
+                    InputValue::Source(self.source.unwrap_or(default)),
+                    super::InputKind::Source,
+                )
+                .with_default(InputValue::Source(initial)),
+            );
+        }
+        if self.study.source().is_some() {
+            use super::{InputKind, StudyInput};
+            inputs.extend([
+                StudyInput::new(
+                    "plot_offset",
+                    "Offset",
+                    InputValue::Integer(self.offset),
+                    InputKind::Integer(i32::MIN, i32::MAX),
+                )
+                .with_default(InputValue::Integer(0)),
+                StudyInput::new(
+                    "calculation_symbol",
+                    "Symbol",
+                    InputValue::Symbol(self.calculation_symbol.clone()),
+                    InputKind::Symbol,
+                )
+                .with_default(InputValue::Symbol(String::new())),
+                StudyInput::new(
+                    "calculation_timeframe",
+                    "Interval",
+                    InputValue::Timeframe(self.calculation_timeframe),
+                    InputKind::Timeframe,
+                )
+                .with_default(InputValue::Timeframe(None)),
+                StudyInput::new(
+                    "wait_for_close",
+                    "Wait for interval close",
+                    InputValue::Toggle(self.wait_for_close),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(true)),
+            ]);
+        }
+        inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
-        self.study.set_input(id, value)
+        if id == "plot_offset" && self.study.source().is_some() {
+            let InputValue::Integer(offset) = value else {
+                return Err("invalid plot offset");
+            };
+            self.offset = offset;
+            self.aligned = None;
+            self.study.calculate(&[]);
+            return Ok(());
+        }
+        if self.study.source().is_some()
+            && matches!(
+                id,
+                "calculation_symbol" | "calculation_timeframe" | "wait_for_close"
+            )
+        {
+            let schema = self
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == id)
+                .ok_or("unknown study input")?;
+            if !schema.accepts(&value) {
+                return Err("invalid study data input");
+            }
+            if matches!(self.source(), Some(super::StudySource::Study { .. }))
+                && !matches!(&value, InputValue::Symbol(s) if s.is_empty())
+                && value != InputValue::Timeframe(None)
+                && id != "wait_for_close"
+            {
+                return Err("a study output already follows the chart interval and symbol");
+            }
+            match value {
+                InputValue::Symbol(value) => self.calculation_symbol = value,
+                InputValue::Timeframe(value) => self.calculation_timeframe = value,
+                InputValue::Toggle(value) => self.wait_for_close = value,
+                _ => unreachable!(),
+            }
+            self.aligned = None;
+            self.study.calculate(&[]);
+            return Ok(());
+        }
+        if id == "source" && self.study.source().is_some() {
+            if matches!(value, InputValue::Choice(_)) {
+                self.study.set_input(id, value)?;
+                self.source = None;
+                self.aligned = None;
+                return Ok(());
+            }
+            let InputValue::Source(source) = value else {
+                return Err("invalid study source");
+            };
+            if matches!(source, super::StudySource::Study { .. })
+                && (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
+            {
+                return Err("a study output already follows the chart interval and symbol");
+            }
+            self.source = Some(source);
+            self.aligned = None;
+            self.study.calculate(&[]);
+            Ok(())
+        } else {
+            self.study.set_input(id, value)?;
+            self.aligned = None;
+            Ok(())
+        }
+    }
+    fn data_requests(&self) -> Vec<super::StudyDataRequest> {
+        if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
+            vec![super::StudyDataRequest {
+                symbol: self.calculation_symbol.clone(),
+                timeframe: self.calculation_timeframe,
+            }]
+        } else {
+            self.study.data_requests()
+        }
+    }
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            if self.study.data_requests().is_empty() {
+                self.update(data, from);
+            } else {
+                self.study.update_data(data, from, sources);
+            }
+            return;
+        }
+        let request = &self.data_requests()[0];
+        let Some(source) = sources.iter().find(|source| &source.request == request) else {
+            self.aligned = Some(IndicatorValues::missing(data.len()));
+            self.aligned_bars.clear();
+            return;
+        };
+        self.instrument_precision = source
+            .instrument
+            .and_then(crate::scales::instrument_price_precision);
+        self.study.set_instrument(source.instrument);
+        self.study.set_timeframe(source.timeframe);
+        self.study.set_bar_clock(&source.clock);
+        self.update_price(source.bars, 0);
+        let mut aligned = IndicatorValues::new();
+        self.aligned_bars.clear();
+        for (at, bar) in data.iter().enumerate() {
+            let close = self
+                .clock
+                .next_open(self.clock.bar_open(bar.time))
+                .unwrap_or(bar.time);
+            let output = source.output_at(close, !self.wait_for_close && at + 1 == data.len());
+            self.aligned_bars.push(output);
+            let values: Vec<_> = (0..self.study.line_cnt())
+                .map(|line| {
+                    output
+                        .and_then(|at| self.study.values().value(line, at))
+                        .unwrap_or(f64::NAN)
+                })
+                .collect();
+            aligned.push(super::IndicatorValue::Multiple(values));
+        }
+        self.aligned = Some(aligned);
     }
     fn calculate(&mut self, data: &[Bar]) {
-        self.study.calculate(data);
+        self.update(data, 0);
     }
     fn update(&mut self, data: &[Bar], from: usize) {
-        self.study.update(data, from);
+        if !self.data_requests().is_empty() {
+            self.update_data(data, from, &[]);
+        } else {
+            self.update_price(data, from);
+        }
+    }
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.study.update_source(data, from, source);
     }
     fn is_incremental(&self) -> bool {
-        self.study.is_incremental()
+        self.data_requests().is_empty()
+            && self.source() == self.study.source()
+            && self.study.is_incremental()
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-        self.instrument_precision = instrument.and_then(crate::scales::instrument_price_precision);
-        self.study.set_instrument(instrument)
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.instrument_precision =
+                instrument.and_then(crate::scales::instrument_price_precision);
+            self.study.set_instrument(instrument)
+        } else {
+            false
+        }
     }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.timeframe = Some(timeframe);
-        self.study.set_timeframe(timeframe);
+        self.clock = crate::model::BarClock::new(timeframe);
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.study.set_timeframe(timeframe);
+        }
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
-        self.study.set_bar_clock(clock)
+        self.clock = clock.clone();
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.study.set_bar_clock(clock)
+        } else {
+            false
+        }
     }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
@@ -151,7 +379,7 @@ impl Indicator for ConfiguredStudy {
         self.study.tpo()
     }
     fn values(&self) -> &IndicatorValues {
-        self.study.values()
+        self.aligned.as_ref().unwrap_or_else(|| self.study.values())
     }
     fn colors(&self) -> Vec<Color32> {
         self.settings.plots.iter().map(|plot| plot.color).collect()
@@ -182,12 +410,37 @@ impl Indicator for ConfiguredStudy {
         plot
     }
     fn plot_offset(&self, line: usize) -> isize {
-        self.study.plot_offset(line)
+        self.study
+            .plot_offset(line)
+            .saturating_add(self.offset as isize)
+    }
+    fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
+        if let Some(values) = &self.aligned {
+            values.value(
+                line,
+                bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?,
+            )
+        } else {
+            self.study.plot_value(
+                line,
+                bar.checked_add_signed((self.offset as isize).checked_neg()?)?,
+            )
+        }
     }
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        let bar = if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()?
+        } else {
+            bar
+        };
         self.study.plot_color(line, bar)
     }
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let bar = if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()?
+        } else {
+            bar
+        };
         self.study.plot_text(line, bar)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
@@ -209,7 +462,15 @@ impl Indicator for ConfiguredStudy {
         {
             return Err("invalid study presentation settings");
         }
-        let mut edited = self.study.clone_box();
+        let mut edited = self.clone();
+        let mut inputs: Vec<_> = inputs.iter().collect();
+        if inputs.iter().any(|(id, value)| {
+            id == "source" && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
+        }) {
+            inputs.sort_by_key(|(id, _)| {
+                !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
+            });
+        }
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
@@ -217,7 +478,13 @@ impl Indicator for ConfiguredStudy {
             return Err("one style is required per study plot");
         }
         edited.set_colors(settings.plots.iter().map(|plot| plot.color).collect());
-        self.study = edited;
+        self.study = edited.study;
+        self.source = edited.source;
+        self.calculation_symbol = edited.calculation_symbol;
+        self.calculation_timeframe = edited.calculation_timeframe;
+        self.wait_for_close = edited.wait_for_close;
+        self.offset = edited.offset;
+        self.aligned = None;
         self.settings = settings;
         Ok(())
     }

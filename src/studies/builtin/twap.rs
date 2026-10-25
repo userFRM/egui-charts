@@ -94,6 +94,10 @@ impl Default for TimeWeightedAvgPrice {
 }
 
 impl Indicator for TimeWeightedAvgPrice {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         anchor: choice("Anchor Period", [AnchorPeriod::Session, AnchorPeriod::Week, AnchorPeriod::Month, AnchorPeriod::Quarter, AnchorPeriod::Year, AnchorPeriod::Decade, AnchorPeriod::Century]),
         source: choice("Source", PriceSource::all())

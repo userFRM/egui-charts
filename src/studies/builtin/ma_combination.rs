@@ -97,6 +97,7 @@ enum Ribbon {
 #[derive(Clone)]
 pub struct MACombination {
     lines: Vec<AverageLine>,
+    defaults: Vec<AverageLine>,
     values: IndicatorValues,
     markers: Vec<IndicatorMarker>,
     pair: Option<(usize, usize)>,
@@ -112,6 +113,7 @@ impl MACombination {
             return Err("a combination needs 2 to 14 averages");
         }
         Ok(Self {
+            defaults: lines.clone(),
             lines,
             values: IndicatorValues::new(),
             markers: Vec::new(),
@@ -187,7 +189,8 @@ impl Indicator for MACombination {
                             if line.kind == AverageType::Hull { 2 } else { 1 },
                             usize::MAX,
                         ),
-                    ),
+                    )
+                    .with_default(InputValue::Length(self.defaults[index].period)),
                     StudyInput::new(
                         format!("kind_{index}"),
                         format!("Average {}", index + 1),
@@ -197,7 +200,13 @@ impl Indicator for MACombination {
                         InputKind::Choice(
                             kinds.iter().map(|kind| kind.label().to_owned()).collect(),
                         ),
-                    ),
+                    )
+                    .with_default(InputValue::Choice(
+                        kinds
+                            .iter()
+                            .position(|kind| *kind == self.defaults[index].kind)
+                            .unwrap(),
+                    )),
                     StudyInput::new(
                         format!("source_{index}"),
                         format!("Source {}", index + 1),
@@ -213,7 +222,13 @@ impl Indicator for MACombination {
                                 .map(|source| source.label().to_owned())
                                 .collect(),
                         ),
-                    ),
+                    )
+                    .with_default(InputValue::Choice(
+                        sources
+                            .iter()
+                            .position(|source| *source == self.defaults[index].source)
+                            .unwrap(),
+                    )),
                 ]
             })
             .collect()

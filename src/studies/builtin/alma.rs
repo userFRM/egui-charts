@@ -82,6 +82,12 @@ impl Default for ALMA {
 }
 
 impl Indicator for ALMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         offset: number("Offset", 0.0, 1.0),

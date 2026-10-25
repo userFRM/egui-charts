@@ -859,14 +859,9 @@ impl DemoApp {
     }
 
     fn open_indicator_settings(&mut self, id: SeriesId) {
-        if let Some((_, study)) = self
-            .chart
-            .indicators()
-            .find(|(candidate, _)| *candidate == id)
+        if !self.indicator_settings.open_for_chart(&self.chart, id)
+            && self.chart.series().any(|(series, _)| series == id)
         {
-            self.indicator_settings
-                .open(id, study, self.chart.timeframe());
-        } else if self.chart.series().any(|(series, _)| series == id) {
             self.compare_dialog.open();
         }
     }

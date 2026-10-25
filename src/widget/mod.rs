@@ -150,6 +150,8 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
+mod studies;
+mod studies_data;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
@@ -289,6 +291,7 @@ pub struct Chart {
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     #[cfg(feature = "studies")]
     volume_setting: bool,

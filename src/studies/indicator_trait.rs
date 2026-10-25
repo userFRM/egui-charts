@@ -254,6 +254,39 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Additional histories this study needs. The chart resolves defaults, requests history
+    /// and live updates from its feed, and supplies them before recalculating the study.
+    fn data_requests(&self) -> Vec<super::StudyDataRequest> {
+        Vec::new()
+    }
+
+    /// Update with requested histories. Studies using only chart bars keep the default.
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        let _ = sources;
+        self.update(data, from);
+    }
+
+    /// The single price series this study reads, or `None` for OHLC or multi-source studies.
+    /// Configured studies expose this as a Source input. Study references use chart ids and
+    /// undisplaced output columns; missing or cyclic references produce missing values.
+    fn source(&self) -> Option<super::StudySource> {
+        None
+    }
+
+    /// Update using an aligned source column. Missing source values remain gaps.
+    /// The default substitutes the source for OHLC and retains timestamps and volume.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        let bars: Vec<_> = data
+            .iter()
+            .enumerate()
+            .map(|(at, bar)| {
+                let value = source.get(at).copied().unwrap_or(f64::NAN);
+                Bar::new(bar.time, value, value, value, value, bar.volume)
+            })
+            .collect();
+        self.update(&bars, from);
+    }
+
     /// Current editable inputs. A host study can supply the same schema as built-ins.
     fn inputs(&self) -> Vec<super::StudyInput> {
         Vec::new()

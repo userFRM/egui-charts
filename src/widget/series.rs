@@ -2,6 +2,7 @@
 //! computed from them.
 
 use super::change_marks::ChangeMarks;
+use super::studies::refresh_values;
 use super::{Chart, ChartElementId, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
@@ -9,7 +10,6 @@ use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, MarkerOptions, 
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
-use web_time::Instant;
 
 /// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,7 +422,23 @@ impl Chart {
         }
         indicator.set_instrument(self.instrument());
         indicator.set_bar_clock(&self.bar_clock());
-        indicator.calculate(&self.state.data().bars);
+        if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
+            let source = self
+                .study_ids
+                .iter()
+                .position(|candidate| candidate.0 == id)
+                .and_then(|at| self.studies.indicators()[at].values().columns().get(plot));
+            indicator.update_source(
+                &self.state.data().bars,
+                0,
+                source.map_or(&[], Vec::as_slice),
+            );
+        } else {
+            let sources =
+                self.study_data
+                    .data(indicator.data_requests(), &self.symbol, self.timeframe);
+            indicator.update_data(&self.state.data().bars, 0, &sources);
+        }
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);
@@ -581,7 +597,7 @@ impl Chart {
     /// recomputes the study in full, for at most one study per call: of the studies whose change
     /// starts at the first bar or whose `next_refresh` has passed, the one whose `next_refresh`
     /// is earliest. Its next full recompute then waits, from the end of this one,
-    /// the longer of [`REFRESH_INTERVAL`] and four times what this one took. Until its turn, a
+    /// the longer of a quarter second and four times what this one took. Until its turn, a
     /// study whose change starts at the first bar has no values, since its values belong to
     /// other bars. Returns how long until the next waiting study is due, zero if one is due now.
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
@@ -596,23 +612,41 @@ impl Chart {
                 self.element_studies.dirty = true;
             }
         }
+        let requests = self
+            .studies
+            .indicators()
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
         refresh_values(
             self.studies.indicators_mut(),
+            &self.study_ids,
             bars,
             &mut self.pending_from,
             &mut self.next_refresh,
             now,
+            &sources,
         )
     }
 
     pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
         let cache = &mut self.element_studies;
+        let requests = cache
+            .studies
+            .indicators()
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
         refresh_values(
             cache.studies.indicators_mut(),
+            &self.study_ids,
             &cache.bars,
             &mut cache.pending_from,
             &mut cache.next_refresh,
             now,
+            &sources,
         )
     }
 
@@ -703,57 +737,6 @@ impl Chart {
         follow
     }
 }
-
-fn refresh_values(
-    studies: &mut [Box<dyn Indicator>],
-    bars: &[Bar],
-    pending_from: &mut [Option<usize>],
-    next_refresh: &mut [f64],
-    now: f64,
-) -> Option<f64> {
-    let mut due = None::<usize>;
-    for (at, study) in studies.iter_mut().enumerate() {
-        let Some(from) = pending_from[at] else {
-            continue;
-        };
-        let len = study.values().len();
-        if study.is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len {
-            study.update(bars, from);
-            pending_from[at] = None;
-        } else if (from == 0 || now >= next_refresh[at])
-            && due.is_none_or(|first| next_refresh[at] < next_refresh[first])
-        {
-            due = Some(at);
-        }
-    }
-    if let Some(at) = due {
-        let started = Instant::now();
-        let from = pending_from[at].take().unwrap_or(0);
-        studies[at].update(bars, from);
-        let cost = started.elapsed().as_secs_f64();
-        next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
-    }
-    let mut wait = None::<f64>;
-    for (at, study) in studies.iter_mut().enumerate() {
-        let Some(from) = pending_from[at] else {
-            continue;
-        };
-        let left = if from == 0 {
-            if !study.values().is_empty() {
-                study.update(&[], 0);
-            }
-            0.0
-        } else {
-            (next_refresh[at] - now).max(0.0)
-        };
-        wait = Some(wait.map_or(left, |wait| wait.min(left)));
-    }
-    wait
-}
-
-/// Least time in seconds between two full recomputes of a study while bars stream; a study
-/// whose recompute took longer than a quarter of it waits four times that instead.
-const REFRESH_INTERVAL: f64 = 0.25;
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {

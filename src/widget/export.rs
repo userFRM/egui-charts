@@ -69,7 +69,6 @@ impl Chart {
             .map_or(2, usize::from);
         let mut studies: Vec<_> = self
             .indicators()
-            .filter(|(_, study)| study.is_visible())
             .map(|(_, study)| study.clone_box())
             .collect();
         let mut columns = Vec::new();
@@ -81,9 +80,20 @@ impl Chart {
             "close".into(),
             "volume".into(),
         ];
-        for (index, study) in studies.iter_mut().enumerate() {
+        for study in &mut studies {
             study.set_instrument(self.instrument());
-            study.calculate(bars);
+        }
+        let requests = studies
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+        super::studies::calculate(&mut studies, &self.study_ids, bars, &sources);
+        for (index, study) in studies
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, study)| study.is_visible())
+        {
             let names = study.line_names();
             for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
                 header.push(format!(
@@ -299,6 +309,8 @@ impl Chart {
         chart.primitives = self.primitives.clone();
         chart.next_primitive = self.next_primitive;
         chart.settle_primitives();
+        chart.study_data = self.study_data.snapshot();
+        chart.recalculate_studies();
         chart
     }
 }

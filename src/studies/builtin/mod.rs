@@ -268,10 +268,14 @@ mod bull_bear_power;
 mod chaikin_oscillator;
 mod ulcer_index;
 // Standard oscillators
+mod market_breadth;
 mod price_momentum_oscillator;
 mod rci_ribbon;
 mod relative_volatility_index;
 mod smi_ergodic;
+pub use market_breadth::{
+    AdvanceDeclineLine, AdvanceDeclineRatio, CumulativeVolumeIndex, MarketBreadth,
+};
 mod special_k;
 mod woodies_cci;
 // Time studies

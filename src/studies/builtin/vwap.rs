@@ -61,6 +61,15 @@ pub enum VwapAnchor {
     Events,
 }
 
+const VWAP_ANCHORS: [VwapAnchor; 6] = [
+    VwapAnchor::Session,
+    VwapAnchor::Week,
+    VwapAnchor::Month,
+    VwapAnchor::Quarter,
+    VwapAnchor::Year,
+    VwapAnchor::Events,
+];
+
 impl VwapAnchor {
     /// Identifies the period that holds trading day `day`.
     fn period(self, day: NaiveDate) -> (i32, u32) {
@@ -226,10 +235,63 @@ impl Default for VolumeWeightedAvgPrice {
 }
 
 impl Indicator for VolumeWeightedAvgPrice {
-    crate::studies::inputs::study_inputs!(self;
-        anchor: choice("Anchor", [VwapAnchor::Session, VwapAnchor::Week, VwapAnchor::Month, VwapAnchor::Quarter, VwapAnchor::Year, VwapAnchor::Events]),
-        percentage_bands: toggle("Percentage bands")
-    ; {});
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        vec![
+            StudyInput::new(
+                "anchor",
+                "Anchor",
+                InputValue::Choice(self.anchor as usize),
+                InputKind::Choice(
+                    VWAP_ANCHORS
+                        .iter()
+                        .map(|anchor| format!("{anchor:?}"))
+                        .collect(),
+                ),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "percentage_bands",
+                "Percentage bands",
+                InputValue::Toggle(self.percentage_bands),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+        ]
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), &'static str> {
+        use crate::studies::InputValue;
+        // Older templates stored this inferred flag; it never controlled the calculation.
+        if id == "daily" && matches!(value, InputValue::Toggle(_)) {
+            return Ok(());
+        }
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !schema.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        match (id, value) {
+            ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
+            ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
+            _ => return Err("invalid VWAP input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn name(&self) -> &str {
         "VWAP"

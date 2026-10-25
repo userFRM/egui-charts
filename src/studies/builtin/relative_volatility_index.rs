@@ -101,6 +101,12 @@ impl Default for RelativeVolatilityIndex {
 }
 
 impl Indicator for RelativeVolatilityIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         length: length("Length", 1, usize::MAX)
     ; {});

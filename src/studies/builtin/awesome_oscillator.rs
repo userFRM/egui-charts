@@ -77,6 +77,12 @@ impl Default for AwesomeOscillator {
 }
 
 impl Indicator for AwesomeOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         fast_period: length("Fast period", 1, usize::MAX),
         slow_period: length("Slow period", 1, usize::MAX)

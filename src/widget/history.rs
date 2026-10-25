@@ -427,6 +427,7 @@ impl Chart {
             self.pending_from.insert(at, None);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
+        self.recalculate_studies();
         // Replacing a study during history replay is not a volume-switch edit.
         self.config.show_volume = show_volume;
         for (change, before) in action.studies.iter_mut().zip(current) {
