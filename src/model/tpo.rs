@@ -767,7 +767,7 @@ mod tests {
             &'static [(i64, f64, f64)],
             &'static [(usize, usize, char, i64, RangeInclusive<i64>)],
         );
-        let cases: [Case; 6] = [
+        let cases: [Case; 7] = [
             // One 30-minute bar: one TPO on each row it spans
             (&[(0, 100.0, 104.0)], &[(0, 0, 'A', 0, 100..=104)]),
             // Two bars of one period: their union, one TPO per row, stamped with the first bar
@@ -798,6 +798,11 @@ mod tests {
             (
                 &[(0, 100.0, 100.0), (900, 101.0, 101.0)],
                 &[(0, 0, 'A', 0, 100..=100), (1, 0, 'A', 900, 101..=101)],
+            ),
+            // An inverted bar stays unusable even when both endpoints round to the same row.
+            (
+                &[(0, 100.0, 100.0), (900, 100.2, 100.1), (960, 101.0, 101.0)],
+                &[(0, 0, 'A', 0, 100..=100), (1, 0, 'A', 960, 101..=101)],
             ),
         ];
         let start = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
