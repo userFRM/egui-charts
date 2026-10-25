@@ -344,6 +344,7 @@ pub trait Indicator: Send {
 
     /// Apply the chart instrument's time zone and trading session. Returns `true`
     /// if calculation settings changed and the caller must recalculate from bar 0.
+    /// The chart calls this on add and before calculation after its symbol or metadata changes.
     /// `None` clears chart metadata and restores the study's own settings.
     /// Studies independent of instrument metadata keep the default.
     fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
