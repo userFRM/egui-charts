@@ -81,6 +81,8 @@ pub(super) struct Group {
     pub peak: usize,
     /// The bars with the lowest and highest price-source value.
     pub extremes: [usize; 2],
+    /// Draw the source bars when aggregation would erase a gap or per-bar styling.
+    preserve_bars: bool,
 }
 
 /// The groups of the main bars at the frame's factor, rebuilt when the bars, the factor or the
@@ -111,13 +113,26 @@ impl Groups {
         self.groups
             .extend(rest.chunks(factor).enumerate().map(|(index, chunk)| {
                 let first = (kept + index) * factor;
+                let valued = chunk
+                    .iter()
+                    .position(|bar| !bar.is_whitespace())
+                    .unwrap_or(0);
                 let mut group = Group {
-                    bar: chunk[0].clone(),
-                    peak: first,
-                    extremes: [first; 2],
+                    bar: chunk[valued].clone(),
+                    peak: first + valued,
+                    extremes: [first + valued; 2],
+                    preserve_bars: chunk
+                        .iter()
+                        .any(|bar| bar.is_whitespace() || bar.colors.is_some()),
                 };
-                let mut extremes = [value(&chunk[0]); 2];
-                for (offset, bar) in chunk.iter().enumerate().skip(1) {
+                group.bar.time = chunk[0].time;
+                let mut extremes = [value(&chunk[valued]); 2];
+                for (offset, bar) in chunk
+                    .iter()
+                    .enumerate()
+                    .skip(valued + 1)
+                    .filter(|(_, bar)| !bar.is_whitespace())
+                {
                     group.bar.high = group.bar.high.max(bar.high);
                     group.bar.low = group.bar.low.min(bar.low);
                     if bar.volume > group.bar.volume {
@@ -134,7 +149,9 @@ impl Groups {
                         group.extremes[1] = first + offset;
                     }
                 }
-                group.bar.close = chunk[chunk.len() - 1].close;
+                if let Some(last) = crate::model::last_with_value(chunk) {
+                    group.bar.close = last.close;
+                }
                 group
             }));
     }
@@ -192,16 +209,25 @@ impl Merged {
             let group = &groups.groups[g];
             let first = g * factor;
             let last = (first + factor).min(bars.len()) - 1;
-            if line {
+            if group.preserve_bars {
+                merged.bars.extend_from_slice(&bars[first..=last]);
+                merged
+                    .index
+                    .extend((first..=last).map(|index| index as f32));
+            } else if line {
                 let mut points = [first, group.extremes[0], group.extremes[1], last];
                 points.sort_unstable();
                 for (i, &index) in points.iter().enumerate() {
                     if i == 0 || points[i - 1] != index {
                         let bar = &bars[index];
                         let price = source.compute(bar.open, bar.high, bar.low, bar.close);
-                        merged
-                            .bars
-                            .push(Bar::new(bar.time, price, price, price, price, bar.volume));
+                        merged.bars.push(Bar {
+                            open: price,
+                            high: price,
+                            low: price,
+                            close: price,
+                            ..bar.clone()
+                        });
                         merged.index.push(index as f32);
                     }
                 }
@@ -211,5 +237,52 @@ impl Merged {
             }
         }
         merged
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::BarColors;
+
+    #[test]
+    fn pixel_groups_keep_gaps_and_bar_colours() {
+        let mut bars: Vec<_> = (0..16)
+            .map(|i| {
+                Bar::from_value(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i),
+                    i as f64,
+                )
+            })
+            .collect();
+        bars[0] = Bar::whitespace(bars[0].time);
+        bars[3] = Bar::whitespace(bars[3].time);
+        bars[5].colors = Some(Box::new(BarColors {
+            color: Some(egui::Color32::RED),
+            ..Default::default()
+        }));
+        for bar in &mut bars[8..12] {
+            *bar = Bar::whitespace(bar.time);
+        }
+        let mut groups = Groups::default();
+        groups.update(&bars, 1, 4, PriceSource::Close);
+        // A gap at either edge cannot poison the aggregate used by the volume and time axes.
+        assert_eq!(
+            (groups.groups[0].bar.open, groups.groups[0].bar.close),
+            (1.0, 2.0)
+        );
+        assert!(groups.groups[2].bar.is_whitespace());
+        for line in [false, true] {
+            let merged = Merged::new(&bars, &groups, 0..bars.len(), line, PriceSource::Close);
+            // Only the last, ordinary column can be reduced; gaps and styled bars keep their slots.
+            assert_eq!(
+                &merged.index[..12],
+                &(0..12).map(|i| i as f32).collect::<Vec<_>>()
+            );
+            assert!(merged.bars[0].is_whitespace() && merged.bars[3].is_whitespace());
+            assert!(merged.bars[8..12].iter().all(Bar::is_whitespace));
+            assert_eq!(merged.bars[5].colors, bars[5].colors);
+            assert!(merged.bars.len() < bars.len());
+        }
     }
 }

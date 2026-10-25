@@ -187,6 +187,8 @@ mod tests {
             low: 98.0,
             close: 103.0,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         };
 
         // Case 1: Normal range (high - low is largest)
@@ -214,6 +216,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         };
         let first = bar(102.0, 98.0, 100.0);
         // Length 2 around a bad bar: ranges 4, max(2, 3, 1) = 3, then from the close of 102

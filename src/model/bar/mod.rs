@@ -37,10 +37,10 @@ mod levels;
 mod patterns;
 
 // Re-export main types
-pub use bar::Bar;
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
-pub(crate) use bar::percent_change;
+pub use bar::{Bar, BarColors};
+pub(crate) use bar::{last_with_value, percent_change};
 pub use bar_data::BarData;
 pub(crate) use levels::{bar_level_keys, level_grid};
 pub use patterns::CandlePatterns;

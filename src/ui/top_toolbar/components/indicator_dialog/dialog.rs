@@ -862,6 +862,8 @@ mod tests {
                     low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
                     close,
                     volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect();

@@ -152,8 +152,11 @@ impl PriceSeries {
         }
     }
 
-    /// The last-value tag colour: the bar's direction for the OHLC types.
+    /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types.
     pub(super) fn value_color(&self, bar: &Bar) -> Color32 {
+        if let Some(color) = bar.colors.as_ref().and_then(|own| own.color) {
+            return color;
+        }
         match self.options.chart_type.uses_ohlc() {
             true if bar.close >= bar.open => self.options.up_color,
             true => self.options.down_color,
@@ -534,8 +537,10 @@ impl Chart {
     /// The bar whose close the series' price line and last value label show.
     fn series_last_bar<'a>(&self, item: &'a PriceSeries) -> Option<&'a Bar> {
         match item.options.style.price_line_source {
-            PriceLineSource::LastBar => item.bars.last(),
-            PriceLineSource::LastVisible => item.bars[self.series_range(item)].last(),
+            PriceLineSource::LastBar => crate::model::last_with_value(&item.bars),
+            PriceLineSource::LastVisible => {
+                crate::model::last_with_value(&item.bars[self.series_range(item)])
+            }
         }
     }
 
@@ -561,7 +566,10 @@ impl Chart {
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
         let mode = self.secondary_scale(item.options.scale).options().mode;
         let range = self.series_range(item);
-        let base = item.bars[range].first().map_or(f64::NAN, |bar| bar.close);
+        let base = item.bars[range]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .map_or(f64::NAN, |bar| bar.close);
         PriceTransform { mode, base }
     }
 
@@ -578,7 +586,9 @@ impl Chart {
         item.bars
             .binary_search_by_key(&time, |bar| bar.time)
             .ok()
-            .map(|at| item.bars[at].close)
+            .map(|at| &item.bars[at])
+            .filter(|bar| !bar.is_whitespace())
+            .map(|bar| bar.close)
     }
 
     /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
@@ -878,7 +888,7 @@ impl Chart {
                 };
                 let bar = Bar {
                     time: marker.time,
-                    ..*bar
+                    ..bar.clone()
                 };
                 crate::chart::renderers::render_markers(
                     &RenderContext::new(plot, rect),
@@ -918,14 +928,15 @@ impl Chart {
                         )
                     })
                     .map(|bar| bar.time);
-                let bar = selected_time
-                    .and_then(|time| {
-                        item.bars
-                            .binary_search_by_key(&time, |bar| bar.time)
-                            .ok()
-                            .map(|at| &item.bars[at])
-                    })
-                    .or_else(|| selected_time.is_none().then(|| item.bars.last()).flatten());
+                let bar = match selected_time {
+                    Some(time) => item
+                        .bars
+                        .binary_search_by_key(&time, |bar| bar.time)
+                        .ok()
+                        .map(|at| &item.bars[at])
+                        .filter(|bar| !bar.is_whitespace()),
+                    None => crate::model::last_with_value(&item.bars),
+                };
                 let value = bar.map_or_else(|| "∅".into(), |bar| format!("{:.2}", bar.close));
                 plot.text(
                     Pos2::new(rect.left() + 8.0, top + row as f32 * 20.0),

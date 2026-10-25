@@ -26,7 +26,7 @@ impl Chart {
         if !self.config.show_countdown || !self.config.show_symbol_last_val {
             return None;
         }
-        let last = self.state.data().bars.last()?;
+        let last = crate::model::last_with_value(&self.state.data().bars)?;
         let timeframe = self.timeframe?;
         if matches!(timeframe, crate::model::Timeframe::Ticks(_)) {
             return None;
@@ -445,9 +445,15 @@ impl Chart {
         use crate::model::LastPriceAnimation;
         let styles = &self.chart_type_params.styles;
         let animation = styles.last_price_animation;
-        let Some(last) = self.state.shown().last() else {
+        let Some(index) = self
+            .state
+            .shown()
+            .iter()
+            .rposition(|bar| !bar.is_whitespace())
+        else {
             return;
         };
+        let last = &self.state.shown()[index];
         let price = self
             .config
             .price_source
@@ -459,6 +465,7 @@ impl Chart {
             &coords.price,
             price_rect,
             price,
+            last,
         )
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
@@ -480,10 +487,7 @@ impl Chart {
             LastPriceAnimation::Continuous => (now / period).fract(),
             _ => (now - started) / period,
         };
-        let point = Pos2::new(
-            coords.idx_to_x(self.state.shown().len() - 1),
-            coords.price.price_to_y(price),
-        );
+        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
         if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
             rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
             ui.ctx().request_repaint();
@@ -1551,7 +1555,7 @@ impl Chart {
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
-            && let Some(last) = self.state.data().bars.last()
+            && let Some(last) = crate::model::last_with_value(&self.state.data().bars)
             && let Some(index) = self
                 .state
                 .data()
@@ -1561,7 +1565,7 @@ impl Chart {
                         < exchange_session.trading_date(last.time)
                 })
                 .checked_sub(1)
-            && let Some(previous) = self.state.data().bars.get(index)
+            && let Some(previous) = crate::model::last_with_value(&self.state.data().bars[..=index])
         {
             let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
                 .with_style(crate::model::LineStyle::Dotted)
@@ -1603,12 +1607,17 @@ impl Chart {
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
         // from the newest bar in view
         let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => self.state.data().bars.last(),
-            crate::model::PriceLineSource::LastVisible => visible_data.last(),
+            crate::model::PriceLineSource::LastBar => {
+                crate::model::last_with_value(&self.state.data().bars)
+            }
+            crate::model::PriceLineSource::LastVisible => {
+                crate::model::last_with_value(visible_data)
+            }
         };
         let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
             let color = style
                 .price_line_color
+                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
                 .unwrap_or(if last.close >= last.open {
                     self.config.bullish_color
                 } else {
@@ -2013,7 +2022,14 @@ impl Chart {
             let selected = hover_pos
                 .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
                 .map(|index| start_idx + index)
-                .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
+                .unwrap_or_else(|| {
+                    // The last bar with a value, before any whitespace bars at the end.
+                    let shown = self.state.shown();
+                    shown
+                        .iter()
+                        .rposition(|bar| !bar.is_whitespace())
+                        .unwrap_or(shown.len().saturating_sub(1))
+                });
             if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
@@ -2035,24 +2051,23 @@ impl Chart {
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_visible && self.config.show_symbol_labels;
                 legend.title_as_description = self.config.title_as_description;
-                legend.show_ohlc = self.main_series_visible && self.config.show_ohlc_info;
-                legend.show_change = self.main_series_visible && self.config.show_ohlc_change;
-                legend.show_change_percent =
-                    self.main_series_visible && self.config.show_ohlc_change_percent;
+                // A whitespace bar has no values to show.
+                let values = self.main_series_visible && !bar.is_whitespace();
+                legend.show_ohlc = values && self.config.show_ohlc_info;
+                legend.show_change = values && self.config.show_ohlc_change;
+                legend.show_change_percent = values && self.config.show_ohlc_change_percent;
                 legend.show_indicator_titles = self.config.show_indicator_labels;
                 legend.show_indicator_inputs = self.config.show_indicator_inputs;
                 legend.show_indicator_values = self.config.show_indicator_last_val;
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
-                legend.previous_close = selected
-                    .checked_sub(1)
-                    .and_then(|index| self.state.shown().get(index))
-                    .map(|bar| bar.close);
+                legend.previous_close =
+                    crate::model::last_with_value(&self.state.shown()[..selected])
+                        .map(|bar| bar.close);
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
-                legend.show_volume = self.main_series_visible
-                    && self.chart_type.supports_volume()
-                    && self.config.show_legend_volume;
+                legend.show_volume =
+                    values && self.chart_type.supports_volume() && self.config.show_legend_volume;
                 let (quote_action, study_settings, bottom) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(
@@ -2167,6 +2182,7 @@ impl Chart {
                         &price_map,
                         price_rect,
                         value,
+                        bar,
                     ) {
                         rendering::candles::render_crosshair_marker(
                             &painter.with_clip_rect(price_rect),
@@ -2221,6 +2237,7 @@ impl Chart {
                     && !self.drawings.eraser_mode
                     && self.drawings.active_tool.is_none()
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
+                    && !visible_data[local_idx].is_whitespace()
                 {
                     let candle = &visible_data[local_idx];
                     if tooltip_options.on_long_press {
@@ -2239,7 +2256,12 @@ impl Chart {
                             5.0,
                             5.0,
                         );
-                        for (index, bar) in visible_data.iter().enumerate().step_by(25) {
+                        for (index, bar) in visible_data
+                            .iter()
+                            .enumerate()
+                            .step_by(25)
+                            .filter(|(_, bar)| !bar.is_whitespace())
+                        {
                             let pos = Pos2::new(
                                 coords.idx_to_x(start_idx + index),
                                 price_map.price_to_y(bar.close),
@@ -2256,9 +2278,7 @@ impl Chart {
                         &price_ctx,
                         hover_pos,
                         candle,
-                        (start_idx + local_idx)
-                            .checked_sub(1)
-                            .and_then(|index| self.state.shown().get(index))
+                        crate::model::last_with_value(&self.state.shown()[..start_idx + local_idx])
                             .map(|bar| bar.close),
                         &tooltip_options,
                         &colors,
@@ -2346,11 +2366,7 @@ impl Chart {
             }
         }
 
-        let current_price = self
-            .state
-            .data()
-            .bars
-            .last()
+        let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
                 price_map.transform().label(
@@ -2945,6 +2961,7 @@ mod tests {
     #[test]
     fn line_pulse_and_crosshair_marker_follow_their_bars() {
         use crate::model::{ChartType, LastPriceAnimation};
+        use egui::Color32;
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
         chart.set_chart_type(ChartType::Line);
@@ -2987,6 +3004,40 @@ mod tests {
             ),
             vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
         );
+        // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
+        // bar's own colour, and a hovered empty slot has no dot.
+        let mut bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        bars[98].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::GOLD),
+            ..Default::default()
+        }));
+        bars[99] = crate::model::Bar::whitespace(bars[99].time);
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        let map = chart.get_chart_mapping();
+        for (time, index, marker) in [(5.2, 98, true), (5.3, 99, false)] {
+            let hover = Pos2::new(
+                map.idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(hover)]);
+            for radius in [3.0, 5.0] {
+                let dots: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Circle(dot) if dot.radius == radius && dot.fill == Color32::GOLD => {
+                            Some(dot.center)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected = if radius == 3.0 || marker {
+                    vec![Pos2::new(map.idx_to_x(98), map.price_to_y(110.0))]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(dots, expected, "{radius} at {index}");
+            }
+        }
     }
 
     /// Axis buttons route their clicks without changing the price range or viewport.

@@ -1052,7 +1052,8 @@ impl ChartMenus {
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
                     self.chart.set_symbol(chart.symbol.clone());
-                    self.chart.market_price = chart.bars(SeriesId::MAIN).last().map(|b| b.close);
+                    self.chart.market_price =
+                        crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
                     self.chart.tick_size = chart
                         .instrument()
                         .and_then(|instrument| instrument.tick_size)
