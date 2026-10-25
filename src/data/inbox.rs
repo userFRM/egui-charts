@@ -39,11 +39,21 @@ pub fn aggregate_trades(
     trades: &[Tick],
     clock: impl Into<BarClock>,
 ) -> Result<Vec<Bar>, FeedError> {
+    aggregate_trades_with_tick_size(trades, clock, None)
+}
+
+/// Rebuilds trade bars as `aggregate_trades` does, with an instrument tick size for range bars.
+/// The tick size must be positive and finite for a range interval.
+pub fn aggregate_trades_with_tick_size(
+    trades: &[Tick],
+    clock: impl Into<BarClock>,
+    tick_size: Option<f64>,
+) -> Result<Vec<Bar>, FeedError> {
     let Some(last) = trades.last() else {
         return Ok(Vec::new());
     };
     let inbox = Arc::new(Inbox::default());
-    let sink = inbox.subscribe(String::new(), clock.into(), trades.len(), None);
+    let sink = inbox.subscribe(String::new(), clock.into(), trades.len(), tick_size);
     sink.set_server_time(last.ts);
     for trade in trades {
         sink.push_tick(trade.clone());
@@ -82,6 +92,8 @@ struct Live {
     /// Feed clock minus system clock, as last reported; zero until then.
     offset: TimeDelta,
     count_bar: Option<(Bar, u64)>,
+    delta: f64,
+    event_closed: bool,
     last_trade: Option<DateTime<Utc>>,
     last_close: Option<f64>,
     empty: bool,
@@ -215,6 +227,8 @@ impl Inbox {
             forming: None,
             offset: TimeDelta::zero(),
             count_bar: None,
+            delta: 0.0,
+            event_closed: false,
             last_trade: None,
             last_close: None,
             empty: false,
@@ -398,12 +412,12 @@ impl Sink {
                 live.updates.rejected += 1;
                 return;
             }
-            if matches!(
-                live.clock.timeframe(),
-                Some(crate::model::Timeframe::Ticks(_))
-            ) && live.forming.is_none_or(|last| slot >= last)
+            if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+                && live.forming.is_none_or(|last| slot >= last)
             {
                 live.count_bar = None;
+                live.event_closed = false;
+                live.delta = 0.0;
                 live.last_trade = Some(slot);
             }
             if live.forming.is_none_or(|last| slot >= last) {
@@ -426,57 +440,24 @@ impl Sink {
     /// Count intervals start at the first accepted execution of the subscription. Replay the
     /// retained executions on resubscription to rebuild a partial bar. Count bars use the first
     /// trade's time; if that would duplicate a bar time, it advances by one nanosecond. Original
-    /// execution times remain unchanged. A pushed count bar must be complete: the next trade
+    /// execution times remain unchanged. Volume and delta fills split exactly at the threshold;
+    /// range bars need the instrument tick size and close at the first real fill reaching it.
+    /// A fill producing more than 100,000 bars is rejected atomically. A pushed trade-based bar must be complete: the next trade
     /// starts a fresh bar. History pages should contain complete count bars only.
     pub fn push_tick(&self, tick: Tick) {
         let system = Utc::now();
         self.update(|live| {
-            if let Some(crate::model::Timeframe::Ticks(count)) = live.clock.timeframe() {
+            if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
                 if !trades::valid(&tick) || live.ahead(tick.ts, system) {
                     live.updates.rejected += 1;
                 } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
                     live.updates.repeated_ticks += 1;
                 } else if live.last_trade.is_some_and(|last| tick.ts < last) {
                     live.updates.late_ticks += 1;
+                } else if live.fold_trade_bar(&tick).is_err() {
+                    live.updates.rejected += 1;
                 } else {
-                    let starts = live
-                        .count_bar
-                        .as_ref()
-                        .is_none_or(|(_, n)| *n == count.get());
-                    let open = if starts {
-                        match live.forming.filter(|last| *last >= tick.ts) {
-                            Some(last) => {
-                                match last.checked_add_signed(TimeDelta::nanoseconds(1)) {
-                                    Some(time) => time,
-                                    None => {
-                                        live.updates.rejected += 1;
-                                        return;
-                                    }
-                                }
-                            }
-                            None => tick.ts,
-                        }
-                    } else {
-                        live.count_bar.as_ref().unwrap().0.time
-                    };
-                    let trade = Bar::new(
-                        open, tick.price, tick.price, tick.price, tick.price, tick.size,
-                    );
-                    let (bar, n) = if starts {
-                        (trade, 1)
-                    } else {
-                        let (old, n) = live.count_bar.as_ref().unwrap();
-                        let Some(bar) = fold(old, &trade) else {
-                            live.updates.rejected += 1;
-                            return;
-                        };
-                        (bar, n + 1)
-                    };
-                    live.forming = Some(open);
                     live.last_trade = Some(tick.ts);
-                    live.count_bar = Some((bar.clone(), n));
-                    // A full snapshot survives drains without adding the same trades twice.
-                    live.updates.bars.insert(open, (bar, Origin::Live));
                     if let Some(id) = tick.id {
                         live.taken.insert(id);
                     }
@@ -766,6 +747,93 @@ impl Live {
                 .is_some_and(|before| self.clock.bar_open(before) > self.clock.bar_open(now))
     }
 
+    /// Folds exact volume and delta thresholds atomically; raw fills stay intact for order flow.
+    fn fold_trade_bar(&mut self, tick: &Tick) -> Result<(), ()> {
+        use crate::model::{Timeframe, TradeSide};
+        let timeframe = self.clock.timeframe().ok_or(())?;
+        let mut forming = self.forming;
+        let mut current = self.count_bar.clone();
+        let (mut delta, mut closed) = (self.delta, self.event_closed);
+        let mut remaining = tick.size;
+        let mut bars = Vec::new();
+        loop {
+            if bars.len() == 100_000 {
+                return Err(());
+            }
+            let starts = closed || current.is_none();
+            let (old, count) = if starts {
+                let time = match forming.filter(|last| *last >= tick.ts) {
+                    Some(last) => last
+                        .checked_add_signed(TimeDelta::nanoseconds(1))
+                        .ok_or(())?,
+                    None => tick.ts,
+                };
+                delta = 0.0;
+                (
+                    Bar::new(time, tick.price, tick.price, tick.price, tick.price, 0.0),
+                    0,
+                )
+            } else {
+                current.clone().ok_or(())?
+            };
+            let size = match timeframe {
+                Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
+                Timeframe::Delta(limit) => match tick.side {
+                    Some(TradeSide::Buy) => remaining.min(limit.get() as f64 - delta),
+                    Some(TradeSide::Sell) => remaining.min(limit.get() as f64 + delta),
+                    None => remaining,
+                },
+                _ => remaining,
+            };
+            let fill = Bar::new(
+                old.time, tick.price, tick.price, tick.price, tick.price, size,
+            );
+            let bar = fold(&old, &fill).ok_or(())?;
+            delta += match tick.side {
+                Some(TradeSide::Buy) => size,
+                Some(TradeSide::Sell) => -size,
+                None => 0.0,
+            };
+            closed = match timeframe {
+                Timeframe::Ticks(limit) => count + 1 >= limit.get(),
+                Timeframe::Volume(limit) => bar.volume >= limit.get() as f64,
+                Timeframe::Delta(limit) => delta.abs() >= limit.get() as f64,
+                Timeframe::Range(ticks) => {
+                    let tick_size = self
+                        .tick_size
+                        .filter(|s| s.is_finite() && *s > 0.0)
+                        .ok_or(())?;
+                    let range = ticks.get() as f64 * tick_size;
+                    if !range.is_finite() {
+                        return Err(());
+                    }
+                    (bar.high / tick_size).round() - (bar.low / tick_size).round()
+                        >= ticks.get() as f64
+                }
+                _ => return Err(()),
+            };
+            forming = Some(bar.time);
+            current = Some((bar.clone(), count + 1));
+            bars.push(bar);
+            let left = remaining - size;
+            if left <= 0.0 {
+                break;
+            }
+            if left == remaining {
+                return Err(());
+            }
+            remaining = left;
+        }
+        self.forming = forming;
+        self.count_bar = current;
+        self.delta = delta;
+        self.event_closed = closed;
+        for bar in bars {
+            self.updates.bars.insert(bar.time, (bar, Origin::Live));
+        }
+        Ok(())
+    }
+
     /// Applies a depth update stamped `ts`, sampling the book as it stood before when the update
     /// opens a new period of the depth history. An update stamped more than a minute after the
     /// feed's time samples nothing: it would hold the open period, and every later column, until
@@ -825,6 +893,50 @@ mod tests {
     use crate::model::{OrderBookLevel, Timeframe};
     use chrono::{DateTime, TimeDelta, Utc};
     use std::sync::atomic::AtomicUsize;
+
+    /// Exact volume/delta splitting preserves total size, while range bars use only real fills.
+    #[test]
+    fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
+        use crate::model::TradeSide::{Buy, Sell};
+        #[rustfmt::skip]
+        let cases = [
+            ("5v", vec![(100.0, 3.0, Buy), (102.0, 9.0, Sell)],
+                vec![(100.0, 102.0, 100.0, 102.0, 5.0), (102.0, 102.0, 102.0, 102.0, 5.0), (102.0, 102.0, 102.0, 102.0, 2.0)]),
+            ("5delta", vec![(100.0, 3.0, Buy), (101.0, 2.0, Sell), (102.0, 9.0, Buy)],
+                vec![(100.0, 102.0, 100.0, 102.0, 9.0), (102.0, 102.0, 102.0, 102.0, 5.0)]),
+            ("4r", vec![(100.0, 3.0, Buy), (100.5, 2.0, Sell), (101.0, 1.0, Buy), (99.0, 4.0, Sell)],
+                vec![(100.0, 101.0, 100.0, 101.0, 6.0), (99.0, 99.0, 99.0, 99.0, 4.0)]),
+        ];
+        for (interval, trades, expected) in cases {
+            let inbox = Arc::new(Inbox::default());
+            let tf: Timeframe = interval.parse().unwrap();
+            assert!(tf.is_trade_based());
+            assert_eq!(tf.to_string(), interval);
+            let sink = inbox.subscribe("A".into(), tf.into(), 100, Some(0.25));
+            sink.set_server_time(at(0, 0));
+            let mut bars = BTreeMap::new();
+            let mut raw = Vec::new();
+            for (i, (price, size, side)) in trades.iter().enumerate() {
+                let trade = Tick::new(at(0, 0), *price, *size, Some(*side)).with_id(i as u64);
+                sink.push_tick(trade.clone());
+                sink.push_tick(trade);
+                let (_, updates) = inbox.drain().updates.pop().unwrap();
+                bars.extend(updates.bars);
+                raw.extend(updates.trades.iter().cloned());
+            }
+            let actual: Vec<_> = bars
+                .values()
+                .map(|(b, _)| (b.open, b.high, b.low, b.close, b.volume))
+                .collect();
+            assert_eq!(actual, expected, "{interval}");
+            assert_eq!(raw.len(), trades.len());
+            assert_eq!(
+                bars.values().map(|(b, _)| b.volume).sum::<f64>(),
+                trades.iter().map(|t| t.1).sum::<f64>()
+            );
+            assert!(crate::data::resample(&[], Timeframe::Min1, tf).is_none());
+        }
+    }
 
     #[test]
     fn order_events_feed_aggregated_depth_and_link_execution_trades() {

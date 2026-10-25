@@ -46,10 +46,10 @@ pub fn resample(
 ) -> Option<Vec<Bar>> {
     let (source, target) = (from.into(), to.into());
     let (from, to) = (source.timeframe()?, target.timeframe()?);
-    if source == target || (from == to && matches!(from, Timeframe::Ticks(_))) {
+    if source == target || (from == to && from.is_trade_based()) {
         return Some(bars.to_vec());
     }
-    if matches!(from, Timeframe::Ticks(_)) || matches!(to, Timeframe::Ticks(_)) {
+    if from.is_trade_based() || to.is_trade_based() {
         return None;
     }
     // Weeks do not nest in months or in fixed multi-week intervals, and a month has no fixed length.
@@ -121,8 +121,8 @@ pub(crate) fn resample_periods(
     if (instrument.session.is_none()
         && (instrument.time_zone.is_none() || to.duration_ms() < Timeframe::Day1.duration_ms()))
         || from.duration_ms() >= Timeframe::Day1.duration_ms()
-        || matches!(from, Timeframe::Ticks(_))
-        || matches!(to, Timeframe::Ticks(_))
+        || from.is_trade_based()
+        || to.is_trade_based()
     {
         let output = resample(bars, source.clone(), target.clone())?;
         let mut start = 0;

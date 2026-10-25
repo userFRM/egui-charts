@@ -51,7 +51,7 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 )]
 pub(crate) mod trades;
 
-pub use inbox::{Reply, Sink, aggregate_trades};
+pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};

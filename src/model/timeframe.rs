@@ -103,6 +103,14 @@ pub enum Timeframe {
 
     /// One bar per nonzero number of accepted trades, starting at subscription or replay start.
     Ticks(NonZeroU64),
+    /// Exact traded volume per bar, in whole units. A fill spanning bars is split by size.
+    Volume(NonZeroU64),
+    /// Price range in instrument ticks. Closes on the first real fill reaching the range;
+    /// skipped prices can overshoot it. No synthetic executions are inserted.
+    Range(NonZeroU64),
+    /// Absolute buy minus sell volume per bar, in whole units. Fills split at the threshold;
+    /// unknown sides contribute volume but no delta.
+    Delta(NonZeroU64),
 }
 
 impl Timeframe {
@@ -110,6 +118,9 @@ impl Timeframe {
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
             Timeframe::Ticks(count) => Cow::Owned(format!("{count}t")),
+            Timeframe::Volume(size) => Cow::Owned(format!("{size}v")),
+            Timeframe::Range(ticks) => Cow::Owned(format!("{ticks}r")),
+            Timeframe::Delta(size) => Cow::Owned(format!("{size}delta")),
             Timeframe::Ms100 => Cow::Borrowed("100ms"),
             Timeframe::Ms250 => Cow::Borrowed("250ms"),
             Timeframe::Ms500 => Cow::Borrowed("500ms"),
@@ -129,6 +140,14 @@ impl Timeframe {
             Timeframe::Month1 => Cow::Borrowed("1M"),
             Timeframe::Custom(seconds) => Cow::Owned(format_custom_seconds(seconds.get())),
         }
+    }
+
+    /// Whether bars close on executions rather than a time boundary.
+    pub fn is_trade_based(self) -> bool {
+        matches!(
+            self,
+            Self::Ticks(_) | Self::Volume(_) | Self::Range(_) | Self::Delta(_)
+        )
     }
 
     /// Returns the preset time intervals in ascending duration order. Count intervals are excluded.
@@ -158,7 +177,10 @@ impl Timeframe {
     /// Count intervals have no time duration and return zero; do not use them to step time.
     pub fn duration_ms(&self) -> i64 {
         match self {
-            Timeframe::Ticks(_) => 0,
+            Timeframe::Ticks(_)
+            | Timeframe::Volume(_)
+            | Timeframe::Range(_)
+            | Timeframe::Delta(_) => 0,
             Timeframe::Ms100 => 100,
             Timeframe::Ms250 => 250,
             Timeframe::Ms500 => 500,
@@ -241,6 +263,20 @@ impl FromStr for Timeframe {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        for (suffix, make) in [
+            ("delta", Timeframe::Delta as fn(NonZeroU64) -> Timeframe),
+            ("v", Timeframe::Volume),
+            ("r", Timeframe::Range),
+        ] {
+            if let Some(value) = s.to_lowercase().strip_suffix(suffix)
+                && value.chars().all(|c| c.is_ascii_digit())
+            {
+                return value
+                    .parse::<NonZeroU64>()
+                    .map(make)
+                    .map_err(|_| "Trade interval must be a positive integer".into());
+            }
+        }
         if let Some(count) = s.to_lowercase().strip_suffix('t') {
             return count
                 .parse::<NonZeroU64>()

@@ -204,6 +204,9 @@ impl DemoApp {
         let seconds = tf.duration_ms() / 1000;
         let (value, unit) = match tf {
             Timeframe::Ticks(n) => (n.get(), Unit::Tick),
+            Timeframe::Volume(n) => (n.get(), Unit::Volume),
+            Timeframe::Range(n) => (n.get(), Unit::Range),
+            Timeframe::Delta(n) => (n.get(), Unit::Delta),
             Timeframe::Month1 => (1, Unit::Month),
             Timeframe::Week1 => (1, Unit::Week),
             _ if seconds >= 86400 && seconds % 86400 == 0 => (seconds as u64 / 86400, Unit::Day),

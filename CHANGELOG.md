@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Trade-based `Timeframe::Volume`, `Range` and `Delta` intervals build bars directly from executions and appear in the interval menu, subject to the source interval list. Volume and absolute signed delta split fills exactly at the threshold; raw fills stay intact. Range is measured in instrument ticks and closes on the first real fill reaching it, with possible overshoot across skipped prices. Parse `100v`, `10r` or `100delta`; trade-based bars keep exact opening times and have no countdown or time-based resampling. Migration: exhaustive `Timeframe` and `TimeframeUnit` matches handle the new variants. ([#239](https://github.com/userFRM/egui-charts/issues/239))
+
 - `Sink::push_order_snapshot` and `push_order_event` accept sequenced resting orders, modifications, cancellations and executions. `Chart::order_queue` exposes queue priority, the largest order at a price and levels filtered by minimum order size; the usual aggregated book and depth history continue to work. Known execution trades carry `Tick::resting_order_id`. Gaps, invalid events and the 10,000-order per-side limit require a fresh snapshot, with bounded buffering during resync. ([#555](https://github.com/userFRM/egui-charts/issues/555))
 
 - `Datafeed::depth_history` optionally pages recorded depth through `DepthRequest` and `DepthPage`. Charts with a depth history load past columns and request older pages on scroll-back, preserve live columns on overlap, retain time gaps and stop at the end of history. Feeds without recorded depth keep their existing behaviour. ([#554](https://github.com/userFRM/egui-charts/issues/554))

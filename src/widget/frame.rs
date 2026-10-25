@@ -28,7 +28,7 @@ impl Chart {
         }
         let last = self.state.data().bars.last()?;
         let timeframe = self.timeframe?;
-        if matches!(timeframe, crate::model::Timeframe::Ticks(_)) {
+        if timeframe.is_trade_based() {
             return None;
         }
         let now = self.replay_time().or_else(|| {

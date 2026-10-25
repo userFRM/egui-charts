@@ -76,7 +76,7 @@ impl BarClock {
         let Some(timeframe) = self.timeframe else {
             return t;
         };
-        if matches!(timeframe, Timeframe::Ticks(_)) {
+        if timeframe.is_trade_based() {
             return t;
         }
         if timeframe.duration_ms() < DAY_MS
@@ -171,7 +171,7 @@ impl BarClock {
     /// First boundary after an aligned open, including short days and calendar months.
     pub(crate) fn next_open(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let timeframe = self.timeframe?;
-        if matches!(timeframe, Timeframe::Ticks(_)) {
+        if timeframe.is_trade_based() {
             return None;
         }
         if timeframe.duration_ms() < DAY_MS
