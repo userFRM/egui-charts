@@ -1,7 +1,7 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
 use super::draw_dashed_hline;
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, ProfileDisplay};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
@@ -202,14 +202,42 @@ impl Drawing {
                 Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 80)
             };
 
-            painter.rect_filled(
-                Rect::from_min_max(
-                    Pos2::new(left, top),
-                    Pos2::new(left + width, (bottom - 1.0).max(top)),
-                ),
-                0.0,
-                bar_color,
-            );
+            let paint = |start, width, color| {
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(start, top),
+                        Pos2::new(start + width, (bottom - 1.0).max(top)),
+                    ),
+                    0.0,
+                    color,
+                );
+            };
+            let rgba = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+            match config.display {
+                ProfileDisplay::Total => paint(left, width, bar_color),
+                ProfileDisplay::UpDown => {
+                    let up_width = (profile.up[row] / max_volume) as f32 * max_width;
+                    paint(left, up_width, rgba(config.up_color));
+                    paint(
+                        left + up_width,
+                        (width - up_width).max(0.0),
+                        rgba(config.down_color),
+                    );
+                }
+                ProfileDisplay::Delta => {
+                    let delta = profile.up[row] - profile.down[row];
+                    let color = if delta >= 0.0 {
+                        config.up_color
+                    } else {
+                        config.down_color
+                    };
+                    paint(
+                        left,
+                        (delta.abs() / max_volume) as f32 * max_width,
+                        rgba(color),
+                    );
+                }
+            }
         }
 
         let rect = Rect::from_two_pos(
@@ -391,6 +419,8 @@ struct VolumeProfile {
     row_height: f64,
     /// Volume per row, lowest prices first.
     volume: Vec<f64>,
+    up: Vec<f64>,
+    down: Vec<f64>,
 }
 
 /// Profile of `bars`, the span that starts at bar `first`, with `rows` rows.
@@ -434,6 +464,8 @@ impl VolumeProfile {
             high,
             row_height,
             volume: vec![0.0; rows],
+            up: vec![0.0; rows],
+            down: vec![0.0; rows],
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
@@ -453,6 +485,11 @@ impl VolumeProfile {
     /// in proportion to the overlap.
     fn add(&mut self, bar: &Bar) {
         let (low, row_height) = (self.low, self.row_height);
+        let direction = if bar.close >= bar.open {
+            &mut self.up
+        } else {
+            &mut self.down
+        };
         let top_row = self.volume.len() - 1;
         let row_of = |price: f64| (((price - low) / row_height) as usize).min(top_row);
         if bar.high > bar.low {
@@ -466,10 +503,13 @@ impl VolumeProfile {
             {
                 let row_low = low + row as f64 * row_height;
                 let overlap = bar.high.min(row_low + row_height) - bar.low.max(row_low);
-                *row_volume += bar.volume * overlap.max(0.0) / (bar.high - bar.low);
+                let amount = bar.volume * overlap.max(0.0) / (bar.high - bar.low);
+                *row_volume += amount;
+                direction[row] += amount;
             }
         } else {
             self.volume[row_of(bar.low)] += bar.volume;
+            direction[row_of(bar.low)] += bar.volume;
         }
     }
 
@@ -609,6 +649,20 @@ mod tests {
         {
             assert_close(*got, want);
         }
+        // The down bars are 150 over 11..12.5 and 400 over 12..14.5.
+        for (row, (up, down)) in [
+            (250.0 / 3.0, 0.0),
+            (250.0, 100.0),
+            (3950.0 / 12.0, 290.0),
+            (237.5, 160.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_close(profile.up[row], up);
+            assert_close(profile.down[row], down);
+            assert_close(profile.up[row] + profile.down[row], profile.volume[row]);
+        }
         for (share, value_area) in [(0.5, (1, 2)), (0.7, (0, 2)), (1.0, (0, 3))] {
             assert_eq!(
                 profile.poc_and_value_area(share),
@@ -732,9 +786,13 @@ mod tests {
         };
         let mut bars = sample_bars();
         check(&bars, "first frame");
-        for (high, low, volume) in [(16.0, 12.0, 150.0), (14.0, 12.5, 90.0), (14.5, 12.0, 130.0)] {
+        for (high, low, close, volume) in [
+            (16.0, 12.0, 14.0, 150.0),
+            (14.0, 12.5, 13.5, 90.0),
+            (14.5, 12.0, 12.5, 130.0),
+        ] {
             let forming = bars.last_mut().unwrap();
-            (forming.high, forming.low, forming.volume) = (high, low, volume);
+            (forming.high, forming.low, forming.close, forming.volume) = (high, low, close, volume);
             check(&bars, &format!("tick {low}..{high}"));
         }
         // The bar closes on a trade that was not drawn, and the next one opens.

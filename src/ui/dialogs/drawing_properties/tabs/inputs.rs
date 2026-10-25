@@ -2,7 +2,8 @@
 
 use crate::drawings::{
     Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel, GannConfig, LineStyle,
-    PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig, VolumeProfileConfig,
+    PitchforkConfig, PitchforkLevel, PositionSize, ProfileDisplay, RegressionTrendConfig,
+    VolumeProfileConfig,
 };
 use crate::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
@@ -119,7 +120,8 @@ impl InputsTab {
                 }
             }
             Tool::FixedRangeVolumeProfile | Tool::AnchoredVolumeProfile => {
-                let config = drawing.volume_profile.unwrap_or_default();
+                let original = drawing.volume_profile.unwrap_or_default();
+                let mut config = original;
                 let mut rows = config.rows();
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
@@ -132,9 +134,39 @@ impl InputsTab {
                         &mut percent,
                         f64::MIN_POSITIVE..=100.0,
                     );
+                    ui.label("Volume");
+                    ui.combo_select(
+                        "profile_display",
+                        &mut config.display,
+                        [
+                            ProfileDisplay::Total,
+                            ProfileDisplay::UpDown,
+                            ProfileDisplay::Delta,
+                        ],
+                        |mode| match mode {
+                            ProfileDisplay::Total => "Total".into(),
+                            ProfileDisplay::UpDown => "Up / down".into(),
+                            ProfileDisplay::Delta => "Delta".into(),
+                        },
+                    );
+                    ui.end_row();
+                    if config.display != ProfileDisplay::Total {
+                        pickers.resize_with(2, ColorPickerState::default);
+                        ui.label("Up colour");
+                        level_color(ui, &mut config.up_color, &mut pickers[0]);
+                        ui.end_row();
+                        ui.label("Down colour");
+                        level_color(ui, &mut config.down_color, &mut pickers[1]);
+                        ui.end_row();
+                    }
                 });
-                if rows != config.rows() || percent != config.value_area() * 100.0 {
-                    drawing.volume_profile = VolumeProfileConfig::new(rows, percent / 100.0);
+                if let Some(mut updated) = VolumeProfileConfig::new(rows, percent / 100.0) {
+                    updated.display = config.display;
+                    updated.up_color = config.up_color;
+                    updated.down_color = config.down_color;
+                    if updated != original {
+                        drawing.volume_profile = Some(updated);
+                    }
                 }
             }
             Tool::RegressionTrend => {

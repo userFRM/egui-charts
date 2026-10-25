@@ -325,12 +325,37 @@ impl FibonacciConfig {
     }
 }
 
+/// Volume shown in each price row of a profile built from bars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ProfileDisplay {
+    /// Total volume, with the point of control and value area highlighted.
+    #[default]
+    Total,
+    /// Up-bar and down-bar volume in adjacent segments.
+    UpDown,
+    /// Absolute up minus down volume, coloured by its sign.
+    Delta,
+}
+
+fn profile_up_color() -> [u8; 4] {
+    [38, 166, 154, 180]
+}
+fn profile_down_color() -> [u8; 4] {
+    [239, 83, 80, 180]
+}
+
 /// Settings of the fixed range and anchored volume profile drawings.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VolumeProfileFields")]
 pub struct VolumeProfileConfig {
     rows: usize,
     value_area: f64,
+    /// Volume displayed in each row. Totals still determine POC and value area.
+    pub display: ProfileDisplay,
+    /// Colour of rising bars, including an unchanged close, in split and delta modes.
+    pub up_color: [u8; 4],
+    /// Colour of falling bars in split and delta modes.
+    pub down_color: [u8; 4],
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -338,13 +363,24 @@ pub struct VolumeProfileConfig {
 struct VolumeProfileFields {
     rows: usize,
     value_area: f64,
+    #[serde(default)]
+    display: ProfileDisplay,
+    #[serde(default = "profile_up_color")]
+    up_color: [u8; 4],
+    #[serde(default = "profile_down_color")]
+    down_color: [u8; 4],
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
     type Error = &'static str;
 
     fn try_from(fields: VolumeProfileFields) -> Result<Self, Self::Error> {
-        Self::new(fields.rows, fields.value_area).ok_or("volume profile settings out of bounds")
+        let mut config = Self::new(fields.rows, fields.value_area)
+            .ok_or("volume profile settings out of bounds")?;
+        config.display = fields.display;
+        config.up_color = fields.up_color;
+        config.down_color = fields.down_color;
+        Ok(config)
     }
 }
 
@@ -356,8 +392,11 @@ impl VolumeProfileConfig {
     /// `value_area` share of its volume (above 0, at most 1); `None` when
     /// either is out of bounds.
     pub fn new(rows: usize, value_area: f64) -> Option<Self> {
-        (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0)
-            .then_some(Self { rows, value_area })
+        (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0).then_some(Self {
+            rows,
+            value_area,
+            ..Self::default()
+        })
     }
 
     /// Number of price rows.
@@ -377,6 +416,9 @@ impl Default for VolumeProfileConfig {
         Self {
             rows: 24,
             value_area: 0.7,
+            display: ProfileDisplay::Total,
+            up_color: profile_up_color(),
+            down_color: profile_down_color(),
         }
     }
 }
@@ -498,6 +540,22 @@ mod tests {
                 "{size:?}: got {got:?}, want {want:?}"
             );
         }
+    }
+
+    /// Saved modes and direction colours survive loading, including older records.
+    #[test]
+    fn volume_profile_display_round_trips() {
+        for mode in ["Total", "UpDown", "Delta"] {
+            let stored = serde_json::json!({
+                "rows": 24, "value_area": 0.7, "display": mode,
+                "up_color": [1, 2, 3, 240], "down_color": [4, 5, 6, 200]
+            });
+            let config: VolumeProfileConfig = serde_json::from_value(stored.clone()).unwrap();
+            assert_eq!(serde_json::to_value(config).unwrap(), stored);
+        }
+        let old: VolumeProfileConfig =
+            serde_json::from_str(r#"{"rows":24,"value_area":0.7}"#).unwrap();
+        assert_eq!(old, VolumeProfileConfig::default());
     }
 
     #[test]

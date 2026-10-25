@@ -128,8 +128,8 @@ pub mod services;
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
     DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos, LineStyle,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
-    TimeframeVisibility, VolumeProfileConfig,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, ProfileDisplay,
+    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 
 // Re-export manager types
