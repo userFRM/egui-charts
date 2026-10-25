@@ -148,6 +148,16 @@ impl Search {
             .is_some_and(|rows| !rows.is_empty())
     }
 
+    pub(super) fn recent_names(&self) -> Vec<String> {
+        self.recents
+            .entries()
+            .get("recent")
+            .into_iter()
+            .flatten()
+            .map(|row| row.name.clone())
+            .collect()
+    }
+
     pub(super) fn query(
         &mut self,
         ctx: &egui::Context,

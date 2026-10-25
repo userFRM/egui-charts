@@ -615,6 +615,12 @@ impl DemoApp {
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.template_storage.clone());
+        if let Some(row) = DemoSymbol::symbols()
+            .into_iter()
+            .find(|row| row.name == symbol)
+        {
+            app.symbol_search.record_symbol(&row);
+        }
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
         app.top_toolbar.state.can_trade = true;

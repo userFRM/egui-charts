@@ -308,6 +308,9 @@ impl SymbolSearchDialog {
     #[must_use = "Symbol selection should be handled"]
     pub fn show(&mut self, ctx: &Context, all_symbols: &[Symbol]) -> Option<Symbol> {
         self.search.poll(ctx);
+        if self.search.has_recents() {
+            self.recent_symbols = self.search.recent_names();
+        }
         if !self.is_open {
             return None;
         }
