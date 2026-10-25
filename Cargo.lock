@@ -310,6 +310,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "pure-rust-locales",
  "serde",
  "wasm-bindgen",
  "windows-link",
@@ -323,6 +324,7 @@ checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
 dependencies = [
  "chrono",
  "phf",
+ "serde",
 ]
 
 [[package]]
@@ -605,6 +607,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "wasm-bindgen-futures",
  "web-time",
 ]
 
@@ -2032,6 +2035,12 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "pure-rust-locales"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "869675ad2d7541aea90c6d88c81f46a7f4ea9af8cd0395d38f11a95126998a0d"
 
 [[package]]
 name = "pxfm"

@@ -1,8 +1,10 @@
 //! Host-fed watchlists: named lists of symbols with sections, colour flags, sorting and text
-//! import and export. The host supplies quotes and persists the lists.
+//! import and export. The host's quote service supplies the quotes, and the host persists the
+//! lists.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{
@@ -12,11 +14,15 @@ use egui::{
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::{format_price, price_decimals};
+use crate::data::inbox::Inbox;
 use crate::icons::icons;
+use crate::model::Quote;
+use crate::services::{Listener, Quotes};
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton};
 
-const ROW_HEIGHT: f32 = 26.0;
+/// Height shared by market data rows.
+pub(super) const ROW_HEIGHT: f32 = 26.0;
 /// Height of a panel header row, which fits its title and action buttons.
 pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
@@ -146,33 +152,6 @@ impl Watchlist {
     }
 }
 
-/// The latest prices of one watchlist symbol, supplied by the host.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WatchlistQuote {
-    /// Last traded price.
-    pub last: f64,
-    /// Close of the previous session. The change is `last - prev_close`, and the change percent
-    /// is that difference divided by the absolute previous close, times 100.
-    pub prev_close: f64,
-    /// Decimals of the price columns, as `Instrument::price_decimals`. `None` chooses them from
-    /// the size of the last price.
-    pub price_decimals: Option<u8>,
-}
-
-impl WatchlistQuote {
-    pub(super) fn change(&self) -> f64 {
-        self.last - self.prev_close
-    }
-
-    pub(super) fn change_percent(&self) -> f64 {
-        if self.prev_close == 0.0 {
-            f64::NAN
-        } else {
-            self.change() / self.prev_close.abs() * 100.0
-        }
-    }
-}
-
 /// A sortable watchlist column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchlistColumn {
@@ -207,8 +186,13 @@ struct RowDrag(egui::Id, usize);
 
 /// Watchlists fed by host quotes.
 ///
-/// Feed quotes with [`set_quote`](Self::set_quote) for the [`symbols`](Self::symbols) of the
-/// active list, and keep the chart symbol selected with [`set_selected`](Self::set_selected).
+/// With a [`Quotes`] service attached through [`set_service`](Self::set_service), the panel
+/// subscribes to the [`symbols`](Self::symbols) of the active list and the selected symbol, and
+/// subscribes again whenever they change; call [`poll`](Self::poll) each frame, even while the
+/// panel is hidden. Without one, set quotes with [`set_quote`](Self::set_quote). Either way
+/// [`quote`](Self::quote) reads them back, so the selected symbol's quote can feed the symbol
+/// details panel, the symbol header and the order ticket. Keep the chart symbol selected with
+/// [`set_selected`](Self::set_selected).
 /// The list name in the header opens the list menu; beside it, the add button returns
 /// [`WatchlistAction::AddSymbol`], the advanced view button [`WatchlistAction::AdvancedView`],
 /// and the more button opens the actions on the active list. Clicking a symbol, or moving
@@ -220,9 +204,18 @@ struct RowDrag(egui::Id, usize);
 pub struct WatchlistPanel {
     lists: Vec<Watchlist>,
     active: usize,
-    quotes: HashMap<String, WatchlistQuote>,
+    quotes: HashMap<String, Quote>,
+    /// Decimals of the price columns per symbol, where the host knows them.
+    decimals: HashMap<String, u8>,
     sort: Option<(WatchlistColumn, bool)>,
     selected: Option<String>,
+    service: Option<Arc<dyn Quotes>>,
+    inbox: Arc<Inbox>,
+    listener: Option<Listener>,
+    /// Key of the current stream's pushes in the inbox.
+    generation: u64,
+    /// The symbols of the current stream.
+    subscribed: Vec<String>,
 }
 
 impl Default for WatchlistPanel {
@@ -241,8 +234,14 @@ impl WatchlistPanel {
             lists,
             active: 0,
             quotes: HashMap::new(),
+            decimals: HashMap::new(),
             sort: None,
             selected: None,
+            service: None,
+            inbox: Arc::default(),
+            listener: None,
+            generation: 0,
+            subscribed: Vec::new(),
         }
     }
 
@@ -257,8 +256,57 @@ impl WatchlistPanel {
     }
 
     /// Sets the latest quote of `symbol`.
-    pub fn set_quote(&mut self, symbol: &str, quote: WatchlistQuote) {
+    pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
         self.quotes.insert(symbol.to_owned(), quote);
+    }
+
+    /// The latest quote of `symbol`, if the panel holds one.
+    pub fn quote(&self, symbol: &str) -> Option<&Quote> {
+        self.quotes.get(symbol)
+    }
+
+    /// Shows the prices of `symbol` with `decimals`, as `Instrument::price_decimals`. Without
+    /// them, the decimals follow the size of the last price.
+    pub fn set_price_decimals(&mut self, symbol: &str, decimals: u8) {
+        self.decimals.insert(symbol.to_owned(), decimals);
+    }
+
+    /// Takes quotes from `service` from the next [`poll`](Self::poll) on.
+    pub fn set_service(&mut self, service: Arc<dyn Quotes>) {
+        self.service = Some(service);
+        self.listener = None;
+    }
+
+    /// Subscribes again when the symbols to quote changed or the stream lagged, and applies the
+    /// quotes the service pushed. The quotes of symbols no longer subscribed are dropped.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        let Some(service) = &self.service else {
+            return;
+        };
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        let mut symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
+        symbols.extend(self.selected.clone());
+        symbols.sort();
+        symbols.dedup();
+        let lagged = self.listener.as_ref().is_none_or(|l| !l.is_active());
+        if lagged || symbols != self.subscribed {
+            self.generation += 1;
+            let (listener, events) = Listener::new(&self.inbox, self.generation);
+            // Replacing the listener stops the previous stream.
+            self.listener = Some(listener);
+            self.quotes.retain(|symbol, _| symbols.contains(symbol));
+            self.subscribed = symbols;
+            service.subscribe(&self.subscribed, events);
+        }
+        for (key, answer) in self.inbox.drain().answers {
+            if key == self.generation
+                && let Ok(event) = answer.downcast::<(String, Quote)>()
+            {
+                let (symbol, quote) = *event;
+                self.quotes.insert(symbol, quote);
+            }
+        }
     }
 
     /// Marks `symbol` selected, such as the symbol the chart shows.
@@ -285,8 +333,10 @@ impl WatchlistPanel {
             lists,
             active,
             quotes,
+            decimals,
             sort,
             selected,
+            ..
         } = self;
         let theme = ui.active_theme();
         let (mut menu, mut more) = (None, None);
@@ -643,8 +693,7 @@ impl WatchlistPanel {
                                 .selectable(false),
                             );
                             if let Some(quote) = quotes.get(symbol.as_str()) {
-                                let decimals = quote
-                                    .price_decimals
+                                let decimals = (decimals.get(symbol.as_str()).copied())
                                     .unwrap_or_else(|| price_decimals(quote.last));
                                 let change = quote.change();
                                 let color = if change > 0.0 {
@@ -747,7 +796,7 @@ pub(super) fn signed(value: f64, decimals: usize) -> String {
 /// directions; ties keep list order. The symbols of the `collapsed` sections are left out.
 fn display_order(
     items: &[WatchlistItem],
-    quotes: &HashMap<String, WatchlistQuote>,
+    quotes: &HashMap<String, Quote>,
     sort: Option<(WatchlistColumn, bool)>,
     collapsed: &HashSet<usize>,
 ) -> Vec<usize> {
@@ -855,11 +904,7 @@ mod tests {
             symbol("DOWN"),
             symbol("TIE"),
         ];
-        let quote = |last, prev_close| WatchlistQuote {
-            last,
-            prev_close,
-            price_decimals: None,
-        };
+        let quote = |last, prev_close| Quote::new(last, prev_close, Default::default());
         let quotes = HashMap::from([
             ("A".to_owned(), quote(10.0, 10.0)),
             ("C".to_owned(), quote(30.0, 20.0)),
@@ -1012,5 +1057,55 @@ mod tests {
             let (action, _) = frame(&mut panel, vec![key(pressed)]);
             assert_eq!(action, WatchlistAction::SelectSymbol(expected.into()));
         }
+    }
+
+    /// Guards the quote subscription: the panel subscribes to its list and the selected symbol,
+    /// applies the pushes of the current stream, and subscribes again with a new stream when its
+    /// symbols change, stopping the old one (whose late pushes must not land) and dropping the
+    /// quotes of symbols it no longer quotes. A lagged stream is replaced; unchanged symbols keep
+    /// the stream.
+    #[test]
+    fn quotes_follow_the_list_and_the_selected_symbol() {
+        type Subscriptions = Vec<(Vec<String>, crate::services::Events<(String, Quote)>)>;
+        #[derive(Default)]
+        struct Recorder(std::sync::Mutex<Subscriptions>);
+        impl Quotes for Recorder {
+            fn subscribe(
+                &self,
+                symbols: &[String],
+                events: crate::services::Events<(String, Quote)>,
+            ) {
+                self.0.lock().unwrap().push((symbols.to_vec(), events));
+            }
+        }
+        let service = Arc::new(Recorder::default());
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "B,A")]);
+        panel.set_selected("C");
+        panel.set_service(service.clone());
+        let ctx = egui::Context::default();
+        let quote = |last| Quote::new(last, 1.0, Default::default());
+        let stream = |i: usize| service.0.lock().unwrap()[i].clone();
+        panel.poll(&ctx);
+        let (symbols, first) = stream(0);
+        assert_eq!(symbols, ["A", "B", "C"]);
+        first.push(("A".into(), quote(2.0)));
+        first.push(("C".into(), quote(3.0)));
+        panel.poll(&ctx);
+        assert_eq!(panel.quote("C").map(|q| q.last), Some(3.0));
+
+        panel.set_selected("D");
+        panel.poll(&ctx);
+        let (symbols, second) = stream(1);
+        assert_eq!(symbols, ["A", "B", "D"]);
+        assert!(!first.is_active() && second.is_active());
+        first.push(("A".into(), quote(9.0)));
+        panel.poll(&ctx);
+        assert_eq!(panel.quote("A").map(|q| q.last), Some(2.0));
+        assert_eq!(panel.quote("C"), None);
+        assert_eq!(service.0.lock().unwrap().len(), 2);
+
+        (0..=10_000).for_each(|_| second.push(("A".into(), quote(1.0))));
+        panel.poll(&ctx);
+        assert_eq!(stream(2).0, ["A", "B", "D"]);
     }
 }

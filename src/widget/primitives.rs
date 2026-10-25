@@ -594,10 +594,27 @@ mod tests {
         let red = |shape: &Shape| match shape {
             Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED),
             Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+            // Unchanged drawings paint their cached triangles in the same place in the list.
+            Shape::Mesh(mesh) => mesh.triangles().any(|triangle| {
+                triangle
+                    .into_iter()
+                    .all(|index| mesh.vertices[index as usize].color == Color32::RED)
+            }),
             _ => false,
         };
         let above = |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == ABOVE);
-        assert!(shapes.iter().position(red).unwrap() < shapes.iter().position(above).unwrap());
+        let drawing = shapes
+            .iter()
+            .position(red)
+            .expect("the red drawing is painted");
+        let last_pass = shapes
+            .iter()
+            .position(above)
+            .expect("the last pass is painted");
+        assert!(
+            drawing < last_pass,
+            "the last pass must paint above the drawing"
+        );
         assert!(
             shapes
                 .iter()

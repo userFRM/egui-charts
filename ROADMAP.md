@@ -71,8 +71,8 @@ Each item is marked as complete, partial, or missing.
 - [x] Inverted scale
 - [x] Hierarchical time tick generation with weight system
 - [x] Price mark generation
-- [ ] Price formatters (default, currency, percentage, scientific, volume, custom) defined but not used by axis labels
-- [x] Default time formatter on the time axis (locale, relative, custom defined but not injectable; locale is a stub)
+- [x] Host price and percentage formatters for axis ticks, crosshair labels and price tags (`Chart::set_price_formatter`, `set_percentage_formatter`); per-series formatters and locale number separators not yet
+- [x] Host time formatters for axis marks, crosshair and tooltip labels (`Chart::set_time_formatter`), with month and weekday names in the chart's locale (`set_locale`) and a date pattern (`set_date_format`)
 
 ### Multi-Pane
 - [x] `IndicatorPane` widget for separate-pane indicators
@@ -492,7 +492,7 @@ The ui_kit components are generic building blocks:
 
 ### Data Layer
 - [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
-- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account
+- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account, and its fills are drawn on the chart and announced with its rejections
 - [ ] `services::SymbolSearch` and `Signals` are defined, but nothing calls them yet
 - [ ] No in-crate `Datafeed` implementation: the host owns the transport
 

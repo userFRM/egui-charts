@@ -249,6 +249,8 @@ fn price_based(filters: &[String], frames: usize) {
                 high: open.max(close) + 0.05,
                 low: open.min(close) - 0.05,
                 volume: 100.0,
+                colors: None,
+                payload: None,
             }
         })
         .collect();

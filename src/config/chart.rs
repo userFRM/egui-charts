@@ -16,7 +16,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Background style for the chart.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BackgroundStyle {
     /// Solid single-color background
     #[default]
@@ -34,7 +34,7 @@ pub enum BackgroundStyle {
 }
 
 /// When the chart shows its navigation buttons in the main pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
@@ -46,7 +46,7 @@ pub enum NavigationButtons {
 }
 
 /// Style for session break lines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SessionBreakStyle {
     /// Solid line
     #[default]
@@ -66,7 +66,7 @@ pub enum SessionBreakStyle {
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceAxisOptions {
     /// Draw a line between the plot and the axis.
     /// Default: false
@@ -98,7 +98,7 @@ impl Default for PriceAxisOptions {
 }
 
 /// Trading session configuration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionConfig {
     /// Session start time in HH:MM format (24-hour)
     pub session_start: String,
@@ -197,7 +197,7 @@ impl SessionConfig {
 /// overlay, and the real-time navigation button.
 ///
 /// Defaults follow a common dark-theme charting palette.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,
@@ -342,7 +342,7 @@ pub struct ChartConfig {
 }
 
 /// Pos options for the "Go to Realtime" button
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum RealtimeButtonPos {
     /// Top-left of the chart
     TopLeft,
@@ -360,7 +360,7 @@ pub enum RealtimeButtonPos {
 }
 
 /// Pos options for the watermark overlay
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WatermarkPos {
     /// Center of the chart (default)
     #[default]

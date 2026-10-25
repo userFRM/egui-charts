@@ -639,6 +639,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y,
+                time_axis: true,
             };
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 let painter = egui::Painter::new(
@@ -726,6 +727,7 @@ mod tests {
                 revision: 0,
                 bar_to_x: &|x| x,
                 price_to_y: &|price| price as f32,
+                time_axis: true,
             };
             let want = VolumeProfile::of(&bars[1..], 24);
             assert_eq!(*span_profile(&view, 24, 1, &bars[1..]), want, "{case}");

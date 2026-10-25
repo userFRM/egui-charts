@@ -164,7 +164,7 @@ impl Chart {
             manager.add_synced_drawing(drawing);
         }
         self.drawings = manager;
-        self.history = Default::default();
+        self.history.clear();
         Ok(skipped)
     }
 }

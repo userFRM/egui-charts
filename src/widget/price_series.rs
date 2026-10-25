@@ -152,8 +152,11 @@ impl PriceSeries {
         }
     }
 
-    /// The last-value tag colour: the bar's direction for the OHLC types.
+    /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types.
     pub(super) fn value_color(&self, bar: &Bar) -> Color32 {
+        if let Some(color) = bar.colors.as_ref().and_then(|own| own.color) {
+            return color;
+        }
         match self.options.chart_type.uses_ohlc() {
             true if bar.close >= bar.open => self.options.up_color,
             true => self.options.down_color,
@@ -485,6 +488,7 @@ impl Chart {
         Some(transform.label(
             transform.to_scale(price),
             map.price_precision().unwrap_or(2),
+            self.price_label_formatter(transform.mode).as_deref(),
         ))
     }
 
@@ -534,8 +538,10 @@ impl Chart {
     /// The bar whose close the series' price line and last value label show.
     fn series_last_bar<'a>(&self, item: &'a PriceSeries) -> Option<&'a Bar> {
         match item.options.style.price_line_source {
-            PriceLineSource::LastBar => item.bars.last(),
-            PriceLineSource::LastVisible => item.bars[self.series_range(item)].last(),
+            PriceLineSource::LastBar => crate::model::last_with_value(&item.bars),
+            PriceLineSource::LastVisible => {
+                crate::model::last_with_value(&item.bars[self.series_range(item)])
+            }
         }
     }
 
@@ -561,7 +567,10 @@ impl Chart {
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
         let mode = self.secondary_scale(item.options.scale).options().mode;
         let range = self.series_range(item);
-        let base = item.bars[range].first().map_or(f64::NAN, |bar| bar.close);
+        let base = item.bars[range]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .map_or(f64::NAN, |bar| bar.close);
         PriceTransform { mode, base }
     }
 
@@ -578,7 +587,9 @@ impl Chart {
         item.bars
             .binary_search_by_key(&time, |bar| bar.time)
             .ok()
-            .map(|at| item.bars[at].close)
+            .map(|at| &item.bars[at])
+            .filter(|bar| !bar.is_whitespace())
+            .map(|bar| bar.close)
     }
 
     /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
@@ -878,7 +889,7 @@ impl Chart {
                 };
                 let bar = Bar {
                     time: marker.time,
-                    ..*bar
+                    ..bar.clone()
                 };
                 crate::chart::renderers::render_markers(
                     &RenderContext::new(plot, rect),
@@ -918,14 +929,15 @@ impl Chart {
                         )
                     })
                     .map(|bar| bar.time);
-                let bar = selected_time
-                    .and_then(|time| {
-                        item.bars
-                            .binary_search_by_key(&time, |bar| bar.time)
-                            .ok()
-                            .map(|at| &item.bars[at])
-                    })
-                    .or_else(|| selected_time.is_none().then(|| item.bars.last()).flatten());
+                let bar = match selected_time {
+                    Some(time) => item
+                        .bars
+                        .binary_search_by_key(&time, |bar| bar.time)
+                        .ok()
+                        .map(|at| &item.bars[at])
+                        .filter(|bar| !bar.is_whitespace()),
+                    None => crate::model::last_with_value(&item.bars),
+                };
                 let value = bar.map_or_else(|| "∅".into(), |bar| format!("{:.2}", bar.close));
                 plot.text(
                     Pos2::new(rect.left() + 8.0, top + row as f32 * 20.0),
@@ -1082,13 +1094,17 @@ impl Chart {
                     label_rect,
                     axis.right(),
                     mapping.price_to_y(value),
-                    mapping
-                        .transform()
-                        .label(mapping.transform().to_scale(value), 2),
+                    mapping.transform().label(
+                        mapping.transform().to_scale(value),
+                        2,
+                        self.price_label_formatter(mapping.transform().mode)
+                            .as_deref(),
+                    ),
                     colors,
                     &tags,
                 ));
             }
+            let formatter = self.price_label_formatter(map.transform().mode);
             crate::chart::renderers::render_price_labels_at_pos(
                 &ctx,
                 &map,
@@ -1097,11 +1113,13 @@ impl Chart {
                 position,
                 &tags,
                 slot,
+                formatter.as_deref(),
             );
             measured = measured.max(crate::chart::rendering::axes::price_axis_width(
                 &clipped,
                 &map,
                 &[],
+                formatter.as_deref(),
             ));
             ui.interact(
                 axis,
@@ -1518,9 +1536,73 @@ mod tests {
         assert_eq!(drawn.len(), 3);
         assert!(drawn.iter().all(|body| body.top() > main.bottom()));
 
+        #[derive(Clone)]
+        struct Host;
+        impl crate::scales::PriceFormatter for Host {
+            fn format(&self, value: f64) -> String {
+                format!("label {value:.2}")
+            }
+            fn format_tick(&self, value: f64) -> String {
+                format!("tick {value:.2}")
+            }
+            fn clone_box(&self) -> Box<dyn crate::scales::PriceFormatter> {
+                Box::new(self.clone())
+            }
+        }
+        chart.set_price_formatter(Some(std::sync::Arc::new(Host)));
+        chart.set_percentage_formatter(Some(std::sync::Arc::new(Host)));
+        chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+        for (index, (mode, expected)) in [
+            (PriceScaleMode::Normal, "label 230.00"),
+            (PriceScaleMode::Logarithmic, "label 230.00"),
+            (PriceScaleMode::Percentage, "label 4.55"),
+            (PriceScaleMode::IndexedTo100, "label 104.55"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let time = 0.2 + index as f64 * 0.2;
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+            frame(&ctx, &mut chart, time, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let pos = Pos2::new(
+                chart.get_chart_mapping().rect.center().x,
+                map.price_to_y(210.0),
+            );
+            let painted = crate::widget::test_frames::shapes(
+                &ctx,
+                &mut chart,
+                time + 0.1,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            assert_eq!(
+                chart.format_series_price(id, 230.0).as_deref(),
+                Some(expected)
+            );
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.pos.y > main.bottom() => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.iter().any(|text| text.starts_with("tick ")),
+                "{mode:?}: {labels:?}"
+            );
+            let hover_label = chart.format_series_price(id, 210.0).unwrap();
+            assert!(
+                labels.contains(&hover_label.as_str()),
+                "{mode:?}: {labels:?}"
+            );
+        }
+        chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Normal;
+
         assert!(chart.move_series_to_pane(id, PaneId::MAIN));
         assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
-        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
         let main = chart.last_rendered_price_rect;
         let drawn = bodies(&painted);
         assert_eq!(drawn.len(), 3);

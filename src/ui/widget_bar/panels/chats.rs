@@ -5,11 +5,14 @@ use std::sync::Arc;
 
 use egui::{RichText, Ui};
 
+use super::controls::dropdown;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
 use crate::services::{ChatEvent, ChatMessage, Chats, Listener};
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
+use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, PanelHeader};
 
@@ -33,7 +36,7 @@ pub struct ChatsPanel {
     rooms: Vec<String>,
     room: usize,
     messages: VecDeque<ChatMessage>,
-    draft: String,
+    draft: FilterWidget,
     error: Option<FeedError>,
 }
 
@@ -113,13 +116,12 @@ impl ChatsPanel {
                 .show(ui);
             return;
         };
-        egui::ComboBox::from_id_salt("chat_room")
-            .selected_text(&room)
-            .show_ui(ui, |ui| {
-                for (index, name) in self.rooms.iter().enumerate() {
-                    ui.selectable_value(&mut self.room, index, name);
-                }
-            });
+        dropdown(ui, "chat_room", &room, |ui| {
+            for (index, name) in self.rooms.iter().enumerate() {
+                ui.selectable_value(&mut self.room, index, name);
+            }
+        });
+        let room = self.rooms[self.room].clone();
         if let Some(error) = &self.error {
             status_message(
                 ui,
@@ -134,15 +136,20 @@ impl ChatsPanel {
             .show(ui, |ui| {
                 ui.add_space(theme.spacing.sm);
                 ui.horizontal(|ui| {
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.draft)
-                            .hint_text(format!("Message {room}"))
-                            .desired_width(ui.available_width() - 48.0),
-                    );
-                    let entered =
-                        response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    send =
-                        (ui.button("Send").clicked() || entered) && !self.draft.trim().is_empty();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        send = Button::new("Send")
+                            .enabled(!self.draft.query().trim().is_empty())
+                            .show(ui)
+                            .clicked();
+                        self.draft = std::mem::take(&mut self.draft)
+                            .placeholder(format!("Message {room}"))
+                            .show_icon(false)
+                            .show_clear_button(false);
+                        let response = self.draft.show(ui).response;
+                        let entered =
+                            response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        send |= entered && !self.draft.query().trim().is_empty();
+                    });
                 });
             });
         egui::ScrollArea::vertical()
@@ -150,20 +157,34 @@ impl ChatsPanel {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for message in self.messages.iter().filter(|m| m.room == room) {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&message.author).strong());
-                        ui.label(
-                            RichText::new(message.time.format("%H:%M").to_string())
-                                .size(theme.text.small)
-                                .color(theme.ui.text_secondary),
-                        );
+                    ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::hover()), |ui| {
+                        let hovered = ui.response().hovered();
+                        egui::Frame::new()
+                            .fill(if hovered {
+                                theme.ui.btn_bg_hover
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            })
+                            .inner_margin(egui::Margin::symmetric(8, 0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.set_min_height(26.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(&message.author).strong());
+                                    ui.label(
+                                        RichText::new(message.time.format("%H:%M").to_string())
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                });
+                                ui.label(&message.text);
+                            });
                     });
-                    ui.label(&message.text);
                     ui.add_space(theme.spacing.sm);
                 }
             });
         if send && let Some(service) = &self.service {
-            let text = std::mem::take(&mut self.draft);
+            let text = std::mem::take(self.draft.query_mut());
             service.send(room, text.trim().to_owned(), self.inbox.reply(SENT));
         }
     }

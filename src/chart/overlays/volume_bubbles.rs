@@ -188,7 +188,7 @@ impl VolumeBubbles {
         match trade.side {
             Some(TradeSide::Buy) => count(&mut bubble.buys, &mut bubble.buy, size, added),
             Some(TradeSide::Sell) => count(&mut bubble.sells, &mut bubble.sell, size, added),
-            Some(TradeSide::Unknown) | None => {}
+            None => {}
         }
         if bubble.trades == 0 {
             self.bubbles.remove(&key);

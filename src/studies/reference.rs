@@ -209,6 +209,8 @@ fn fixture() -> Vec<Bar> {
                 low: low as f64 / 4.0,
                 close: close as f64 / 4.0,
                 volume: volume as f64,
+                colors: None,
+                payload: None,
             }
         })
         .collect()

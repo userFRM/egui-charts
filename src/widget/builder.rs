@@ -132,6 +132,8 @@ impl Chart {
             next_primitive: 0,
             drawings: DrawingManager::new(),
             symbol_drawings: Default::default(),
+            drawing_store: None,
+            restored_studies: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             pane_options: Default::default(),
@@ -152,6 +154,12 @@ impl Chart {
             indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
+            horizontal_scale: None,
+            locale: None,
+            date_format: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -193,6 +201,14 @@ impl Chart {
             next_price_line: 0,
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_outlined: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_bid_ask: false,
+            #[cfg(feature = "ui")]
+            order_quantity: None,
+            #[cfg(feature = "ui")]
+            quantity_clicked: None,
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,

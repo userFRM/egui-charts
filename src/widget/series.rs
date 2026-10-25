@@ -49,7 +49,8 @@ impl Chart {
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
     /// value, a high or low on the wrong side of the open and close, negative volume) are dropped
-    /// and counted in [`feed_state`](Self::feed_state), the rest sorted by time, and of several
+    /// and counted in [`feed_state`](Self::feed_state), except [whitespace](Bar::whitespace) bars,
+    /// which keep their slots empty. The rest are sorted by time, and of several
     /// bars with one open time, or in one slot of the timeframe for a chart built with a feed, the
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
@@ -182,8 +183,9 @@ impl Chart {
         removed
     }
 
-    /// The bars of `series`, oldest first: `bars(id).get(index)` is the bar at an index and
-    /// `bars(id).last()` the last value. Removed series, volume and studies hold no bars.
+    /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
+    /// is the bar at an index and `bars(id).last()` the last bar, which can be a
+    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
         if series == SeriesId::MAIN && self.main_series_present {
             &self.state.data().bars
@@ -686,8 +688,10 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
-        let tail_changed =
-            tail.is_some_and(|(old, new)| old.time != new.time || old.close != new.close);
+        // Bitwise, so that the NaN close of an unchanged whitespace bar is unchanged.
+        let tail_changed = tail.is_some_and(|(old, new)| {
+            old.time != new.time || old.close.to_bits() != new.close.to_bits()
+        });
         let options = &self.chart_options.time_scale;
         let shift_for_whitespace = tail_changed
             && !appended
@@ -1404,7 +1408,8 @@ mod tests {
     }
 
     /// A price-anchored marker in view widens the fit unless its options say otherwise, and one
-    /// out of view never does. Each layer paints the main series' marker under or over a series
+    /// out of view never does. Each layer paints the main series' marker and its text over the
+    /// main series' candles, the text on a background, and the marker under or over a series
     /// added after it and a price line.
     #[test]
     fn marker_options_fit_and_layer_the_markers() {
@@ -1412,77 +1417,100 @@ mod tests {
         use crate::widget::test_frames::{chart, shapes};
         use egui::{Color32, Shape};
 
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[100.0], &[110.0]);
-        chart.config.show_volume = false;
-        chart.set_visible_bars(20);
-        let bars = chart.bars(SeriesId::MAIN).to_vec();
-        let series = chart.add_series(crate::widget::SeriesOptions {
-            color: Color32::GREEN,
-            ..Default::default()
-        });
-        chart.set_data(series, bars.clone());
-        chart.set_price_lines(
-            SeriesId::MAIN,
-            vec![PriceLine::new(105.0, Color32::BLUE).with_style(crate::model::LineStyle::Solid)],
-        );
-        let marker = |time, price| {
-            Marker::new(time)
-                .with_shape(MarkerShape::Circle)
-                .with_color(Color32::RED)
-                .at_price(price, MarkerPos::AtPriceMiddle)
-        };
-        let markers = vec![marker(bars[95].time, 150.0), marker(bars[0].time, 300.0)];
-        chart.set_markers(SeriesId::MAIN, markers.clone());
-        assert_eq!(chart.markers(SeriesId::MAIN).len(), markers.len());
-        assert!(chart.markers(series).is_empty());
-
-        for (auto_scale, z_order) in [
-            (false, MarkerZOrder::Normal),
-            (true, MarkerZOrder::Normal),
-            (true, MarkerZOrder::AboveSeries),
-            (true, MarkerZOrder::Top),
-        ] {
-            chart.set_marker_options(
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.set_theme_override(Some(theme.clone()));
+            chart.config.show_volume = false;
+            chart.set_visible_bars(20);
+            let bars = chart.bars(SeriesId::MAIN).to_vec();
+            let series = chart.add_series(crate::widget::SeriesOptions {
+                color: Color32::GREEN,
+                ..Default::default()
+            });
+            chart.set_data(series, bars.clone());
+            chart.set_price_lines(
                 SeriesId::MAIN,
-                MarkerOptions {
-                    auto_scale,
-                    z_order,
-                },
+                vec![
+                    PriceLine::new(105.0, Color32::BLUE).with_style(crate::model::LineStyle::Solid),
+                ],
             );
-            frame(&ctx, &mut chart, 0.0, Vec::new());
-            let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
-            let max = chart.state.price_scale().range().max;
-            assert_eq!(max > 150.0, auto_scale, "{max}");
-            assert!(max < 300.0, "{max}");
-            if !auto_scale {
-                continue;
-            }
-            let line = |color| {
-                // The series line is one path, a price line a segment.
-                let at = |shape: &Shape| match shape {
-                    Shape::LineSegment { stroke, .. } => stroke.color == color,
-                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
-                    _ => false,
-                };
-                (
-                    painted.iter().position(at).unwrap(),
-                    painted.iter().rposition(at).unwrap(),
-                )
+            let marker = |time, price| {
+                Marker::new(time)
+                    .with_shape(MarkerShape::Circle)
+                    .with_color(Color32::RED)
+                    .with_text("Fill")
+                    .at_price(price, MarkerPos::AtPriceMiddle)
             };
-            let mark = painted
-                .iter()
-                .position(|shape| matches!(shape, Shape::Circle(c) if c.fill == Color32::RED))
-                .unwrap();
-            let (series_line, price_line) = (line(Color32::GREEN), line(Color32::BLUE));
-            assert!(
-                match z_order {
-                    MarkerZOrder::Normal => mark < series_line.0,
-                    MarkerZOrder::AboveSeries => series_line.1 < mark && mark < price_line.0,
-                    MarkerZOrder::Top => price_line.1 < mark,
-                },
-                "{z_order:?}: marker {mark}, series {series_line:?}, price line {price_line:?}"
-            );
+            let markers = vec![marker(bars[95].time, 150.0), marker(bars[0].time, 300.0)];
+            chart.set_markers(SeriesId::MAIN, markers.clone());
+            assert_eq!(chart.markers(SeriesId::MAIN).len(), markers.len());
+            assert!(chart.markers(series).is_empty());
+
+            for (auto_scale, z_order) in [
+                (false, MarkerZOrder::Normal),
+                (true, MarkerZOrder::Normal),
+                (true, MarkerZOrder::AboveSeries),
+                (true, MarkerZOrder::Top),
+            ] {
+                chart.set_marker_options(
+                    SeriesId::MAIN,
+                    MarkerOptions {
+                        auto_scale,
+                        z_order,
+                    },
+                );
+                frame(&ctx, &mut chart, 0.0, Vec::new());
+                let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+                let max = chart.state.price_scale().range().max;
+                assert_eq!(max > 150.0, auto_scale, "{max}");
+                assert!(max < 300.0, "{max}");
+                if !auto_scale {
+                    continue;
+                }
+                let line = |color| {
+                    let at = |shape: &Shape| match shape {
+                        Shape::LineSegment { stroke, .. } => stroke.color == color,
+                        Shape::Path(path) => {
+                            path.stroke.color == egui::epaint::ColorMode::Solid(color)
+                        }
+                        _ => false,
+                    };
+                    (
+                        painted.iter().position(at).unwrap(),
+                        painted.iter().rposition(at).unwrap(),
+                    )
+                };
+                let mark = painted
+                    .iter()
+                    .position(|shape| matches!(shape, Shape::Circle(c) if c.fill == Color32::RED))
+                    .unwrap();
+                let (series_line, price_line) = (line(Color32::GREEN), line(Color32::BLUE));
+                let candles = painted
+                    .iter()
+                    .rposition(|shape| {
+                        matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                        && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    })
+                    .unwrap();
+                let text = painted
+                    .iter()
+                    .position(|shape| matches!(shape, Shape::Text(t) if t.galley.text() == "Fill"))
+                    .unwrap();
+                assert!(candles < mark && candles + 1 < text, "{z_order:?}");
+                assert!(
+                    matches!(&painted[text - 1], Shape::Rect(r) if r.fill == theme.chart.bg && r.rect.contains_rect(painted[text].visual_bounding_rect())),
+                    "{z_order:?}: the text has a background"
+                );
+                assert!(
+                    match z_order {
+                        MarkerZOrder::Normal => mark < series_line.0,
+                        MarkerZOrder::AboveSeries => series_line.1 < mark && mark < price_line.0,
+                        MarkerZOrder::Top => price_line.1 < mark,
+                    },
+                    "{z_order:?}: marker {mark}, series {series_line:?}, price line {price_line:?}"
+                );
+            }
         }
     }
 

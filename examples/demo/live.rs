@@ -7,16 +7,21 @@ use egui_charts::data::{
     Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
-    Bar, BarClock, DataStatus, Instrument, Level1Quote, Tick, Timeframe, TradeSide,
+    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
+    Tick, Timeframe, TradeSide,
 };
+use egui_charts::services::{Events, Quotes};
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use super::market::Market;
 use crate::sampledata::{DemoSymbol, sample_session, session_bars};
 use egui_charts::ui::timeframe_toolbar::SessionType;
-use egui_charts::ui::widget_bar::{ExtendedHoursQuote, ExtendedSession, WatchlistQuote};
 
 const RETAINED_TRADES: usize = 100_000;
+
+/// Orders added or cancelled in the book after each trade.
+const CHURN_PER_TRADE: usize = 6;
 
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(Mutex<Simulation>);
@@ -38,6 +43,8 @@ struct Simulation {
     continuous: bool,
     adjusted: bool,
     subscription: Option<Subscription>,
+    /// The order book of the subscription, around the last price it was shown.
+    market: Option<Market>,
 }
 
 impl LiveFeed {
@@ -65,6 +72,7 @@ impl LiveFeed {
             continuous: true,
             adjusted: false,
             subscription: None,
+            market: None,
         };
         while sim.next_trade <= now {
             sim.trade();
@@ -96,6 +104,7 @@ impl LiveFeed {
             continuous: sim.continuous,
             adjusted: sim.adjusted,
             subscription: None,
+            market: None,
         }))
     }
 
@@ -285,6 +294,25 @@ impl LiveFeed {
         Some((time, last, prev_close, extended))
     }
 
+    /// The quote of the chart's symbol: the last displayed trade and the previous session close,
+    /// or for SAMPLE its regular-hours price and the extended-hours trade after it, with the
+    /// session volume and the book's best bid and ask.
+    pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
+        let mut quote = watchlist_quote(&self.state().symbol, now)?;
+        if let Some((last, prev_close)) = self.day_change() {
+            (quote.last, quote.prev_close) = (last, prev_close);
+        }
+        if let Some((time, last, prev_close, extended)) = self.regular_quote() {
+            (quote.time, quote.last, quote.prev_close) = (time, last, prev_close);
+            quote.extended = extended;
+        }
+        quote.volume = Some(self.daily_volume().0);
+        if let Some(book) = self.state().quote(now) {
+            quote = quote.with_bid_ask(book.bid, book.ask);
+        }
+        Some(quote)
+    }
+
     /// The volume traded since midnight UTC and the average volume of the earlier whole days.
     /// The synthetic history spans a week, which stands in for the 30 days of the average.
     pub(super) fn daily_volume(&self) -> (f64, f64) {
@@ -341,7 +369,9 @@ impl LiveFeed {
                 .is_some()
             {
                 sub.sink.advance_time(now);
-                sub.sink.push_quote(sim.quote(now));
+                if let Some(quote) = sim.quote(now) {
+                    sub.sink.push_quote(quote);
+                }
             }
         }
         let to_trade = (sim.next_trade - now).to_std().unwrap_or_default();
@@ -352,25 +382,83 @@ impl LiveFeed {
     }
 }
 
+/// The catalog entry of `symbol`, in any case.
+fn catalog(symbol: &str) -> Option<&'static DemoSymbol> {
+    DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+}
+
+/// Decimals of the prices of a catalog symbol.
+pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
+    Some(if catalog(symbol)?.start_price < 10.0 {
+        4
+    } else {
+        2
+    })
+}
+
 /// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
 /// which stands for the previous close. `None` for symbols outside the catalog.
-pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<WatchlistQuote> {
-    let spec = DemoSymbol::catalog()
-        .iter()
-        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))?;
-    let (tick_size, price_decimals) = if spec.start_price < 10.0 {
-        (0.0001, 4)
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+    let spec = catalog(symbol)?;
+    let tick_size = if spec.start_price < 10.0 {
+        0.0001
     } else {
-        (0.01, 2)
+        0.01
     };
     let t = now.timestamp_millis() as f64 / 1000.0;
     let phase = spec.seed as f64;
     let swing = 0.02 * (t / 900.0 + phase).sin() + 0.002 * (t / 7.0 + 2.0 * phase).sin();
-    Some(WatchlistQuote {
-        last: (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size,
-        prev_close: spec.start_price,
-        price_decimals: Some(price_decimals),
-    })
+    let last = (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size;
+    Some(Quote::new(last, spec.start_price, now))
+}
+
+/// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
+/// and extended-hours prices, session volume and best bid and ask, and a synthetic swing for the
+/// other catalog symbols. The demo has no background worker, so the controller publishes once
+/// per frame.
+pub(super) struct DemoQuotes {
+    live: Arc<LiveFeed>,
+    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
+}
+
+impl DemoQuotes {
+    pub(super) fn new(live: Arc<LiveFeed>) -> Self {
+        Self {
+            live,
+            stream: Mutex::default(),
+        }
+    }
+
+    /// Pushes the current quote of every subscribed symbol.
+    pub(super) fn publish(&self, now: DateTime<Utc>) {
+        let stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((symbols, events)) = stream.as_ref().filter(|(_, e)| e.is_active()) {
+            self.push(symbols, events, now);
+        }
+    }
+
+    fn push(&self, symbols: &[String], events: &Events<(String, Quote)>, now: DateTime<Utc>) {
+        let chart = self.live.state().symbol.clone();
+        for symbol in symbols {
+            let quote = if symbol.eq_ignore_ascii_case(&chart) {
+                self.live.quote(now)
+            } else {
+                watchlist_quote(symbol, now)
+            };
+            if let Some(quote) = quote {
+                events.push((symbol.clone(), quote));
+            }
+        }
+    }
+}
+
+impl Quotes for DemoQuotes {
+    fn subscribe(&self, symbols: &[String], events: Events<(String, Quote)>) {
+        self.push(symbols, &events, chrono::Utc::now());
+        *self.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some((symbols.to_vec(), events));
+    }
 }
 
 impl Simulation {
@@ -426,15 +514,16 @@ impl Simulation {
         self.random
     }
 
-    fn quote(&self, ts: DateTime<Utc>) -> Level1Quote {
-        Level1Quote {
-            ts,
-            symbol: self.symbol.clone(),
-            bid: (self.price_ticks - 1) as f64 * self.tick_size,
-            ask: (self.price_ticks + 1) as f64 * self.tick_size,
-            bid_size: 100.0,
-            ask_size: 100.0,
-        }
+    /// The best bid and ask of the subscription's book.
+    fn quote(&self, ts: DateTime<Utc>) -> Option<Level1Quote> {
+        Some(self.market.as_ref()?.quote(ts))
+    }
+
+    /// The price in ticks a trade at the current price would show at.
+    fn shown_ticks(&self, now: DateTime<Utc>, extended_hours: bool) -> Option<i64> {
+        let price = self.price_ticks as f64 * self.tick_size;
+        let shown = self.shown_trade(&Tick::new(now, price, 0.0, None), extended_hours)?;
+        Some((shown.price / self.tick_size).round() as i64)
     }
 
     fn trade(&mut self) {
@@ -458,8 +547,22 @@ impl Simulation {
         if let Some(sub) = &self.subscription
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
+            let price = (shown.price / self.tick_size).round() as i64;
             sub.sink.push_tick(shown);
-            sub.sink.push_quote(self.quote(trade.ts));
+            // A subscription made while no trade was shown gets its book with the first one.
+            let market = self.market.get_or_insert_with(|| {
+                let market = Market::new(&self.symbol, self.tick_size, price, self.random);
+                let (sequence, book) = market.snapshot(trade.ts);
+                sub.sink.push_depth_snapshot(sequence, book);
+                market
+            });
+            let (sequence, delta) = market.trade(trade.ts, price, side, size);
+            sub.sink.push_depth_delta(sequence, delta);
+            for _ in 0..CHURN_PER_TRADE {
+                let (sequence, delta) = market.churn(trade.ts);
+                sub.sink.push_depth_delta(sequence, delta);
+            }
+            sub.sink.push_quote(market.quote(trade.ts));
         }
         if trade.ts < self.retain_from {
             let open = BarClock::new(Timeframe::Min1).bar_open(trade.ts);
@@ -557,15 +660,14 @@ impl Datafeed for LiveFeed {
                 subscription.sink.push_tick(trade);
             }
         }
-        if sim
-            .shown_trade(
-                &Tick::new(sim.now, sim.price_ticks as f64 * sim.tick_size, 0.0, None),
-                subscription.extended_hours,
-            )
-            .is_some()
-        {
+        sim.market = None;
+        if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
+            let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
+            let (sequence, book) = market.snapshot(sim.now);
+            subscription.sink.push_depth_snapshot(sequence, book);
             subscription.sink.advance_time(sim.now);
-            subscription.sink.push_quote(sim.quote(sim.now));
+            subscription.sink.push_quote(market.quote(sim.now));
+            sim.market = Some(market);
         }
         subscription.sink.set_status(FeedStatus::Live);
         sim.subscription = Some(subscription);
@@ -575,6 +677,17 @@ impl Datafeed for LiveFeed {
         let mut sim = self.state();
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
+            sim.market = None;
+        }
+    }
+
+    fn request_depth_snapshot(&self, id: SubscriptionId) {
+        let sim = self.state();
+        if let (Some(sub), Some(market)) = (&sim.subscription, &sim.market)
+            && sub.id == id
+        {
+            let (sequence, book) = market.snapshot(sim.now);
+            sub.sink.push_depth_snapshot(sequence, book);
         }
     }
 
@@ -674,6 +787,36 @@ mod tests {
             variance.sqrt() / mean > 0.3,
             "arrivals must vary, not only trade sizes"
         );
+    }
+
+    #[test]
+    fn a_subscription_before_the_session_gets_depth_when_trading_starts() {
+        let now = "2026-10-23T14:29:59Z".parse().unwrap();
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        feed.set_view(SessionType::RTH, false);
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("SAMPLE")
+            .with_initial_bars(100)
+            .build();
+        chart.set_extended_hours(false);
+        let ctx = egui::Context::default();
+        let frame = |chart: &mut egui_charts::Chart| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..4 {
+            frame(&mut chart);
+        }
+        assert!(chart.order_book(SeriesId::MAIN).is_none());
+        feed.advance(now + TimeDelta::seconds(3));
+        frame(&mut chart);
+        let book = chart
+            .order_book(SeriesId::MAIN)
+            .expect("the opening trade starts depth");
+        assert!(book.best_bid().is_some() && book.best_ask().is_some());
     }
 
     /// Archiving executions must preserve their price path, volume and the bucket crossing
