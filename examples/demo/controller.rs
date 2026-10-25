@@ -2389,8 +2389,15 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
+                if let Some(bar) = self.chart.bars(SeriesId::MAIN).iter().rfind(|bar| !bar.is_whitespace()) {
                     self.paper.set_price(self.chart.symbol(), bar.close);
+                    if self.replay.is_some() {
+                        // Replay has no historical spread; its close prices both broker and ticket.
+                        self.trading.set_quote(
+                            self.chart.symbol(),
+                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                        );
+                    }
                 }
                 if let Some(side) = self.chart.take_quote_action() {
                     let side = match side {
@@ -2953,7 +2960,7 @@ mod tests {
                 .any(|t| t.message == "Filled: BUY 1 at 100.00")
         );
         app.handle_replay_control(ReplayControlAction::GoToEnd);
-        app.trading.trade(symbol, OrderSide::Sell);
+        app.trading.trade(symbol.clone(), OrderSide::Sell);
         app.trading.poll(&ctx, &mut app.toasts);
         assert!(
             app.toasts
@@ -2962,6 +2969,34 @@ mod tests {
                 .any(|t| t.message == "Filled: SELL 1 at 110.00")
         );
         assert!(Arc::ptr_eq(&paper, &app.paper));
+
+        // A live quote must not price the ticket while the broker follows replay closes.
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            app.trading.set_quote(
+                &symbol,
+                egui_charts::model::Quote::new(999.0, 990.0, chrono::Utc::now())
+                    .with_bid_ask(998.0, 1_000.0),
+            );
+            app.trading
+                .open_ticket(egui_charts::model::OrderRequest::new(
+                    &symbol,
+                    side,
+                    1.0,
+                    egui_charts::model::OrderType::Market,
+                ));
+            let mut value = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    app.show_chart(ui, app.theme.chart.bg);
+                });
+                value |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == "Value  110.00 USD")
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert!(value, "{side:?} ticket must use the replay close");
+        }
     }
 
     #[test]
