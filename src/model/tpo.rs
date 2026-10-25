@@ -294,6 +294,36 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
     key as f64 * tick_size
 }
 
+/// First usable bars of the profiles before composites, shared by the model, cache and menus.
+pub(crate) fn session_starts(
+    bars: &[Bar],
+    sessions: &crate::model::ExchangeSessionProvider,
+    split_sessions: bool,
+) -> Vec<usize> {
+    let mut starts: Vec<_> = std::iter::once(0)
+        .chain(sessions.session_breaks(bars).into_iter().map(|(i, _)| i))
+        .collect();
+    if split_sessions {
+        let extended: Vec<_> = bars
+            .iter()
+            .map(|bar| sessions.is_extended(bar.time))
+            .collect();
+        starts.extend((1..bars.len()).filter(|&i| extended[i] != extended[i - 1]));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts.push(bars.len());
+    starts
+        .windows(2)
+        .filter_map(|span| {
+            (span[0]..span[1]).find(|&i| {
+                let bar = &bars[i];
+                bar.high.is_finite() && bar.low.is_finite() && bar.high >= bar.low
+            })
+        })
+        .collect()
+}
+
 /// Transform bars into TPO profiles
 ///
 /// Sessions are the trading days of `clock`: the exchange sessions it carries,
@@ -336,21 +366,9 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let mut period_ts = bars[0].time;
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
-    let sessions = clock.sessions();
-    let mut starts: Vec<_> = sessions
-        .session_breaks(bars)
+    let mut starts = session_starts(bars, &clock.sessions(), config.split_sessions)
         .into_iter()
-        .map(|(i, _)| i)
-        .collect();
-    if config.split_sessions {
-        let extended: Vec<_> = bars
-            .iter()
-            .map(|bar| sessions.is_extended(bar.time))
-            .collect();
-        starts.extend((1..bars.len()).filter(|&i| extended[i] != extended[i - 1]));
-        starts.sort_unstable();
-    }
-    let mut starts = starts.into_iter().peekable();
+        .peekable();
     let tick_size = level_grid(bars, config.tick_size);
     let keys = bars.iter().filter_map(|bar| bar_level_keys(bar, tick_size));
     let Some((first_key, last_key)) = keys.reduce(|(low, high), (l, h)| (low.min(l), high.max(h)))
