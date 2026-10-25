@@ -2225,7 +2225,12 @@ impl Chart {
 
         // Draw the axis labels, leaving out those the tags overlap
         tags.extend(crosshair_tags);
-        time_tags.extend_from_slice(&tags);
+        let time_tags = if time_tags.is_empty() {
+            &tags
+        } else {
+            time_tags.extend_from_slice(&tags);
+            &time_tags
+        };
         if self.config.show_right_axis {
             rendering::render_price_labels(
                 &price_ctx,
@@ -2256,7 +2261,7 @@ impl Chart {
                 &coords,
                 &colors,
                 formatter.as_ref(),
-                &time_tags,
+                time_tags,
                 &self.chart_options.time_scale,
                 time_labels,
             );
