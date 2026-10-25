@@ -32,7 +32,7 @@ use crate::model::{Instrument, SymbolType};
 ///     let apple = Instrument::new("AAPL")
 ///         .with_description("Apple Inc.")
 ///         .with_exchange("NASDAQ");
-///     Ok([apple].into_iter().take(query.limit).collect())
+///     Ok([apple].into_iter().skip(query.offset).take(query.limit).collect())
 /// }
 /// ```
 pub trait SymbolSearch: MaybeSend + 'static {
@@ -50,6 +50,8 @@ pub struct SymbolQuery {
     pub symbol_type: Option<SymbolType>,
     /// Only instruments of this exchange, when set.
     pub exchange: Option<String>,
+    /// Matching results to skip, for the next page.
+    pub offset: usize,
     /// Results wanted at most.
     pub limit: usize,
 }
@@ -86,7 +88,7 @@ impl SymbolSearch for Vec<Instrument> {
             })
             .collect();
         found.sort_by_key(|&(rank, _)| rank);
-        let found = found.into_iter().take(query.limit);
+        let found = found.into_iter().skip(query.offset).take(query.limit);
         reply.send(Ok(found
             .map(|(_, instrument)| instrument.clone())
             .collect()));
@@ -126,11 +128,12 @@ mod tests {
             symbol_type,
             exchange: exchange.map(Into::into),
             limit,
+            offset: 0,
         };
         let cases = [
             (query("aapl", None, None, 10), &["AAPL"][..]),
             (query("APPLE", None, None, 10), &["AAPL"]),
-            (query("s&p 500", None, None, 10), &["SPYG", "SPY"]),
+            (query("s&p 500", None, None, 10), &["SPY"]),
             (query("spy", None, None, 10), &["SPY", "SPYG"]),
             (query("spy", None, None, 1), &["SPY"]),
             (query("", Some(SymbolType::Crypto), None, 10), &["BTCUSD"]),
@@ -138,7 +141,10 @@ mod tests {
             (query("s", None, None, 10), &["SPYG", "SPY", "BTCUSD"]),
             (query("xyz", None, None, 10), &[]),
         ];
-        for (query, expected) in cases {
+        for (mut query, expected) in cases {
+            if query.text == "s&p 500" {
+                query.offset = 1;
+            }
             let inbox = Arc::new(Inbox::default());
             list.search(query.clone(), inbox.reply(0));
             let answers = inbox.drain().answers;

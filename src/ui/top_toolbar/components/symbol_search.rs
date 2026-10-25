@@ -43,9 +43,12 @@
 //! # }
 //! ```
 
+mod service;
+
 use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::model::{Symbol, SymbolType};
+use crate::services::{Storage, SymbolSearch};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -54,6 +57,8 @@ use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};
+use service::Search;
+use std::sync::Arc;
 
 // =============================================================================
 // Symbol Search Dialog
@@ -166,6 +171,7 @@ pub struct SymbolSearchDialog {
     category: Category,
     recent_symbols: Vec<String>,
     config: SymbolSearchConfig,
+    search: Search,
 }
 
 impl Default for SymbolSearchDialog {
@@ -186,6 +192,7 @@ impl SymbolSearchDialog {
             category: Category(None),
             recent_symbols: Vec::new(),
             config: SymbolSearchConfig::default(),
+            search: Search::default(),
         }
     }
 
@@ -208,6 +215,26 @@ impl SymbolSearchDialog {
         self
     }
 
+    /// Connects host symbol search. Without a service, `show` searches its supplied list.
+    pub fn set_search_service(&mut self, service: Option<Arc<dyn SymbolSearch>>) {
+        self.search.set_service(service);
+    }
+
+    /// Keeps recently selected instruments through the host's storage service.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.search.recents.set_storage(storage);
+    }
+
+    /// Restricts service results to an exchange, or removes that filter.
+    pub fn set_exchange_filter(&mut self, exchange: Option<String>) {
+        self.search.exchange = exchange;
+    }
+
+    /// Records an instrument opened outside this dialog in the recent list.
+    pub fn record_symbol(&mut self, symbol: &Symbol) {
+        self.search.record(symbol);
+    }
+
     /// Supply recent symbol names, newest first. Unknown names are ignored.
     pub fn set_recent_symbols(&mut self, symbols: Vec<String>) {
         self.recent_symbols = symbols;
@@ -223,6 +250,7 @@ impl SymbolSearchDialog {
         self.sel_idx = 0;
         self.category = Category(None);
         self.filtered_symbols.clear();
+        self.search.reset();
     }
 
     /// Open symbol search with text supplied by the host's keyboard dispatcher.
@@ -279,11 +307,12 @@ impl SymbolSearchDialog {
     /// ```
     #[must_use = "Symbol selection should be handled"]
     pub fn show(&mut self, ctx: &Context, all_symbols: &[Symbol]) -> Option<Symbol> {
+        self.search.poll(ctx);
         if !self.is_open {
             return None;
         }
 
-        self.update_filtered_symbols(all_symbols);
+        self.refresh_results(ctx, all_symbols);
         let mut sel_symbol = None;
         let mut should_close = false;
         let search_id = egui::Id::unique("symbol_search_input");
@@ -343,12 +372,37 @@ impl SymbolSearchDialog {
                     }
                     if response.changed() {
                         self.sel_idx = 0;
-                        self.update_filtered_symbols(all_symbols);
+                        self.refresh_results(ctx, all_symbols);
                     }
                 });
                 ui.add_space(16.0);
                 let mut categories = vec![Category(None)];
-                for symbol in all_symbols {
+                let service_categories: Vec<_> = [
+                    SymbolType::Stock,
+                    SymbolType::Index,
+                    SymbolType::Forex,
+                    SymbolType::Futures,
+                    SymbolType::Crypto,
+                    SymbolType::Cfd,
+                    SymbolType::Bond,
+                    SymbolType::Fund,
+                    SymbolType::Option,
+                    SymbolType::Commodity,
+                    SymbolType::Economic,
+                    SymbolType::Dr,
+                    SymbolType::Right,
+                    SymbolType::Warrant,
+                    SymbolType::Expression,
+                    SymbolType::Spread,
+                ]
+                .into_iter()
+                .map(|kind| Symbol::new("", "").with_market("", kind))
+                .collect();
+                for symbol in if self.search.connected() {
+                    &service_categories
+                } else {
+                    all_symbols
+                } {
                     let category = Category(symbol.symbol_type);
                     if !categories.contains(&category) {
                         categories.push(category);
@@ -365,11 +419,16 @@ impl SymbolSearchDialog {
                             .show(ui)
                         {
                             self.sel_idx = 0;
-                            self.update_filtered_symbols(all_symbols);
+                            self.refresh_results(ctx, all_symbols);
                         }
                     });
                 ui.add_space(4.0);
 
+                self.search.status(ui);
+                if self.search_query.is_empty() && self.search.has_recents() {
+                    ui.weak("Recently opened");
+                }
+                let mut next_page = false;
                 // Results list
                 egui::ScrollArea::vertical()
                     .id_salt("symbol_results")
@@ -397,6 +456,8 @@ impl SymbolSearchDialog {
                             for (idx, symbol) in self.filtered_symbols.iter().enumerate() {
                                 let is_sel = idx == self.sel_idx;
                                 let response = self.render_symbol_item(ui, symbol, is_sel);
+                                next_page |= idx + 1 == self.filtered_symbols.len()
+                                    && ui.is_rect_visible(response.rect);
 
                                 if response.clicked() {
                                     sel_symbol = Some(symbol.clone());
@@ -416,6 +477,9 @@ impl SymbolSearchDialog {
                         }
                     });
 
+                if next_page {
+                    self.search.next_page();
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -444,7 +508,34 @@ impl SymbolSearchDialog {
             self.close();
         }
 
+        if let Some(symbol) = &sel_symbol {
+            self.search.record(symbol);
+        }
         sel_symbol
+    }
+
+    fn refresh_results(&mut self, ctx: &Context, all_symbols: &[Symbol]) {
+        if self.search.connected() {
+            if self.search_query.is_empty()
+                || self.search_query.chars().count() >= self.config.min_search_len
+            {
+                self.search.query(
+                    ctx,
+                    &self.search_query,
+                    self.category.0,
+                    self.config.max_results,
+                );
+                self.filtered_symbols = self.search.results();
+            } else {
+                self.search.reset();
+                self.filtered_symbols.clear();
+            }
+            self.sel_idx = self
+                .sel_idx
+                .min(self.filtered_symbols.len().saturating_sub(1));
+        } else {
+            self.update_filtered_symbols(all_symbols);
+        }
     }
 
     fn update_filtered_symbols(&mut self, all_symbols: &[Symbol]) {
@@ -744,6 +835,7 @@ pub struct CompareSymbolsDialog {
     pub compared_symbols: Vec<CompareSymbol>,
     /// Configuration
     config: CompareSymbolsConfig,
+    search: Search,
 }
 
 impl Default for CompareSymbolsDialog {
@@ -760,7 +852,13 @@ impl CompareSymbolsDialog {
             search_query: String::new(),
             compared_symbols: Vec::new(),
             config: CompareSymbolsConfig::default(),
+            search: Search::default(),
         }
+    }
+
+    /// Connects the same host service used by symbol search.
+    pub fn set_search_service(&mut self, service: Option<Arc<dyn SymbolSearch>>) {
+        self.search.set_service(service);
     }
 
     /// Create with custom configuration
@@ -773,6 +871,7 @@ impl CompareSymbolsDialog {
     pub fn open(&mut self) {
         self.is_open = true;
         self.search_query.clear();
+        self.search.reset();
     }
 
     /// Close the dialog
@@ -783,6 +882,7 @@ impl CompareSymbolsDialog {
     /// Show the dialog, suggesting `symbols`: the symbols the host's data source offers
     pub fn show(&mut self, ctx: &egui::Context, symbols: &[Symbol]) -> CompareAction {
         let mut action = CompareAction::None;
+        self.search.poll(ctx);
 
         if !self.is_open {
             return action;
@@ -874,6 +974,15 @@ impl CompareSymbolsDialog {
             ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
         }
 
+        self.search.query(ui.ctx(), &self.search_query, None, 20);
+        let found = self.search.results();
+        let symbols = if self.search.connected() {
+            found.as_slice()
+        } else {
+            symbols
+        };
+        self.search.status(ui);
+        let mut next_page = false;
         // Suggestions
         ui.label(RichText::new("Symbols").color(config.muted_color));
         ui.space_lg();
@@ -888,15 +997,21 @@ impl CompareSymbolsDialog {
             .show(ui, |ui| {
                 let query = self.search_query.to_lowercase();
                 for symbol in symbols.iter().filter(|symbol| {
-                    symbol.name.to_lowercase().contains(&query)
+                    self.search.connected()
+                        || symbol.name.to_lowercase().contains(&query)
                         || symbol.display_name.to_lowercase().contains(&query)
                 }) {
+                    next_page |= ui.clip_rect().contains(ui.cursor().min)
+                        && symbols.last().is_some_and(|last| last.name == symbol.name);
                     if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
                         action = a;
                     }
                 }
             });
 
+        if next_page {
+            self.search.next_page();
+        }
         action
     }
 
@@ -978,6 +1093,36 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn service_results_reach_both_symbol_choosers_without_a_local_catalog() {
+        for compare in [false, true] {
+            let ctx = Context::default();
+            let source: Arc<dyn SymbolSearch> = Arc::new(vec![
+                crate::model::Instrument::new("HOST").with_description("Host instrument"),
+            ]);
+            let mut search = SymbolSearchDialog::new();
+            search.set_search_service(Some(source.clone()));
+            search.open_with_query("host".into());
+            let mut comparison = CompareSymbolsDialog::new();
+            comparison.set_search_service(Some(source));
+            comparison.open();
+            comparison.search_query = "host".into();
+            for step in 0..3 {
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    if compare {
+                        let _ = comparison.show(ui.ctx(), &[]);
+                    } else {
+                        let _ = search.show(ui.ctx(), &[]);
+                    }
+                });
+                let painted = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "HOST"));
+                output.drop_without_applying_deltas();
+                if step > 0 {
+                    assert!(painted, "service result absent from chooser {compare}");
+                }
+            }
+        }
+    }
     #[test]
     fn test_symbol_search_creation() {
         let dialog = SymbolSearchDialog::new();

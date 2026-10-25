@@ -21,6 +21,8 @@ pub enum StoreKind {
     DrawingTemplates,
     /// The user's notes on one symbol, one document per symbol, named by the symbol.
     SymbolNotes,
+    /// Recently opened instruments, newest first.
+    RecentSymbols,
 }
 
 /// Where the library keeps settings and drawings between sessions: files, browser storage or a

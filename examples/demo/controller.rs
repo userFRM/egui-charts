@@ -601,6 +601,20 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.template_storage.clone());
+        let catalog: Vec<_> = DemoSymbol::symbols()
+            .into_iter()
+            .map(|symbol| {
+                let mut instrument = egui_charts::model::Instrument::new(&symbol.name)
+                    .with_description(&symbol.display_name)
+                    .with_exchange(&symbol.exchange);
+                instrument.symbol_type = symbol.symbol_type;
+                instrument
+            })
+            .collect();
+        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(catalog);
+        app.symbol_search.set_search_service(Some(search.clone()));
+        app.compare_dialog.set_search_service(Some(search));
+        app.symbol_search.set_storage(app.template_storage.clone());
         app.alerts.set_service(app.alert_host.clone());
         app.trading.set_service(app.paper.clone());
         app.top_toolbar.state.can_trade = true;
@@ -711,6 +725,12 @@ impl DemoApp {
     }
 
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
+        if let Some(row) = DemoSymbol::symbols()
+            .into_iter()
+            .find(|row| row.name == symbol)
+        {
+            self.symbol_search.record_symbol(&row);
+        }
         self.remember_drawings();
         self.copied_drawing = None;
         let spec = DemoSymbol::find(symbol);
@@ -920,8 +940,6 @@ impl DemoApp {
         self.sync_comparisons();
         let action = self.compare_dialog.show(ctx, &symbols);
         self.handle_comparison(action);
-        self.symbol_search
-            .set_recent_symbols(vec![self.state.symbol.clone()]);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
                 self.watchlist.add_symbol(&picked.name);
