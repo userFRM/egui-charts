@@ -5,7 +5,7 @@
 //!
 //! | Sub-module     | Key types                        | Purpose                        |
 //! |----------------|----------------------------------|--------------------------------|
-//! | `chart`        | [`ChartConfig`], [`SessionConfig`] | Visual styling, session hours |
+//! | `chart`        | [`ChartConfig`], [`PriceAxisOptions`], [`SessionConfig`] | Visual styling, price axis, session hours |
 //! | `crosshair`    | [`CrosshairOptions`]             | Crosshair mode and colors      |
 //! | `interaction`  | [`HandleScrollOptions`], [`HandleScaleOptions`] | Scroll/zoom behavior |
 //! | `keyboard`     | [`KeyboardOptions`], [`KeyboardAction`] | Keyboard shortcuts      |
@@ -25,8 +25,8 @@ mod timescale;
 mod tooltip;
 
 pub use chart::{
-    BackgroundStyle, ChartConfig, NavigationButtons, RealtimeButtonPos, SessionBreakStyle,
-    SessionConfig, WatermarkPos,
+    BackgroundStyle, ChartConfig, NavigationButtons, PriceAxisOptions, RealtimeButtonPos,
+    SessionBreakStyle, SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use interaction::{

@@ -445,11 +445,13 @@ mod tests {
         for name in names {
             let mut study = factory.create(&name).unwrap();
             study.calculate(&bars);
-            let lines: Vec<Vec<String>> = study
-                .values()
-                .to_rows()
-                .iter()
-                .map(|v| {
+            // Studies that draw only shapes differ by their zones or profile.
+            let shapes = vec![
+                format!("{:?}", study.zones()),
+                study.tpo().is_some().to_string(),
+            ];
+            let lines: Vec<Vec<String>> = std::iter::once(shapes)
+                .chain(study.values().to_rows().iter().map(|v| {
                     let mut xs = match v {
                         IndicatorValue::Single(x) => vec![*x],
                         IndicatorValue::Multiple(xs) => xs.clone(),
@@ -457,7 +459,7 @@ mod tests {
                     };
                     xs.sort_by(f64::total_cmp);
                     xs.iter().map(|x| format!("{x:.9e}")).collect()
-                })
+                }))
                 .collect();
             if let Some(first) = seen.insert(lines, name.clone()) {
                 duplicates.push(format!("{first} and {name}"));

@@ -90,8 +90,9 @@ pub(crate) fn render_study_axis(
     }
     let mut occupied = Vec::new();
     for (value, color) in labels.into_iter().chain(
-        crate::scales::PriceMarkGenerator::new()
-            .generate_marks(&coords.price)
+        coords
+            .price
+            .marks()
             .into_iter()
             .map(|mark| (mark.price, None)),
     ) {

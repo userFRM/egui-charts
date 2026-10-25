@@ -98,6 +98,21 @@ where
                     )
             });
     }
+    if let Some(zone) = indicator
+        .zones()
+        .iter()
+        .filter(|zone| zone.plot == line_idx)
+        .find(|zone| {
+            zone.rect(coords, &value_to_y)
+                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+        })
+    {
+        return Some(
+            coords
+                .x_to_idx(click_pos.x)
+                .clamp(zone.bars.start, zone.bars.end - 1),
+        );
+    }
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
