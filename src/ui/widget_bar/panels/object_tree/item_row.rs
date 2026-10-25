@@ -4,7 +4,6 @@
 
 use egui::{Rect, Sense, Stroke, Ui, vec2};
 
-use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -130,6 +129,11 @@ fn render_row_content(
     let is_dragging = state.dragging_id == Some(item.id);
 
     let center_y = rect.center().y;
+    let icon_color = if is_selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().widgets.noninteractive.fg_stroke.color
+    };
 
     // First pass: paint background and static elements
     {
@@ -165,17 +169,16 @@ fn render_row_content(
         // Expand/collapse chevron (for items with properties)
         if config.show_expand_chevron && item.source_type == SourceType::Drawing {
             let chevron = if state.is_item_expanded(item.id) {
-                "v"
+                &embedded_icons::CHEVRON_DOWN
             } else {
-                ">"
+                &embedded_icons::CHEVRON_RIGHT
             };
-            painter.text(
-                egui::pos2(x + 6.0, center_y),
-                egui::Align2::LEFT_CENTER,
-                chevron,
-                egui::FontId::proportional(typography::XS),
-                DESIGN_TOKENS.semantic.extended.text_muted,
-            );
+            chevron
+                .as_image_tinted(vec2(16.0, 16.0), icon_color)
+                .paint_at(
+                    ui,
+                    Rect::from_center_size(egui::pos2(x + 6.0, center_y), vec2(16.0, 16.0)),
+                );
             x += 16.0;
         }
 
@@ -204,16 +207,13 @@ fn render_row_content(
             x += config.color_indicator_size + DESIGN_TOKENS.spacing.sm;
         }
 
-        // Tool icon abbreviation (for drawings)
         if let Some(tool_type) = item.tool_type {
-            let abbrev = get_tool_abbreviation(tool_type);
-            painter.text(
-                egui::pos2(x + 10.0, center_y),
-                egui::Align2::LEFT_CENTER,
-                abbrev,
-                egui::FontId::proportional(typography::TINY),
-                DESIGN_TOKENS.semantic.extended.gray,
-            );
+            crate::ui::drawing_toolbar::icons::get_icon(tool_type)
+                .as_image_tinted(vec2(16.0, 16.0), icon_color)
+                .paint_at(
+                    ui,
+                    Rect::from_center_size(egui::pos2(x + 10.0, center_y), vec2(16.0, 16.0)),
+                );
             x += 24.0;
         }
 
@@ -317,10 +317,10 @@ fn render_row_content(
     // Settings/Properties button
     let settings_rect =
         Rect::from_center_size(egui::pos2(right_x - 28.0, center_y), vec2(16.0, 16.0));
-    let settings_response = ui.put(
-        settings_rect,
-        egui::Label::new(egui::RichText::new("S").color(button_color)).sense(Sense::click()),
-    );
+    let settings_response = ui.allocate_rect(settings_rect, Sense::click());
+    embedded_icons::SETTINGS
+        .as_image_tinted(vec2(16.0, 16.0), button_color)
+        .paint_at(ui, settings_rect);
     crate::styles::focus::draw_focus_ring(ui, &settings_response, 0.0);
     if settings_response.clicked() {
         *action = if item.source_type == SourceType::Indicator {
@@ -335,10 +335,10 @@ fn render_row_content(
     if item.source_type != SourceType::DataSource {
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-        let del_response = ui.put(
-            del_rect,
-            egui::Label::new(egui::RichText::new("X").color(button_color)).sense(Sense::click()),
-        );
+        let del_response = ui.allocate_rect(del_rect, Sense::click());
+        embedded_icons::TRASH
+            .as_image_tinted(vec2(16.0, 16.0), button_color)
+            .paint_at(ui, del_rect);
         crate::styles::focus::draw_focus_ring(ui, &del_response, 0.0);
         if del_response.clicked() {
             *action = if item.source_type == SourceType::Indicator {
@@ -393,40 +393,10 @@ fn render_properties(
     ui.space_xs();
 }
 
-/// Get abbreviated tool type name for display
-fn get_tool_abbreviation(tool_type: DrawingToolType) -> &'static str {
-    match tool_type {
-        DrawingToolType::TrendLine => "TL",
-        DrawingToolType::HorizontalLine => "HL",
-        DrawingToolType::VerticalLine => "VL",
-        DrawingToolType::Ray => "RY",
-        DrawingToolType::ExtendedLine => "EL",
-        DrawingToolType::FibonacciRetracement => "FR",
-        DrawingToolType::FibonacciExtension => "FE",
-        DrawingToolType::FibonacciChannel => "FC",
-        DrawingToolType::GannBox => "GB",
-        DrawingToolType::GannFan => "GF",
-        DrawingToolType::Rect => "RT",
-        DrawingToolType::Circle => "CR",
-        DrawingToolType::Ellipse => "EL",
-        DrawingToolType::Triangle => "TR",
-        DrawingToolType::Brush => "BR",
-        DrawingToolType::Highlighter => "HI",
-        DrawingToolType::TextLabel => "TX",
-        DrawingToolType::Note => "NT",
-        DrawingToolType::Arrow => "AR",
-        DrawingToolType::ArrowMarker => "AM",
-        DrawingToolType::Pitchfork => "PF",
-        DrawingToolType::XABCDPattern => "XB",
-        DrawingToolType::ElliottImpulse => "EI",
-        DrawingToolType::Measure => "MS",
-        _ => "••",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::DrawingToolType;
     use egui::Color32;
 
     #[test]
