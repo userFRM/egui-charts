@@ -3378,6 +3378,7 @@ mod tests {
             shapes.iter().position(|shape| match shape {
                 Shape::Rect(rect) => rect.fill == color,
                 Shape::LineSegment { stroke, .. } => stroke.color == color,
+                Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
                 Shape::Mesh(mesh) => mesh.vertices.iter().any(|vertex| vertex.color == color),
                 _ => false,
             })

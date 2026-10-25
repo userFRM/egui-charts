@@ -1967,8 +1967,10 @@ mod tests {
         let sma_behind = |chart: &mut Chart, menus: &mut ChartMenus| {
             let (_, shapes) = frame(chart, menus, vec![]);
             let first = |color| {
-                shapes.iter().position(|shape| {
-                    matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)
+                shapes.iter().position(|shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
                 })
             };
             first(sma_color).unwrap() < first(bullish).unwrap()
