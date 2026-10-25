@@ -7,9 +7,79 @@
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice.
 
-use crate::model::Tick;
+use crate::model::{Tick, TradeSide};
 use chrono::{DateTime, Utc};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// Fills of one explicitly identified aggressive order, or one fill without an order id.
+/// Only retained fills count: eviction from the raw store also removes them from this view.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CombinedTrade {
+    /// Explicit aggressor order id; unknown fills are never grouped together.
+    pub aggressor_order_id: Option<u64>,
+    /// Time of the first retained fill.
+    pub first_time: DateTime<Utc>,
+    /// Time of the last retained fill.
+    pub last_time: DateTime<Utc>,
+    /// Price of the first retained fill.
+    pub first_price: f64,
+    /// Price of the last retained fill.
+    pub last_price: f64,
+    /// Volume-weighted price; the first price for zero total size.
+    pub price: f64,
+    /// Total retained size, saturating at the largest finite value on overflow.
+    pub size: f64,
+    /// Number of retained fills.
+    pub fills: usize,
+    /// Aggressor side, unknown if fills disagree.
+    pub side: Option<TradeSide>,
+}
+
+/// Combines explicit aggressor ids, in order of their first fill. Unknown ids stay separate.
+/// Use raw fills for per-price volume. This allocates at most one entry per input fill and
+/// ignores invalid fills. A bounded input gives a bounded combined view.
+pub fn combine_trades<'a>(trades: impl IntoIterator<Item = &'a Tick>) -> Vec<CombinedTrade> {
+    let mut indices: HashMap<u64, usize> = HashMap::new();
+    let mut combined: Vec<CombinedTrade> = Vec::new();
+    for fill in trades.into_iter().filter(|t| valid(t)) {
+        if let Some(&at) = fill
+            .aggressor_order_id
+            .as_ref()
+            .and_then(|id| indices.get(id))
+        {
+            let trade = &mut combined[at];
+            let scale = trade.size.max(fill.size);
+            if scale > 0.0 {
+                let weight = (fill.size / scale) / (trade.size / scale + fill.size / scale);
+                trade.price = trade.price * (1.0 - weight) + fill.price * weight;
+            }
+            trade.size = (trade.size + fill.size).min(f64::MAX);
+            trade.last_time = fill.ts;
+            trade.last_price = fill.price;
+            trade.fills += 1;
+            if trade.side != fill.side {
+                trade.side = None;
+            }
+        } else {
+            if let Some(id) = fill.aggressor_order_id {
+                indices.insert(id, combined.len());
+            }
+            combined.push(CombinedTrade {
+                aggressor_order_id: fill.aggressor_order_id,
+                first_time: fill.ts,
+                last_time: fill.ts,
+                first_price: fill.price,
+                last_price: fill.price,
+                price: fill.price,
+                size: fill.size,
+                fills: 1,
+                side: fill.side,
+            });
+        }
+    }
+    combined
+}
 
 /// Trades in arrival order, at most `capacity` of them: the oldest go first.
 pub(crate) struct Trades {
@@ -141,6 +211,64 @@ mod tests {
         Page(Vec<Tick>),
     }
     use Step::{Live, Page};
+
+    /// Group only explicit aggressor ids, across pages and drains, without moving price volume.
+    #[test]
+    fn combines_only_fills_of_the_same_aggressor() {
+        let fill = |second, price, size, order| {
+            let mut t = trade(second, price);
+            t.size = size;
+            t.aggressor_order_id = order;
+            t
+        };
+        #[rustfmt::skip]
+        let cases = [
+            ("three prices", 10, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
+                fill(2, 101.0, 3.0, Some(7)), fill(3, 102.0, 5.0, Some(7))])],
+                vec![(10.0, 100.0, 102.0, 101.3, 3)]),
+            ("interleaved ids", 10, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
+                fill(2, 90.0, 1.0, Some(8)), fill(3, 102.0, 2.0, Some(7))])],
+                vec![(4.0, 100.0, 102.0, 101.0, 2), (1.0, 90.0, 90.0, 90.0, 1)]),
+            ("unknown ids stay separate", 10, vec![Live(vec![fill(1, 100.0, 2.0, None),
+                fill(2, 100.0, 3.0, None)])],
+                vec![(2.0, 100.0, 100.0, 100.0, 1), (3.0, 100.0, 100.0, 100.0, 1)]),
+            ("separate drains", 10, vec![Page(vec![fill(1, 100.0, 2.0, Some(7))]),
+                Live(vec![fill(2, 102.0, 2.0, Some(7))])],
+                vec![(4.0, 100.0, 102.0, 101.0, 2)]),
+            ("only retained fills count", 2, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
+                fill(2, 101.0, 3.0, Some(7))]), Live(vec![fill(3, 102.0, 1.0, Some(7))])],
+                vec![(4.0, 101.0, 102.0, 101.25, 2)]),
+        ];
+        for (name, capacity, steps, expected) in cases {
+            let mut store = Trades::new(capacity);
+            for step in steps {
+                match step {
+                    Live(trades) => {
+                        let mut pending = store.empty();
+                        trades.into_iter().for_each(|t| pending.push(t));
+                        store.append(pending, &mut |_, _| ());
+                    }
+                    Page(page) => {
+                        store.prepend(page, &mut |_, _| ());
+                    }
+                }
+            }
+            let combined = combine_trades(store.iter());
+            let held: Vec<_> = combined
+                .iter()
+                .map(|t| (t.size, t.first_price, t.last_price, t.price, t.fills))
+                .collect();
+            assert_eq!(held.len(), expected.len(), "{name}");
+            for (actual, expected) in held.iter().zip(expected) {
+                assert_eq!(
+                    (actual.0, actual.1, actual.2, actual.4),
+                    (expected.0, expected.1, expected.2, expected.4),
+                    "{name}"
+                );
+                assert!((actual.3 - expected.3).abs() < 1e-10, "{name}: VWAP");
+            }
+        }
+    }
 
     /// Guards the memory bound and the join of history and live trades: a store that never evicts
     /// grows with the trade rate, a page that evicts newer trades erases the live tape, a trade

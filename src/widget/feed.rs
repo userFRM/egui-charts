@@ -283,6 +283,13 @@ impl Chart {
         link.into_iter().flat_map(|link| link.trades.iter())
     }
 
+    /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
+    /// 100,000 entries; fills without an id stay separate. Rebuilds the view on request, including
+    /// fills arriving in separate pages or frames. Per-price consumers keep using `trades`.
+    pub fn combined_trades(&self, series: SeriesId) -> Vec<crate::data::CombinedTrade> {
+        crate::data::combine_trades(self.trades(series))
+    }
+
     /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
     /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
     /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis

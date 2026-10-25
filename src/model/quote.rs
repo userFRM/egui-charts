@@ -45,6 +45,9 @@ pub struct Tick {
     /// as off-exchange or auction trades.
     #[serde(default)]
     pub conditions: TradeConditions,
+    /// Exchange aggressor order id, unique per symbol. Only explicit matching ids combine fills.
+    #[serde(default)]
+    pub aggressor_order_id: Option<u64>,
 }
 
 impl Tick {
@@ -57,12 +60,19 @@ impl Tick {
             side,
             id: None,
             conditions: TradeConditions::NONE,
+            aggressor_order_id: None,
         }
     }
 
     /// Sets [`id`](Self::id).
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = Some(id);
+        self
+    }
+
+    /// Sets [`aggressor_order_id`](Self::aggressor_order_id).
+    pub fn with_aggressor_order_id(mut self, id: u64) -> Self {
+        self.aggressor_order_id = Some(id);
         self
     }
 
