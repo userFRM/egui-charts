@@ -53,6 +53,7 @@ pub(crate) struct FeedLink {
     order_book: Option<OrderBook>,
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
+    heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -124,6 +125,7 @@ impl Chart {
             bubbles: None,
             order_book: None,
             depth_history: None,
+            heatmap: None,
             paging_stopped: false,
         });
     }
@@ -319,6 +321,77 @@ impl Chart {
                 link.inbox.sample_depth(id, config);
             }
             link.depth_history = history;
+        }
+    }
+
+    /// Shows resting liquidity behind the price series. A feed and instrument tick size are
+    /// required. Enabling starts the default depth history if none is configured; disabling
+    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// enabled independently through the existing chart options.
+    pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
+        if enabled && self.depth_history(SeriesId::MAIN).is_none() {
+            self.set_depth_history(Some(
+                DepthHistory::new(Default::default()).expect("default depth history"),
+            ));
+        }
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+        }
+    }
+
+    pub(super) fn paint_liquidity(
+        &self,
+        painter: &egui::Painter,
+        mapping: &crate::chart::coords::ChartMapping,
+    ) {
+        let Some(link) = &self.feed_link else { return };
+        let (Some(heatmap), Some(history), Some(tick)) = (
+            &link.heatmap,
+            &link.depth_history,
+            self.instrument().and_then(|i| i.tick_size),
+        ) else {
+            return;
+        };
+        heatmap.borrow_mut().render(
+            painter,
+            mapping,
+            history,
+            tick * history.config().ticks_per_row as f64,
+            |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
+            [self.config.bullish_color, self.config.bearish_color],
+        );
+        if let Some(book) = &link.order_book {
+            let max = book
+                .bids
+                .iter()
+                .chain(&book.asks)
+                .map(|l| l.size)
+                .fold(0.0, f64::max);
+            if max > 0.0 {
+                for (levels, color) in [
+                    (&book.bids, self.config.bullish_color),
+                    (&book.asks, self.config.bearish_color),
+                ] {
+                    for level in levels {
+                        let y0 = mapping.price_to_y(level.price);
+                        let y1 = mapping.price_to_y(level.price + tick);
+                        let rect = egui::Rect::from_min_max(
+                            egui::pos2(
+                                mapping.rect.right() - 60.0 * (level.size / max) as f32,
+                                y0.min(y1),
+                            ),
+                            egui::pos2(mapping.rect.right(), y0.max(y1)),
+                        );
+                        if rect.is_finite() && rect.intersects(mapping.rect) {
+                            painter.with_clip_rect(mapping.rect).rect_filled(
+                                rect,
+                                0.0,
+                                color.gamma_multiply(0.7),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -205,6 +205,7 @@ pub struct DemoApp {
     colour_drag: bool,
     footprint: Option<egui_charts::data::Footprint>,
     footprint_scale: Option<(f32, f32)>,
+    liquidity_heatmap: bool,
     feed_before_footprint: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
@@ -421,6 +422,7 @@ impl DemoApp {
             colour_drag: false,
             footprint: None,
             footprint_scale: None,
+            liquidity_heatmap: false,
             feed_before_footprint: false,
             menus,
             last_chart_click: None,
@@ -1141,6 +1143,7 @@ impl DemoApp {
                 let mut widget_action = None;
                 let mut show_help = false;
                 let mut footprint_enabled = self.footprint.is_some();
+                let mut heatmap_enabled = self.liquidity_heatmap;
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
@@ -1152,6 +1155,7 @@ impl DemoApp {
                                 .tooltip("Menu")
                                 .show(ui);
                         egui::Popup::menu(&response).show(|ui| {
+                            ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
                             ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
                                 .on_hover_text("Pause the feed to inspect the footprint sample");
                             ui.add_enabled(
@@ -1218,6 +1222,12 @@ impl DemoApp {
                     self.keyboard_shortcuts.toggle();
                 }
                 self.live.set_paused(paused);
+                if heatmap_enabled != self.liquidity_heatmap {
+                    self.liquidity_heatmap = heatmap_enabled;
+                    self.chart.set_liquidity_heatmap(heatmap_enabled);
+                    self.chart
+                        .set_volume_bubbles(heatmap_enabled.then(Default::default));
+                }
                 if footprint_enabled != self.footprint.is_some() {
                     if footprint_enabled {
                         self.feed_before_footprint = self.live.paused();

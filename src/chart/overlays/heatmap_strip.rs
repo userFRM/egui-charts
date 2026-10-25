@@ -37,7 +37,7 @@ impl HeatmapCell {
         if max_abs_delta > 0.0 {
             // Normalize to 0.0-1.0 range where 0.5 is neutral
             let normalized = (self.delta / max_abs_delta) as f32;
-            self.intensity = (normalized + 1.0) / 2.0; // Map -1..1 to 0..1
+            self.intensity = ((normalized + 1.0) / 2.0).clamp(0.0, 1.0); // Map -1..1 to 0..1
         }
         self
     }
@@ -128,6 +128,10 @@ impl HeatmapStrip {
     /// Add a single cell
     pub fn add_cell(&mut self, bar_idx: usize, delta: f64, volume: f64) {
         self.cells.push(HeatmapCell::new(bar_idx, delta, volume));
+        let max = self.cells.iter().map(|c| c.delta.abs()).fold(0.0, f64::max);
+        for cell in &mut self.cells {
+            *cell = cell.with_normalized_intensity(max);
+        }
     }
 
     /// Clear all cells
@@ -167,6 +171,8 @@ impl HeatmapStrip {
         // Calculate cell dimensions
         let cell_width = bar_width.max(self.config.min_cell_width);
 
+        let max_volume = self.cells.iter().map(|c| c.volume).fold(0.0, f64::max);
+
         // Filter and render visible cells
         for cell in &self.cells {
             if cell.bar_idx < visible_range.0 || cell.bar_idx > visible_range.1 {
@@ -189,7 +195,16 @@ impl HeatmapStrip {
 
             // Calculate color based on delta and intensity
             let color = if self.config.use_gradient {
-                self.gradient_color(cell, bullish, bearish, neutral)
+                let mut shown = *cell;
+                if self.config.volume_weighted {
+                    shown.intensity = if max_volume > 0.0 {
+                        (0.5 + 0.5 * cell.delta.signum() * cell.volume / max_volume).clamp(0.0, 1.0)
+                            as f32
+                    } else {
+                        0.5
+                    };
+                }
+                self.gradient_color(&shown, bullish, bearish, neutral)
             } else {
                 self.solid_color(cell, bullish, bearish)
             };
@@ -300,6 +315,9 @@ mod tests {
         assert_eq!(strip.cells.len(), 3);
         assert!(strip.cells[0].is_buying());
         assert!(strip.cells[1].is_selling());
+        strip.add_cell(3, -200.0, 600.0);
+        assert_eq!(strip.cells[3].intensity, 0.0);
+        assert_eq!(strip.cells[0].intensity, 0.75);
     }
 
     #[test]
