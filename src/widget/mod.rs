@@ -378,7 +378,7 @@ pub struct Chart {
     #[cfg(feature = "ui")]
     pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
     #[cfg(feature = "ui")]
-    pub(crate) trading_outlined: Vec<f64>,
+    pub(crate) trading_outlined: Vec<usize>,
     #[cfg(feature = "ui")]
     pub(crate) trading_bid_ask: bool,
     /// The order quantity the legend shows under the quote buttons' spread, set by trading for

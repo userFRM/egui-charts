@@ -593,9 +593,16 @@ impl Trading {
                 OrderStatus::Working,
             );
             let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
-            let projected_price = lines.tags.first().map(|(price, _)| *price);
+            let projected_price = lines
+                .outlined
+                .first()
+                .and_then(|index| lines.tags.get(*index))
+                .map(|(price, _)| *price);
+            let offset = chart.trading_tags.len();
             chart.trading_tags.extend(lines.tags);
-            chart.trading_outlined.extend(lines.outlined);
+            chart
+                .trading_outlined
+                .extend(lines.outlined.into_iter().map(|index| offset + index));
             match lines.action {
                 Some(TradingLineAction::Cancel(_)) => self.ticket.open = false,
                 Some(TradingLineAction::Modify(_, changed)) => self.ticket.open(&changed),
@@ -1553,6 +1560,59 @@ mod tests {
             find(&texts, "25").is_some(),
             "the legend shows the new quantity"
         );
+    }
+
+    #[test]
+    fn coincident_order_and_position_axis_tags_keep_their_own_style() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let broker = Arc::new(Recorder {
+                state: vec![
+                    AccountEvent::Order(Order::new(
+                        OrderId::new("order"),
+                        OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(100.0)),
+                        OrderStatus::Working,
+                    )),
+                    AccountEvent::Position(Position::new("SYM", 2.0, 100.0)),
+                ],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker);
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            chart.set_theme_override(Some(theme.clone()));
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for pass in 0..3 {
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    trading.poll(ui.ctx(), &mut Toasts::new());
+                    chart.show(ui);
+                    trading.show(ui, &mut chart);
+                });
+                if pass == 2 {
+                    let edge = chart.get_chart_mapping().rect.right();
+                    let tags: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect) if rect.rect.center().x > edge => Some(rect),
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(
+                        tags.iter().any(|rect| rect.fill == theme.ui.accent),
+                        "position tag stays filled"
+                    );
+                    assert!(
+                        tags.iter()
+                            .any(|rect| rect.stroke.color == theme.ui.accent
+                                && rect.stroke.width == 1.0),
+                        "order tag stays outlined"
+                    );
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 
     #[test]

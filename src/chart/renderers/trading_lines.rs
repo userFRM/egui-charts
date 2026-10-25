@@ -63,8 +63,8 @@ pub struct TradingLines {
     /// price axis: for example as [`PriceLine`]s of width 0 passed to
     /// [`Chart::set_price_lines`](crate::Chart::set_price_lines) with the chart's other lines.
     pub tags: Vec<(f64, Color32)>,
-    /// Entry tags use chart background and a coloured outline.
-    pub outlined: Vec<f64>,
+    /// Indices in `tags` that use chart background and a coloured outline.
+    pub outlined: Vec<usize>,
 }
 
 /// What [`render_trading_lines`] draws and offers.
@@ -231,14 +231,18 @@ pub fn render_trading_lines<'a>(
                 buttons: if cancel { &[Button::Cancel] } else { &[] },
                 draggable: options.modify,
             };
+            let first_tag = tags.len();
             let (dragged, pressed) = ui
                 .push_id(level as u8, |ui| {
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
                 .inner;
-            let drawn = tags.last().map_or(price, |(price, _)| *price);
+            if tags.len() == first_tag {
+                continue;
+            }
+            let drawn = tags[first_tag].0;
             if appearance == Level::Entry {
-                outlined.push(drawn);
+                outlined.push(first_tag);
                 parent_price = Some(drawn);
             }
             if let Some(parent) = parent {

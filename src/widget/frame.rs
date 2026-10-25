@@ -1245,22 +1245,26 @@ impl Chart {
                 axis_edge,
             );
             if line.axis_label {
-                pending_values.push((line.price, rendering::axes::axis_label_colors(line)));
+                pending_values.push((line.price, rendering::axes::axis_label_colors(line), false));
             }
         }
         #[cfg(feature = "ui")]
         let trading_outlined = std::mem::take(&mut self.trading_outlined);
         #[cfg(feature = "ui")]
-        pending_values.extend(std::mem::take(&mut self.trading_tags).into_iter().map(
-            |(value, fill)| {
-                let colors = if trading_outlined.contains(&value) {
-                    (fill, ui.active_theme().chart.bg)
-                } else {
-                    (rendering::axes::tag_text_color(fill), fill)
-                };
-                (value, colors)
-            },
-        ));
+        pending_values.extend(
+            std::mem::take(&mut self.trading_tags)
+                .into_iter()
+                .enumerate()
+                .map(|(index, (value, fill))| {
+                    let outlined = trading_outlined.contains(&index);
+                    let colors = if outlined {
+                        (fill, ui.active_theme().chart.bg)
+                    } else {
+                        (rendering::axes::tag_text_color(fill), fill)
+                    };
+                    (value, colors, outlined)
+                }),
+        );
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
@@ -1294,7 +1298,11 @@ impl Chart {
                 axis_edge,
             );
             if self.config.show_symbol_prev_close {
-                pending_values.push((previous.close, rendering::axes::axis_label_colors(&line)));
+                pending_values.push((
+                    previous.close,
+                    rendering::axes::axis_label_colors(&line),
+                    false,
+                ));
             }
         }
 
@@ -1351,7 +1359,7 @@ impl Chart {
 
         tags.push(last_price_tag);
         if show_price_axis {
-            for (value, colors) in &pending_values {
+            for (value, colors, outlined) in &pending_values {
                 if price_map
                     .range()
                     .contains(price_map.transform().to_scale(*value))
@@ -1369,10 +1377,7 @@ impl Chart {
                         *colors,
                         &tags,
                     );
-                    #[cfg(feature = "ui")]
-                    if trading_outlined.contains(value)
-                        && let Some(rect) = tag
-                    {
+                    if *outlined && let Some(rect) = tag {
                         painter.rect_stroke(
                             rect,
                             2.0,
