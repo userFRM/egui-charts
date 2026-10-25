@@ -230,20 +230,23 @@ impl NewsPanel {
                 {
                     self.market = true;
                 }
-                if let Some(symbol) = &self.symbol
-                    && ui
-                        .add(
-                            egui::Button::new(symbol)
-                                .frame_when_inactive(false)
-                                .selected(!self.market)
-                                .min_size(egui::vec2(0.0, 24.0))
-                                .truncate(),
-                        )
-                        .on_hover_text(symbol)
-                        .clicked()
-                {
-                    self.market = false;
-                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(symbol) = &self.symbol
+                        && ui
+                            .add(
+                                egui::Button::new(symbol)
+                                    .frame_when_inactive(!self.market)
+                                    .stroke(egui::Stroke::NONE)
+                                    .selected(!self.market)
+                                    .min_size(egui::vec2(0.0, 24.0))
+                                    .truncate(),
+                            )
+                            .on_hover_text(symbol)
+                            .clicked()
+                    {
+                        self.market = false;
+                    }
+                });
             },
         );
         if refresh || market != self.market {
