@@ -227,10 +227,12 @@ impl Inbox {
         }
     }
 
-    /// Samples the book of `id` into depth history columns from its next update, or stops.
+    /// Samples the book of `id` into depth history columns from its next update, or stops. The
+    /// columns sampled before and not yet drained are dropped.
     pub(crate) fn sample_depth(&self, id: SubscriptionId, config: Option<DepthHistoryConfig>) {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
+            live.updates.depth_columns.clear();
         }
     }
 
@@ -697,9 +699,13 @@ impl Live {
     }
 
     /// Applies a depth update stamped `ts`, sampling the book as it stood before when the update
-    /// opens a new period of the depth history.
+    /// opens a new period of the depth history. An update stamped more than a minute after the
+    /// feed's time samples nothing: it would hold the open period, and every later column, until
+    /// that time passed.
     fn depth(&mut self, ts: DateTime<Utc>, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
         if let Some(sampler) = &mut self.sampler
+            && (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
+                .is_some_and(|limit| ts <= limit)
             && let Some(column) = sampler.sample(ts, &self.book)
         {
             let columns = &mut self.updates.depth_columns;
@@ -1102,7 +1108,7 @@ mod tests {
     /// left), rows group ticks downwards, sum their sizes and keep the nearest `rows`, and a
     /// period that ends gives one column of the book as it stood before the update that opened
     /// the next period, spanning every period it did not change in. An update stamped before the
-    /// open period samples nothing.
+    /// open period, or ahead of the feed's time, samples nothing.
     #[test]
     fn depth_columns_sample_the_book_at_the_end_of_each_period() {
         let inbox = Arc::new(Inbox::default());
@@ -1137,7 +1143,10 @@ mod tests {
         let bids = vec![level(0.2, 5.0), level(0.3, 1.0)];
         sink.push_depth_delta(3, &book(3, bids, vec![]));
         sink.push_depth_delta(4, &book(2, vec![], vec![level(0.5, 0.0)]));
-        sink.push_depth_delta(5, &book(4, vec![], vec![]));
+        let mut future = book(4, vec![], vec![]);
+        future.ts = Utc::now() + TimeDelta::days(1);
+        sink.push_depth_delta(5, &future);
+        sink.push_depth_delta(6, &book(4, vec![], vec![]));
 
         let (_, updates) = inbox.drain().updates.pop().unwrap();
         let column = |second, span, bids: &[(i64, f64)], asks: &[(i64, f64)]| DepthColumn {
@@ -1152,6 +1161,13 @@ mod tests {
                 column(0, 3, &[(1, 2.0), (-1, 4.0)], &[(2, 3.0)]),
                 column(3, 1, &[(1, 6.0), (-1, 4.0)], &[]),
             ]
+        );
+        sink.push_depth_delta(7, &book(5, vec![], vec![]));
+        inbox.sample_depth(sink.id, Some(DepthHistoryConfig::default()));
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert!(
+            updates.depth_columns.is_empty(),
+            "new settings discard pending old rows"
         );
     }
 }

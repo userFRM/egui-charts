@@ -548,15 +548,20 @@ impl Simulation {
         {
             let price = (shown.price / self.tick_size).round() as i64;
             sub.sink.push_tick(shown);
-            if let Some(market) = &mut self.market {
-                let (sequence, delta) = market.trade(trade.ts, price, side, size);
+            // A subscription made while no trade was shown gets its book with the first one.
+            let market = self.market.get_or_insert_with(|| {
+                let market = Market::new(&self.symbol, self.tick_size, price, self.random);
+                let (sequence, book) = market.snapshot(trade.ts);
+                sub.sink.push_depth_snapshot(sequence, book);
+                market
+            });
+            let (sequence, delta) = market.trade(trade.ts, price, side, size);
+            sub.sink.push_depth_delta(sequence, delta);
+            for _ in 0..CHURN_PER_TRADE {
+                let (sequence, delta) = market.churn(trade.ts);
                 sub.sink.push_depth_delta(sequence, delta);
-                for _ in 0..CHURN_PER_TRADE {
-                    let (sequence, delta) = market.churn(trade.ts);
-                    sub.sink.push_depth_delta(sequence, delta);
-                }
-                sub.sink.push_quote(market.quote(trade.ts));
             }
+            sub.sink.push_quote(market.quote(trade.ts));
         }
         if trade.ts < self.retain_from {
             let open = BarClock::new(Timeframe::Min1).bar_open(trade.ts);
@@ -761,6 +766,36 @@ mod tests {
             variance.sqrt() / mean > 0.3,
             "arrivals must vary, not only trade sizes"
         );
+    }
+
+    #[test]
+    fn a_subscription_before_the_session_gets_depth_when_trading_starts() {
+        let now = "2026-10-23T14:29:59Z".parse().unwrap();
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        feed.set_view(SessionType::RTH, false);
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("SAMPLE")
+            .with_initial_bars(100)
+            .build();
+        chart.set_extended_hours(false);
+        let ctx = egui::Context::default();
+        let frame = |chart: &mut egui_charts::Chart| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..4 {
+            frame(&mut chart);
+        }
+        assert!(chart.order_book(SeriesId::MAIN).is_none());
+        feed.advance(now + TimeDelta::seconds(3));
+        frame(&mut chart);
+        let book = chart
+            .order_book(SeriesId::MAIN)
+            .expect("the opening trade starts depth");
+        assert!(book.best_bid().is_some() && book.best_ask().is_some());
     }
 
     /// Archiving executions must preserve their price path, volume and the bucket crossing
