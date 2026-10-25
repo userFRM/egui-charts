@@ -337,6 +337,12 @@ pub trait Indicator: Send {
         None
     }
 
+    /// Price bands painted beneath this study's plots, stored per zone rather than per bar.
+    /// Empty by default.
+    fn zones(&self) -> &[super::StudyZone] {
+        &[]
+    }
+
     /// Shapes attached to study values, empty by default.
     fn markers(&self) -> &[IndicatorMarker] {
         &[]

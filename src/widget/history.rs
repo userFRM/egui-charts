@@ -238,8 +238,10 @@ impl Chart {
                 .zip(&self.pane_layout.panes)
                 .all(|(a, b)| {
                     a.id == b.id
-                        && a.studies == b.studies
+                        && a.members == b.members
+                        && a.stretch == b.stretch
                         && a.height == b.height
+                        && a.preserve == b.preserve
                         && a.collapsed == b.collapsed
                         && a.scale.options() == b.scale.options()
                         && a.scale.is_manual() == b.scale.is_manual()
@@ -499,7 +501,7 @@ mod tests {
         );
         assert!(!chart.study_autoscale[0]);
         chart.user_action(|chart| assert!(chart.move_indicator_to_pane(sma, rsi)));
-        assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
+        assert_eq!(chart.pane_layout.panes[1].members, [rsi, sma]);
         assert!(chart.undo());
         assert!(
             chart
@@ -509,9 +511,9 @@ mod tests {
                 .1
                 .is_overlay()
         );
-        assert_eq!(chart.pane_layout.panes[0].studies, [rsi]);
+        assert_eq!(chart.pane_layout.panes[1].members, [rsi]);
         assert!(chart.redo());
-        assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
+        assert_eq!(chart.pane_layout.panes[1].members, [rsi, sma]);
         chart.user_action(|chart| {
             chart.remove_series(rsi);
             chart.remove_series(sma);
@@ -523,7 +525,7 @@ mod tests {
         for _ in 0..2 {
             assert!(chart.undo());
             assert_eq!(chart.study_ids, [rsi, sma, host]);
-            assert_eq!(chart.pane_layout.panes[0].studies, [rsi, sma]);
+            assert_eq!(chart.pane_layout.panes[1].members, [rsi, sma]);
             assert_eq!(chart.indicator_inputs(rsi), Some("5"));
             assert_eq!(chart.indicators().next().unwrap().1.values().len(), 17);
             assert!(chart.redo());

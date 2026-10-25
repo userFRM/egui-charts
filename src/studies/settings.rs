@@ -14,6 +14,10 @@ pub enum PlotPattern {
     Dashed,
     /// Equally spaced dots.
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap.
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`.
+    SparseDotted,
 }
 
 /// Geometry for one output line.
@@ -239,6 +243,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
+    }
+    fn zones(&self) -> &[super::StudyZone] {
+        self.study.zones()
     }
     fn extend_right(&self) -> bool {
         self.study.extend_right()

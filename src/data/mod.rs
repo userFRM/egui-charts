@@ -262,6 +262,8 @@ pub struct SymbolDetails {
     pub statistics: Vec<(String, String)>,
     /// The company or contract profile, such as `("Sector", "Technology")`.
     pub profile: Vec<(String, String)>,
+    /// A page about the instrument, linked beside its name.
+    pub url: Option<String>,
 }
 
 impl SymbolDetails {
@@ -270,7 +272,14 @@ impl SymbolDetails {
         Self {
             statistics,
             profile,
+            url: None,
         }
+    }
+
+    /// Sets [`url`](Self::url).
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
     }
 }
 

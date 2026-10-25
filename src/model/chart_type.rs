@@ -373,6 +373,9 @@ pub struct ChartTypeParams {
     pub line_break_count: usize,
     /// Baseline: where the base line is drawn.
     pub baseline: BaselineLevel,
+    /// Columns: the price the columns rise above or fall below; `None` draws them up from the
+    /// pane bottom.
+    pub columns_base: Option<f64>,
     /// TPO: minutes per period, raised to the bar interval when shorter.
     pub tpo_period_minutes: u32,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
@@ -406,6 +409,7 @@ impl Default for ChartTypeParams {
             pnf_reversal: 3,
             line_break_count: 3,
             baseline: BaselineLevel::PercentOfPane(50.0),
+            columns_base: None,
             tpo_period_minutes: 30,
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,

@@ -1,9 +1,10 @@
-//! Host-owned feeds attached as native comparison series.
+//! Host-owned feeds attached as native comparison series, and a second instrument drawn as
+//! candles in a pane of its own.
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
-use egui_charts::model::{BarClock, Timeframe};
+use egui_charts::model::{BarClock, ChartType, SeriesScale, Timeframe};
 use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbol};
-use egui_charts::widget::{Chart, SeriesId};
+use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
 use std::sync::Arc;
 
 pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
@@ -24,6 +25,16 @@ pub(super) fn copy(
         };
         let feed = Arc::new(feed.fork());
         let next = chart.add_series(options.clone());
+        if let Some(pane) = source.series_pane(*id).filter(|pane| *pane != PaneId::MAIN) {
+            let target = chart.add_pane();
+            chart.move_series_to_pane(next, target);
+            if let Some(factor) = source.pane_stretch_factor(pane) {
+                chart.set_pane_stretch_factor(target, factor);
+            }
+            if let Some(at) = source.panes().iter().position(|item| *item == pane) {
+                chart.move_pane(target, at);
+            }
+        }
         chart.set_data(next, source.bars(*id).to_vec());
         chart.set_series_visible(next, source.is_series_visible(*id));
         *chart.series_price_scale_mut(next).expect("copied series") = source
@@ -54,6 +65,43 @@ impl DemoApp {
                 Some(entry)
             })
             .collect();
+    }
+
+    /// Feeds another symbol as candles in a pane of its own, above the price pane, on the left
+    /// scale once moved to the price pane.
+    pub(super) fn add_series_pane(&mut self) {
+        let Some(symbol) = DemoSymbol::catalog()
+            .iter()
+            .map(|spec| spec.symbol)
+            .find(|symbol| {
+                *symbol != self.chart.symbol()
+                    && !self
+                        .comparisons
+                        .iter()
+                        .any(|(current, _, _)| current == symbol)
+            })
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
+        let id = self.chart.add_series(SeriesOptions {
+            name: symbol.clone(),
+            chart_type: ChartType::Candles,
+            color: self.theme.ui.info,
+            up_color: self.theme.ui.info,
+            down_color: self.theme.ui.warning,
+            scale: SeriesScale::Left,
+            ..Default::default()
+        });
+        refresh(&mut self.chart, id, &feed);
+        let pane = self.chart.add_pane();
+        self.chart.move_series_to_pane(id, pane);
+        // Half the price pane's default share of the height.
+        self.chart.set_pane_stretch_factor(pane, 1.5);
+        self.chart.move_pane(pane, 0);
+        self.comparisons.push((symbol, id, feed));
+        self.sync_comparisons();
     }
 
     pub(super) fn handle_comparison(&mut self, action: CompareAction) {

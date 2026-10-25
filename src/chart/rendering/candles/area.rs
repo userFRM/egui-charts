@@ -6,7 +6,7 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-use super::line::draw_styled_line;
+use super::line::{draw_styled_line, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{AreaStyle, Bar, BaselineLevel, BaselineStyle, PriceSource};
@@ -39,13 +39,8 @@ pub(super) fn render_area(
     );
 
     if line_points.len() > 1 {
-        draw_area_fill(
-            painter,
-            &line_points,
-            price_rect.max.y,
-            style.top_fill,
-            style.bottom_fill,
-        );
+        let line_points = with_line_type(line_points, style.line.line_type);
+        draw_area_fill(painter, &line_points, price_rect, style);
         draw_styled_line(painter, line_points, &style.line);
     }
 
@@ -220,22 +215,39 @@ fn collect_hlc_points(
         .collect()
 }
 
-fn draw_area_fill(
-    painter: &Painter,
-    points: &[Pos2],
-    baseline_y: f32,
-    top_color: Color32,
-    bottom_color: Color32,
-) {
-    let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-    if !top.is_finite() || baseline_y <= top {
+/// Fills between the line and the bottom of `rect`, or its top when inverted. The gradient runs
+/// from `top_fill` to `bottom_fill` over the whole pane, or with a relative gradient from the
+/// fill's far edge on the line to the pane edge it reaches.
+fn draw_area_fill(painter: &Painter, points: &[Pos2], rect: Rect, style: &AreaStyle) {
+    let finite = points.iter().map(|p| p.y).filter(|y| y.is_finite());
+    let (high, low) = finite.fold((f32::INFINITY, f32::NEG_INFINITY), |(high, low), y| {
+        (high.min(y), low.max(y))
+    });
+    if !high.is_finite() {
         return;
     }
+    let base_y = if style.invert_filled_area {
+        rect.min.y
+    } else {
+        rect.max.y
+    };
+    let (top, bottom) = match (style.relative_gradient, style.invert_filled_area) {
+        (false, _) => (rect.min.y, rect.max.y),
+        (true, false) => (high, rect.max.y),
+        (true, true) => (rect.min.y, low),
+    };
+    let color_at = |y: f32| {
+        let fraction = if bottom > top {
+            ((y - top) / (bottom - top)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        style.top_fill.lerp_to_gamma(style.bottom_fill, fraction)
+    };
     let mut mesh = egui::Mesh::default();
     for (i, point) in points.iter().enumerate() {
-        let fraction = ((point.y - top) / (baseline_y - top)).clamp(0.0, 1.0);
-        mesh.colored_vertex(*point, top_color.lerp_to_gamma(bottom_color, fraction));
-        mesh.colored_vertex(Pos2::new(point.x, baseline_y), bottom_color);
+        mesh.colored_vertex(*point, color_at(point.y));
+        mesh.colored_vertex(Pos2::new(point.x, base_y), color_at(base_y));
         if i > 0 {
             let n = (2 * i) as u32;
             mesh.add_triangle(n - 2, n, n - 1);
@@ -293,61 +305,75 @@ fn draw_baseline_segments(
     style: &BaselineStyle,
     price_source: PriceSource,
 ) {
-    let point = |i: usize| {
-        let bar = &data[i];
-        let value = price_source.compute(bar.open, bar.high, bar.low, bar.close);
-        Pos2::new(
-            idx_to_coord(start_idx + i, chart_rect_min_x),
-            coords.price_to_y(value),
-        )
-    };
+    let points = with_line_type(
+        collect_price_points(
+            data,
+            start_idx,
+            coords,
+            chart_rect_min_x,
+            idx_to_coord,
+            price_source,
+        ),
+        style.above.line_type,
+    );
+    // A segment that crosses the base line is split there, in screen space, where the line is
+    // straight on every price scale. Each part keeps its distance along the path for the dashes.
+    let mut parts = Vec::with_capacity(points.len());
     let mut distance = 0.0;
-    for i in 1..data.len() {
-        let (prev, curr) = (point(i - 1), point(i));
-        // A segment that crosses the base line is split there, in screen space, where the
-        // line is straight on every price scale.
+    for pair in points.windows(2) {
+        let (prev, curr) = (pair[0], pair[1]);
         let crossing = (prev.y < baseline_y && curr.y > baseline_y)
             || (prev.y > baseline_y && curr.y < baseline_y);
         if crossing {
             let t = (baseline_y - prev.y) / (curr.y - prev.y);
             let cross = Pos2::new(prev.x + (curr.x - prev.x) * t, baseline_y);
-            draw_baseline_part(painter, coords, prev, cross, baseline_y, style, distance);
-            draw_baseline_part(
-                painter,
-                coords,
-                cross,
-                curr,
-                baseline_y,
-                style,
-                distance + f64::from(prev.distance(cross)),
-            );
+            parts.push((prev, cross, distance));
+            parts.push((cross, curr, distance + f64::from(prev.distance(cross))));
         } else {
-            draw_baseline_part(painter, coords, prev, curr, baseline_y, style, distance);
+            parts.push((prev, curr, distance));
         }
         distance += f64::from(prev.distance(curr));
     }
-}
-
-/// A part of a segment that does not cross the base line: its line and its fill down to the base.
-fn draw_baseline_part(
-    painter: &Painter,
-    coords: &PriceMap,
-    a: Pos2,
-    b: Pos2,
-    baseline_y: f32,
-    style: &BaselineStyle,
-    distance: f64,
-) {
     // The side is decided by value, so an inverted price scale keeps its colours; a part that
     // only touches the base line takes its other side.
-    let (line, fill) =
-        if coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y) {
-            (&style.above, style.above_fill)
+    let above = |a: Pos2, b: Pos2| {
+        coords.y_to_price(f32::midpoint(a.y, b.y)) >= coords.y_to_price(baseline_y)
+    };
+    // One unfeathered mesh, so adjacent parts of a densely sampled path leave no seams.
+    let mut fill = egui::Mesh::default();
+    for &(a, b, _) in &parts {
+        let color = if above(a, b) {
+            style.above_fill
         } else {
-            (&style.below, style.below_fill)
+            style.below_fill
         };
-    let fill_points = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
-    painter.add(Shape::convex_polygon(fill_points, fill, Stroke::NONE));
+        let n = fill.vertices.len() as u32;
+        for point in [a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)] {
+            fill.colored_vertex(point, color);
+        }
+        fill.add_triangle(n, n + 1, n + 2);
+        fill.add_triangle(n, n + 2, n + 3);
+    }
+    painter.add(fill);
+    for &(a, b, distance) in &parts {
+        let line = if above(a, b) {
+            &style.above
+        } else {
+            &style.below
+        };
+        draw_baseline_line_part(painter, a, b, line, distance);
+    }
+}
+
+/// The line of a part of the path that does not cross the base line, with its dashes `distance`
+/// along the path.
+fn draw_baseline_line_part(
+    painter: &Painter,
+    a: Pos2,
+    b: Pos2,
+    line: &crate::model::LinePlotStyle,
+    distance: f64,
+) {
     if !line.width.is_finite() || line.width <= 0.0 {
         return;
     }
@@ -440,27 +466,40 @@ mod tests {
     }
 
     #[test]
-    fn area_gradient_uses_visible_high_and_reaches_the_plot_bottom() {
-        // From y=20 to y=100, y=60 is halfway, so 45% becomes 22.5%.
-        // Moving the visible high to y=40 keeps the same endpoint opacities.
-        for top in [20.0, 40.0] {
+    fn area_gradient_spans_the_fill_or_the_pane_on_either_side() {
+        // From y=20 to y=100, y=60 is halfway, so 45% becomes 22.5%. Moving the visible high
+        // to y=40 keeps the same endpoint opacities. An inverted fill reaches y=0 and spans the
+        // lowest point, y=60 or 70; an absolute gradient spans the 100-point pane either way.
+        for (top, relative, inverted) in [
+            (20.0, true, false),
+            (40.0, true, false),
+            (20.0, false, false),
+            (20.0, true, true),
+            (40.0, true, true),
+            (40.0, false, true),
+        ] {
+            let low = (top + 100.0) / 2.0;
+            let (span_top, span_bottom) = match (relative, inverted) {
+                (false, _) => (0.0, 100.0),
+                (true, false) => (top, 100.0),
+                (true, true) => (0.0, low),
+            };
+            let style = AreaStyle {
+                top_fill: Color32::from_rgba_unmultiplied(0, 0, 255, 115),
+                bottom_fill: Color32::TRANSPARENT,
+                relative_gradient: relative,
+                invert_filled_area: inverted,
+                ..Default::default()
+            };
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |_| {
-                let painter = Painter::new(
-                    ctx.clone(),
-                    LayerId::background(),
-                    Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
-                );
+                let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
                 draw_area_fill(
                     &painter,
-                    &[
-                        pos2(10.0, top),
-                        pos2(20.0, (top + 100.0) / 2.0),
-                        pos2(30.0, top),
-                    ],
-                    100.0,
-                    Color32::from_rgba_unmultiplied(0, 0, 255, 115),
-                    Color32::TRANSPARENT,
+                    &[pos2(10.0, top), pos2(20.0, low), pos2(30.0, top)],
+                    rect,
+                    &style,
                 );
             });
             let vertices: Vec<_> = output
@@ -480,9 +519,13 @@ mod tests {
                 !vertices.is_empty(),
                 "area fill must carry per-vertex gradient colours"
             );
+            let base = if inverted { 0.0 } else { 100.0 };
+            assert_eq!(vertices.iter().filter(|v| v.pos.y == base).count(), 3);
             for vertex in vertices {
-                let expected = (115.0 * (100.0 - vertex.pos.y) / (100.0 - top)).round() as u8;
-                assert_eq!(vertex.color.a(), expected);
+                let fraction: f32 =
+                    ((vertex.pos.y - span_top) / (span_bottom - span_top)).clamp(0.0, 1.0);
+                let expected = (115.0 * (1.0 - fraction)).round() as u8;
+                assert_eq!(vertex.color.a(), expected, "{top} {relative} {inverted}");
             }
         }
     }
