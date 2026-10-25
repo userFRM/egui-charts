@@ -428,7 +428,11 @@ impl SymbolSearchDialog {
                 ui.add_space(4.0);
 
                 self.search.status(ui);
-                if self.search_query.is_empty() && self.search.has_recents() {
+                if self.search_query.is_empty()
+                    && self.category.0.is_none()
+                    && self.search.exchange.is_none()
+                    && self.search.has_recents()
+                {
                     ui.weak("Recently opened");
                 }
                 let mut next_page = false;

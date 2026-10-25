@@ -175,22 +175,19 @@ impl Search {
             offset: 0,
             limit,
         };
+        let recent =
+            text.is_empty() && kind.is_none() && self.exchange.is_none() && self.has_recents();
         if self.query.as_ref() != Some(&query) {
             self.reset();
             self.query = Some(query.clone());
             self.more = true;
-            if !text.is_empty() || !self.has_recents() {
+            if !recent {
                 self.next_page();
             }
         }
-        if text.is_empty() && self.has_recents() {
+        if recent {
             self.rows = self.recents.entries()["recent"]
                 .iter()
-                .filter(|row| {
-                    (kind.is_none() || row.kind == kind)
-                        && (self.exchange.is_none()
-                            || self.exchange.as_deref() == Some(&row.exchange))
-                })
                 .map(Recent::symbol)
                 .collect();
             self.more = false;
@@ -348,5 +345,21 @@ mod tests {
             ["A", "B"]
         );
         assert_eq!(restored.rows[0].display_name, "Host name");
+        let source = Arc::new(Source::default());
+        restored.set_service(Some(source.clone()));
+        for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {
+            restored.exchange = exchange.map(str::to_owned);
+            restored.query(&ctx, "", kind, 20);
+            let (query, _) = source
+                .0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("filters query the host catalog even when recents exist");
+            assert_eq!(
+                (query.symbol_type, query.exchange.as_deref()),
+                (kind, exchange)
+            );
+        }
     }
 }

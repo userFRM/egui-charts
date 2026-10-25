@@ -8,7 +8,7 @@ Connect an `Arc<dyn services::SymbolSearch>` with `SymbolSearchDialog::set_searc
 
 Apply `SymbolQuery::offset` before `limit`, preserving ordering between pages. A page shorter than the limit ends scrolling requests. The dialogs ask for another page when the last result comes into view. Instrument identifiers must match the identifiers accepted by the bar feed. `Vec<Instrument>` implements the same search contract for a local catalog.
 
-`SymbolSearchDialog::set_storage` connects recent selections through `StoreKind::RecentSymbols`. Call `show` every frame, including while closed, so asynchronous storage can finish. Recent instruments retain their names and metadata, with the newest first. `record_symbol` also records symbols opened elsewhere. Storage is read before a write; a failed read prevents replacement of the stored catalog. `set_exchange_filter` restricts service queries to a venue.
+`SymbolSearchDialog::set_storage` connects recent selections through `StoreKind::RecentSymbols`. Call `show` every frame, including while closed, so asynchronous storage can finish. Recent instruments retain their names and metadata, with the newest first. `record_symbol` also records symbols opened elsewhere. Storage is read before a write; a failed read prevents replacement of the stored catalog. `set_exchange_filter` restricts service queries to a venue. An empty, unfiltered query shows recents; choosing a category or venue browses the host catalog.
 
 ## Signals
 
