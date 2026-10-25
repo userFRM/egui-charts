@@ -40,3 +40,6 @@ pub mod multi_chart;
 pub mod replay_status;
 pub mod symbol_header;
 pub mod trading;
+
+mod trade_profile_menu;
+pub use trade_profile_menu::trade_profile_menu;

@@ -529,3 +529,6 @@ fn over_finite_bars(
 
 /// Most price rows a volume profile computes.
 const MAX_PROFILE_ROWS: usize = 10_000;
+
+mod trade_profile;
+pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};

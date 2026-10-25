@@ -31,3 +31,8 @@ pub use volume_bubbles::{BubbleColor, BubbleScalingMode, VolumeBubblesConfig};
 
 #[cfg(feature = "studies")]
 pub use footprint::render_footprint_studies;
+
+#[cfg(feature = "studies")]
+mod trade_profile;
+#[cfg(feature = "studies")]
+pub use trade_profile::render_trade_profiles;

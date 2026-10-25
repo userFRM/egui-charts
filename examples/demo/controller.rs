@@ -206,6 +206,7 @@ pub struct DemoApp {
     footprint: Option<egui_charts::data::Footprint>,
     footprint_scale: Option<(f32, f32)>,
     liquidity_heatmap: bool,
+    profile_ranges: Option<egui_charts::studies::TradeProfileRanges>,
     feed_before_footprint: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
@@ -423,6 +424,7 @@ impl DemoApp {
             footprint: None,
             footprint_scale: None,
             liquidity_heatmap: false,
+            profile_ranges: None,
             feed_before_footprint: false,
             menus,
             last_chart_click: None,
@@ -1144,6 +1146,15 @@ impl DemoApp {
                 let mut show_help = false;
                 let mut footprint_enabled = self.footprint.is_some();
                 let mut heatmap_enabled = self.liquidity_heatmap;
+                let mut profiles_enabled = self.profile_ranges.is_some();
+                let mut profile_ranges = self.profile_ranges.clone();
+                let profile_split = self
+                    .chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .rev()
+                    .nth(5)
+                    .map(|bar| bar.time);
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
@@ -1158,6 +1169,17 @@ impl DemoApp {
                             ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
                             ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
                                 .on_hover_text("Pause the feed to inspect the footprint sample");
+                            ui.add_enabled_ui(self.footprint.is_some(), |ui| {
+                                ui.checkbox(&mut profiles_enabled, "Trade profile (synthetic)");
+                                if let Some(ranges) = &mut profile_ranges {
+                                    egui_charts::ui::trade_profile_menu(
+                                        ui,
+                                        ranges,
+                                        0,
+                                        profile_split,
+                                    );
+                                }
+                            });
                             ui.add_enabled(
                                 self.replay.is_none() && self.footprint.is_none(),
                                 |ui: &mut egui::Ui| {
@@ -1246,6 +1268,27 @@ impl DemoApp {
                         }
                     }
                 }
+                if !profiles_enabled || self.footprint.is_none() {
+                    profile_ranges = None;
+                } else if profile_ranges.is_none() {
+                    let bars = self.chart.bars(SeriesId::MAIN);
+                    if let (Some(first), Some(last)) = (
+                        bars.get(self.chart.get_chart_mapping().start_idx),
+                        bars.last(),
+                    ) {
+                        let span = self
+                            .chart
+                            .timeframe()
+                            .unwrap_or_default()
+                            .duration_ms()
+                            .max(1);
+                        profile_ranges = egui_charts::studies::TradeProfileRanges::new(vec![
+                            first.time..last.time + chrono::TimeDelta::milliseconds(span),
+                        ])
+                        .ok();
+                    }
+                }
+                self.profile_ranges = profile_ranges;
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
             });
@@ -2010,6 +2053,7 @@ impl DemoApp {
     }
 
     fn rebuild_footprint(&mut self) {
+        self.profile_ranges = None;
         let bars = self.chart.bars(SeriesId::MAIN);
         let step = if bars.last().is_some_and(|bar| bar.close.abs() >= 100.0) {
             0.05
@@ -2051,6 +2095,10 @@ impl DemoApp {
                         ..Default::default()
                     };
                     self.chart.show_footprint(ui, flow, &config);
+                    if let Some(ranges) = &self.profile_ranges {
+                        let profiles = egui_charts::studies::trade_profiles(flow, ranges);
+                        egui_charts::chart::overlays::render_trade_profiles(ui.painter(), &self.chart.get_chart_mapping(), self.chart.bars(SeriesId::MAIN), &profiles, flow.price_step(), &config);
+                    }
                     if self.chart.chart_type().is_time_independent() {
                         ui.painter().text(self.chart.get_rendered_price_rect().center(), egui::Align2::CENTER_CENTER,
                             "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
