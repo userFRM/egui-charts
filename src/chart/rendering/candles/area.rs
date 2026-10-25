@@ -578,11 +578,8 @@ mod tests {
             assert!(!meshes.is_empty());
             for mesh in &meshes {
                 assert!(mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()));
-                for triangle in mesh.indices.chunks_exact(3) {
-                    let xs: Vec<_> = triangle
-                        .iter()
-                        .map(|i| mesh.vertices[*i as usize].pos.x)
-                        .collect();
+                for triangle in mesh.indices.as_chunks::<3>().0 {
+                    let xs = triangle.map(|i| mesh.vertices[i as usize].pos.x);
                     assert!(xs.iter().all(|x| *x <= 20.0) || xs.iter().all(|x| *x >= 40.0));
                 }
             }
