@@ -117,7 +117,7 @@ resvg = { version = "0.45.1", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
-chrono-tz = "0.10.4"
+chrono-tz = { version = "0.10.4", features = ["serde"] }
 web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
 thiserror = { version = "2.0.18", optional = true }

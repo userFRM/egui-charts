@@ -153,6 +153,13 @@ impl SettingsStore {
     /// Writes `current` now if it differs from the stored settings, such as when the
     /// application exits.
     pub fn flush(&mut self, current: &UserSettings) {
+        if self.written.is_some() {
+            for received in self.document.receive(&*self.storage) {
+                if let Received::Failed(error) = received {
+                    self.error = Some(error);
+                }
+            }
+        }
         if self
             .written
             .as_ref()
@@ -222,6 +229,12 @@ mod tests {
         poll(&mut store, 1.5, &settings);
         let written = host.0.lock().unwrap().clone().unwrap();
         assert!(written.contains("\"TrendLine\""));
+
+        // Exit can follow an inline save before another frame polls its acknowledgement.
+        settings.symbol = Some("MSFT".into());
+        store.flush(&settings);
+        let written = host.0.lock().unwrap().clone().unwrap();
+        assert_eq!(UserSettings::from_json(&written).unwrap(), settings);
 
         // A favourite tool from a newer release is left out; the rest is restored.
         let document = written.replace("\"TrendLine\"", "\"TrendLine\",\"FutureTool\"");

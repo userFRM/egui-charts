@@ -74,47 +74,58 @@ impl StoredDocument {
     pub(crate) fn poll(&mut self, storage: &dyn Storage, ctx: &egui::Context) -> Vec<Received> {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        self.receive(storage)
+    }
+
+    /// Finishes replies already available, including inline writes, without changing the waker.
+    pub(crate) fn receive(&mut self, storage: &dyn Storage) -> Vec<Received> {
         let mut received = Vec::new();
-        for (key, answer) in self.inbox.drain().answers {
-            if key == 0 {
-                let answer = *answer
-                    .downcast::<Result<Option<String>, FeedError>>()
-                    .expect("document load");
-                match answer {
-                    Ok(document) => {
-                        self.writable.get_or_insert(true);
-                        received.push(Received::Loaded(document));
+        loop {
+            let answers = self.inbox.drain().answers;
+            if answers.is_empty() {
+                break;
+            }
+            for (key, answer) in answers {
+                if key == 0 {
+                    let answer = *answer
+                        .downcast::<Result<Option<String>, FeedError>>()
+                        .expect("document load");
+                    match answer {
+                        Ok(document) => {
+                            self.writable.get_or_insert(true);
+                            received.push(Received::Loaded(document));
+                        }
+                        Err(error) => {
+                            self.refuse_writes();
+                            received.push(Received::Failed(format!(
+                                "Could not read {}: {error}",
+                                self.name
+                            )));
+                        }
                     }
-                    Err(error) => {
-                        self.refuse_writes();
+                    continue;
+                }
+                self.writing = false;
+                let answer = *answer
+                    .downcast::<Result<(), FeedError>>()
+                    .expect("document save");
+                match answer {
+                    Ok(()) => self.failing = false,
+                    Err(error) if !self.failing => {
+                        self.failing = true;
                         received.push(Received::Failed(format!(
-                            "Could not read {}: {error}",
+                            "Could not save {}: {error}",
                             self.name
                         )));
                     }
+                    Err(_) => {}
                 }
-                continue;
             }
-            self.writing = false;
-            let answer = *answer
-                .downcast::<Result<(), FeedError>>()
-                .expect("document save");
-            match answer {
-                Ok(()) => self.failing = false,
-                Err(error) if !self.failing => {
-                    self.failing = true;
-                    received.push(Received::Failed(format!(
-                        "Could not save {}: {error}",
-                        self.name
-                    )));
-                }
-                Err(_) => {}
+            if !self.writing
+                && let Some(document) = self.waiting.take()
+            {
+                self.save(storage, document);
             }
-        }
-        if !self.writing
-            && let Some(document) = self.waiting.take()
-        {
-            self.save(storage, document);
         }
         received
     }

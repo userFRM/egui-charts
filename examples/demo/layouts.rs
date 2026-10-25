@@ -176,6 +176,7 @@ impl DemoApp {
             self.extra_charts.insert(old_position, moved);
             self.layout_slot = slot;
             self.layout.set_active(slot);
+            self.chart.set_storage(self.storage.clone());
             self.refresh_active_chart();
         }
     }
@@ -297,6 +298,9 @@ impl DemoApp {
         if index == self.layout_tab {
             return;
         }
+        if self.top_toolbar.layout_menu.autosave {
+            self.save_layout();
+        }
         self.stop_replay();
         if self.footprint.take().is_some() {
             self.restore_feed_after_footprint();
@@ -317,6 +321,12 @@ impl DemoApp {
             slot: std::mem::replace(&mut self.layout_slot, next.slot),
         });
         self.layout_tab = index;
+        self.refresh_layout_menu();
+        // Other tabs may have edited the same symbol since this tab was last shown.
+        self.chart.set_storage(self.storage.clone());
+        for chart in &mut self.extra_charts {
+            chart.chart.set_storage(self.storage.clone());
+        }
         self.refresh_active_chart();
         self.top_toolbar
             .chart_grid_selector
@@ -383,10 +393,15 @@ impl DemoApp {
                 self.ensure_chart_slots(mode);
             }
             LayoutAction::CreateNew => self.new_layout(None),
-            LayoutAction::SaveAs(name) => {
-                self.new_layout(Some(name));
-                self.save_layout();
-            }
+            LayoutAction::SaveAs(name) => match self.capture_layout() {
+                Ok(layout) => {
+                    self.new_layout(Some(name));
+                    let name = self.layout_tabs[self.layout_tab].name.clone();
+                    self.restore_layout(name, layout);
+                    self.save_layout();
+                }
+                Err(error) => self.toasts.error(error),
+            },
             LayoutAction::Open(name) => {
                 match self.layout_tabs.iter().position(|t| t.name == name) {
                     Some(i) if i != self.layout_tab => self.select_layout(i),
@@ -399,7 +414,6 @@ impl DemoApp {
                 if !new.trim().is_empty() && !self.layout_tabs.iter().any(|t| t.name == new) {
                     match self.capture_layout() {
                         Ok(layout) => {
-                            self.layout_tabs[self.layout_tab].name = new.clone();
                             self.top_toolbar.layout_menu.rename(&new, &layout);
                         }
                         Err(error) => self.toasts.error(error),
@@ -465,7 +479,26 @@ impl DemoApp {
             self.select_layout(index);
             return;
         }
+        if layout.charts.is_empty()
+            || (layout.mode != ChartLayoutMode::Tabs
+                && layout.charts.len() != layout.mode.chart_count())
+        {
+            self.toasts
+                .error("Could not open layout: invalid chart count");
+            return;
+        }
+        for snapshot in &layout.charts {
+            let mut check = Chart::new(egui_charts::model::BarData::new());
+            if let Err(error) = check.restore(snapshot) {
+                self.toasts.error(format!("Could not open layout: {error}"));
+                return;
+            }
+        }
         self.layout_tabs[self.layout_tab].name = name;
+        if self.layout_slot >= layout.charts.len() {
+            self.activate_chart_slot(0);
+        }
+        self.extra_charts.truncate(layout.charts.len() - 1);
         self.ensure_chart_slots(layout.mode);
         while self.extra_charts.len() + 1 < layout.charts.len() {
             let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
@@ -482,9 +515,14 @@ impl DemoApp {
             let restored = self
                 .chart_in_slot(slot)
                 .map(|chart| chart.restore(snapshot));
-            if let Some(Err(error)) = restored {
-                self.toasts
-                    .error(format!("Could not open chart {}: {error}", slot + 1));
+            match restored {
+                Some(Err(error)) => self
+                    .toasts
+                    .error(format!("Could not open chart {}: {error}", slot + 1)),
+                Some(Ok(skipped)) if !skipped.is_empty() => self
+                    .toasts
+                    .warning(format!("Skipped {} unreadable drawings", skipped.len())),
+                _ => {}
             }
         }
         self.refresh_active_chart();
@@ -543,8 +581,13 @@ impl DemoApp {
         if let Some(settings) = self.settings.poll(ctx, &current) {
             self.apply_user_settings(ctx, settings);
         }
+        let previous = self.top_toolbar.layout_menu.curr_layout.clone();
         if let Some((name, layout)) = self.top_toolbar.layout_menu.poll(ctx) {
             self.restore_layout(name, layout);
+        } else if self.top_toolbar.layout_menu.curr_layout != previous
+            && let Some(name) = &self.top_toolbar.layout_menu.curr_layout
+        {
+            self.layout_tabs[self.layout_tab].name = name.clone();
         }
         let mut errors = vec![
             self.settings.take_error(),

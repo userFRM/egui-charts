@@ -3398,6 +3398,10 @@ mod tests {
         use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        ctx.run_ui(Default::default(), |ui| {
+            app.chart.show(ui);
+        })
+        .drop_without_applying_deltas();
         app.user_action(|app| {
             app.chart
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));

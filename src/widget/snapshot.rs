@@ -25,12 +25,24 @@ pub struct SavedStudy {
 }
 
 /// One pane of a [`ChartSnapshot`].
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
     /// Whether it is the price pane.
     pub main: bool,
     /// Its share of the chart height; see [`Chart::pane_stretch_factor`].
     pub stretch: f32,
+    /// Explicit collapse state, or automatic collapse in a narrow chart.
+    #[serde(default)]
+    pub collapsed: Option<bool>,
+    /// Keep the pane when its last study leaves.
+    #[serde(default)]
+    pub preserve: bool,
+    /// Saved study ids in legend order; empty in version 1 layouts.
+    #[serde(default)]
+    pub members: Vec<usize>,
+    /// The pane's price scale, including its manual range.
+    #[serde(default)]
+    pub scale: Option<crate::scales::PriceScale>,
 }
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
@@ -53,44 +65,50 @@ pub struct ChartSnapshot {
     pub main_series_visible: bool,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
-    /// The studies in the order they were added, except the volume study that
-    /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) adds.
+    /// Complete appearance settings; absent in version 1 layouts.
+    #[serde(default)]
+    pub config: Option<crate::config::ChartConfig>,
+    /// Interaction and time axis settings; absent in version 1 layouts.
+    #[serde(default)]
+    pub options: Option<crate::config::ChartOptions>,
+    /// The main price scale, including its manual range and transform.
+    #[serde(default)]
+    pub price_scale: Option<crate::scales::PriceScale>,
+    /// Position of the maximized pane, or no maximized pane.
+    #[serde(default)]
+    pub maximized: Option<usize>,
+    /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
-    /// The panes from top to bottom that hold the price series or a saved study.
+    /// The panes from top to bottom, including preserved empty panes.
     pub panes: Vec<SavedPane>,
     /// The space between bars in points.
     pub bar_spacing: f32,
     /// The space after the last bar, in bars.
     pub right_offset: f32,
-    /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]), or `None`
-    /// when the chart keeps them in storage of their own (see [`Chart::set_storage`]).
+    /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
+    /// Version 1 layouts may omit drawings kept in per-symbol storage.
     pub drawings: Option<serde_json::Value>,
 }
 
 impl Chart {
-    /// Captures the chart's state. Fails when a drawing cannot be saved; see
+    /// Captures the chart's state. Fails while stored drawings are loading, for an unregistered
+    /// study or when a drawing cannot be saved; see
     /// [`save_drawings`](Self::save_drawings).
     pub fn snapshot(&self) -> Result<ChartSnapshot, SaveError> {
-        let drawings = match self.drawing_store {
-            Some(_) => None,
-            None => {
-                Some(serde_json::to_value(self.save_drawings()?).expect("drawings were validated"))
-            }
-        };
-        let panes: Vec<_> = self
-            .panes()
-            .into_iter()
-            .filter(|pane| {
-                *pane == PaneId::MAIN
-                    || self
-                        .pane_series(*pane)
-                        .iter()
-                        .any(|id| self.saved_study(*id))
-            })
-            .collect();
-        let studies = self
+        if self
+            .drawing_store
+            .as_ref()
+            .is_some_and(|store| !store.ready(&self.symbol))
+        {
+            return Err(SaveError::Json(serde::ser::Error::custom(
+                "Drawings are still loading",
+            )));
+        }
+        let drawings =
+            Some(serde_json::to_value(self.save_drawings()?).expect("drawings were validated"));
+        let panes = self.panes();
+        let studies: Vec<_> = self
             .indicators()
-            .filter(|(id, _)| self.saved_study(*id))
             .map(|(id, study)| SavedStudy {
                 id: id.0,
                 study: StudyTemplate::from_study(study),
@@ -102,6 +120,12 @@ impl Chart {
                     .unwrap_or(0),
             })
             .collect();
+        for saved in &studies {
+            saved
+                .study
+                .create()
+                .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
+        }
         let (bar_spacing, right_offset) = self.get_time_scale_state();
         Ok(ChartSnapshot {
             symbol: self.symbol.clone(),
@@ -111,12 +135,31 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             settings: ChartSettingsState::from_chart(self),
+            config: Some(self.config.clone()),
+            options: Some(self.chart_options.clone()),
+            price_scale: Some(self.state.price_scale().clone()),
+            maximized: self
+                .pane_layout
+                .maximized
+                .and_then(|id| panes.iter().position(|pane| *pane == id)),
             studies,
             panes: panes
                 .iter()
-                .map(|pane| SavedPane {
-                    main: *pane == PaneId::MAIN,
-                    stretch: self.pane_stretch_factor(*pane).unwrap_or(1.0),
+                .map(|id| {
+                    let pane = self
+                        .pane_layout
+                        .panes
+                        .iter()
+                        .find(|pane| pane.id == *id)
+                        .expect("listed pane");
+                    SavedPane {
+                        main: *id == PaneId::MAIN,
+                        stretch: pane.stretch,
+                        collapsed: pane.collapsed,
+                        preserve: pane.preserve,
+                        members: pane.members.iter().map(|id| id.0).collect(),
+                        scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
+                    }
                 })
                 .collect(),
             bar_spacing,
@@ -126,7 +169,7 @@ impl Chart {
     }
 
     /// Shows what `snapshot` captured: its symbol, interval, chart type, settings, studies,
-    /// panes and view, and its drawings unless the chart keeps them in storage. Studies are
+    /// panes and view, and its drawings. Studies are
     /// built through [`StudyTemplate::create`]. Clears undo history and returns the drawings
     /// that could not be read. Fails without changing the chart for an unknown study, invalid
     /// settings or an unreadable drawings document.
@@ -137,8 +180,54 @@ impl Chart {
             .map(|saved| saved.study.create())
             .collect::<Result<Vec<_>, _>>()?;
         snapshot.settings.validate()?;
-        let drawings = match (&snapshot.drawings, &self.drawing_store) {
-            (Some(drawings), None) => {
+        let valid_scale = |scale: &crate::scales::PriceScale| {
+            let range = scale.range();
+            let margins = scale.options().scale_margins;
+            range.min.is_finite()
+                && range.max.is_finite()
+                && range.min < range.max
+                && margins.top.is_finite()
+                && margins.bottom.is_finite()
+                && margins.top >= 0.0
+                && margins.bottom >= 0.0
+                && margins.top + margins.bottom < 1.0
+        };
+        if snapshot
+            .price_scale
+            .as_ref()
+            .is_some_and(|scale| !valid_scale(scale))
+            || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+            || snapshot
+                .studies
+                .iter()
+                .map(|study| study.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != snapshot.studies.len()
+            || snapshot
+                .panes
+                .iter()
+                .filter_map(|pane| pane.scale.as_ref())
+                .any(|scale| !valid_scale(scale))
+            || snapshot
+                .studies
+                .iter()
+                .any(|study| study.pane >= snapshot.panes.len())
+            || snapshot
+                .panes
+                .iter()
+                .any(|pane| !pane.stretch.is_finite() || pane.stretch <= 0.0)
+            || !snapshot.bar_spacing.is_finite()
+            || snapshot.bar_spacing <= 0.0
+            || !snapshot.right_offset.is_finite()
+            || snapshot
+                .maximized
+                .is_some_and(|pane| pane >= snapshot.panes.len())
+        {
+            return Err("Invalid layout geometry".into());
+        }
+        let drawings = match &snapshot.drawings {
+            Some(drawings) => {
                 let json = drawings.to_string();
                 let (storage, _) = DrawingStorage::from_json(&json).map_err(|e| e.to_string())?;
                 if storage.symbol != snapshot.symbol {
@@ -151,71 +240,91 @@ impl Chart {
         self.set_symbol(snapshot.symbol.clone());
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
+        } else {
+            self.timeframe = None;
+            self.drawings.curr_timeframe.clear();
         }
         self.set_extended_hours(snapshot.extended_hours);
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
         snapshot.settings.apply_to_chart(self)?;
-        let replaced: Vec<_> = self
-            .indicators()
-            .map(|(id, _)| id)
-            .filter(|id| self.saved_study(*id))
-            .collect();
+        if let Some(config) = &snapshot.config {
+            self.config = config.clone();
+        }
+        if let Some(options) = &snapshot.options {
+            self.chart_options = options.clone();
+        }
+        if let Some(scale) = &snapshot.price_scale {
+            *self.state.price_scale_mut() = scale.clone();
+        }
+        let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+        let show_volume = self.config.show_volume;
         for id in replaced {
             self.remove_series(id);
         }
+        self.config.show_volume = show_volume;
         self.restored_studies.clear();
+        self.pane_layout
+            .panes
+            .retain(|pane| pane.id == PaneId::MAIN || !pane.members.is_empty());
         let mut panes: HashMap<usize, PaneId> = HashMap::new();
+        for (at, pane) in snapshot.panes.iter().enumerate() {
+            panes.insert(
+                at,
+                if pane.main {
+                    PaneId::MAIN
+                } else {
+                    self.add_pane()
+                },
+            );
+        }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.add_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);
-            if snapshot.panes.get(saved.pane).is_none_or(|pane| pane.main) {
-                self.move_series_to_pane(id, PaneId::MAIN);
-            } else if let Some(pane) = panes.get(&saved.pane) {
-                self.move_series_to_pane(id, *pane);
-            } else {
-                if self.series_pane(id) == Some(PaneId::MAIN) {
-                    self.move_indicator_to_pane(id, id);
-                }
-                if let Some(pane) = self.series_pane(id) {
-                    panes.insert(saved.pane, pane);
-                }
-            }
+            self.move_series_to_pane(id, panes[&saved.pane]);
         }
         for (at, saved) in snapshot.panes.iter().enumerate() {
-            let pane = if saved.main {
-                Some(PaneId::MAIN)
-            } else {
-                panes.get(&at).copied()
-            };
-            if let Some(pane) = pane {
-                self.move_pane(pane, at);
-                self.set_pane_stretch_factor(pane, saved.stretch);
+            let id = panes[&at];
+            self.move_pane(id, at);
+            self.set_pane_stretch_factor(id, saved.stretch);
+            let pane = self
+                .pane_layout
+                .panes
+                .iter_mut()
+                .find(|pane| pane.id == id)
+                .expect("restored pane");
+            pane.collapsed = saved.collapsed;
+            pane.preserve = saved.preserve;
+            if !saved.members.is_empty() {
+                pane.members.sort_by_key(|id| {
+                    saved
+                        .members
+                        .iter()
+                        .position(|old| self.restored_studies.get(old) == Some(&id.0))
+                        .unwrap_or(usize::MAX)
+                });
+            }
+            if let Some(scale) = &saved.scale {
+                pane.scale = scale.clone();
             }
         }
+        self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
             Some(json) => {
                 let skipped = self.load_drawings(&json).map_err(|e| e.to_string())?;
                 self.remap_drawing_panes();
+                self.history.drawing_edits += 1;
+                self.save_restored_drawings();
                 skipped
             }
             None => Vec::new(),
         };
         self.history.clear();
         Ok(skipped)
-    }
-
-    /// Whether `id` is a study a snapshot holds: any but the volume study of the settings.
-    fn saved_study(&self, id: SeriesId) -> bool {
-        #[cfg(feature = "studies")]
-        if self.volume_study == Some(id) {
-            return false;
-        }
-        self.study_ids.contains(&id)
     }
 
     fn study_index(&self, id: SeriesId) -> usize {
@@ -245,7 +354,7 @@ struct Document<T> {
 
 impl SavedLayout {
     /// The version of the document [`to_json`](Self::to_json) writes.
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
 
     /// The layout as a versioned JSON document.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -260,7 +369,7 @@ impl SavedLayout {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
-            Self::VERSION => serde_json::from_value(document.layout),
+            1 | Self::VERSION => serde_json::from_value(document.layout),
             version => Err(serde::de::Error::custom(format!(
                 "unsupported layout version {version}, expected {}",
                 Self::VERSION
@@ -305,6 +414,17 @@ mod tests {
         chart.move_pane(pane, 0);
         chart.set_pane_stretch_factor(pane, 2.0);
         chart.apply_synced_time_scale(9.0, 4.0);
+        let empty = chart.add_pane();
+        chart.set_preserve_empty_pane(empty, true);
+        chart.pane_layout.panes[0].collapsed = Some(true);
+        chart.pane_layout.panes[0].scale.set_range(25.0, 75.0);
+        chart.pane_layout.maximized = Some(pane);
+        chart.price_scale_mut().set_range(8.0, 12.0);
+        chart.config_mut().candle_width = 0.42;
+        chart.config_mut().watermark_text = Some("Saved chart".into());
+        chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        chart.chart_options.time_scale.timezone =
+            crate::scales::TimezoneMode::Timezone(chrono_tz::Europe::Zurich);
         let mut drawing = Drawing::new(1, DrawingToolType::HorizontalLine);
         drawing.chart_points = vec![ChartPoint::new(3.0, 50.0)];
         drawing.completed = true;
@@ -340,18 +460,59 @@ mod tests {
         assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
         assert!(!restored.study_autoscale[0]);
         let panes = restored.panes();
-        assert_eq!(panes.len(), 2);
+        assert_eq!(panes.len(), 3);
         assert_eq!(panes[1], PaneId::MAIN);
         assert_eq!(restored.pane_series(panes[0]), [*rsi, *macd]);
         assert_eq!(restored.pane_stretch_factor(panes[0]), Some(2.0));
         assert_eq!(restored.get_time_scale_state(), (9.0, 4.0));
+        assert_eq!(restored.config(), chart.config());
+        assert_eq!(restored.chart_options(), chart.chart_options());
+        assert_eq!(
+            restored.state().price_scale().range(),
+            chart.state().price_scale().range()
+        );
+        assert!(restored.state().price_scale().is_manual());
+        assert_eq!(restored.pane_layout.panes[0].collapsed, Some(true));
+        assert_eq!(
+            restored.pane_layout.panes[0].scale.range(),
+            chart.pane_layout.panes[0].scale.range()
+        );
+        assert_eq!(restored.pane_layout.maximized, Some(panes[0]));
+        assert!(restored.preserves_empty_pane(panes[2]));
         let drawings = &restored.drawings().drawings;
         assert_eq!(drawings.len(), 1);
         assert_eq!(drawings[0].pane, Some(rsi.0));
         assert_eq!(drawings[0].chart_points[0].bar_idx, 3.0);
         assert!(!restored.can_undo());
 
-        let newer = json.replacen("\"version\":1", "\"version\":2", 1);
+        // An absent interval clears an existing interval, and malformed geometry is atomic.
+        let mut snapshot = layout.charts[0].clone();
+        snapshot.interval = None;
+        restored.restore(&snapshot).unwrap();
+        assert_eq!(restored.timeframe(), None);
+        for bad in [0.0, f32::NAN, f32::INFINITY] {
+            snapshot.bar_spacing = bad;
+            snapshot.symbol = "Invalid".into();
+            assert!(restored.restore(&snapshot).is_err());
+            assert_eq!(restored.symbol(), "A");
+        }
+        // Both theme palettes survive instead of being replaced by dialog defaults.
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            chart.set_theme(&egui::Context::default(), &theme);
+            let snapshot = chart.snapshot().unwrap();
+            restored.restore(&snapshot).unwrap();
+            assert_eq!(restored.config(), chart.config());
+        }
+        let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        legacy["version"] = 1.into();
+        for key in ["config", "options", "price_scale", "maximized"] {
+            legacy["charts"][0].as_object_mut().unwrap().remove(key);
+        }
+        let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
+        restored.restore(&migrated.charts[0]).unwrap();
+        assert_eq!(restored.chart_type(), ChartType::Line);
+
+        let newer = json.replacen("\"version\":2", "\"version\":99", 1);
         assert!(SavedLayout::from_json(&newer).is_err());
     }
 }
