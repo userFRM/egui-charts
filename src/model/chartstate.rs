@@ -380,6 +380,13 @@ impl ChartState {
                     && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
+                #[cfg(not(feature = "widget"))]
+                let drawing_prices = std::iter::empty();
+                #[cfg(feature = "widget")]
+                let drawing_prices = crate::studies::plots::drawing_prices(
+                    study,
+                    study_start.max(start)..study_end.max(end),
+                );
                 (0..study.line_cnt())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
@@ -429,6 +436,7 @@ impl ChartState {
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
                     )
+                    .chain(drawing_prices)
             });
         let main = main_visible
             .then(|| {

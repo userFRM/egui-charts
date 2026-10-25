@@ -161,6 +161,54 @@ pub(crate) fn paint_zones(
     }
 }
 
+/// Anchor and level prices of drawings reaching the visible bars, for all study scales.
+#[cfg(feature = "widget")]
+pub(crate) fn drawing_prices(
+    study: &dyn super::Indicator,
+    bars: std::ops::Range<usize>,
+) -> impl Iterator<Item = f64> + '_ {
+    study
+        .drawings()
+        .iter()
+        .filter_map(move |drawing| {
+            if !study.plot_style(0).visible || !drawing.visible || bars.is_empty() {
+                return None;
+            }
+            let first = drawing
+                .chart_points
+                .iter()
+                .map(|p| p.bar_idx)
+                .reduce(f32::min)?;
+            let last = drawing
+                .chart_points
+                .iter()
+                .map(|p| p.bar_idx)
+                .reduce(f32::max)?;
+            let levels = drawing.fib_levels();
+            let left = drawing.extend_left
+                || levels
+                    .as_ref()
+                    .is_some_and(|(c, _)| c.extend_left || c.show_background);
+            let right = drawing.extend_right
+                || drawing.tool_type == crate::drawings::DrawingToolType::Pitchfork
+                || levels
+                    .as_ref()
+                    .is_some_and(|(c, _)| c.extend_right || c.show_background);
+            if (!left && first >= bars.end as f32) || (!right && last < bars.start as f32) {
+                return None;
+            }
+            Some(
+                drawing
+                    .chart_points
+                    .iter()
+                    .map(|p| p.price)
+                    .chain(levels.into_iter().flat_map(|(_, prices)| prices)),
+            )
+        })
+        .flatten()
+        .filter(|price| price.is_finite())
+}
+
 /// Apply the study's presentation and pane mapping before rendering or hit testing.
 #[cfg(feature = "widget")]
 pub(crate) fn mapped_drawings(

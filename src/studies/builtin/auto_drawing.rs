@@ -369,5 +369,38 @@ mod tests {
                 visible
             );
         }
+
+        // Zoom between anchors: the construction still supplies the independent scale's range.
+        let mut settings = study.settings();
+        settings.plots[0].visible = true;
+        study.apply_settings(&[], settings).unwrap();
+        study.set_scale(crate::studies::StudyScale::Independent);
+        let zoomed = ChartMapping::new(rect, 400.0, 6, 7, 0.0, price);
+        let mapped = crate::chart::renderers::study_mapping(&study, &zoomed);
+        for value in [113.0, 118.0] {
+            assert!((0.0..=300.0).contains(&mapped.price_to_y(value)));
+        }
+
+        // Projected levels must fit even when none of the swing anchors are in view.
+        let mut extension = AutoDrawing::new(AutoDrawingKind::FibonacciExtension, 5.0, 3);
+        extension.calculate(&data);
+        let prices: Vec<_> = crate::studies::plots::drawing_prices(&extension, 10..12).collect();
+        // C + 2.618*(B-A) = 118 + 2.618*(100-113) = 83.966.
+        assert!(prices.iter().any(|p| (p - 83.966).abs() < 1e-4));
+        let mut state = crate::model::ChartState::new(crate::model::BarData::from_bars(data));
+        state.time_scale_mut().set_width(400.0);
+        let transform = state.fit_price_scale([&extension as &dyn Indicator]);
+        let range = state.price_scale().range();
+        assert!(transform.to_price(range.min) <= 83.966);
+        assert!(transform.to_price(range.max) >= 118.0);
+        let mut extension = ConfiguredStudy::new(Box::new(extension));
+        let mut hidden = extension.settings();
+        hidden.plots[0].visible = false;
+        extension.apply_settings(&[], hidden).unwrap();
+        assert!(
+            crate::studies::plots::drawing_prices(&extension, 10..12)
+                .next()
+                .is_none()
+        );
     }
 }

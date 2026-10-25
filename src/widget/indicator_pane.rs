@@ -854,6 +854,11 @@ impl IndicatorPane {
             max_val = max_val.max(zone.top);
         }
 
+        for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
+        }
+
         if min_val != f64::MAX
             && (0..indicator.line_cnt()).any(|line| {
                 let plot = indicator.plot_style(line);
