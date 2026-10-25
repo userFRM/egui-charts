@@ -65,8 +65,10 @@ mod inputs;
 pub use inputs::{InputKind, InputValue, StudyInput};
 pub(crate) mod plots;
 mod settings;
+pub(crate) mod table;
 pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
+pub use table::{StudyCell, StudyTable};
 mod values;
 pub use values::IndicatorValues;
 #[cfg(any(feature = "studies", feature = "widget"))]

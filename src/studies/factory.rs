@@ -244,6 +244,7 @@ impl IndicatorFactory {
                 MajorityRule,
                 AccumulationSwingIndex,
                 Seasonality,
+                Performance,
             ],
             "Price" => [
                 HigherIntervalCandles,
@@ -347,6 +348,72 @@ mod tests {
 
         let list = factory.list();
         assert!(!list.is_empty());
+    }
+
+    /// Calendar lookbacks use the last close on or before the target date, not bar counts.
+    #[test]
+    fn performance_uses_calendar_dates_and_missing_history() {
+        let bars: Vec<_> = [
+            (2023, 9, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 2, 28, 120.0),
+            (2024, 2, 29, 125.0),
+            (2024, 3, 22, 150.0),
+            (2024, 3, 31, 180.0),
+        ]
+        .map(|(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .to_vec();
+        let mut study = IndicatorFactory::new()
+            .create("Performance")
+            .expect("Performance study");
+        study.calculate(&bars);
+        // March 24 -> March 22: 180/150-1 = 20%; February 29: 44%;
+        // December 31 -> December 29: 80%; September 30 -> September 29: 125%.
+        for (line, expected) in [
+            Some(20.0),
+            Some(44.0),
+            Some(80.0),
+            Some(125.0),
+            Some(80.0),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let got = study.values().value(line, bars.len() - 1);
+            match expected {
+                Some(expected) => assert!(
+                    (got.unwrap() - expected).abs() < 1e-10,
+                    "line {line}: {got:?}"
+                ),
+                None => assert_eq!(got, None, "line {line}"),
+            }
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::widget::{Chart, test_frames::shapes};
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+            let id = chart.add_indicator(study);
+            let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+            for expected in ["Change", "1W", "+44.00%", "N/A"] {
+                assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing table cell {expected}");
+            }
+            chart.indicator_mut(id).unwrap().set_visible(false);
+            let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+            assert!(!painted.iter().any(
+                |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Change")
+            ));
+        }
     }
 
     #[test]
@@ -634,6 +701,7 @@ mod tests {
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
             Box::new(Seasonality::new()),
+            Box::new(Performance::new()),
             Box::new(HigherIntervalCandles::default()),
             Box::new(BollingerBars::new()),
             Box::new(TypicalPrice::new()),

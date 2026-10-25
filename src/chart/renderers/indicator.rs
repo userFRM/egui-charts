@@ -284,6 +284,9 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(context.painter, context.rect, table);
+        }
         if !indicator.candles().is_empty() {
             crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
             return;

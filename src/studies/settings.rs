@@ -108,6 +108,10 @@ impl ConfiguredStudy {
 }
 
 impl Indicator for ConfiguredStudy {
+    fn table(&self) -> Option<&super::StudyTable> {
+        self.study.table()
+    }
+
     fn has_settings(&self) -> bool {
         true
     }

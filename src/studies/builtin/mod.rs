@@ -275,6 +275,7 @@ mod smi_ergodic;
 mod special_k;
 mod woodies_cci;
 // Time studies
+mod performance;
 mod relative_volume_at_time;
 mod seasonality;
 mod trading_sessions;
@@ -465,6 +466,7 @@ pub use smi_ergodic::{SMIErgodic, SMIErgodicIndicator, SMIErgodicOscillator};
 pub use special_k::PringsSpecialK;
 pub use woodies_cci::WoodiesCCI;
 // Re-exports - Time studies
+pub use performance::Performance;
 pub use relative_volume_at_time::{RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode};
 pub use seasonality::Seasonality;
 pub use trading_sessions::TradingSessions;

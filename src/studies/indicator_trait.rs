@@ -140,6 +140,11 @@ pub struct StudyPane {
 /// contain it without a value. The chart's datafeed drops such bars before they reach a
 /// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
 pub trait Indicator: Send {
+    /// A labelled table of the latest study statistics, drawn independently of the plots.
+    fn table(&self) -> Option<&super::StudyTable> {
+        None
+    }
+
     /// Whether this study stores presentation edits itself. Charts wrap other studies once.
     fn has_settings(&self) -> bool {
         false
