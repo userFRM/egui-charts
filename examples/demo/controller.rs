@@ -3615,7 +3615,12 @@ mod tests {
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
         state.margins.right_bars = 17;
-        apply_settings_state(&state, &mut app.chart, &mut app.timeframe_toolbar);
+        state.trading.show_poss = false;
+        state.trading.show_orders = false;
+        state.trading.show_executions = false;
+        state.trading.show_execution_labels = true;
+        app.apply_chart_settings(state.clone());
+        assert_eq!(app.trading.display, state.trading);
         assert_eq!(
             app.chart.config().background_style,
             BackgroundStyle::VerticalGradient {
@@ -3647,6 +3652,8 @@ mod tests {
         app.open_chart_settings_dialog();
         assert_eq!(app.settings_state.alerts, state.alerts);
         assert_eq!(app.settings_dialog.settings().alerts, state.alerts);
+        assert_eq!(app.settings_state.trading, state.trading);
+        assert_eq!(app.settings_dialog.settings().trading, state.trading);
         assert_eq!(app.settings_state.grid_lines, state.grid_lines);
         assert_eq!(app.settings_state.crosshair, state.crosshair);
         assert_eq!(app.settings_state.precision, state.precision);

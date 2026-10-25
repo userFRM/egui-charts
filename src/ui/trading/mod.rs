@@ -126,6 +126,8 @@ impl Trading {
         self.service = Some(service);
         self.inbox = Arc::default();
         self.ticket.open = false;
+        self.sound = None;
+        self.calculator = None;
         self.executions.clear();
         self.reported_orders.clear();
         self.connect();
@@ -1803,7 +1805,7 @@ mod tests {
     }
 
     #[test]
-    fn account_changes_discard_stale_confirmations() {
+    fn account_changes_discard_stale_confirmations_and_feedback() {
         let mut trading = Trading::default();
         let position = Position::new("SYM", 2.0, 100.0);
         let order = Order::new(
@@ -1837,5 +1839,10 @@ mod tests {
                 "changed exposure invalidates confirmation"
             );
         }
+        trading.sound = Some("Bell".into());
+        trading.calculator = Some((egui::Pos2::ZERO, "3".into()));
+        trading.set_service(Arc::new(Recorder::default()));
+        assert_eq!(trading.take_execution_sound(), None);
+        assert!(trading.calculator.is_none());
     }
 }
