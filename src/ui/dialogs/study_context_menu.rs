@@ -160,8 +160,9 @@ impl StudyContextMenu {
                     chart.indicators().find(|(id, _)| id == member).map_or_else(
                         || {
                             chart
-                                .series_options(*member)
-                                .map_or("Series", |options| options.name.as_str())
+                                .series()
+                                .find(|(id, _)| id == member)
+                                .map_or("Series", |(_, options)| options.name.as_str())
                         },
                         |(_, study)| study.name(),
                     )
