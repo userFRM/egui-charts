@@ -210,9 +210,16 @@ impl HeatmapStrip {
             };
 
             // Apply opacity
-            let [r, g, b, _] = color.to_array();
-            let alpha = (255.0 * self.config.opacity) as u8;
-            let final_color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+            let weight = if self.config.volume_weighted && !self.config.use_gradient {
+                if max_volume > 0.0 {
+                    (cell.volume / max_volume).clamp(0.0, 1.0) as f32
+                } else {
+                    0.0
+                }
+            } else {
+                1.0
+            };
+            let final_color = color.gamma_multiply(self.config.opacity * weight);
 
             painter.rect_filled(cell_rect, 0.0, final_color);
         }
@@ -318,6 +325,32 @@ mod tests {
         strip.add_cell(3, -200.0, 600.0);
         assert_eq!(strip.cells[3].intensity, 0.0);
         assert_eq!(strip.cells[0].intensity, 0.75);
+
+        strip.set_data([(0, 10.0, 1.0), (1, -10.0, 10.0), (2, 0.0, 5.0)]);
+        strip.config.use_gradient = false;
+        strip.config.opacity = 1.0;
+        let ctx = egui::Context::default();
+        for (weighted, expected) in [(false, [255, 255, 0]), (true, [26, 255, 0])] {
+            strip.config.volume_weighted = weighted;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                strip.render(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(150.0, 24.0)),
+                    (0, 2),
+                    50.0,
+                );
+            });
+            let alphas: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect.width() == 50.0 => Some(rect.fill.a()),
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            assert_eq!(alphas, expected, "solid volume weighting: {weighted}");
+        }
     }
 
     #[test]
