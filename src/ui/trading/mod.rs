@@ -401,10 +401,11 @@ impl Trading {
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0)
             .unwrap_or(10f64.powi(-(decimals as i32)));
+        let replay = chart.replay_time().is_some();
         let quote = (self.quote.as_ref())
-            .filter(|(quoted, _)| quoted == symbol)
+            .filter(|(quoted, _)| quoted == symbol && !replay)
             .map(|(_, quote)| quote);
-        let book = chart.order_book(SeriesId::MAIN);
+        let book = chart.order_book(SeriesId::MAIN).filter(|_| !replay);
         Market {
             last: crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|bar| bar.close),
             bid: book
@@ -423,7 +424,7 @@ impl Trading {
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
-            book: chart.order_book(SeriesId::MAIN),
+            book,
             orders: &self.orders,
             positions: &self.positions,
             trades: &[],
@@ -450,7 +451,11 @@ impl Trading {
         let mut ticket = std::mem::take(&mut self.ticket);
         let mut presets = std::mem::take(&mut self.presets);
         let mut one_click = self.one_click;
-        let trades: Vec<_> = chart.trades(SeriesId::MAIN).collect();
+        let trades: Vec<_> = if chart.replay_time().is_some() {
+            Vec::new()
+        } else {
+            chart.trades(SeriesId::MAIN).collect()
+        };
         let mut market = self.market(chart);
         market.last = trades.last().map(|trade| trade.price).or(market.last);
         market.trades = &trades;

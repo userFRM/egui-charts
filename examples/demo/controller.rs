@@ -2956,12 +2956,16 @@ mod tests {
             let mut value = false;
             for _ in 0..3 {
                 let output = ctx.run_ui(Default::default(), |ui| {
+                    app.trading.show_ticket(ui, &app.chart);
                     app.show_chart(ui, app.theme.chart.bg);
                 });
-                value |= output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Text(text)
-                        if text.galley.text() == "Value  110.00 USD")
-                });
+                let has_text = |label| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == label)
+                    })
+                };
+                value |= has_text("Trade value") && has_text("110.00");
                 output.drop_without_applying_deltas();
             }
             assert!(value, "{side:?} ticket must use the replay close");
