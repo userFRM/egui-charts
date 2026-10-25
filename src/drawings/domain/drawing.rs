@@ -267,16 +267,9 @@ impl Drawing {
                 FibonacciConfig::default()
             }
         });
-        let offset = if extension {
-            self.chart_points
-                .get(2)
-                .map_or(0.0, |origin| origin.price - start.price)
-        } else {
-            0.0
-        };
+        let origin = self.chart_points.get(2).unwrap_or(start).price;
         let prices = config
-            .level_prices(start.price, end.price, extension)
-            .map(|price| price + offset)
+            .level_prices(start.price, end.price, extension, origin)
             .collect();
         Some((config, prices))
     }

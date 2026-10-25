@@ -241,6 +241,9 @@ pub struct FibonacciConfig {
     pub extend_right: bool,
     /// Reverse the direction (flip vertically)
     pub reverse: bool,
+    /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
+    #[serde(default)]
+    pub logarithmic: bool,
 }
 
 impl Default for FibonacciConfig {
@@ -261,6 +264,7 @@ impl Default for FibonacciConfig {
             extend_left: false,
             extend_right: false,
             reverse: false,
+            logarithmic: false,
         }
     }
 }
@@ -283,6 +287,7 @@ impl FibonacciConfig {
             extend_left: false,
             extend_right: true,
             reverse: false,
+            logarithmic: false,
         }
     }
 
@@ -292,7 +297,7 @@ impl FibonacciConfig {
     }
 
     /// Position of retracement level `value` between the first anchor `start`
-    /// and the second anchor `end`, as a price or a screen coordinate.
+    /// and the second anchor `end`, in price units.
     ///
     /// Level 0 sits on the second anchor and level 1 on the first, so levels
     /// measure back from the end of the move; `reverse` swaps the two anchors.
@@ -302,22 +307,31 @@ impl FibonacciConfig {
         } else {
             (end, start)
         };
-        from + (to - from) * value
+        if self.logarithmic && from > 0.0 && to > 0.0 {
+            (from.ln() + (to.ln() - from.ln()) * value).exp()
+        } else {
+            from + (to - from) * value
+        }
     }
 
     /// Price of each visible level, in config order, between the anchor prices `start` and `end`:
     /// a retracement's as [`Self::retracement_position`] places them, an extension's projected
-    /// from `start` by `end - start`.
+    /// from `origin` by `end - start`, or by the log swing when all three prices are positive.
     pub(crate) fn level_prices(
         &self,
         start: f64,
         end: f64,
         extension: bool,
+        origin: f64,
     ) -> impl Iterator<Item = f64> + '_ {
         self.visible_levels().map(move |level| {
             let value = f64::from(level.value);
             if extension {
-                start + (end - start) * value
+                if self.logarithmic && start > 0.0 && end > 0.0 && origin > 0.0 {
+                    (origin.ln() + (end.ln() - start.ln()) * value).exp()
+                } else {
+                    origin + (end - start) * value
+                }
             } else {
                 self.retracement_position(start, end, value)
             }
@@ -551,6 +565,76 @@ mod tests {
                 (got - want).abs() < 1e-9,
                 "reverse {reverse}, level {value}: got {got}, want {want}"
             );
+        }
+        // With 0 at 10 and 1 at 1000, log10(price) = 1 + 2*r.
+        // Rounded independently: 10^1.472, 10^2, 10^2.236.
+        for (logarithmic, low, ratio, want) in [
+            (true, 10.0, 0.236, 29.64831389524342),
+            (true, 10.0, 0.5, 100.0),
+            (true, 10.0, 0.618, 172.1868574986006),
+            (false, 10.0, 0.236, 243.64),
+            (false, 10.0, 0.5, 505.0),
+            (false, 10.0, 0.618, 621.82),
+            (true, 0.0, 0.5, 500.0),
+            (true, -10.0, 0.5, 495.0),
+        ] {
+            for reverse in [false, true] {
+                let mut json = serde_json::to_value(FibonacciConfig::default()).unwrap();
+                json["logarithmic"] = logarithmic.into();
+                json["reverse"] = reverse.into();
+                let config: FibonacciConfig = serde_json::from_value(json).unwrap();
+                let (start, end) = if reverse {
+                    (low, 1000.0)
+                } else {
+                    (1000.0, low)
+                };
+                let got = config.retracement_position(start, end, ratio);
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "log {logarithmic}, reverse {reverse}, ratio {ratio}: {got} != {want}"
+                );
+            }
+        }
+    }
+
+    /// A geometric swing projects from C, and every scale maps the resulting price.
+    #[test]
+    fn logarithmic_extension_and_saved_levels() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        for (origin, want) in [(20.0, 200.0), (0.0, 495.0), (-20.0, 475.0)] {
+            let mut drawing = Drawing::new(7, DrawingToolType::FibonacciExtension);
+            drawing.chart_points = vec![
+                ChartPoint::new(0.0, 10.0),
+                ChartPoint::new(10.0, 1000.0),
+                ChartPoint::new(20.0, origin),
+            ];
+            let mut config = serde_json::to_value(FibonacciConfig::default()).unwrap();
+            config["logarithmic"] = true.into();
+            drawing.fib_config = Some(serde_json::from_value(config).unwrap());
+            // The 50% log extension is C * sqrt(1000/10) = 10*C.
+            for log_scale in [false, true] {
+                let map = |p: f64| {
+                    if log_scale {
+                        (500.0 - 100.0 * p.ln()) as f32
+                    } else {
+                        (1000.0 - p) as f32
+                    }
+                };
+                drawing.update_screen_coords(|b| b, map);
+                assert!((drawing.level_ys[3] - map(want)).abs() < 1e-4);
+            }
+            let mut json = serde_json::to_value(&drawing).unwrap();
+            assert_eq!(json["fib_config"]["logarithmic"], true);
+            let restored: Drawing = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(restored.fib_config, drawing.fib_config);
+            json["fib_config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("logarithmic");
+            let mut legacy: Drawing = serde_json::from_value(json).unwrap();
+            legacy.chart_points = drawing.chart_points.clone();
+            let (_, prices) = legacy.fib_levels().unwrap();
+            assert!((prices[3] - (origin + 495.0)).abs() < 1e-9);
         }
     }
 }

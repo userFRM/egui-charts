@@ -770,6 +770,7 @@ mod tests {
             extend_left: true,
             extend_right: true,
             reverse: true,
+            logarithmic: false,
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
