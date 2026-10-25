@@ -312,6 +312,11 @@ impl SymbolSearchDialog {
             .height(480.0)
             .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
             .show(ctx, &mut open, |ui| {
+                ui.response().widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, "Search symbols")
+                });
+                ui.ctx()
+                    .accesskit_node_builder(ui.response().id, |node| node.set_modal());
                 ui.horizontal(|ui| {
                     let theme = ui.active_theme();
                     ui.add(
@@ -488,8 +493,10 @@ impl SymbolSearchDialog {
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_sel, &symbol.name)
+            egui::WidgetInfo::labeled(egui::Role::ListBoxOption, response.enabled(), &symbol.name)
         });
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(is_sel));
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
@@ -795,6 +802,11 @@ impl CompareSymbolsDialog {
             .height(config.height)
             .fill(config.bg_color)
             .show(ctx, &mut is_open, |ui| {
+                ui.response().widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, "Compare symbols")
+                });
+                ui.ctx()
+                    .accesskit_node_builder(ui.response().id, |node| node.set_modal());
                 action = self.draw_content(ui, symbols, &config);
             });
 
@@ -913,6 +925,15 @@ impl CompareSymbolsDialog {
 
         let desired_size = Vec2::new(ui.available_width(), 56.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::ListBoxOption,
+                response.enabled() && !is_compared,
+                &symbol.name,
+            )
+        });
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(is_compared));
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         // Background on hover

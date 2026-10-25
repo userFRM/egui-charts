@@ -697,7 +697,7 @@ impl SettingsDialog {
         .fold(0.0_f32, f32::max);
         ui.horizontal(|ui| {
             // All tabs share the longest label's width.
-            ui.allocate_ui_with_layout(
+            let label = ui.allocate_ui_with_layout(
                 egui::vec2(label_width, 42.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
@@ -710,7 +710,7 @@ impl SettingsDialog {
                                 .color(style.label_text),
                         )
                         .wrap(),
-                    );
+                    )
                 },
             );
 
@@ -718,7 +718,7 @@ impl SettingsDialog {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.spacing_mut().interact_size.y = 32.0;
-                add_content(ui, self);
+                ui.label_inputs_by(label.inner.id, |ui| add_content(ui, self));
             });
         });
         ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);

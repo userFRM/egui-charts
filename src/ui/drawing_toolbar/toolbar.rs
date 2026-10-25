@@ -805,6 +805,14 @@ impl DrawingToolbar {
         current_color: [u8; 4],
     ) -> Option<[u8; 4]> {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(swatch_size), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::RadioButton,
+                response.enabled(),
+                current_color == color_val,
+                name,
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
 
         let c =
@@ -917,6 +925,14 @@ impl DrawingToolbar {
                                     Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                     Sense::click(),
                                 );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::Role::Button,
+                                        response.enabled(),
+                                        is_sel,
+                                        tool.as_str(),
+                                    )
+                                });
                                 crate::styles::focus::draw_focus_ring(
                                     ui,
                                     &response,

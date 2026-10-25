@@ -630,6 +630,19 @@ impl Chart {
                         } else {
                             "Collapse pane"
                         });
+                    toggle.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            toggle.enabled(),
+                            if collapsed {
+                                "Expand pane"
+                            } else {
+                                "Collapse pane"
+                            },
+                        )
+                    });
+                    ui.ctx()
+                        .accesskit_node_builder(toggle.id, |node| node.set_expanded(!collapsed));
                     if toggle.clicked() && !control_clicked {
                         pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();

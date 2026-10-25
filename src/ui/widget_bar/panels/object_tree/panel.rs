@@ -276,7 +276,9 @@ impl ObjectTreePanel {
                         let label = source_type.map_or("All", |t| t.display_name());
                         ui.selectable_value(&mut self.state.filter_type, source_type, label);
                     }
-                });
+                })
+                .response
+                .accessible_name("Object type");
         });
     }
 

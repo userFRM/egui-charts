@@ -120,6 +120,8 @@ impl SplitButton {
                 .paint_at(ui, chevron);
         }
 
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_expanded(self.expanded));
         let tooltip = self.tooltip.as_deref();
         finish(response, show_active, tooltip.unwrap_or_default(), tooltip)
     }

@@ -227,8 +227,8 @@ impl ListItemContent for ChartTypeRow<'_> {
         };
         context.response.widget_info(|| {
             WidgetInfo::selected(
-                Role::Button,
-                ui.is_enabled(),
+                Role::MenuItemRadio,
+                context.response.enabled(),
                 context.selected,
                 self.chart_type.name(),
             )

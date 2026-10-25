@@ -312,7 +312,19 @@ impl SymbolHeader {
                     x = buy.right() + DESIGN_TOKENS.spacing.md;
                     for (rect, side) in [(sell, QuoteSide::Sell), (buy, QuoteSide::Buy)] {
                         let id = response.id.with(side == QuoteSide::Buy);
-                        if ui.interact(rect, id, Sense::click()).clicked() {
+                        let quote_response = ui.interact(rect, id, Sense::click());
+                        quote_response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                quote_response.enabled(),
+                                if side == QuoteSide::Buy {
+                                    "Buy"
+                                } else {
+                                    "Sell"
+                                },
+                            )
+                        });
+                        if quote_response.clicked() {
                             quote_action = Some(side);
                         }
                     }

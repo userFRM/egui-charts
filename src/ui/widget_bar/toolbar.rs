@@ -519,7 +519,9 @@ impl WidgetBar {
 
         // The bar is at the window's right edge, so the tooltip opens to the left, clear of the
         // next button. Unlike `on_hover_text`, `Tooltip` does not name the button.
-        btn_res.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
+        btn_res.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, btn_res.enabled(), is_active, tooltip)
+        });
         let mut tip = egui::Tooltip::for_enabled(&btn_res);
         tip.popup = tip.popup.align(egui::RectAlign::LEFT);
         tip.show(|ui| ui.label(tooltip));

@@ -56,6 +56,8 @@ pub fn draw_icon_btn(
 
     render_svg_at_rect_themed(ui, icon, rect, response.hovered(), is_active);
 
+    response
+        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
     response.on_hover_text(tooltip)
 }
 
@@ -146,6 +148,8 @@ pub fn draw_icon_button_padded(
     let is_hovered = response.hovered() || response.is_pointer_button_down_on();
     render_svg_at_rect_themed(ui, icon, icon_rect, is_hovered, is_active);
 
+    response
+        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
     response.on_hover_text(tooltip)
 }
 
@@ -193,7 +197,9 @@ fn draw_rail_button(
         Vec2::new(tokens.button_width, tokens.button_height),
         Sense::click(),
     );
-    response.widget_info(|| WidgetInfo::selected(Role::Button, true, is_selected, tooltip));
+    response.widget_info(|| {
+        WidgetInfo::selected(Role::Button, response.enabled(), is_selected, tooltip)
+    });
 
     if ui.is_rect_visible(rect) {
         let theme = ui.active_theme();

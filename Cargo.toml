@@ -106,8 +106,9 @@ serde = []
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
 # without a Linux backend.  `clipboard` gives text fields copy and paste.
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "x11", "wayland"] }
 egui = "0.37.0"
+egui_kittest = { version = "0.37.0", default-features = false }
 rand = "0.10.0"
 
 [dependencies]

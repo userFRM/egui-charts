@@ -119,9 +119,9 @@ impl<'a> SidebarTab<'a> {
         let width = ui.available_width();
         let height = DESIGN_TOKENS.sizing.button_lg;
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        response.widget_info(|| {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), self.is_active, self.label)
-        });
+        response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), self.label));
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(self.is_active));
 
         let is_hovered = response.hovered();
 

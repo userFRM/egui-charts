@@ -99,6 +99,14 @@ impl<'a> PairButton<'a> {
         // Icon button (centered in full width for visual balance)
         let icon_rect = Rect::from_center_size(pair_rect.center(), Vec2::splat(icon_size));
         let icon_res = ui.allocate_rect(icon_rect, Sense::click());
+        icon_res.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                icon_res.enabled(),
+                self.is_icon_active,
+                self.tooltip,
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &icon_res, DESIGN_TOKENS.rounding.button);
 
         // Arrow button (right edge)
@@ -107,6 +115,11 @@ impl<'a> PairButton<'a> {
             Vec2::new(arrow_width, height),
         );
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
+        arrow_res.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), self.arrow_tooltip)
+        });
+        ui.ctx()
+            .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
         crate::styles::focus::draw_focus_ring(ui, &arrow_res, DESIGN_TOKENS.rounding.button);
 
         // Draw icon button background (with visibility check)
@@ -227,8 +240,21 @@ impl<'a> PairButton<'a> {
 
         // Use Response-based interactions instead of manual pointer polling
         let icon_res = ui.allocate_rect(icon_zone_rect, Sense::click());
+        icon_res.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                icon_res.enabled(),
+                self.is_icon_active,
+                self.tooltip,
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &icon_res, inner_rounding);
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
+        arrow_res.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), self.arrow_tooltip)
+        });
+        ui.ctx()
+            .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
         crate::styles::focus::draw_focus_ring(ui, &arrow_res, inner_rounding);
 
         let icon_hovered = icon_res.hovered();

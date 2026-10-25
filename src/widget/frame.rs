@@ -274,6 +274,9 @@ impl Chart {
     /// Studies use element OHLC on price-based types; time annotations follow element slots.
     /// Source-bar study results remain available through [`Self::indicators`].
     ///
+    /// Reports the series summary and hovered bar values to accessibility clients. Native
+    /// applications using `eframe` enable its `accesskit` feature to connect to screen readers.
+    ///
     /// Returns an [`egui::Response`] for additional interaction handling.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         self.show_content(ui, None)
@@ -422,6 +425,7 @@ impl Chart {
             ui.ctx().request_discard("Chart measured its axis labels");
         }
         self.record_host_events(ui);
+        response.widget_info(|| self.accessibility_info(response.enabled()));
         response
     }
 

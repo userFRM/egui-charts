@@ -494,15 +494,28 @@ impl WatchlistPanel {
                     Stroke::NONE,
                 ));
             }
-            if ui
+            let response = ui
                 .interact(
                     text.expand(3.0),
                     list_id.with(("column", index)),
                     Sense::click(),
                 )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::ColumnHeader, response.enabled(), label)
+            });
+            if let Some((sorted, descending)) = *sort
+                && sorted == column
             {
+                ui.ctx().accesskit_node_builder(response.id, |node| {
+                    node.set_sort_direction(if descending {
+                        egui::accesskit::SortDirection::Descending
+                    } else {
+                        egui::accesskit::SortDirection::Ascending
+                    });
+                });
+            }
+            if response.clicked() {
                 *sort = match *sort {
                     Some((c, false)) if c == column => Some((column, true)),
                     Some((c, true)) if c == column => None,
@@ -569,6 +582,16 @@ impl WatchlistPanel {
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
                             let is_collapsed = collapsed.contains(&index);
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::Button,
+                                    response.enabled(),
+                                    &*title,
+                                )
+                            });
+                            ui.ctx().accesskit_node_builder(response.id, |node| {
+                                node.set_expanded(!is_collapsed)
+                            });
                             if response.clicked() {
                                 let id = collapsed_id(title);
                                 ui.data_mut(|data| data.insert_temp(id, !is_collapsed));
@@ -615,6 +638,16 @@ impl WatchlistPanel {
                         }
                         WatchlistItem::Symbol { symbol, flag } => {
                             let is_selected = selected.as_deref() == Some(symbol.as_str());
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::ListBoxOption,
+                                    response.enabled(),
+                                    symbol.as_str(),
+                                )
+                            });
+                            ui.ctx().accesskit_node_builder(response.id, |node| {
+                                node.set_selected(is_selected)
+                            });
                             if is_selected && reveal {
                                 response.scroll_to_me(None);
                             }
@@ -686,6 +719,14 @@ impl WatchlistPanel {
                                     for choice in WatchlistFlag::ALL {
                                         let (swatch, response) = ui
                                             .allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                        response.widget_info(|| {
+                                            egui::WidgetInfo::selected(
+                                                egui::Role::RadioButton,
+                                                response.enabled(),
+                                                *flag == Some(choice),
+                                                format!("{choice:?}"),
+                                            )
+                                        });
                                         ui.painter().circle_filled(
                                             swatch.center(),
                                             if *flag == Some(choice) { 8.0 } else { 6.0 },

@@ -547,6 +547,13 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::GraphicsObject,
+                response.enabled(),
+                format!("{} pane", indicator.name()),
+            )
+        });
 
         if !ui.is_rect_visible(rect) {
             return None;

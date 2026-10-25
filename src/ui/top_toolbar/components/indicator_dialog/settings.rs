@@ -95,30 +95,24 @@ impl IndicatorSettingsDialog {
                             }
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for input in &mut self.inputs {
-                                    ui.label(&input.label);
-                                    match (&input.kind, &mut input.value) {
+                                    let label = ui.label(&input.label);
+                                    let response = match (&input.kind, &mut input.value) {
                                         (
                                             InputKind::Length(min, max),
                                             InputValue::Length(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Integer(min, max),
                                             InputValue::Integer(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Number(min, max),
                                             InputValue::Number(value),
-                                        ) => {
-                                            ui.add(
-                                                egui::DragValue::new(value)
-                                                    .speed(0.1)
-                                                    .range(*min..=*max),
-                                            );
-                                        }
+                                        ) => ui.add(
+                                            egui::DragValue::new(value)
+                                                .speed(0.1)
+                                                .range(*min..=*max),
+                                        ),
                                         (InputKind::Choice(choices), InputValue::Choice(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
                                                 .selected_text(
@@ -129,15 +123,15 @@ impl IndicatorSettingsDialog {
                                                     {
                                                         ui.selectable_value(value, index, label);
                                                     }
-                                                });
+                                                })
+                                                .response
                                         }
                                         (InputKind::Toggle, InputValue::Toggle(value)) => {
-                                            ui.checkbox(value, "");
+                                            ui.checkbox(value, "")
                                         }
-                                        _ => {
-                                            ui.label("This input is unavailable.");
-                                        }
-                                    }
+                                        _ => ui.label("This input is unavailable."),
+                                    };
+                                    response.labelled_by(label.id);
                                     ui.end_row();
                                 }
                             });
@@ -157,7 +151,8 @@ impl IndicatorSettingsDialog {
                                             egui::DragValue::new(&mut plot.width)
                                                 .range(0.5..=10.0)
                                                 .suffix(" px"),
-                                        );
+                                        )
+                                        .accessible_name("Line width");
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         egui::ComboBox::from_id_salt("pattern")
@@ -176,7 +171,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{pattern:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Line pattern");
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(format!("{:?}", plot.plot_type))
                                             .show_ui(ui, |ui| {
@@ -191,7 +188,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{kind:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Plot type");
                                     });
                                     ui.separator();
                                 });
@@ -208,7 +207,8 @@ impl IndicatorSettingsDialog {
                                         egui::DragValue::new(precision)
                                             .range(0..=12)
                                             .suffix(" decimals"),
-                                    );
+                                    )
+                                    .accessible_name("Precision");
                                 }
                             });
                         }

@@ -36,6 +36,16 @@ pub fn render_item_row(
         Sense::click_and_drag(),
     );
 
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::TreeItem,
+            response.enabled(),
+            item.full_display_name(),
+        )
+    });
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_selected(state.is_selected(id)));
+
     // Handle interactions
     let mut action = handle_interactions(ui, &response, id, config, state);
 
@@ -244,7 +254,18 @@ fn render_row_content(
     if config.show_expand_chevron && item.source_type == SourceType::Drawing {
         let chevron_rect = Rect::from_center_size(egui::pos2(x + 6.0, center_y), vec2(14.0, 14.0));
         let chevron_response = ui.allocate_rect(chevron_rect, Sense::click());
+        chevron_response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                chevron_response.enabled(),
+                "Drawing properties",
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &chevron_response, 0.0);
+        ui.ctx()
+            .accesskit_node_builder(chevron_response.id, |node| {
+                node.set_expanded(state.is_item_expanded(item.id))
+            });
         if chevron_response.clicked() {
             state.toggle_item(item.id);
         }
@@ -259,6 +280,14 @@ fn render_row_content(
         &embedded_icons::EYE_HIDE
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
+    vis_response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::Button,
+            vis_response.enabled(),
+            item.visible,
+            if item.visible { "Hide" } else { "Show" },
+        )
+    });
     crate::styles::focus::draw_focus_ring(ui, &vis_response, 0.0);
     if ui.is_rect_visible(vis_rect) {
         let icon_color = if is_selected {
@@ -287,6 +316,14 @@ fn render_row_content(
             &embedded_icons::UNLOCK
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
+        lock_response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                lock_response.enabled(),
+                item.locked,
+                if item.locked { "Unlock" } else { "Lock" },
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &lock_response, 0.0);
         if ui.is_rect_visible(lock_rect) {
             let icon_color = if is_selected {
@@ -318,6 +355,9 @@ fn render_row_content(
     let settings_rect =
         Rect::from_center_size(egui::pos2(right_x - 28.0, center_y), vec2(16.0, 16.0));
     let settings_response = ui.allocate_rect(settings_rect, Sense::click());
+    settings_response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, settings_response.enabled(), "Settings")
+    });
     embedded_icons::SETTINGS
         .as_image_tinted(vec2(16.0, 16.0), button_color)
         .paint_at(ui, settings_rect);
@@ -336,6 +376,9 @@ fn render_row_content(
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
         let del_response = ui.allocate_rect(del_rect, Sense::click());
+        del_response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, del_response.enabled(), "Remove")
+        });
         embedded_icons::TRASH
             .as_image_tinted(vec2(16.0, 16.0), button_color)
             .paint_at(ui, del_rect);

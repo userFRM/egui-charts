@@ -336,6 +336,16 @@ impl<'a> IndicatorTemplatePanel<'a> {
             .selected_template
             .as_ref()
             .is_some_and(|id| id == &template.id);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::ListBoxOption,
+                response.enabled(),
+                &template.name,
+            )
+        });
+
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(is_selected));
 
         // Background
         self.draw_item_bg(ui, rect, &response, is_selected);
