@@ -200,7 +200,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 | Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
 | Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, drawings, studies on the chart, theme | `widget` |
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
-| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
+| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
 The default feature is `ui`, which enables `icons`, `widget` and `studies`.
 

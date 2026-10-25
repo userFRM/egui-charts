@@ -10,7 +10,7 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::modal::Modal;
 
-const TILE: egui::Vec2 = vec2(156.0, 144.0);
+const TILE: egui::Vec2 = vec2(164.0, 152.0);
 const GAP: f32 = 8.0;
 
 /// One broker of the [`BrokerPicker`], as the host offers it.
@@ -131,32 +131,48 @@ impl BrokerPicker {
         let mut chosen = None;
         let mut close = false;
         Modal::new("broker_picker", "")
-            .width(TILE.x * 5.0 + GAP * 4.0 + 160.0)
-            .height(680.0)
+            .fill(if theme.dark {
+                theme.ui.btn_bg_hover
+            } else {
+                theme.ui.panel_bg
+            })
+            .width(1000.0)
+            .height(760.0)
             .closable(self.selected.is_none())
             .show(ctx, &mut self.open, |ui| {
-                ui.add_space(24.0);
+                let inset = 52.0_f32.min((ui.available_width() - TILE.x).max(0.0) / 2.0);
+                let close_rect = Rect::from_min_size(
+                    ui.max_rect().right_top() - vec2(24.0, 0.0),
+                    vec2(24.0, 24.0),
+                );
+                close = ui
+                    .place(close_rect, |ui: &mut Ui| {
+                        IconButton::new(&icons::CLOSE).tooltip("Close").show(ui)
+                    })
+                    .clicked();
+                ui.add_space(32.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(40.0);
+                    ui.add_space(inset);
                     if self.searching {
                         let search = ui.add(
                             egui::TextEdit::singleline(&mut self.query)
                                 .hint_text("Search")
-                                .desired_width(ui.available_width() - 120.0),
+                                .desired_width((ui.available_width() - 88.0).max(40.0)),
                         );
                         search.request_focus();
                     } else {
-                        ui.label(semibold("Trade with your broker", 20.0, theme.ui.text));
+                        ui.label(semibold(
+                            "Trade with your broker",
+                            if ui.available_width() < 360.0 {
+                                16.0
+                            } else {
+                                20.0
+                            },
+                            theme.ui.text,
+                        ));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if IconButton::new(&icons::CLOSE)
-                            .tooltip("Close")
-                            .show(ui)
-                            .clicked()
-                        {
-                            close = true;
-                        }
-                        ui.add_space(16.0);
+                        ui.add_space(inset);
                         if IconButton::new(&icons::QUICK_SEARCH)
                             .tooltip("Search brokers")
                             .selected(self.searching)
@@ -175,10 +191,9 @@ impl BrokerPicker {
                     .max_height((ui.available_height() - footer).max(0.0))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let width = ui.available_width() - 80.0;
+                        let width = ui.available_width() - inset * 2.0;
                         let columns = ((width + GAP) / (TILE.x + GAP)).floor().max(1.0) as usize;
-                        let indent =
-                            (ui.available_width() - (columns as f32 * (TILE.x + GAP) - GAP)) / 2.0;
+                        let indent = inset;
                         // Room for the featured badges, which overlap their tile's top edge.
                         ui.add_space(8.0);
                         let shown: Vec<usize> = (0..self.tiles.len())
@@ -237,50 +252,65 @@ impl BrokerPicker {
             self.selected = None;
             return action;
         };
-        let tile = &self.tiles[index];
+        let Some(tile) = self.tiles.get(index) else {
+            self.selected = None;
+            return action;
+        };
         let mut card = true;
         Modal::new("broker_picker_connect", "")
+            .fill(theme.ui.panel_bg_floating)
             .width(400.0)
             .min_height(0.0)
             .show(ctx, &mut card, |ui| {
-                ui.horizontal(|ui| {
-                    let (icon, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
-                    paint_icon(ui, tile, icon);
-                    ui.add_space(4.0);
-                    ui.label(semibold(&tile.name, theme.text.title + 2.0, theme.ui.text));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if IconButton::new(&icons::CLOSE)
-                            .tooltip("Back to brokers")
-                            .show(ui)
-                            .clicked()
-                        {
-                            self.selected = None;
-                        }
+                egui::Frame::new().inner_margin(16).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (icon, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                        paint_icon(ui, tile, icon);
+                        ui.add_space(4.0);
+                        ui.label(semibold(&tile.name, theme.text.title + 2.0, theme.ui.text));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if IconButton::new(&icons::CLOSE)
+                                .tooltip("Back to brokers")
+                                .show(ui)
+                                .clicked()
+                            {
+                                self.selected = None;
+                            }
+                        });
                     });
-                });
-                ui.add_space(16.0);
-                let connect = ui.add_sized(
-                    vec2(ui.available_width(), 40.0),
-                    egui::Button::new(semibold(
-                        "Connect",
-                        theme.text.body,
-                        theme.ui.panel_bg_floating,
-                    ))
-                    .fill(theme.ui.text)
-                    .corner_radius(6),
-                );
-                if connect.clicked() {
-                    action = Some(BrokerPickerAction::Connect(tile.id.clone()));
-                    self.open = false;
-                }
-                if !tile.description.is_empty() {
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new(&tile.description)
-                            .size(theme.text.small)
-                            .color(theme.ui.text_secondary),
+                    ui.add_space(16.0);
+                    let connect = ui.add_sized(
+                        vec2(ui.available_width(), 40.0),
+                        egui::Button::new(semibold(
+                            "Connect",
+                            theme.text.body,
+                            theme.ui.panel_bg_floating,
+                        ))
+                        .fill(theme.ui.text)
+                        .corner_radius(6),
                     );
-                }
+                    if connect.clicked() {
+                        action = Some(BrokerPickerAction::Connect(tile.id.clone()));
+                        self.open = false;
+                    }
+                    if !tile.description.is_empty() {
+                        ui.add_space(12.0);
+                        ui.label(
+                            RichText::new(&tile.description)
+                                .size(theme.text.body)
+                                .color(theme.ui.text_secondary),
+                        );
+                    }
+                });
+                ui.separator();
+                ui.vertical_centered(|ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Account connection")
+                            .size(theme.text.small)
+                            .color(theme.ui.text_muted),
+                    );
+                });
             });
         if !card {
             self.selected = None;
@@ -347,7 +377,7 @@ fn tile(ui: &mut Ui, tile: &mut BrokerTile) -> bool {
         egui::pos2(rect.center().x, icon.bottom() + 18.0),
         Align2::CENTER_CENTER,
         &tile.name,
-        FontId::proportional(theme.text.body),
+        FontId::proportional(theme.text.body + 2.0),
         theme.ui.text,
     );
     if let Some(subtitle) = &tile.subtitle {

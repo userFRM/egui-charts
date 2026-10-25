@@ -1123,8 +1123,14 @@ impl eframe::App for DemoApp {
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
+        let narrow_account = ui.available_width() < 700.0 && self.trading.is_connected();
+        if narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_side_panel(ui);
-        self.show_account_panel(ui, panel_bg);
+        if !narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -1990,6 +1996,7 @@ impl DemoApp {
             AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
             _ => 320.0,
         };
+        let height = height.min((ui.available_height() - 96.0).max(42.0));
         let symbol = self.chart.symbol().to_owned();
         let trading = &mut self.trading;
         let action = egui::Panel::bottom("account_panel")
@@ -2230,8 +2237,10 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                // Trading follows the live stream, so it rests while replay rewinds the chart.
-                if let Some(side) = self.chart.take_quote_action().filter(|_| self.replay.is_none()) {
+                if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
+                    self.paper.set_price(self.chart.symbol(), bar.close);
+                }
+                if let Some(side) = self.chart.take_quote_action() {
                     let side = match side {
                         egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
                         egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
@@ -2242,24 +2251,13 @@ impl DemoApp {
                         self.broker_picker.open();
                     }
                 }
-                if self.replay.is_none() {
-                    if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
-                        self.paper.set_price(self.chart.symbol(), bar.close);
-                    }
-                    self.trading.show(ui, &mut self.chart);
-                }
+                self.trading.show(ui, &mut self.chart);
             });
         self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
-        // Right-click context actions resolve after the chart is shown. Order entries rest with
-        // the rest of trading during replay.
-        self.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
-        self.top_toolbar
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
@@ -2717,6 +2715,57 @@ mod tests {
     use super::*;
     use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn replay_prices_fill_the_connected_paper_account() {
+        use egui_charts::model::OrderSide;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new(&cc);
+        let symbol = app.chart.symbol().to_owned();
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = [100.0, 80.0, 110.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, price)| {
+                egui_charts::model::Bar::new(
+                    start + chrono::Duration::minutes(i as i64),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
+        let paper = app.paper.clone();
+        app.paper.set_price(&symbol, 999.0);
+        app.trading.set_service(app.paper.clone());
+        app.start_replay();
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.one_click = true;
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == "Filled: BUY 1 at 100.00")
+        );
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        app.trading.trade(symbol, OrderSide::Sell);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == "Filled: SELL 1 at 110.00")
+        );
+        assert!(Arc::ptr_eq(&paper, &app.paper));
+    }
 
     #[test]
     fn research_toolbar_reports_the_last_chart_click() {

@@ -117,6 +117,8 @@ impl Trading {
     pub fn disconnect(&mut self) {
         self.listener = None;
         self.service = None;
+        self.inbox = Arc::default();
+        self.one_click = false;
         self.ticket.open = false;
         self.connect();
     }
@@ -384,7 +386,9 @@ impl Trading {
         if self.ticket.symbol != symbol {
             self.ticket.open = false;
         }
-        self.load_rules(symbol);
+        if self.account_panel.editing.is_none() {
+            self.load_rules(symbol);
+        }
         let currency = self
             .account
             .as_ref()
@@ -895,6 +899,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn chart_frames_keep_the_edited_orders_symbol_rules() {
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let order = Order::new(
+            OrderId::new("1"),
+            OrderRequest::new("OTHER", OrderSide::Buy, 2.0, OrderType::Limit(100.0)),
+            OrderStatus::Working,
+        );
+        trading.account_panel.editing = Some((order.clone(), order.request));
+        trading.load_rules("OTHER");
+        let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+        let mut rules = TradingRules::new("OTHER");
+        rules.quantity_step = 2.0;
+        reply.send(Ok(rules));
+        let mut chart = crate::ChartBuilder::new().with_symbol("MAIN").build();
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        egui::__run_test_ui(|ui| trading.show(ui, &mut chart));
+        assert_eq!(trading.rules.symbol, "OTHER");
+        assert!(trading.rules_ready);
+        assert!(broker.rules.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -10,7 +10,8 @@ use super::Trading;
 use crate::chart::TradingLineAction;
 use crate::icons::icons;
 use crate::model::{
-    BalanceChange, JournalEntry, Order, OrderRequest, OrderSide, OrderStatus, OrderType, Position,
+    BalanceChange, Execution, JournalEntry, Order, OrderRequest, OrderSide, OrderStatus, OrderType,
+    Position,
 };
 use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::services::AccountEvent;
@@ -72,10 +73,12 @@ pub struct AccountPanel {
     tab: Tab,
     hidden: HashSet<(Tab, &'static str)>,
     history: Vec<Order>,
+    executions: Vec<Execution>,
+    show_executions: bool,
     balance: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
     /// The order whose edit dialog is open, and its changed request.
-    editing: Option<(Order, OrderRequest)>,
+    pub(super) editing: Option<(Order, OrderRequest)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -86,6 +89,7 @@ enum Tab {
     History,
     Balance,
     Journal,
+    Executions,
 }
 
 impl Tab {
@@ -104,6 +108,7 @@ impl Tab {
             Tab::History => "Order History",
             Tab::Balance => "Balance History",
             Tab::Journal => "Trading Journal",
+            Tab::Executions => "Executions",
         }
     }
 
@@ -179,6 +184,17 @@ impl Tab {
                     right("Balance After", 110.0),
                     right("Realized P&L", 110.0),
                     left("Action", 300.0),
+                ];
+                COLUMNS
+            }
+            Tab::Executions => {
+                const COLUMNS: &[Column] = &[
+                    left("Symbol", 110.0),
+                    left("Side", 44.0),
+                    right("Qty", 44.0),
+                    right("Fill Price", 80.0),
+                    left("Time", 130.0),
+                    left("Order ID", 60.0),
                 ];
                 COLUMNS
             }
@@ -280,11 +296,25 @@ fn status(status: &OrderStatus) -> String {
 impl AccountPanel {
     /// Keeps the history the broker pushes: finished orders, balance changes and the journal.
     pub(super) fn record(&mut self, event: &AccountEvent) {
+        if let AccountEvent::Order(order) = event
+            && self
+                .editing
+                .as_ref()
+                .is_some_and(|(old, _)| old.id == order.id && old != order)
+        {
+            self.editing = None;
+        }
+        if let AccountEvent::Account(account) = event
+            && !account.capabilities.modify
+        {
+            self.editing = None;
+        }
         match event {
             AccountEvent::Order(order) if order.status != OrderStatus::Working => {
                 self.history.retain(|finished| finished.id != order.id);
                 self.history.push(order.clone());
             }
+            AccountEvent::Execution(fill) => self.executions.push(fill.clone()),
             AccountEvent::Balance(change) => self.balance.push(change.clone()),
             AccountEvent::Journal(entry) => self.journal.push(entry.clone()),
             _ => {}
@@ -294,6 +324,7 @@ impl AccountPanel {
     /// Forgets the history, as a new stream from the broker starts from nothing.
     pub(super) fn clear(&mut self) {
         self.history.clear();
+        self.executions.clear();
         self.balance.clear();
         self.journal.clear();
         self.editing = None;
@@ -316,6 +347,11 @@ impl Trading {
             .as_ref()
             .map_or(String::new(), |account| account.currency.clone());
 
+        ui.painter().rect_filled(
+            Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), TAB_HEIGHT)),
+            0.0,
+            theme.ui.btn_bg_hover,
+        );
         // Tab strip: the broker's tab with a Trade button, then minimize and maximize.
         ui.horizontal(|ui| {
             ui.set_height(TAB_HEIGHT);
@@ -324,6 +360,7 @@ impl Trading {
                 .corner_radius(4)
                 .inner_margin(egui::Margin::symmetric(10, 4));
             tab.show(ui, |ui| {
+                ui.add(icons::CANDLESTICK.as_image_tinted(vec2(20.0, 20.0), theme.ui.text));
                 ui.label(RichText::new(&self.account_panel.broker).color(theme.ui.text));
                 if ui
                     .add(egui::Button::new("Trade").corner_radius(4))
@@ -351,154 +388,175 @@ impl Trading {
             });
         });
 
-        // Account selectors, then the summary from the right edge as far as there is room.
-        let (row, _) =
-            ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
-        let mut selectors = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(row.with_min_x(row.left() + 8.0))
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        let panel = &mut self.account_panel;
-        let chevron = || icons::CHEVRON_DOWN.as_image_square(16.0);
-        let broker = selectors.add(
-            egui::Button::new((
-                semibold(&panel.broker, theme.text.body, theme.ui.text),
-                chevron(),
-            ))
-            .frame_when_inactive(false)
-            .image_tint_follows_text_color(true),
-        );
-        egui::Popup::menu(&broker).show(|ui| {
-            if ui.button("Disconnect").clicked() {
-                action = Some(AccountPanelAction::Disconnect);
-            }
-        });
-        let name = panel.accounts.get(panel.active).map_or("", String::as_str);
-        let account = selectors.add(
-            egui::Button::new((format!("{name} {currency}").trim().to_owned(), chevron()))
-                .frame_when_inactive(false)
-                .image_tint_follows_text_color(true),
-        );
-        egui::Popup::menu(&account).show(|ui| {
-            for (index, name) in panel.accounts.iter().enumerate() {
-                if ui.selectable_label(index == panel.active, name).clicked() {
-                    action = Some(AccountPanelAction::SelectAccount(index));
-                }
-            }
-        });
-        if IconButton::new(&icons::SETTINGS)
-            .tooltip("Account settings")
-            .show(&mut selectors)
-            .clicked()
-        {
-            action = Some(AccountPanelAction::Settings);
+        if ui.available_height() < HEADER_HEIGHT {
+            return action;
         }
-        if let Some(account) = &self.account {
-            let unrealized = account.equity.map(|equity| equity - account.balance);
-            let figures = [
-                ("Account balance", Some(account.balance), false, None),
-                ("Equity", account.equity, false, None),
-                ("Realized P&L", account.realized_pnl, true, None),
-                ("Unrealized P&L", unrealized, true, None),
-                (
-                    "Account margin",
-                    account.margin,
-                    false,
-                    Some("The margin the open positions hold"),
-                ),
-                (
-                    "Available funds",
-                    account.available_funds,
-                    false,
-                    Some("Equity less the margin of the positions and the working orders"),
-                ),
-                (
-                    "Orders margin",
-                    account.orders_margin,
-                    false,
-                    Some("The margin the working orders hold once filled"),
-                ),
-            ];
-            let painter = ui.painter();
-            let value_font = FontId::proportional(theme.text.body);
-            let mut right = row.right() - 16.0;
-            for (label, value, signed, info) in figures.into_iter().rev() {
-                let Some(value) = value else { continue };
-                let text = grouped(value, 2, signed);
-                let color = if signed {
-                    pnl_color(&theme, value, &text)
-                } else {
-                    theme.ui.text
-                };
-                let label = painter.layout_job(semibold(label, theme.text.small, theme.ui.text));
-                let value = painter.layout_no_wrap(text, value_font.clone(), color);
-                let info_width = if info.is_some() { 18.0 } else { 0.0 };
-                let width = (label.size().x + info_width).max(value.size().x);
-                let left = right - width;
-                if left < selectors.min_rect().right() + 24.0 {
-                    break;
+        // Keep selectors and every summary figure reachable in narrow panels.
+        egui::ScrollArea::horizontal()
+            .id_salt("account_summary")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.set_min_width(1020.0);
+                // Account selectors, then the summary from the right edge as far as there is room.
+                let (row, _) = ui
+                    .allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
+                let mut selectors = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row.with_min_x(row.left() + 8.0))
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                let panel = &mut self.account_panel;
+                let chevron = || icons::CHEVRON_DOWN.as_image_square(16.0);
+                let broker = selectors.add(
+                    egui::Button::new((
+                        semibold(&panel.broker, theme.text.body, theme.ui.text),
+                        chevron(),
+                    ))
+                    .frame_when_inactive(false)
+                    .image_tint_follows_text_color(true),
+                );
+                egui::Popup::menu(&broker).show(|ui| {
+                    if ui.button("Disconnect").clicked() {
+                        action = Some(AccountPanelAction::Disconnect);
+                    }
+                });
+                let name = panel.accounts.get(panel.active).map_or("", String::as_str);
+                let account = selectors.add(
+                    egui::Button::new((format!("{name} {currency}").trim().to_owned(), chevron()))
+                        .frame_when_inactive(false)
+                        .image_tint_follows_text_color(true),
+                );
+                egui::Popup::menu(&account).show(|ui| {
+                    for (index, name) in panel.accounts.iter().enumerate() {
+                        if ui.selectable_label(index == panel.active, name).clicked() {
+                            action = Some(AccountPanelAction::SelectAccount(index));
+                        }
+                    }
+                });
+                if IconButton::new(&icons::SETTINGS_NUT)
+                    .tooltip("Account settings")
+                    .show(&mut selectors)
+                    .clicked()
+                {
+                    action = Some(AccountPanelAction::Settings);
                 }
-                let top = row.center().y - (label.size().y + value.size().y + 2.0) / 2.0;
-                if let Some(info) = info {
-                    let icon = Rect::from_min_size(
-                        egui::pos2(
-                            left + label.size().x + 4.0,
-                            top + label.size().y / 2.0 - 7.0,
+                if let Some(account) = &self.account {
+                    let unrealized = account.equity.map(|equity| equity - account.balance);
+                    let figures = [
+                        ("Account balance", Some(account.balance), false, None),
+                        ("Equity", account.equity, false, None),
+                        ("Realized P&L", account.realized_pnl, true, None),
+                        ("Unrealized P&L", unrealized, true, None),
+                        (
+                            "Account margin",
+                            account.margin,
+                            false,
+                            Some("The margin the open positions hold"),
                         ),
-                        vec2(14.0, 14.0),
-                    );
-                    icons::INFO
-                        .as_image_tinted(icon.size(), theme.ui.text_muted)
-                        .paint_at(ui, icon);
-                    ui.interact(icon, ui.scope_id().with(info), Sense::hover())
-                        .on_hover_text(info);
+                        (
+                            "Available funds",
+                            account.available_funds,
+                            false,
+                            Some("Equity less the margin of the positions and the working orders"),
+                        ),
+                        (
+                            "Orders margin",
+                            account.orders_margin,
+                            false,
+                            Some("The margin the working orders hold once filled"),
+                        ),
+                    ];
+                    let painter = ui.painter();
+                    let value_font = FontId::proportional(theme.text.body);
+                    let mut right = row.right() - 16.0;
+                    for (label, value, signed, info) in figures.into_iter().rev() {
+                        let Some(value) = value else { continue };
+                        let text = grouped(value, 2, signed);
+                        let color = if signed {
+                            pnl_color(&theme, value, &text)
+                        } else {
+                            theme.ui.text
+                        };
+                        let label =
+                            painter.layout_job(semibold(label, theme.text.small, theme.ui.text));
+                        let value = painter.layout_no_wrap(text, value_font.clone(), color);
+                        let info_width = if info.is_some() { 18.0 } else { 0.0 };
+                        let width = (label.size().x + info_width).max(value.size().x);
+                        let left = right - width;
+                        if left < selectors.min_rect().right() + 24.0 {
+                            break;
+                        }
+                        let top = row.center().y - (label.size().y + value.size().y + 2.0) / 2.0;
+                        if let Some(info) = info {
+                            let icon = Rect::from_min_size(
+                                egui::pos2(
+                                    left + label.size().x + 4.0,
+                                    top + label.size().y / 2.0 - 7.0,
+                                ),
+                                vec2(14.0, 14.0),
+                            );
+                            icons::INFO
+                                .as_image_tinted(icon.size(), theme.ui.text_muted)
+                                .paint_at(ui, icon);
+                            ui.interact(icon, ui.scope_id().with(info), Sense::hover())
+                                .on_hover_text(info);
+                        }
+                        let painter = ui.painter();
+                        painter.galley(egui::pos2(left, top + label.size().y + 2.0), value, color);
+                        painter.galley(egui::pos2(left, top), label, theme.ui.text);
+                        right = left - 28.0;
+                    }
                 }
-                let painter = ui.painter();
-                painter.galley(egui::pos2(left, top + label.size().y + 2.0), value, color);
-                painter.galley(egui::pos2(left, top), label, theme.ui.text);
-                right = left - 28.0;
-            }
-        }
+            });
 
         // Tabs, with the number of positions and working orders.
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.spacing_mut().item_spacing.x = 20.0;
-            for tab in Tab::ALL {
-                let count = match tab {
-                    Tab::Positions => self.positions.len(),
-                    Tab::Orders => self.orders.len(),
-                    _ => 0,
-                };
-                let mut title = RichText::new(tab.title());
-                let active = self.account_panel.tab == tab;
-                title = title.color(if active {
-                    theme.ui.text
-                } else {
-                    theme.ui.text_secondary
+        egui::ScrollArea::horizontal()
+            .id_salt("account_tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.spacing_mut().item_spacing.x = 20.0;
+                    for tab in Tab::ALL {
+                        let count = match tab {
+                            Tab::Positions => self.positions.len(),
+                            Tab::Orders => self.orders.len(),
+                            _ => 0,
+                        };
+                        let mut title = RichText::new(tab.title());
+                        let active = self.account_panel.tab == tab;
+                        title = title.color(if active {
+                            theme.ui.text
+                        } else {
+                            theme.ui.text_secondary
+                        });
+                        let label = if count > 0 {
+                            egui::Atoms::new((
+                                title,
+                                RichText::new(count.to_string()).color(theme.ui.text_secondary),
+                            ))
+                        } else {
+                            egui::Atoms::new(title)
+                        };
+                        let response = ui.add(egui::Button::new(label).frame(false));
+                        if active {
+                            let underline = Rect::from_min_max(
+                                egui::pos2(response.rect.left(), response.rect.bottom() + 2.0),
+                                egui::pos2(response.rect.right(), response.rect.bottom() + 5.0),
+                            );
+                            ui.painter().rect_filled(underline, 1.0, theme.ui.text);
+                        }
+                        if response.clicked() {
+                            self.account_panel.tab = tab;
+                        }
+                    }
                 });
-                let label = if count > 0 {
-                    egui::Atoms::new((
-                        title,
-                        RichText::new(count.to_string()).color(theme.ui.text_secondary),
-                    ))
-                } else {
-                    egui::Atoms::new(title)
-                };
-                let response = ui.add(egui::Button::new(label).frame(false));
-                if active {
-                    let underline = Rect::from_min_max(
-                        egui::pos2(response.rect.left(), response.rect.bottom() + 2.0),
-                        egui::pos2(response.rect.right(), response.rect.bottom() + 4.0),
-                    );
-                    ui.painter().rect_filled(underline, 1.0, theme.ui.text);
-                }
-                if response.clicked() {
-                    self.account_panel.tab = tab;
-                }
-            }
-        });
+            });
+        if self.account_panel.tab == Tab::History {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.account_panel.show_executions, false, "Orders");
+                ui.selectable_value(&mut self.account_panel.show_executions, true, "Executions");
+            });
+        }
         let rule = ui.available_rect_before_wrap();
         ui.add_space(6.0);
         ui.painter().hline(
@@ -507,7 +565,11 @@ impl Trading {
             Stroke::new(1.0, theme.ui.border),
         );
 
-        let tab = self.account_panel.tab;
+        let tab = if self.account_panel.tab == Tab::History && self.account_panel.show_executions {
+            Tab::Executions
+        } else {
+            self.account_panel.tab
+        };
         let capabilities = self.capabilities();
         let price = |symbol: &str, value: f64| {
             let decimals = if symbol == chart_symbol {
@@ -642,9 +704,7 @@ impl Trading {
                                 })),
                             ],
                             symbol: Some(position.symbol.clone()),
-                            edit: capabilities
-                                .limit
-                                .then(|| RowAction::Position(position.clone())),
+                            edit: None,
                             close: capabilities
                                 .market
                                 .then(|| RowAction::Position(position.clone())),
@@ -672,6 +732,39 @@ impl Trading {
                     symbol: Some(order.request.symbol.clone()),
                     edit: None,
                     close: None,
+                })
+                .collect(),
+            Tab::Executions => self
+                .account_panel
+                .executions
+                .iter()
+                .rev()
+                .map(|fill| {
+                    let order = self
+                        .orders
+                        .iter()
+                        .chain(&self.account_panel.history)
+                        .find(|order| order.id == fill.order);
+                    let name = order
+                        .map(|order| order.request.symbol.as_str())
+                        .unwrap_or("");
+                    Row {
+                        cells: vec![
+                            symbol(name),
+                            side(fill.side, fill.side.label()),
+                            plain(grouped(
+                                fill.quantity,
+                                quantity_decimals(fill.quantity),
+                                false,
+                            )),
+                            plain(price(name, fill.price)),
+                            plain(time(Some(fill.time))),
+                            plain(fill.order.to_string()),
+                        ],
+                        symbol: order.map(|order| order.request.symbol.clone()),
+                        edit: None,
+                        close: None,
+                    }
                 })
                 .collect(),
             Tab::Balance => self
@@ -713,7 +806,6 @@ impl Trading {
             .filter(|(_, column)| !self.account_panel.hidden.contains(&(tab, column.title)))
             .collect();
         let font = FontId::proportional(theme.text.body);
-        let small = FontId::proportional(theme.text.small);
         let heading = FontId::proportional(theme.text.small);
         let unit_font = FontId::proportional(theme.text.tiny);
         // Columns take their smallest width, at least their title's, and share what is left; a
@@ -811,6 +903,7 @@ impl Trading {
                         Tab::History => "No finished orders",
                         Tab::Balance => "No balance changes",
                         Tab::Journal => "No journal entries",
+                        Tab::Executions => "No executions",
                     })
                     .fill_height()
                     .show(ui);
@@ -834,12 +927,12 @@ impl Trading {
                             );
                             for (&(index, column), cell_rect) in columns.iter().zip(edges(rect)) {
                                 let cell = &row.cells[index];
-                                if cell.symbol {
-                                    let galley = ui.painter().layout_no_wrap(
-                                        cell.text.clone(),
-                                        small.clone(),
+                                if cell.symbol && !cell.text.is_empty() {
+                                    let galley = ui.painter().layout_job(semibold(
+                                        &cell.text,
+                                        theme.text.small,
                                         theme.ui.text,
-                                    );
+                                    ));
                                     let chip = Rect::from_min_size(
                                         egui::pos2(cell_rect.left(), rect.center().y - 12.0),
                                         vec2((galley.size().x + 16.0).min(cell_rect.width()), 24.0),
@@ -862,11 +955,14 @@ impl Trading {
                                         )
                                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                                     ui.painter().rect_filled(chip, 4.0, fill);
-                                    ui.painter().with_clip_rect(chip.shrink(4.0)).text(
-                                        chip.left_center() + vec2(8.0, 0.0),
-                                        Align2::LEFT_CENTER,
+                                    let galley = ui.painter().layout_job(semibold(
                                         &cell.text,
-                                        small.clone(),
+                                        theme.text.small,
+                                        text,
+                                    ));
+                                    ui.painter().with_clip_rect(chip.shrink(4.0)).galley(
+                                        chip.left_center() + vec2(8.0, -galley.size().y / 2.0),
+                                        galley,
                                         text,
                                     );
                                     if response.clicked() {
@@ -915,9 +1011,7 @@ impl Trading {
                                         .layout(Layout::right_to_left(Align::Center)),
                                 );
                                 let (close, edit) = match row.close.as_ref().or(row.edit.as_ref()) {
-                                    Some(RowAction::Position(_)) => {
-                                        ("Close position", "Protect position")
-                                    }
+                                    Some(RowAction::Position(_)) => ("Close position", ""),
                                     _ => ("Cancel order", "Modify order"),
                                 };
                                 if row.close.is_some()
@@ -944,28 +1038,15 @@ impl Trading {
             });
 
         match row_action {
-            Some((RowAction::Position(position), false)) => {
+            Some((RowAction::Position(position), _)) => {
                 self.pending = Some(TradingLineAction::Close(position.clone()));
             }
             Some((RowAction::Order(order), false)) => {
                 self.pending = Some(TradingLineAction::Cancel(order.clone()));
             }
-            // Protecting a position opens the ticket for an exit order on its other side.
-            Some((RowAction::Position(position), true)) => {
-                let side = if position.quantity > 0.0 {
-                    OrderSide::Sell
-                } else {
-                    OrderSide::Buy
-                };
-                let last = position.last_price.unwrap_or(position.average_price);
-                self.open_ticket(OrderRequest::new(
-                    position.symbol.clone(),
-                    side,
-                    position.quantity.abs(),
-                    OrderType::Limit(last),
-                ));
-            }
             Some((RowAction::Order(order), true)) => {
+                self.ticket.open = false;
+                self.load_rules(&order.request.symbol);
                 self.account_panel.editing = Some((order.clone(), order.request.clone()));
             }
             None => {}
@@ -1044,7 +1125,11 @@ impl Trading {
                         }
                     });
                 ui.add_space(8.0);
-                let valid = request.quantity > 0.0 && request != &order.request;
+                let valid = self.rules_ready
+                    && self.rules.symbol == request.symbol
+                    && super::ticket::order_quantity(request.quantity, &self.rules)
+                        .is_ok_and(|quantity| quantity == request.quantity)
+                    && request != &order.request;
                 save = ui
                     .add_enabled(valid, egui::Button::new("Modify order"))
                     .clicked();
@@ -1072,7 +1157,7 @@ fn quantity_decimals(quantity: f64) -> usize {
 /// Cells holding a comma or a quote are quoted.
 fn csv(columns: &[(usize, &Column)], rows: &[Row]) -> String {
     let field = |text: &str| {
-        if text.contains([',', '"', '\n']) {
+        if text.contains([',', '"', '\n', '\r']) {
             format!("\"{}\"", text.replace('"', "\"\""))
         } else {
             text.to_owned()
@@ -1104,7 +1189,67 @@ fn csv(columns: &[(usize, &Column)], rows: &[Row]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::grouped;
+    use super::*;
+
+    #[test]
+    fn history_keeps_each_partial_fill_and_discards_stale_edits() {
+        let mut panel = AccountPanel::default();
+        let order = Order::new(
+            crate::model::OrderId::new("7"),
+            OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Limit(100.0)),
+            OrderStatus::Working,
+        );
+        let fill = Execution::new(order.id.clone(), Utc::now(), OrderSide::Buy, 99.0, 1.0);
+        panel.record(&AccountEvent::Execution(fill.clone()));
+        panel.record(&AccountEvent::Execution(fill.clone()));
+        assert_eq!(panel.executions, vec![fill.clone(), fill]);
+        for event in [
+            AccountEvent::Order({
+                let mut partial = order.clone();
+                partial.filled = 1.0;
+                partial
+            }),
+            AccountEvent::Account(crate::model::Account::new(
+                "USD",
+                1000.0,
+                Default::default(),
+            )),
+        ] {
+            panel.editing = Some((order.clone(), order.request.clone()));
+            panel.record(&event);
+            assert!(panel.editing.is_none());
+        }
+        panel.clear();
+        assert!(panel.executions.is_empty());
+    }
+
+    #[test]
+    fn csv_round_trips_quoted_journal_text_and_visible_columns() {
+        let columns: Vec<_> = Tab::Journal.columns().iter().enumerate().collect();
+        let rows = vec![Row {
+            cells: ["time", "line\rbreak"]
+                .into_iter()
+                .map(|text| Cell {
+                    text: text.into(),
+                    color: Color32::WHITE,
+                    unit: String::new(),
+                    symbol: false,
+                })
+                .collect(),
+            symbol: None,
+            edit: None,
+            close: None,
+        }];
+        for shown in [&columns[..], &columns[1..]] {
+            let exported = csv(shown, &rows);
+            let mut reader = ::csv::Reader::from_reader(exported.as_bytes());
+            assert_eq!(reader.headers().unwrap().len(), shown.len());
+            assert_eq!(
+                reader.records().next().unwrap().unwrap().iter().next_back(),
+                Some("line\rbreak")
+            );
+        }
+    }
 
     #[test]
     fn figures_group_thousands_and_sign_only_what_they_show() {
