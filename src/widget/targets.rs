@@ -3,7 +3,7 @@
 use super::Chart;
 use crate::chart::coords::ChartMapping;
 use crate::data::{FeedError, inbox::Inbox};
-use crate::scales::{DefaultPriceFormatter, PriceFormatter};
+use crate::scales::{DefaultPriceFormatter, PriceFormatter, PriceScaleMode};
 use crate::services::PriceTargets;
 use crate::theme::ThemeExt;
 use egui::{FontId, Pos2, Sense, Stroke, Vec2};
@@ -150,6 +150,7 @@ impl Chart {
         });
         let mut label_bottom = label_top.max(coords.rect.top());
         let mut lines = Vec::new();
+        let formatter = self.price_label_formatter(PriceScaleMode::Normal);
         for (position, (name, price)) in levels.into_iter().enumerate() {
             let end = Pos2::new(end_x, coords.price.price_to_y(price));
             if !end.is_finite() || !origin.is_finite() {
@@ -172,7 +173,10 @@ impl Chart {
                 .map(usize::from)
                 .or_else(|| coords.price.price_precision())
                 .unwrap_or(2);
-            let price_text = DefaultPriceFormatter::with_precision(decimals).format(price);
+            let price_text = formatter.as_ref().map_or_else(
+                || DefaultPriceFormatter::with_precision(decimals).format(price),
+                |formatter| formatter.format(price),
+            );
             let change = percent_change(last.close, price)
                 .map(|change| format!(" ({change:+.2}%)"))
                 .unwrap_or_default();
@@ -364,14 +368,33 @@ mod tests {
             "a visible label retains its tooltip when the horizon is offscreen"
         );
         chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
-        for mode in [
-            crate::scales::PriceScaleMode::Percentage,
-            crate::scales::PriceScaleMode::IndexedTo100,
-        ] {
-            chart.price_scale_mut().options_mut().mode = mode;
-            let shapes = test_frames::shapes(&ctx, &mut chart, 0.11, vec![]);
-            assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == "High 120.00 (+20.00%)")), "target prices stay in instrument units on {mode:?} scales");
+        for custom in [false, true] {
+            chart.set_price_formatter(custom.then(|| {
+                Arc::new(crate::scales::CustomPriceFormatter::new(|price| {
+                    format!("host {price:.2}")
+                })) as Arc<dyn PriceFormatter>
+            }));
+            for mode in [
+                crate::scales::PriceScaleMode::Normal,
+                crate::scales::PriceScaleMode::Percentage,
+                crate::scales::PriceScaleMode::IndexedTo100,
+            ] {
+                chart.price_scale_mut().options_mut().mode = mode;
+                let shapes = test_frames::shapes(&ctx, &mut chart, 0.11, vec![]);
+                let label = if custom {
+                    "High host 120.00 (+20.00%)"
+                } else {
+                    "High 120.00 (+20.00%)"
+                };
+                assert!(
+                    shapes
+                        .iter()
+                        .any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == label)),
+                    "target prices keep the host format and instrument units on {mode:?} scales"
+                );
+            }
         }
+        chart.set_price_formatter(None);
         chart.price_scale_mut().options_mut().mode = crate::scales::PriceScaleMode::Normal;
         chart.state.time_scale_mut().set_min_bar_spacing(0.01);
         chart.set_size(Some(Vec2::new(260.0, 600.0)));
