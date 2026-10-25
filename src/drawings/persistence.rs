@@ -783,6 +783,7 @@ mod tests {
 
     #[test]
     fn every_tool_round_trips_with_all_settings() {
+        use crate::drawings::ProfileDisplay::{Delta, Total, UpDown};
         for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
             let mut drawing = non_default_drawing(tool);
             drawing.gann = Some(crate::drawings::GannConfig {
@@ -802,11 +803,32 @@ mod tests {
                 drawing.screen_anchor = Some([0.25, 0.75]);
             }
 
-            let mut storage = DrawingStorage::new("AAPL");
-            storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
-            let (loaded, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
-            let back = restore(&loaded.drawings()[0], drawing.id);
-            assert_eq!(format!("{back:?}"), format!("{drawing:?}"), "{tool:?}");
+            let modes = if matches!(
+                tool,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            ) {
+                &[Total, UpDown, Delta][..]
+            } else {
+                &[Total][..]
+            };
+            for &display in modes {
+                let config = drawing.volume_profile.as_mut().unwrap();
+                *config = config.with_row_size(Some(0.25)).unwrap();
+                config.display = display;
+                config.up_color = [1, 2, 3, 240];
+                config.down_color = [4, 5, 6, 200];
+                let mut storage = DrawingStorage::new("AAPL");
+                storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
+                let (loaded, skipped) =
+                    DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+                assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+                let back = restore(&loaded.drawings()[0], drawing.id);
+                assert_eq!(
+                    format!("{back:?}"),
+                    format!("{drawing:?}"),
+                    "{tool:?} {display:?}"
+                );
+            }
         }
     }
 

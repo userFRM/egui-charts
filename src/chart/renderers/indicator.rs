@@ -288,8 +288,7 @@ impl IndicatorRenderer {
             crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
             return;
         }
-        let visible = coords.x_to_idx(context.rect.left())
-            ..coords.x_to_idx(context.rect.right()).saturating_add(1);
+        let visible = super::volume_profile::profile_range(coords);
         for plot in indicator.volume_profiles(visible) {
             super::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),

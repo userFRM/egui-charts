@@ -381,9 +381,11 @@ mod tests {
         let drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
         let upright = |price: f64| (16.0 - price) as f32 * 50.0;
         let inverted = |price: f64| (price - 8.0) as f32 * 50.0;
-        for (name, price_to_y) in [
-            ("upright", &upright as &dyn Fn(f64) -> f32),
-            ("inverted", &inverted),
+        for (name, price_to_y, width) in [
+            ("upright", &upright as &dyn Fn(f64) -> f32, 400.0),
+            ("inverted", &inverted, 400.0),
+            ("narrow upright", &upright, 24.0),
+            ("narrow inverted", &inverted, 24.0),
         ] {
             let view = ChartView {
                 instrument: None,
@@ -398,7 +400,7 @@ mod tests {
                     egui::LayerId::background(),
                     Rect::EVERYTHING,
                 );
-                drawing.draw_volume_profile(&painter, &view, 0, &bars, 100.0, 500.0);
+                drawing.draw_volume_profile(&painter, &view, 0, &bars, 100.0, 100.0 + width);
             });
             let rects: Vec<_> = output
                 .shapes
@@ -414,7 +416,7 @@ mod tests {
                 .iter()
                 .filter_map(|c| match &c.shape {
                     egui::Shape::LineSegment { points, .. }
-                        if points[0].x == 100.0 && points[1].x == 500.0 =>
+                        if points[0].x == 100.0 && points[1].x == 100.0 + width =>
                     {
                         Some(points[0].y)
                     }
@@ -429,26 +431,41 @@ mod tests {
                     _ => None,
                 })
             };
-            let (vah_label, val_label) = (label_y("VAH").unwrap(), label_y("VAL").unwrap());
+            let (vah_label, val_label) = (label_y("VAH"), label_y("VAL"));
+            let poc_label = label_y("POC");
             output.drop_without_applying_deltas();
+            if width < 50.0 {
+                assert!(poc_label.is_none(), "{name}: POC exceeds span");
+                assert!(
+                    vah_label.is_none() && val_label.is_none(),
+                    "{name}: labels exceed span"
+                );
+            } else {
+                assert!(
+                    poc_label.is_some() && vah_label.is_some() && val_label.is_some(),
+                    "{name}: missing labels"
+                );
+            }
             edges.sort_by(f32::total_cmp);
             let [top, bottom] = edges[..] else {
                 panic!("{name}: value area edges {edges:?}")
             };
             // The higher price, VAH, is the top edge upright and the bottom one inverted.
-            let (want_vah, want_val) = if name == "upright" {
+            let (want_vah, want_val) = if name.ends_with("upright") {
                 (top - 8.0, bottom + 8.0)
             } else {
                 (bottom + 8.0, top - 8.0)
             };
-            assert!(
-                (vah_label - want_vah).abs() < 1.0,
-                "{name}: VAH {vah_label}, want {want_vah}"
-            );
-            assert!(
-                (val_label - want_val).abs() < 1.0,
-                "{name}: VAL {val_label}, want {want_val}"
-            );
+            if let (Some(vah_label), Some(val_label)) = (vah_label, val_label) {
+                assert!(
+                    (vah_label - want_vah).abs() < 1.0,
+                    "{name}: VAH {vah_label}, want {want_vah}"
+                );
+                assert!(
+                    (val_label - want_val).abs() < 1.0,
+                    "{name}: VAL {val_label}, want {want_val}"
+                );
+            }
             let (boxes, rows): (Vec<_>, Vec<_>) = rects
                 .into_iter()
                 .partition(|&(_, fill)| fill == Color32::TRANSPARENT);

@@ -44,7 +44,6 @@ where
     if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
         click_pos,
         indicator,
-        visible_range.clone(),
         coords,
         &price_to_y,
     ) {
@@ -229,7 +228,6 @@ pub fn hit_test_pane_indicator(
     if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
         click_pos,
         indicator,
-        visible_range.clone(),
         coords,
         &|price| coords.price_to_y(price),
     ) {

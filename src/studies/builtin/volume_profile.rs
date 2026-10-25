@@ -669,7 +669,7 @@ mod rendering_tests {
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
 
-    /// A profile must paint horizontal price rows and label its total-volume POC.
+    /// Painted rows determine the profile's selection and independent price bounds.
     #[test]
     fn visible_profile_paints_price_rows() {
         let bars = [Bar::new(
@@ -726,5 +726,36 @@ mod rendering_tests {
             );
             assert_eq!(hit.is_some(), expected, "profile selection at x={x}");
         }
+
+        // The first bar is outside the painted viewport and must not stretch its scale.
+        let mut independent =
+            crate::studies::ConfiguredStudy::new(Box::new(VolProfileVisible::new(2)));
+        independent.set_scale(crate::studies::StudyScale::Independent);
+        independent.calculate(&[
+            Bar {
+                high: 1000.0,
+                ..bars[0].clone()
+            },
+            bars[0].clone(),
+            bars[0].clone(),
+        ]);
+        let coords = ChartMapping {
+            base_idx: 10,
+            ..coords
+        };
+        let mapping = crate::chart::renderers::study_mapping(&independent, &coords);
+        assert!((mapping.price_to_y(12.0) - 200.0 / 12.0).abs() < 0.01);
+        assert!((mapping.price_to_y(10.0) - 200.0 * 11.0 / 12.0).abs() < 0.01);
+        assert!(
+            crate::chart::indicators::hit_test_indicator(
+                egui::pos2(395.0, mapping.price_to_y(10.5)),
+                &independent,
+                0,
+                0..3,
+                &mapping,
+                |value| mapping.price_to_y(value),
+            )
+            .is_some()
+        );
     }
 }

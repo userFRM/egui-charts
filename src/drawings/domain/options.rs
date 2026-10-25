@@ -445,30 +445,6 @@ mod tests {
         }
     }
 
-    /// Saved modes and direction colours survive loading, including older records.
-    #[test]
-    fn volume_profile_display_round_trips() {
-        for mode in ["Total", "UpDown", "Delta"] {
-            let stored = serde_json::json!({
-                "rows": 24, "value_area": 0.7, "display": mode, "row_size": 0.25,
-                "up_color": [1, 2, 3, 240], "down_color": [4, 5, 6, 200]
-            });
-            let config: VolumeProfileConfig = serde_json::from_value(stored.clone()).unwrap();
-            assert_eq!(serde_json::to_value(config).unwrap(), stored);
-            let mut drawing = crate::drawings::Drawing::new(
-                1,
-                crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
-            );
-            drawing.volume_profile = Some(config);
-            let loaded: crate::drawings::Drawing =
-                serde_json::from_str(&serde_json::to_string(&drawing).unwrap()).unwrap();
-            assert_eq!(loaded.volume_profile, Some(config));
-        }
-        let old: VolumeProfileConfig =
-            serde_json::from_str(r#"{"rows":24,"value_area":0.7}"#).unwrap();
-        assert_eq!(old, VolumeProfileConfig::default());
-    }
-
     #[test]
     fn drawing_settings_reject_out_of_bounds_values() {
         assert!(VolumeProfileConfig::new(1, 1.0).is_some());
