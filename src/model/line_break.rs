@@ -278,6 +278,8 @@ mod tests {
                     low: base - 1.0,
                     close: base + 2.0,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -304,6 +306,8 @@ mod tests {
                 low: open.min(close) - 1.0,
                 close,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }
@@ -395,6 +399,8 @@ mod tests {
                         low: o.min(c),
                         close: c,
                         volume: 0.0,
+                        colors: None,
+                        payload: None,
                     }
                 })
                 .collect();

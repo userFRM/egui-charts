@@ -327,6 +327,8 @@ mod tests {
                 low: 99.0,
                 close: 101.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: now,
@@ -335,6 +337,8 @@ mod tests {
                 low: 100.0,
                 close: 104.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: now,
@@ -343,6 +347,8 @@ mod tests {
                 low: 103.0,
                 close: 105.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: now,
@@ -351,6 +357,8 @@ mod tests {
                 low: 98.0,
                 close: 99.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
         ]
     }

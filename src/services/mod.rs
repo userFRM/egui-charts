@@ -1,5 +1,6 @@
-//! Services a host supplies, each through a small trait. Charts consume `Marks` and the alerts
-//! panel consumes `Alerts`; other contracts define the host side of the assembled terminal.
+//! Services a host supplies, each through a small trait. Charts consume `Marks`, the alerts
+//! panel `Alerts`, the watchlist `Quotes`, the notifications panel `Notifications` and the chats
+//! panel `Chats`; other contracts define the host side of the assembled terminal.
 //! [`PaperAccount`] is a ready-made [`Broker`] that simulates an account.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
@@ -9,24 +10,30 @@
 
 mod alerts;
 mod broker;
+mod chats;
 #[cfg_attr(
     not(any(test, feature = "ui")),
     expect(dead_code, reason = "only the terminal consumes the listener")
 )]
 mod events;
 mod marks;
+mod notifications;
 mod paper;
+mod quotes;
 mod search;
 mod signals;
 mod storage;
 
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
+pub use chats::{ChatEvent, ChatMessage, Chats};
 pub use events::Events;
 #[cfg(feature = "ui")]
 pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
+pub use notifications::{Notification, Notifications};
 pub use paper::PaperAccount;
+pub use quotes::Quotes;
 pub use search::{SymbolQuery, SymbolSearch};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};

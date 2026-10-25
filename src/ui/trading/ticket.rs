@@ -99,8 +99,11 @@ enum Sizing {
 
 /// What the ticket needs from the chart and the account for one frame.
 pub(crate) struct Market<'a> {
-    /// The last price, the entry of a market order.
+    /// The last price, the entry of a market order without a quote.
     pub last: Option<f64>,
+    /// The best bid and ask, the entries of a market sell and buy.
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
     /// The symbol's tick size.
     pub tick: f64,
     /// Decimals of prices.
@@ -185,10 +188,15 @@ impl OrderTicket {
         }
     }
 
-    /// The price the order enters at: its limit price, its stop price, or the last price.
-    fn entry(&self, last: Option<f64>) -> Option<f64> {
+    /// The price the order enters at: its limit price, its stop price, or for a market order the
+    /// ask of a buy or the bid of a sell, or the last price without them.
+    fn entry(&self, market: &Market<'_>) -> Option<f64> {
+        let touch = match self.side {
+            OrderSide::Buy => market.ask,
+            OrderSide::Sell => market.bid,
+        };
         match self.kind {
-            Kind::Market => last,
+            Kind::Market => touch.filter(|price| price.is_finite()).or(market.last),
             Kind::Limit | Kind::Stop => Some(self.price),
             Kind::StopLimit => Some(self.limit),
         }
@@ -205,7 +213,7 @@ impl OrderTicket {
         }
         let snap = |value| to_step(value, market.tick, f64::round);
         let entry = self
-            .entry(market.last)
+            .entry(market)
             .map(snap)
             .filter(|price| price.is_finite() && *price > 0.0)
             .ok_or("Enter a positive price")?;
@@ -445,7 +453,7 @@ impl OrderTicket {
         });
 
         let request = self.request(market);
-        let entry = self.entry(market.last);
+        let entry = self.entry(market);
         if let (Ok(request), Some(entry)) = (&request, entry) {
             let money = |value: f64| format!("{value:.2} {}", market.currency);
             let per_price = request.quantity * rules.point_value;
@@ -647,6 +655,8 @@ mod tests {
             rules.time_in_force.push(TimeInForce::GoodTillCancelled);
             let market = Market {
                 last: Some(100.0),
+                bid: None,
+                ask: None,
                 tick: 0.25,
                 decimals: 2,
                 currency: "USD",
@@ -733,6 +743,8 @@ mod tests {
         ) = (true, true, true);
         let market = Market {
             last: Some(4_000.0),
+            bid: None,
+            ask: None,
             tick: 0.25,
             decimals: 2,
             currency: "USD",
@@ -867,6 +879,22 @@ mod tests {
                 .map(|r| (r.quantity, r.take_profit, r.stop_loss))
                 .map_err(|_| ());
             assert_eq!(actual, expected, "{side:?} {sizing:?} {amount}");
+        }
+        // A quoted market order enters a buy at the ask and a sell at the bid: 4 ticks = 1 point.
+        let quoted = Market {
+            bid: Some(3_999.75),
+            ask: Some(4_000.25),
+            ..market
+        };
+        for (side, take_profit) in [(OrderSide::Buy, 4_001.25), (OrderSide::Sell, 3_998.75)] {
+            let ticket = OrderTicket {
+                symbol: "ES".into(),
+                side,
+                take_profit: (true, ticks(4.0)),
+                ..OrderTicket::default()
+            };
+            let request = ticket.request(&quoted).unwrap();
+            assert_eq!(request.take_profit, Some(take_profit), "{side:?}");
         }
     }
 }

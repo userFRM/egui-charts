@@ -6,7 +6,8 @@
 //! feed on the UI thread and never waits for it: the feed answers each request once through a
 //! [`Reply`] and pushes live bars, trades, depth and status into the [`Sink`] of each
 //! [`Subscription`], from any thread, runtime or browser task. Best bid/ask quotes use
-//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`].
+//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`], and
+//! `Chart::depth_history` keeps the order book over time in a [`DepthHistory`].
 //!
 //! Symbol search is not part of the feed: it is the separate
 //! [`SymbolSearch`](crate::services::SymbolSearch) service. Until an application wires it into
@@ -23,19 +24,31 @@ use std::fmt;
 use std::time::Duration;
 
 pub(crate) mod depth;
+#[cfg_attr(
+    not(feature = "widget"),
+    expect(dead_code, reason = "only the chart widget keeps a depth history")
+)]
+mod depth_history;
 mod footprint;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod inbox;
+mod market;
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod merge;
 mod resample;
+pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
+pub use market::{
+    CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
+    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
+    ScreenerRow,
+};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -131,6 +144,38 @@ pub trait Datafeed: MaybeSend + 'static {
     /// panel. The default answers [`FeedError::NotSupported`], and the panel then shows neither.
     fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
         let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
+    /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// The events of one calendar that pass `query`'s filters, in time order, for the calendar
+    /// panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has
+    /// none.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` symbols that meet every filter of `query`, sorted as it asks, each
+    /// with the values of its columns, for the screener. The feed does the screening. Answer
+    /// [`FeedError::InvalidData`] for a filter it cannot apply, and [`FeedError::NotSupported`]
+    /// (the default) to have the panel say the feed has none.
+    fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` symbols of the hotlist `query.list`, in the list's order, for the
+    /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
+    /// feed has none.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
 

@@ -86,10 +86,16 @@ pub(crate) fn merge(
         }
         let old = stored.next_if(|old| slot(old) == at);
         let new = match (old, origin) {
-            (Some(old), Origin::Ticks(trades)) => fold(old, &bar).unwrap_or_else(|| {
-                merged.rejected += trades;
-                old.clone()
-            }),
+            (Some(old), Origin::Ticks(trades)) => {
+                // Trades filling a whitespace bar build it from ticks, which history replaces.
+                if old.is_whitespace() {
+                    from_ticks.insert(old.time);
+                }
+                fold(old, &bar).unwrap_or_else(|| {
+                    merged.rejected += trades;
+                    old.clone()
+                })
+            }
             (Some(old), Origin::History) if !from_ticks.contains(&old.time) => old.clone(),
             (Some(old), _) => {
                 from_ticks.remove(&old.time);
@@ -101,7 +107,7 @@ pub(crate) fn merge(
             }
             (None, _) => bar,
         };
-        if old != Some(&new) {
+        if old.is_none_or(|old| !same(old, &new)) {
             merged.first_changed.get_or_insert(lo + window.len());
         }
         window.push(new);
@@ -111,7 +117,15 @@ pub(crate) fn merge(
     merged
 }
 
-/// Finite values, a high at or above open and close, a low at or below them, no negative volume.
+/// Whether `a` and `b` are the same bar, with values compared bitwise so that a whitespace bar is
+/// the same as itself.
+fn same(a: &Bar, b: &Bar) -> bool {
+    let bits = |bar: &Bar| [bar.open, bar.high, bar.low, bar.close, bar.volume].map(f64::to_bits);
+    a.time == b.time && bits(a) == bits(b) && a.colors == b.colors && a.payload == b.payload
+}
+
+/// Finite values, a high at or above open and close, a low at or below them, no negative volume;
+/// or a whitespace bar.
 pub(crate) fn valid(bar: &Bar) -> bool {
     [bar.open, bar.high, bar.low, bar.close, bar.volume]
         .into_iter()
@@ -119,17 +133,32 @@ pub(crate) fn valid(bar: &Bar) -> bool {
         && bar.high >= bar.open.max(bar.close)
         && bar.low <= bar.open.min(bar.close)
         && bar.volume >= 0.0
+        || bar.is_whitespace()
 }
 
 /// `bar` extended with `ticks`, a bar of later trades in the same slot, or `None` if the result is
-/// not valid: two valid volumes can add up to infinity.
+/// not valid: two valid volumes can add up to infinity. Whitespace `ticks` leave `bar` as it is,
+/// and the values of `ticks` fill a whitespace `bar`.
 pub(super) fn fold(bar: &Bar, ticks: &Bar) -> Option<Bar> {
+    if ticks.is_whitespace() {
+        return Some(bar.clone());
+    }
+    if bar.is_whitespace() {
+        return Some(Bar {
+            open: ticks.open,
+            high: ticks.high,
+            low: ticks.low,
+            close: ticks.close,
+            volume: ticks.volume,
+            ..bar.clone()
+        });
+    }
     let folded = Bar {
         high: bar.high.max(ticks.high),
         low: bar.low.min(ticks.low),
         close: ticks.close,
         volume: bar.volume + ticks.volume,
-        ..*bar
+        ..bar.clone()
     };
     valid(&folded).then_some(folded)
 }
@@ -212,6 +241,17 @@ mod tests {
             ("invalid bars are dropped",
                 vec![(History, [vec![bar(0, 1.0)], invalid].concat())],
                 vec![bar(0, 1.0)], (Some(0), 3, 0)),
+            ("a whitespace bar holds its slot",
+                vec![(History, vec![bar(0, 1.0), Bar::whitespace(at(1, 0)), bar(2, 3.0)])],
+                vec![bar(0, 1.0), Bar::whitespace(at(1, 0)), bar(2, 3.0)], (Some(0), 0, 0)),
+            ("an identical whitespace bar changes nothing",
+                vec![(History, vec![Bar::whitespace(at(1, 0))]),
+                    (Live, vec![Bar::whitespace(at(1, 0))])],
+                vec![Bar::whitespace(at(1, 0))], (None, 0, 0)),
+            ("trades fill a whitespace bar, which a page bar then replaces",
+                vec![(History, vec![bar(0, 1.0), Bar::whitespace(at(1, 0))]),
+                    (Ticks(1), vec![bar_at(1, 10, 4.0)]), (History, vec![bar_at(1, 20, 6.0)])],
+                vec![bar(0, 1.0), bar_at(1, 20, 6.0)], (Some(1), 0, 0)),
         ];
         let clock = BarClock::new(Timeframe::Min1);
         for (name, steps, bars, expected) in cases {
@@ -226,7 +266,8 @@ mod tests {
                 ));
             }
             let merged = merged.unwrap();
-            assert_eq!(series, bars, "{name}");
+            // Debug output, in which a whitespace bar's NaN equals itself.
+            assert_eq!(format!("{series:?}"), format!("{bars:?}"), "{name}");
             assert_eq!(
                 (merged.first_changed, merged.rejected, merged.late_ticks),
                 expected,

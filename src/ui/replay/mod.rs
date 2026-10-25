@@ -390,6 +390,8 @@ mod tests {
                 low: 99.0 + i as f64,
                 close: 100.5 + i as f64,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             });
             timestamps.push(ts);
         }

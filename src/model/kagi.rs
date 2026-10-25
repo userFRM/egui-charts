@@ -50,6 +50,8 @@ impl KagiLine {
             low: self.start_price.min(self.end_price),
             close: self.end_price,
             volume: 0.0, // Kagi doesn't use volume
+            colors: None,
+            payload: None,
         }
     }
 
@@ -295,6 +297,8 @@ mod tests {
                 low: 99.0,
                 close: 100.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(1),
@@ -303,6 +307,8 @@ mod tests {
                 low: 99.0,
                 close: 105.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(2),
@@ -311,6 +317,8 @@ mod tests {
                 low: 101.0,
                 close: 102.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(3),
@@ -319,6 +327,8 @@ mod tests {
                 low: 101.0,
                 close: 107.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
         ]
     }
