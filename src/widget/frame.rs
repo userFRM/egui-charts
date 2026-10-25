@@ -1501,17 +1501,6 @@ impl Chart {
             _ => {}
         }
         self.paint_primitives(&painter, &coords, PrimitivePass::Series);
-        let mut table_rect = price_rect;
-        for study in studies
-            .indicators()
-            .iter()
-            .filter(|study| study.is_visible() && study.is_overlay())
-        {
-            if let Some(table) = study.table() {
-                table_rect.max.y =
-                    crate::studies::table::paint(&painter, table_rect, table).top() - 8.0;
-            }
-        }
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
@@ -2108,6 +2097,20 @@ impl Chart {
             self.cursor_modes.render(ui, price_rect);
         } else {
             self.cursor_modes.move_pointer(None);
+        }
+        let mut table_rect = price_rect;
+        for (id, study) in self
+            .study_ids
+            .iter()
+            .zip(self.rendered_studies().indicators())
+            .filter(|(_, study)| study.is_visible() && study.is_overlay())
+        {
+            if let Some(table) = study.table() {
+                table_rect.max.y =
+                    crate::studies::table::paint(ui, table_rect, table, ui.scope_id().with(id))
+                        .top()
+                        - 8.0;
+            }
         }
         let hover_rect =
             Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));

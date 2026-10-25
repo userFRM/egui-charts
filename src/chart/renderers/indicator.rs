@@ -552,11 +552,6 @@ impl IndicatorRenderer {
             ];
             painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
         }
-        if !indicator.is_overlay()
-            && let Some(table) = indicator.table()
-        {
-            crate::studies::table::paint(context.painter, context.rect, table);
-        }
     }
 
     fn draw_line(

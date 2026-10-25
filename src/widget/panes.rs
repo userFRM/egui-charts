@@ -911,6 +911,26 @@ impl Chart {
                         .draw(&painter, &view, super::PrimitivePass::Above);
                 }
             }
+            if !collapsed {
+                let mut table_rect = plot;
+                for id in &members {
+                    if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
+                        let study = &studies.indicators()[idx];
+                        if study.is_visible()
+                            && let Some(table) = study.table()
+                        {
+                            table_rect.max.y = crate::studies::table::paint(
+                                ui,
+                                table_rect,
+                                table,
+                                ui.scope_id().with((pane_id, id)),
+                            )
+                            .top()
+                                - 8.0;
+                        }
+                    }
+                }
+            }
         }
         for response in host_clicks {
             self.record_host_click(ui, &response);

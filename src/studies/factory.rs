@@ -483,6 +483,8 @@ mod tests {
                 .create("Up/Down Volume")
                 .expect("Up/Down Volume study"),
         );
+        study.set_timeframe(Timeframe::Day1);
+        assert_eq!(study.lower_timeframe(), Some(Timeframe::Min5));
         study.set_bar_clock(&BarClock::new(Timeframe::Min5));
         assert_eq!(study.lower_timeframe(), Some(Timeframe::Min1));
         study.set_bar_clock(&BarClock::new(Timeframe::Ms100));
@@ -568,6 +570,54 @@ mod tests {
             .unwrap();
         study.calculate(&bars);
         assert_eq!(study.values().value(0, 0), None);
+        // Custom intervals must nest their intrabars without rounding long bars to dates.
+        for (seconds, lower) in [(90, Timeframe::Sec1), (90_000, Timeframe::Hour1)] {
+            let timeframe = Timeframe::Custom(std::num::NonZeroU64::new(seconds).unwrap());
+            study.set_timeframe(timeframe);
+            assert_eq!(study.lower_timeframe(), Some(lower));
+            let bar = |second| {
+                Bar::new(
+                    Utc.timestamp_opt(second, 0).unwrap(),
+                    1.0,
+                    2.0,
+                    1.0,
+                    2.0,
+                    1.0,
+                )
+            };
+            let seconds = seconds as i64;
+            study
+                .set_lower_timeframe_bars(
+                    lower,
+                    [0, seconds - lower.duration_ms() / 1000, seconds]
+                        .map(bar)
+                        .to_vec(),
+                )
+                .unwrap();
+            study.calculate(&[bar(0), bar(seconds)]);
+            assert_eq!(study.values().value(0, 0), Some(2.0));
+            assert_eq!(study.values().value(0, 1), Some(1.0));
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::model::{BarData, Instrument};
+            use crate::widget::{Chart, test_frames::frame};
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min5);
+            chart.set_instrument(Some(Instrument::new("OLD")));
+            let id = chart.add_indicator(Box::new(UpDownVolume::new()));
+            chart.set_instrument(Some(Instrument::new("NEW")));
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_lower_timeframe_bars(Timeframe::Min1, vec![bars[0].clone()])
+                .unwrap();
+            frame(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 0),
+                Some(999.0)
+            );
+        }
     }
 
     /// Latest table metrics include the developing month; projections use earlier years only.
@@ -620,6 +670,7 @@ mod tests {
                 "{label}"
             );
         }
+        assert_eq!(percent("2022", 12), None);
         assert_eq!(percent("2024", 2), None);
         let zone = study
             .projections()
@@ -630,6 +681,65 @@ mod tests {
         assert!((zone.bars.end - (4.0 + 17.0 / 18.0)).abs() < 1e-10);
         assert!((zone.top - 220.0).abs() < 1e-9);
         assert_eq!(zone.bottom, 200.0);
+        #[cfg(feature = "widget")]
+        {
+            use crate::chart::{coords::ChartMapping, indicators::hit_test_indicator};
+            use crate::model::{BarData, ChartState};
+            use egui::{Rect, pos2, vec2};
+
+            let mut bars = bars;
+            bars.extend(
+                (16..=31).map(|day| {
+                    Bar::whitespace(Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0).unwrap())
+                }),
+            );
+            study.calculate(&bars);
+            let mut state = ChartState::new(BarData::from_bars(bars));
+            state.time_scale_mut().set_width(80.0);
+            state.time_scale_mut().set_bar_spacing(8.0);
+            state.time_scale_mut().set_right_offset(0.0);
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(80.0, 200.0));
+            for overlay in [true, false] {
+                study.set_overlay(overlay);
+                state.fit_price_scale([&study as &dyn Indicator]);
+                let price = state.price_scale().map(Default::default(), 0.0, 200.0);
+                if overlay {
+                    assert!(price.range().min <= 200.0 && price.range().max >= 220.0);
+                } else {
+                    use crate::widget::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+                    let mut pane =
+                        IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
+                    egui::Context::default()
+                        .run_ui(Default::default(), |ui| {
+                            let interaction = pane
+                                .show_aligned_interactive(
+                                    ui,
+                                    &study,
+                                    &[],
+                                    12..21,
+                                    IndicatorCoordParams::new(8.0, 0.0, 20, 12),
+                                )
+                                .unwrap();
+                            assert!(interaction.y_min <= 200.0 && interaction.y_max >= 220.0);
+                        })
+                        .drop_without_applying_deltas();
+                    continue;
+                }
+                let coords = ChartMapping::new(rect, 8.0, 12, 20, 0.0, price);
+                assert!(
+                    hit_test_indicator(
+                        pos2(coords.idx_to_x(16), price.price_to_y(210.0)),
+                        &study,
+                        0,
+                        12..21,
+                        &coords,
+                        |value| price.price_to_y(value),
+                    )
+                    .is_some(),
+                    "the remaining-month band must be selectable in whitespace"
+                );
+            }
+        }
     }
 
     #[test]

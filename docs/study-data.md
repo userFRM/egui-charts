@@ -14,8 +14,9 @@ the viewport.
 
 Up/Down Volume needs actual intrabars from the host. Its `lower_timeframe` request uses one
 second on second charts, one minute on minute and hour charts, five minutes on daily charts
-and one hour on longer intervals. Subsecond and tick-count charts have no request. Supply the same symbol
-and session as the chart. Read the request again after a symbol or interval change:
+and one hour on longer intervals. A custom interval that cannot contain whole candles of
+that size uses one-second intrabars. Subsecond and tick-count charts have no request. Supply
+the same symbol and session as the chart. Read the request again after a symbol or interval change:
 
 ```rust,ignore
 let requests: Vec<_> = chart.indicators()
@@ -37,8 +38,9 @@ belong to the host. No split is inferred from a parent candle's direction or tot
 
 `Indicator::table` exposes labelled percentages independently of plots, including Performance's
 six periods and Seasonality's years and summary rows. The shared chart renderer paints them
-in the study pane and in image exports. `Indicator::projections` exposes fractional price boxes
-for future whitespace; Seasonality ends its current projection at the next UTC month boundary,
+in the study pane and in image exports, with scrolling when the table exceeds the pane.
+`Indicator::projections` exposes fractional price boxes for future whitespace, included in
+selection and autoscaling; Seasonality ends its current projection at the next UTC month boundary,
 using the same interpolation and final observed bar spacing as the time axis. Its heatmap
 uses the latest available changes, while each price projection keeps the earlier-year statistics
 that were available at that month's opening.

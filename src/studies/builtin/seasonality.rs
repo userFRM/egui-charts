@@ -186,7 +186,11 @@ impl Indicator for Seasonality {
         {
             history[month as usize].push((year, change));
         }
-        let mut years: BTreeMap<i32, [Option<f64>; 12]> = BTreeMap::new();
+        let mut years: BTreeMap<i32, [Option<f64>; 12]> = data
+            .iter()
+            .filter(|bar| bar.close.is_finite() && bar.time.year() >= self.start_year)
+            .map(|bar| (bar.time.year(), [None; 12]))
+            .collect();
         for (month, changes) in history.iter().enumerate() {
             for &(year, change) in changes {
                 years.entry(year).or_insert([None; 12])[month] = Some(change);

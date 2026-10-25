@@ -432,6 +432,17 @@ impl ChartState {
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
                     )
+                    .chain(
+                        study
+                            .projections()
+                            .iter()
+                            .filter(|projection| {
+                                projection.bars.end > study_start.max(start) as f64
+                                    && projection.bars.start < study_end.max(end) as f64
+                                    && study.plot_style(projection.plot).visible
+                            })
+                            .flat_map(|projection| [projection.bottom, projection.top]),
+                    )
             });
         let main = main_visible
             .then(|| {

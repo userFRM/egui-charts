@@ -58,7 +58,7 @@ impl Indicator for UpDownVolume {
         if matches!(tf, Timeframe::Ticks(_)) || tf.duration_ms() < Timeframe::Sec1.duration_ms() {
             return None;
         }
-        Some(if tf.duration_ms() < Timeframe::Min1.duration_ms() {
+        let lower = if tf.duration_ms() < Timeframe::Min1.duration_ms() {
             Timeframe::Sec1
         } else if tf.duration_ms() < Timeframe::Day1.duration_ms() {
             Timeframe::Min1
@@ -66,6 +66,11 @@ impl Indicator for UpDownVolume {
             Timeframe::Min5
         } else {
             Timeframe::Hour1
+        };
+        Some(if tf.duration_ms() % lower.duration_ms() == 0 {
+            lower
+        } else {
+            Timeframe::Sec1
         })
     }
     fn set_lower_timeframe_bars(
@@ -100,6 +105,9 @@ impl Indicator for UpDownVolume {
         self.symbol = symbol;
         changed
     }
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.set_bar_clock(&self.clock.for_timeframe(timeframe));
+    }
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
         let changed = self.clock != *clock;
         if self.clock.timeframe() != clock.timeframe() {
@@ -117,7 +125,7 @@ impl Indicator for UpDownVolume {
         else {
             return;
         };
-        let daily = tf.duration_ms() >= Timeframe::Day1.duration_ms();
+        let daily = tf.duration_ms() % Timeframe::Day1.duration_ms() == 0;
         let sessions = self.clock.for_timeframe(Timeframe::Min1).sessions();
         let key = |bar: &Bar| {
             if daily {

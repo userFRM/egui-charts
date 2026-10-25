@@ -113,6 +113,18 @@ where
                 .clamp(zone.bars.start, zone.bars.end - 1),
         );
     }
+    if let Some(projection) = indicator
+        .projections()
+        .iter()
+        .filter(|projection| projection.plot == line_idx)
+        .find(|projection| {
+            projection
+                .rect(coords, &value_to_y)
+                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+        })
+    {
+        return Some(projection.bars.start as usize);
+    }
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
