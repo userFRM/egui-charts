@@ -193,16 +193,20 @@ impl NotificationPanel {
         } else {
             side_color
         };
-        let side = ui.painter().layout_no_wrap(
-            format!("{} {}", if buy { "Buy" } else { "Sell" }, trade.quantity),
-            font.clone(),
-            side_text,
-        );
+        let mut side_format = egui::text::TextFormat::simple(font.clone(), side_text);
+        side_format.coords.push("wght", 600.0);
+        let side = ui
+            .painter()
+            .layout_job(egui::text::LayoutJob::single_section(
+                format!("{} {}", if buy { "Buy" } else { "Sell" }, trade.quantity),
+                side_format,
+            ));
         let price = ui
             .painter()
             .layout_no_wrap(format!("at {}", trade.price), font, theme.ui.text);
         let width = (62.0 + title.size().x + symbol.size().x + 44.0)
             .max(62.0 + side.size().x + price.size().x + 30.0)
+            .max(self.config.width)
             .min(ui.ctx().content_rect().width() - 32.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, 66.0), Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
