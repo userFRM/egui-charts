@@ -68,8 +68,11 @@ pub fn resample(
         }
         match resampled.last_mut() {
             Some(last) if last.time == slot => *last = super::merge::fold(last, bar)?,
+            // The colours and payload of a source bar are not those of the bar it falls in.
             _ => resampled.push(Bar {
                 time: slot,
+                colors: None,
+                payload: None,
                 ..bar.clone()
             }),
         }
@@ -189,6 +192,8 @@ pub(crate) fn resample_periods(
                 i..i + 1,
                 Bar {
                     time: period,
+                    colors: None,
+                    payload: None,
                     ..bar.clone()
                 },
             )),

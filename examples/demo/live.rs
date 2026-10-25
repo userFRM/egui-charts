@@ -2,8 +2,9 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, SymbolDetails, aggregate_trades, resample,
+    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
+    HotlistEntry, HotlistQuery, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow,
+    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
@@ -688,6 +689,26 @@ impl Datafeed for LiveFeed {
             let (sequence, book) = market.snapshot(sim.now);
             sub.sink.push_depth_snapshot(sequence, book);
         }
+    }
+
+    /// The catalog symbols ranked on their synthetic quotes.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        reply.send(Ok(super::feeds::hotlist(&query, Utc::now())));
+    }
+
+    /// The catalog symbols screened on their synthetic quotes.
+    fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        reply.send(super::feeds::screen(&query, Utc::now()));
+    }
+
+    /// Synthetic releases, earnings, dividends and offerings.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+        reply.send(Ok(super::feeds::calendar(&query, Utc::now())));
+    }
+
+    /// Synthetic stories about the catalog symbols.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        reply.send(Ok(super::feeds::news(&query, Utc::now())));
     }
 
     /// Synthetic statistics and profile derived from the catalog entry of `symbol`.

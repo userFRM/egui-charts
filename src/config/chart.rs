@@ -9,7 +9,7 @@
 //! [`SessionConfig`] describes trading session hours for a specific exchange,
 //! with presets for NYSE, LSE, TSE, crypto 24/7, and forex.
 
-use crate::model::PriceSource;
+use crate::model::{LineStyle, PriceSource};
 use crate::scales::PriceScaleMode;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
@@ -55,6 +55,10 @@ pub enum SessionBreakStyle {
     Dashed,
     /// Dotted line
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`
+    SparseDotted,
 }
 
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
@@ -217,6 +221,10 @@ pub struct ChartConfig {
     pub grid_color: Color32,
     /// Vertical grid colour; `None` follows `grid_color`.
     pub vertical_grid_color: Option<Color32>,
+    /// Grid line style, dotted by default.
+    pub grid_line_style: LineStyle,
+    /// Vertical grid line style; `None` follows `grid_line_style`.
+    pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
@@ -388,6 +396,8 @@ impl Default for ChartConfig {
             // Grid colour from the default theme
             grid_color: chart.grid_line,
             vertical_grid_color: None,
+            grid_line_style: LineStyle::Dotted,
+            vertical_grid_line_style: None,
             // Text color
             text_color: chart.axis_text,
             // Candle bodies leave room for the wider volume bars

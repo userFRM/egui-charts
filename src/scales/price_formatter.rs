@@ -40,6 +40,12 @@ pub trait PriceFormatter: Send + Sync {
     /// Formatted string to display on the price axis
     fn format(&self, price: f64) -> String;
 
+    /// Format a price axis tick. Defaults to [`format`](Self::format); override it
+    /// to write ticks differently from crosshair and price tag labels.
+    fn format_tick(&self, price: f64) -> String {
+        self.format(price)
+    }
+
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
 }

@@ -129,6 +129,8 @@ fn dash_pattern(style: SessionBreakStyle) -> Option<(f32, f32)> {
         SessionBreakStyle::Solid => None,
         SessionBreakStyle::Dashed => Some((6.0, 4.0)),
         SessionBreakStyle::Dotted => Some((2.0, 3.0)),
+        SessionBreakStyle::LargeDashed => Some((12.0, 8.0)),
+        SessionBreakStyle::SparseDotted => Some((2.0, 8.0)),
     }
 }
 
@@ -302,6 +304,8 @@ mod tests {
             low: 99.0,
             close: 100.5,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

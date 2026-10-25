@@ -16,6 +16,9 @@ pub struct ImageExportOptions {
     pub include_timestamp: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
+    /// Draw the crosshair where the pointer last placed it over the plots, or where
+    /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
+    pub include_crosshair: bool,
 }
 
 impl Default for ImageExportOptions {
@@ -25,6 +28,7 @@ impl Default for ImageExportOptions {
             include_title: true,
             include_timestamp: true,
             transparent_background: false,
+            include_crosshair: false,
         }
     }
 }
@@ -58,7 +62,9 @@ impl Chart {
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
-    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps.
+    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
+    /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
+    /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error>> {
@@ -109,7 +115,11 @@ impl Chart {
         let mut writer = csv::Writer::from_writer(Vec::new());
         writer.write_record(header)?;
         for (index, bar) in bars.iter().enumerate() {
-            let mut row = vec![self.export_time(bar.time)];
+            let mut row = vec![if self.horizontal_scale.is_some() {
+                self.format_time(bar.time)
+            } else {
+                self.export_time(bar.time)
+            }];
             row.extend(
                 [bar.open, bar.high, bar.low, bar.close]
                     .map(|value| number(value, price_precision)),
@@ -129,8 +139,9 @@ impl Chart {
         Ok(String::from_utf8(writer.into_inner()?)?)
     }
 
-    /// Renders an isolated image frame using the same chart, studies, drawings and scales as the
-    /// widget. Does not poll feeds, change live viewport state or capture host panels/dialogs.
+    /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
+    /// scales as the widget. Does not poll feeds, change live viewport state, call the lifecycle
+    /// hooks of primitives or capture host panels/dialogs.
     /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
     /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.
@@ -161,6 +172,15 @@ impl Chart {
             theme.chart.bg = egui::Color32::TRANSPARENT;
         }
         chart.theme_override = Some(theme.clone());
+        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
+            match price {
+                Some(price) => chart.set_crosshair_position(Some((time, price))),
+                None => {
+                    chart.set_synced_crosshair_time(Some(time));
+                    chart.chart_options.crosshair.horz_line_visible = false;
+                }
+            }
+        }
         let image_ctx = egui::Context::default();
         image_ctx.set_global_style(ctx.global_style());
         crate::theme::apply_to_egui(&image_ctx, &theme);
@@ -215,6 +235,35 @@ impl Chart {
         })
     }
 
+    /// Renders the image of [`Self::export_image`] on the CPU and encodes it as PNG, so the host
+    /// needs no renderer or GPU readback. Images whose textures the host binds itself, such as a
+    /// legend badge from a user texture, are left out.
+    pub fn export_png(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+    ) -> Result<Vec<u8>, String> {
+        let mut image = self.export_image(ctx, options)?;
+        let [width, height] = image.size;
+        let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
+        image.textures_delta.clear();
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        let data: Vec<u8> = pixels
+            .iter()
+            .flat_map(|pixel| pixel.to_srgba_unmultiplied())
+            .collect();
+        writer
+            .write_image_data(&data)
+            .map_err(|error| error.to_string())?;
+        writer.finish().map_err(|error| error.to_string())?;
+        Ok(png)
+    }
+
     fn export_snapshot(&self) -> Self {
         let mut chart = Chart::with_config(Default::default(), self.config.clone());
         chart.state = self.state.clone();
@@ -239,6 +288,7 @@ impl Chart {
                 options: series.options.clone(),
                 visible: series.visible,
                 bars: series.bars.clone(),
+                revision: series.revision,
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
                 marker_options: series.marker_options,
@@ -256,6 +306,12 @@ impl Chart {
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
         chart.session_provider = self.session_provider.clone();
+        chart.horizontal_scale = self.horizontal_scale.clone();
+        chart.locale = self.locale.clone();
+        chart.date_format = self.date_format.clone();
+        chart.time_formatter = self.time_formatter.clone();
+        chart.price_formatter = self.price_formatter.clone();
+        chart.percentage_formatter = self.percentage_formatter.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
         chart.drawings.drawings = self.drawings.drawings.clone();
@@ -294,6 +350,9 @@ impl Chart {
             chart.volume_study = self.volume_study;
             chart.volume_setting = self.volume_setting;
         }
+        chart.primitives = self.primitives.clone();
+        chart.next_primitive = self.next_primitive;
+        chart.settle_primitives();
         chart
     }
 }
@@ -545,6 +604,7 @@ mod tests {
             include_title: false,
             include_timestamp: false,
             transparent_background: false,
+            include_crosshair: false,
         };
         let mut opaque = chart.export_image(&ctx, &base).unwrap();
         let has_textures = !opaque.textures_delta.set.is_empty();
@@ -630,5 +690,51 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn png_images_rasterise_the_chart_with_the_last_crosshair_on_request() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Event, Pos2};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        frame(
+            &ctx,
+            &mut chart,
+            0.0,
+            vec![Event::PointerMoved(Pos2::new(400.0, 200.0))],
+        );
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
+        let decode = |include_crosshair| {
+            let png = chart
+                .export_png(
+                    &ctx,
+                    &ImageExportOptions {
+                        size: [480, 320],
+                        include_title: false,
+                        include_timestamp: false,
+                        include_crosshair,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut pixels).unwrap();
+            assert_eq!(
+                (info.width, info.height, info.color_type),
+                (480, 320, png::ColorType::Rgba)
+            );
+            pixels.as_chunks::<4>().0.to_vec()
+        };
+        let (plain, crosshair) = (decode(false), decode(true));
+        // Candle bodies keep their exact colour through rasterisation and encoding.
+        let bullish = chart.config().bullish_color.to_srgba_unmultiplied();
+        assert!(plain.iter().filter(|pixel| **pixel == bullish).count() > 1000);
+        // The crosshair where the pointer left adds a vertical and a horizontal line.
+        let changed = |x: usize, y: usize| plain[y * 480 + x] != crosshair[y * 480 + x];
+        let column = (0..480).map(|x| (0..320).filter(|&y| changed(x, y)).count());
+        let row = (0..320).map(|y| (0..480).filter(|&x| changed(x, y)).count());
+        assert!(column.max() > Some(60) && row.max() > Some(100));
     }
 }

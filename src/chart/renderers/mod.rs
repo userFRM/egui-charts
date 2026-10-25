@@ -38,7 +38,9 @@ pub use labels::{
     Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
     render_time_labels,
 };
-pub(crate) use labels::{price_decimals, render_time_grid, study_controls};
+pub(crate) use labels::{
+    price_decimals, price_marks, render_time_grid, study_controls, time_axis_marks,
+};
 pub(crate) use markers::render_change_mark;
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
