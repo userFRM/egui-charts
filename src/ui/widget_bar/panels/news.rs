@@ -9,6 +9,7 @@ use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
 
@@ -193,11 +194,11 @@ impl NewsPanel {
                         ui.add_space(theme.spacing.sm);
                     }
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Show on chart").clicked() {
+                        if Button::new("Show on chart").show(ui).clicked() {
                             action = NewsAction::ShowOnChart(story.time);
                         }
                         if let Some(url) = &story.url
-                            && ui.button("Open story").clicked()
+                            && Button::new("Open story").show(ui).clicked()
                         {
                             action = NewsAction::OpenUrl(url.clone());
                         }
@@ -218,10 +219,23 @@ impl NewsPanel {
         });
         let market = self.market;
         ui.horizontal(|ui| {
-            if let Some(symbol) = &self.symbol {
-                ui.selectable_value(&mut self.market, false, symbol.as_str());
+            if let Some(symbol) = &self.symbol
+                && Button::new(symbol)
+                    .small()
+                    .selected(!self.market)
+                    .show(ui)
+                    .clicked()
+            {
+                self.market = false;
             }
-            ui.selectable_value(&mut self.market, true, "Market");
+            if Button::new("Market")
+                .small()
+                .selected(self.market)
+                .show(ui)
+                .clicked()
+            {
+                self.market = true;
+            }
         });
         if refresh || market != self.market {
             self.refresh();
@@ -252,21 +266,41 @@ impl NewsPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for story in &self.stories {
-                    ui.label(
-                        RichText::new(meta(story))
-                            .size(theme.text.small)
-                            .color(theme.ui.text_secondary),
-                    );
-                    let headline = ui
-                        .add(
-                            Label::new(RichText::new(&story.headline).strong())
-                                .sense(Sense::click()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if self.highlights && !story.body.is_empty() {
-                        ui.label(&story.body);
-                    }
-                    if headline.clicked() {
+                    let response = ui
+                        .scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                            let hovered = ui.response().hovered();
+                            egui::Frame::new()
+                                .fill(if hovered {
+                                    theme.ui.btn_bg_hover
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                })
+                                .inner_margin(egui::Margin::symmetric(8, 0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.set_min_height(26.0);
+                                    ui.style_mut().interaction.selectable_labels = false;
+                                    ui.label(
+                                        RichText::new(meta(story))
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                    ui.add(
+                                        Label::new(RichText::new(&story.headline).strong()).wrap(),
+                                    );
+                                    if self.highlights && !story.body.is_empty() {
+                                        ui.label(&story.body);
+                                    }
+                                });
+                        })
+                        .response;
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &story.headline)
+                    });
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
                         self.open = Some(story.id.clone());
                     }
                     ui.separator();

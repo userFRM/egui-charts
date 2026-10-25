@@ -424,6 +424,18 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
+            assert!(
+                app.widget_bar.widgets.is_empty(),
+                "sample panels start hidden"
+            );
+            app.execute_search_command(&ctx, "samples");
+            assert_eq!(app.widget_bar.widgets.len(), 2);
+            app.widget_bar.active_widget = Some(2);
+            app.execute_search_command(&ctx, "samples");
+            assert!(app.widget_bar.widgets.is_empty());
+            assert_eq!(app.widget_bar.active_widget, None);
+            app.execute_search_command(&ctx, "samples");
+
             let frame = |app: &mut DemoApp| {
                 let mut remaining = egui::Rect::NOTHING;
                 ctx.run_ui(

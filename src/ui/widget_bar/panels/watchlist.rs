@@ -16,7 +16,8 @@ use crate::icons::icons;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton};
 
-const ROW_HEIGHT: f32 = 26.0;
+/// Height shared by market data rows.
+pub(super) const ROW_HEIGHT: f32 = 26.0;
 /// Height of a panel header row, which fits its title and action buttons.
 pub(super) const HEADER_HEIGHT: f32 = 40.0;
 

@@ -2,9 +2,12 @@
 
 use std::sync::Arc;
 
-use egui::{Align, Layout, RichText, Ui};
+use egui::{Sense, Ui, vec2};
+
+use super::controls::{cell, dropdown, row};
 
 use super::object_tree::{format_price, price_decimals};
+use super::watchlist::ROW_HEIGHT;
 use super::watchlist::signed;
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, HotlistEntry, HotlistQuery};
@@ -108,11 +111,13 @@ impl HotlistsPanel {
         let theme = ui.active_theme();
         PanelHeader::new("Hotlists").show_plain(ui);
         let before = self.list;
-        ui.horizontal_wrapped(|ui| {
-            for (index, name) in self.lists.iter().enumerate() {
-                ui.selectable_value(&mut self.list, index, name);
-            }
-        });
+        if let Some(name) = self.lists.get(self.list) {
+            dropdown(ui, "hotlist", name, |ui| {
+                for (index, name) in self.lists.iter().enumerate() {
+                    ui.selectable_value(&mut self.list, index, name);
+                }
+            });
+        }
         if self.list != before {
             self.refresh();
         }
@@ -141,6 +146,34 @@ impl HotlistsPanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let columns = |rect: egui::Rect| {
+                    let number = ((rect.width() - 18.0).max(0.0) * 0.3).min(96.0);
+                    let right = rect.right() - 8.0;
+                    let edges = [
+                        rect.left() + 10.0,
+                        right - 2.0 * number,
+                        right - number,
+                        right,
+                    ];
+                    std::array::from_fn::<_, 3, _>(|i| {
+                        egui::Rect::from_min_max(
+                            egui::pos2(edges[i], rect.top()),
+                            egui::pos2((edges[i + 1] - 4.0).max(edges[i]), rect.bottom()),
+                        )
+                    })
+                };
+                let (header, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+                for (index, title) in ["Symbol", "Last", "Chg%"].iter().enumerate() {
+                    cell(
+                        ui,
+                        columns(header)[index],
+                        title,
+                        index != 0,
+                        theme.ui.text_secondary,
+                    );
+                }
                 for entry in &self.entries {
                     let color = if entry.change_percent > 0.0 {
                         theme.chart.candle_up
@@ -149,26 +182,36 @@ impl HotlistsPanel {
                     } else {
                         theme.ui.text
                     };
-                    ui.horizontal(|ui| {
-                        if ui.link(&entry.symbol).clicked() {
-                            action = HotlistsAction::SelectSymbol(entry.symbol.clone());
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format!("{}%", signed(entry.change_percent, 2)))
-                                    .color(color),
-                            );
-                            ui.add_space(theme.spacing.md);
-                            ui.label(format_price(
-                                entry.last,
-                                Some(
-                                    entry
-                                        .price_decimals
-                                        .unwrap_or_else(|| price_decimals(entry.last)),
-                                ),
-                            ));
-                        });
+                    let (rect, response) = row(ui);
+                    let cells = columns(rect);
+                    cell(ui, cells[0], &entry.symbol, false, theme.ui.text);
+                    cell(
+                        ui,
+                        cells[1],
+                        &format_price(
+                            entry.last,
+                            Some(
+                                entry
+                                    .price_decimals
+                                    .unwrap_or_else(|| price_decimals(entry.last)),
+                            ),
+                        ),
+                        true,
+                        theme.ui.text,
+                    );
+                    cell(
+                        ui,
+                        cells[2],
+                        &format!("{}%", signed(entry.change_percent, 2)),
+                        true,
+                        color,
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &entry.symbol)
                     });
+                    if response.clicked() {
+                        action = HotlistsAction::SelectSymbol(entry.symbol.clone());
+                    }
                 }
             });
         action

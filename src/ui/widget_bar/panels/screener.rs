@@ -2,14 +2,19 @@
 
 use std::sync::Arc;
 
-use egui::{RichText, Ui};
+use egui::{Sense, Ui, vec2};
 
+use super::controls::{cell, dropdown, row};
+
+use super::watchlist::ROW_HEIGHT;
 use crate::data::inbox::Inbox;
 use crate::data::{
     Datafeed, FeedError, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery, ScreenerRow,
 };
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
+use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
@@ -44,7 +49,7 @@ pub struct ScreenerPanel {
     sort_by: Option<String>,
     descending: bool,
     /// The filter being written: its column within the set, comparison and value text.
-    draft: (usize, ScreenerOp, String),
+    draft: (usize, ScreenerOp, FilterWidget),
     feed: Option<Arc<dyn Datafeed>>,
     /// The latest answer and the set it was asked with.
     rows: Vec<ScreenerRow>,
@@ -64,7 +69,11 @@ impl ScreenerPanel {
             filters: Vec::new(),
             sort_by: None,
             descending: true,
-            draft: (0, ScreenerOp::Above, String::new()),
+            draft: (
+                0,
+                ScreenerOp::Above,
+                FilterWidget::new().placeholder("Value"),
+            ),
             feed: None,
             rows: Vec::new(),
             answered: 0,
@@ -177,27 +186,27 @@ impl ScreenerPanel {
         };
         ui.horizontal_wrapped(|ui| {
             let before = self.set;
-            egui::ComboBox::from_id_salt("screener_set")
-                .selected_text(name)
-                .show_ui(ui, |ui| {
-                    for (index, set) in self.sets.iter().enumerate() {
-                        ui.selectable_value(&mut self.set, index, &set.name);
-                    }
-                });
+            dropdown(ui, "screener_set", &name, |ui| {
+                for (index, set) in self.sets.iter().enumerate() {
+                    ui.selectable_value(&mut self.set, index, &set.name);
+                }
+            });
             if self.set != before {
                 changed = true;
                 self.draft.0 = 0;
             }
-            if ui
-                .add_enabled(has_rows, egui::Button::new("Send to watchlist"))
+            if Button::new("Send to watchlist")
+                .enabled(has_rows)
+                .show(ui)
                 .clicked()
             {
                 action = ScreenerAction::SendToWatchlist(
                     self.rows.iter().map(|row| row.symbol.clone()).collect(),
                 );
             }
-            if ui
-                .add_enabled(has_rows, egui::Button::new("Export CSV…"))
+            if Button::new("Export CSV…")
+                .enabled(has_rows)
+                .show(ui)
                 .clicked()
             {
                 action = ScreenerAction::ExportCsv(self.csv());
@@ -207,29 +216,33 @@ impl ScreenerPanel {
             ui.horizontal_wrapped(|ui| {
                 let (column, op, value) = &mut self.draft;
                 *column = (*column).min(columns.len() - 1);
-                egui::ComboBox::from_id_salt("screener_filter_column")
-                    .selected_text(&columns[*column].title)
-                    .show_ui(ui, |ui| {
+                dropdown(
+                    ui,
+                    "screener_filter_column",
+                    &columns[*column].title,
+                    |ui| {
                         for (index, entry) in columns.iter().enumerate() {
                             ui.selectable_value(column, index, &entry.title);
                         }
-                    });
-                egui::ComboBox::from_id_salt("screener_filter_op")
-                    .width(48.0)
-                    .selected_text(op_label(*op))
-                    .show_ui(ui, |ui| {
-                        for entry in [ScreenerOp::Above, ScreenerOp::Below] {
-                            ui.selectable_value(op, entry, op_label(entry));
-                        }
-                    });
-                ui.add(
-                    egui::TextEdit::singleline(value)
-                        .desired_width(56.0)
-                        .hint_text("Value"),
+                    },
                 );
-                let parsed = value.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-                if ui
-                    .add_enabled(parsed.is_some(), egui::Button::new("Add filter"))
+                dropdown(ui, "screener_filter_op", op_label(*op), |ui| {
+                    for entry in [ScreenerOp::Above, ScreenerOp::Below] {
+                        ui.selectable_value(op, entry, op_label(entry));
+                    }
+                });
+                ui.allocate_ui(vec2(128.0, 28.0), |ui| {
+                    value.show(ui);
+                });
+                let parsed = value
+                    .query()
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite());
+                if Button::new("Add filter")
+                    .enabled(parsed.is_some())
+                    .show(ui)
                     .clicked()
                     && let Some(number) = parsed
                 {
@@ -252,8 +265,9 @@ impl ScreenerPanel {
                     op_label(filter.op),
                     filter.value
                 );
-                if ui
-                    .button(RichText::new(text).size(theme.text.small))
+                if Button::new(text)
+                    .small()
+                    .show(ui)
                     .on_hover_text("Remove filter")
                     .clicked()
                 {
@@ -291,62 +305,75 @@ impl ScreenerPanel {
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Grid::new("screener_rows")
-                        .striped(true)
-                        .min_col_width(0.0)
-                        .show(ui, |ui| {
-                            ui.label(RichText::new("Symbol").size(theme.text.small).strong());
-                            for column in shown {
-                                let sorted = self.sort_by.as_deref() == Some(column.id.as_str());
-                                let clicked = ui
-                                    .horizontal(|ui| {
-                                        let clicked = ui
-                                            .selectable_label(
-                                                sorted,
-                                                RichText::new(&column.title)
-                                                    .size(theme.text.small)
-                                                    .strong(),
-                                            )
-                                            .on_hover_text("Sort by this column")
-                                            .clicked();
-                                        if sorted {
-                                            let chevron = if self.descending {
-                                                &icons::CHEVRON_DOWN
-                                            } else {
-                                                &icons::CHEVRON_UP
-                                            };
-                                            ui.add(chevron.as_image_tinted(
-                                                egui::Vec2::splat(theme.text.small),
-                                                theme.ui.text_secondary,
-                                            ));
-                                        }
-                                        clicked
-                                    })
-                                    .inner;
-                                if clicked {
-                                    if sorted {
-                                        self.descending = !self.descending;
-                                    } else {
-                                        self.sort_by = Some(column.id.clone());
-                                        self.descending = true;
-                                    }
-                                    changed = true;
-                                }
-                            }
-                            ui.end_row();
-                            for row in &self.rows {
-                                if ui.link(&row.symbol).clicked() {
-                                    action = ScreenerAction::SelectSymbol(row.symbol.clone());
-                                }
-                                for value in &row.values {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| ui.label(value),
-                                    );
-                                }
-                                ui.end_row();
-                            }
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let width = ui.available_width().max(80.0 + shown.len() as f32 * 60.0);
+                    ui.set_min_width(width);
+                    let columns = |rect: egui::Rect| {
+                        let symbol = 80.0;
+                        let number = (width - symbol) / shown.len().max(1) as f32;
+                        std::iter::once(rect.with_max_x(rect.left() + symbol))
+                            .chain((0..shown.len()).map(|i| {
+                                rect.with_min_x(rect.left() + symbol + i as f32 * number)
+                                    .with_max_x(rect.left() + symbol + (i + 1) as f32 * number)
+                            }))
+                            .map(|rect| rect.shrink2(vec2(6.0, 0.0)))
+                            .collect::<Vec<_>>()
+                    };
+                    let (header, _) =
+                        ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+                    let cells = columns(header);
+                    cell(ui, cells[0], "Symbol", false, theme.ui.text_secondary);
+                    for (index, column) in shown.iter().enumerate() {
+                        let sorted = self.sort_by.as_deref() == Some(column.id.as_str());
+                        let mut rect = cells[index + 1];
+                        if sorted {
+                            let icon = egui::Rect::from_center_size(
+                                egui::pos2(rect.right() - 6.0, rect.center().y),
+                                vec2(12.0, 12.0),
+                            );
+                            let chevron = if self.descending {
+                                &icons::CHEVRON_DOWN
+                            } else {
+                                &icons::CHEVRON_UP
+                            };
+                            chevron
+                                .as_image_tinted(icon.size(), theme.ui.text_secondary)
+                                .paint_at(ui, icon);
+                            rect.set_right(icon.left() - 2.0);
+                        }
+                        cell(ui, rect, &column.title, true, theme.ui.text_secondary);
+                        let response = ui.interact(
+                            cells[index + 1],
+                            ui.scope_id().with(("sort", &column.id)),
+                            Sense::click(),
+                        );
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &column.title)
                         });
+                        if response.on_hover_text("Sort by this column").clicked() {
+                            if sorted {
+                                self.descending = !self.descending;
+                            } else {
+                                self.sort_by = Some(column.id.clone());
+                                self.descending = true;
+                            }
+                            changed = true;
+                        }
+                    }
+                    for entry in &self.rows {
+                        let (rect, response) = row(ui);
+                        let cells = columns(rect);
+                        cell(ui, cells[0], &entry.symbol, false, theme.ui.text);
+                        for (rect, value) in cells.iter().skip(1).zip(&entry.values) {
+                            cell(ui, *rect, value, true, theme.ui.text);
+                        }
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &entry.symbol)
+                        });
+                        if response.clicked() {
+                            action = ScreenerAction::SelectSymbol(entry.symbol.clone());
+                        }
+                    }
                 });
         }
         if changed {

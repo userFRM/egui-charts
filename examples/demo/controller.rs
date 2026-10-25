@@ -350,9 +350,26 @@ pub struct DemoApp {
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
-    /// Whether the sample markers, change marks, bar marks and demo level are on, from the
+    /// Whether the sample panels, markers, change marks, bar marks and demo level are on, from the
     /// quick search.
     api_samples: bool,
+}
+
+fn sample_widgets() -> [WidgetBarWidget; 2] {
+    [
+        WidgetBarWidget {
+            id: 4,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            tooltip: "Time and sales".into(),
+            section: WidgetBarSection::Bottom,
+        },
+        WidgetBarWidget {
+            id: 2,
+            icon: egui_charts::icons::icons::TEXT,
+            tooltip: "Session notes".into(),
+            section: WidgetBarSection::Bottom,
+        },
+    ]
 }
 
 impl DemoApp {
@@ -415,36 +432,23 @@ impl DemoApp {
         ]);
         let mut widget_bar = WidgetBar::default();
         widget_bar.config.width = 45.0;
-        // The demo feeds every built-in panel; its own panels sit in the lower group.
+        // The default rail contains the built-in panels supplied by the demo.
         widget_bar.icons = SidePanel::BUILT_IN
             .iter()
             .map(|(_, icon)| *icon)
             .chain([RightBarIcon::Help])
             .collect();
-        widget_bar.widgets.push(WidgetBarWidget {
-            id: 4,
-            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
-            tooltip: "Time and sales".into(),
-            section: WidgetBarSection::Bottom,
-        });
         let mut notes = String::new();
-        widget_bar.register_panel(
-            egui_charts::ui::widget_bar::WidgetBarWidget {
-                id: 2,
-                icon: egui_charts::icons::icons::TEXT,
-                tooltip: "Session notes".into(),
-                section: egui_charts::ui::widget_bar::WidgetBarSection::Bottom,
-            },
-            move |ui| {
-                ui.label("Host panel · notes stay in this session");
-                ui.add(
-                    egui::TextEdit::multiline(&mut notes)
-                        .hint_text("Write your research notes…")
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(12),
-                );
-            },
-        );
+        widget_bar.register_panel(sample_widgets()[1].clone(), move |ui| {
+            ui.label("Host panel · notes stay in this session");
+            ui.add(
+                egui::TextEdit::multiline(&mut notes)
+                    .hint_text("Write your research notes…")
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(12),
+            );
+        });
+        widget_bar.widgets.clear();
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -1284,7 +1288,11 @@ impl DemoApp {
                                     ("Object Tree", SidePanel::ObjectTree),
                                     ("Data Window", SidePanel::DataWindow),
                                     ("Time and sales", SidePanel::TimeAndSales),
-                                ] {
+                                ]
+                                .into_iter()
+                                .filter(|(_, panel)| {
+                                    self.api_samples || *panel != SidePanel::TimeAndSales
+                                }) {
                                     if ui.button(label).clicked() {
                                         panel_action = Some(panel);
                                         ui.close();
