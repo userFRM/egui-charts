@@ -402,6 +402,8 @@ impl Trading {
                 ticket.show(ui, &market, &mut presets, &mut one_click)
             })
             .inner;
+        // Later panels may grow to their contents, but must not cover the docked ticket.
+        ui.shrink_clip_rect(ui.available_rect_before_wrap());
         (self.ticket, self.presets, self.one_click) = (ticket, presets, one_click);
         match action {
             Some(Action::Place(request)) => self.place(request),
@@ -956,6 +958,45 @@ mod tests {
             assert!(
                 trading.pending.is_none(),
                 "a symbol change invalidates confirmation"
+            );
+        }
+    }
+
+    #[test]
+    fn docked_tickets_keep_later_panels_out_of_their_bounds() {
+        for width in [320.0, 480.0, 800.0] {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let mut trading = Trading::default();
+            trading.open_ticket(OrderRequest::new(
+                "SYM",
+                OrderSide::Buy,
+                1.0,
+                OrderType::Market,
+            ));
+            let mut remaining = egui::Rect::NOTHING;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 360.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    trading.show_ticket(ui, &chart);
+                    remaining = ui.clip_rect();
+                },
+            );
+            let symbol = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "SYM" => Some(text.pos.x),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            assert!(
+                remaining.right() <= symbol.expect("the ticket's symbol"),
+                "later panels stay beside the ticket at {width}"
             );
         }
     }
