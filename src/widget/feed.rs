@@ -225,6 +225,9 @@ impl Chart {
         }
         self.drawings.curr_timeframe = timeframe.as_str().into_owned();
         if changed {
+            self.pending_from.fill(Some(0));
+            self.next_refresh.fill(f64::NEG_INFINITY);
+            self.element_studies.dirty = true;
             self.apply_replay_window();
         }
     }
