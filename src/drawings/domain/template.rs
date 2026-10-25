@@ -22,6 +22,10 @@ impl DrawingTemplate {
         settings.level_ys.clear();
         settings.screen_anchor = None;
         settings.pane = None;
+        settings.group = None;
+        settings.selectable = true;
+        settings.saveable = true;
+        settings.listed = true;
         settings.completed = false;
         Self { settings }
     }
@@ -51,6 +55,10 @@ impl DrawingTemplate {
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
             pane: drawing.pane,
+            group: drawing.group.clone(),
+            selectable: drawing.selectable,
+            saveable: drawing.saveable,
+            listed: drawing.listed,
             z_order: drawing.z_order,
             ..self.settings.clone()
         };

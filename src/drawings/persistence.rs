@@ -113,7 +113,7 @@ impl StoredDrawing {
     }
 
     /// The first field holding NaN or an infinity, which JSON cannot store.
-    fn non_finite_field(&self) -> Option<String> {
+    pub(super) fn non_finite_field(&self) -> Option<String> {
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
         if bad(d.stroke_width.into()) {
@@ -795,6 +795,9 @@ mod tests {
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
+            drawing.selectable = false;
+            drawing.listed = false;
+            drawing.group = Some("levels".into());
             if matches!(
                 tool,
                 DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote

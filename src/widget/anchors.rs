@@ -12,11 +12,7 @@ use crate::drawings::{ChartPoint, Drawing, DrawingManager};
 impl Chart {
     /// UTC time behind a drawing anchor, retaining fractional and repeated-time positions.
     /// Uses the current rendered bars when its index was edited.
-    #[cfg(feature = "ui")]
-    pub(crate) fn drawing_point_time(
-        &self,
-        point: &ChartPoint,
-    ) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn drawing_point_time(&self, point: &ChartPoint) -> Option<chrono::DateTime<chrono::Utc>> {
         point
             .time_anchor
             .filter(|(_, index)| *index == point.bar_idx)
@@ -26,8 +22,7 @@ impl Chart {
 
     /// Map a UTC time and price into drawing coordinates, including times outside loaded bars.
     /// Returns `None` without displayed bars or for a non-finite price or projected index.
-    #[cfg(feature = "ui")]
-    pub(crate) fn drawing_point_at(
+    pub fn drawing_point_at(
         &self,
         time: chrono::DateTime<chrono::Utc>,
         price: f64,
@@ -93,7 +88,12 @@ impl Chart {
     /// (one second per index for a single bar). Empty charts can export retained time anchors;
     /// an index with no loaded mapping returns an error rather than clamping or inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
-        self.store_drawings(&self.drawings.drawings)
+        self.store_drawings(
+            self.drawings
+                .drawings
+                .iter()
+                .filter(|drawing| drawing.saveable),
+        )
     }
 
     pub(super) fn store_drawings<'a>(

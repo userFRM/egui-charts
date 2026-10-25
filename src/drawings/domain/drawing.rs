@@ -57,6 +57,18 @@ pub struct Drawing {
     /// or merge; hosts restoring studies must retain or remap their ids. Older files use main.
     #[serde(default)]
     pub pane: Option<usize>,
+    /// Whether pointer and programmatic selection can select this drawing.
+    #[serde(default = "enabled")]
+    pub selectable: bool,
+    /// Whether chart saves and persistence notifications include this drawing.
+    #[serde(default = "enabled")]
+    pub saveable: bool,
+    /// Whether host object lists should include this drawing. Rendering is independent.
+    #[serde(default = "enabled")]
+    pub listed: bool,
+    /// Host-defined group identity, retained through saving and undo.
+    #[serde(default)]
+    pub group: Option<String>,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -132,6 +144,10 @@ pub struct Drawing {
     pub z_order: i32,
 }
 
+fn enabled() -> bool {
+    true
+}
+
 impl Drawing {
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
@@ -141,6 +157,10 @@ impl Drawing {
             created_at: None,
             notes: None,
             label: None,
+            selectable: true,
+            saveable: true,
+            listed: true,
+            group: None,
             tool_type,
             points: Vec::new(),
             chart_points: Vec::new(),
