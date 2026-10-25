@@ -69,7 +69,9 @@ book inputs before feed updates are coalesced and feed rates from the deduplicat
 A historical page rebuilds rate inputs from retained trades in timestamp order. Custom hosts
 can push chronological events and book loss through the same handle, then call `calculate` or
 `update`. Cloned studies share their market-data source. Replacing aggregation inputs creates a
-new source; hosts replay their history, while a chart replays the executions it still retains.
+new source; hosts replay their history, while a chart replays the executions it still retains
+for a newly attached rate study. Other studies keep their sources and accumulated bar totals
+when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give
 no substitute values. Counts of orders require fills grouped by order by the host; `Tick` has
 an execution id, not an order id.

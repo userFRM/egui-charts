@@ -315,11 +315,15 @@ impl OrderFlowInput {
         if !matches!(self.state().kind, OrderFlowKind::TradeRate { .. }) {
             return;
         }
+        let as_of = self.state().last;
         self.clear();
         let mut sorted: Vec<_> = trades.collect();
         sorted.sort_by_key(|trade| trade.ts);
         for trade in sorted {
             self.push_trade(clock, trade);
+        }
+        if let Some(now) = as_of {
+            self.advance_time(clock, now);
         }
     }
 

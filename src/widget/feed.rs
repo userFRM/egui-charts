@@ -476,9 +476,21 @@ impl Chart {
                 .zip(&link.study_inputs)
                 .any(|(a, (b, _))| !a.same_source(b))
         {
+            let previous = std::mem::take(&mut link.study_inputs);
             link.study_inputs = inputs
                 .iter()
-                .map(|input| (input.clone(), u64::MAX))
+                .map(|input| {
+                    let seen = previous
+                        .iter()
+                        .find(|(old, _)| input.same_source(old))
+                        .map(|(_, seen)| *seen);
+                    if let Some(seen) = seen {
+                        (input.clone(), seen)
+                    } else {
+                        input.replace_trades(&link.clock, link.trades.iter());
+                        (input.clone(), u64::MAX)
+                    }
+                })
                 .collect();
             if let Some(id) = link.subscription {
                 link.inbox.study_inputs(id, inputs);
@@ -507,12 +519,16 @@ impl Chart {
                 Request::Trades => match result::<TradePage>(answer) {
                     Ok(page) => {
                         let bubbles = &mut link.bubbles;
+                        let mut changed = false;
                         let fold = &mut |trade: &Tick, added| {
+                            changed |= added;
                             bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                         };
                         self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
-                        for (input, _) in &link.study_inputs {
-                            input.replace_trades(&link.clock, link.trades.iter());
+                        if changed {
+                            for (input, _) in &link.study_inputs {
+                                input.replace_trades(&link.clock, link.trades.iter());
+                            }
                         }
                     }
                     Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
@@ -1781,6 +1797,7 @@ mod tests {
         instrument.tick_size = Some(1.0);
         feed.resolve().send(Ok(instrument));
         frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
         let sink = feed.sink();
         let start = bars(1)[0].time;
         let at = |second| start + TimeDelta::seconds(second);
@@ -1923,6 +1940,27 @@ mod tests {
             let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
             assert_eq!(study.values().value(2, 1), Some(0.0), "idle instant rate");
         }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(2.0),
+            "new rate replays the two retained bar-0 executions"
+        );
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(3.0),
+            "existing rate keeps the execution already evicted from raw history"
+        );
+        assert_eq!(
+            study.values().value(2, 1),
+            Some(0.0),
+            "adding another study preserves the idle clock"
+        );
         let band = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
             levels: 10,
             distance: 0.3,
