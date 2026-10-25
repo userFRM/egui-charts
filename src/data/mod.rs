@@ -50,10 +50,10 @@ pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades};
-pub use trades::{CombinedTrade, combine_trades};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
+pub use trades::{CombinedTrade, combine_trades};
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
 #[cfg(not(target_arch = "wasm32"))]
@@ -131,6 +131,13 @@ pub trait Datafeed: MaybeSend + 'static {
     /// Up to `request.count` trades older than `request.before`, or the latest trades when it is
     /// `None`, so order flow survives a reload. The default answers [`FeedError::NotSupported`].
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// One page of recorded depth on the requested grid. The default answers
+    /// [`FeedError::NotSupported`]; live-only feeds need not implement this method.
+    fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
     }
@@ -218,6 +225,60 @@ impl TradePage {
     pub fn new(trades: Vec<Tick>, end_of_history: bool) -> Self {
         Self {
             trades,
+            end_of_history,
+        }
+    }
+}
+
+/// One page of recorded depth for a symbol, using the same price and time grid as live columns.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DepthRequest {
+    /// Instrument requested.
+    pub symbol: String,
+    /// Columns opening strictly before this instant, or the latest columns with `None`.
+    pub before: Option<DateTime<Utc>>,
+    /// Maximum columns wanted.
+    pub count: usize,
+    /// Cadence, row grouping and limits of the receiving store.
+    pub config: DepthHistoryConfig,
+    /// Price of one tick, finite and positive.
+    pub tick_size: f64,
+}
+
+impl DepthRequest {
+    /// Requests the latest `count` columns using `config` and the instrument's `tick_size`.
+    pub fn new(
+        symbol: impl Into<String>,
+        count: usize,
+        config: DepthHistoryConfig,
+        tick_size: f64,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            before: None,
+            count,
+            config,
+            tick_size,
+        }
+    }
+}
+
+/// Recorded depth columns. Empty pages end paging, including when `end_of_history` is false.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DepthPage {
+    /// Columns on the requested grid; held live columns win on overlap. Gaps remain gaps.
+    pub columns: Vec<DepthColumn>,
+    /// Nothing exists before the oldest returned column.
+    pub end_of_history: bool,
+}
+
+impl DepthPage {
+    /// A page of `columns`, the last one when `end_of_history`.
+    pub fn new(columns: Vec<DepthColumn>, end_of_history: bool) -> Self {
+        Self {
+            columns,
             end_of_history,
         }
     }

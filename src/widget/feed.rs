@@ -11,8 +11,8 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, TradePage, TradeRequest,
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, HistoryPage,
+    HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
@@ -53,6 +53,7 @@ pub(crate) struct FeedLink {
     order_book: Option<OrderBook>,
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
+    depth_complete: bool,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -65,6 +66,7 @@ enum Request {
         scroll_back: bool,
     },
     Trades,
+    Depth(DepthRequest),
 }
 
 impl FeedLink {
@@ -124,6 +126,7 @@ impl Chart {
             bubbles: None,
             order_book: None,
             depth_history: None,
+            depth_complete: false,
             paging_stopped: false,
         });
     }
@@ -310,7 +313,7 @@ impl Chart {
         link.order_book.as_ref()
     }
 
-    /// Keeps `history` of the order book the feed sends, sampled from the next update, or stops
+    /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
     /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
     /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
     /// Columns follow the times of the depth updates: an update stamped more than a minute after
@@ -326,6 +329,11 @@ impl Chart {
                 link.inbox.sample_depth(id, config);
             }
             link.depth_history = history;
+            link.depth_complete = false;
+            link.pending
+                .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+            link.retries
+                .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
         }
     }
 
@@ -416,6 +424,35 @@ impl Chart {
                     Ok(page) => self.apply_page(&link, page, scroll_back),
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
+                Request::Depth(request) => match result::<DepthPage>(answer) {
+                    Ok(mut page) => {
+                        page.columns
+                            .retain(|c| request.before.is_none_or(|before| c.time < before));
+                        page.columns.sort_by_key(|c| c.time);
+                        if page.columns.len() > request.count {
+                            page.columns.drain(..page.columns.len() - request.count);
+                        }
+                        let oldest = page.columns.first().map(|c| c.time);
+                        link.depth_complete |= page.end_of_history
+                            || page.columns.is_empty()
+                            || request
+                                .before
+                                .is_some_and(|b| oldest.is_none_or(|t| t >= b));
+                        if let Some(history) = &mut link.depth_history
+                            && let Err(error) = history.merge_page(page.columns)
+                        {
+                            link.depth_complete = true;
+                            self.feed.last_error = Some(error);
+                        }
+                    }
+                    Err(error) => self.request_failed(
+                        &mut link,
+                        Request::Depth(request),
+                        failures,
+                        error,
+                        now,
+                    ),
+                },
                 Request::Trades => match result::<TradePage>(answer) {
                     Ok(page) => {
                         let bubbles = &mut link.bubbles;
@@ -494,6 +531,11 @@ impl Chart {
                     link.pending.last_mut().unwrap().2 = failures;
                     feed.history(history, reply);
                 }
+                Request::Depth(depth) => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.depth_history(depth, reply);
+                }
                 Request::Trades => unreachable!(),
             }
         }
@@ -504,6 +546,7 @@ impl Chart {
             );
         }
         self.scroll_back(&mut link);
+        self.scroll_depth(&mut link);
         self.feed_link = Some(link);
     }
 
@@ -524,6 +567,7 @@ impl Chart {
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        link.depth_complete = false;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -667,10 +711,58 @@ impl Chart {
                 request,
                 failures.saturating_add(1),
             ));
+        } else if matches!(request, Request::Depth(_)) {
+            link.depth_complete = true;
+            if error == FeedError::NotSupported {
+                return;
+            }
         } else {
             link.paging_stopped = true;
         }
         self.feed.last_error = Some(error);
+    }
+
+    /// Depth pages have their own boundary and completion state, independent of bar history.
+    fn scroll_depth(&mut self, link: &mut FeedLink) {
+        if link.depth_complete
+            || link.subscription.is_none()
+            || link
+                .pending
+                .iter()
+                .any(|(_, r, _)| matches!(r, Request::Depth(_)))
+            || link
+                .retries
+                .iter()
+                .any(|(_, r, _)| matches!(r, Request::Depth(_)))
+        {
+            return;
+        }
+        let Some(history) = &link.depth_history else {
+            return;
+        };
+        let Some(tick) = link
+            .instrument
+            .as_ref()
+            .and_then(|i| i.tick_size)
+            .filter(|t| t.is_finite() && *t > 0.0)
+        else {
+            return;
+        };
+        let before = history.columns().next().map(|c| c.time);
+        if before.is_some()
+            && (!self.older_bars_drawn || self.state.visible_range().0 >= SCROLL_BACK_MARGIN)
+        {
+            return;
+        }
+        let mut request = DepthRequest::new(
+            self.symbol.clone(),
+            history.config().columns,
+            history.config().clone(),
+            tick,
+        );
+        request.before = before;
+        let reply = link.reply(Request::Depth(request.clone()));
+        link.feed.depth_history(request, reply);
     }
 
     /// Asks for the page before the oldest bar once the view nears it.
@@ -750,6 +842,7 @@ mod tests {
         Unsubscribe(SubscriptionId),
         Trades(TradeRequest),
         Snapshot(SubscriptionId),
+        Depth(DepthRequest),
     }
 
     /// A feed that records every call and keeps the replies and sinks for the test to answer.
@@ -759,6 +852,7 @@ mod tests {
         resolves: Mutex<Vec<Reply<Instrument>>>,
         pages: Mutex<Vec<Reply<HistoryPage>>>,
         trades: Mutex<Vec<Reply<TradePage>>>,
+        depth: Mutex<Vec<Reply<DepthPage>>>,
         sinks: Mutex<Vec<Sink>>,
         /// `unsubscribe` drops the replies it keeps.
         drop_replies: AtomicBool,
@@ -815,6 +909,10 @@ mod tests {
         fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
             self.calls.lock().unwrap().push(Call::Trades(request));
             self.trades.lock().unwrap().push(reply);
+        }
+        fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+            self.calls.lock().unwrap().push(Call::Depth(request));
+            self.depth.lock().unwrap().push(reply);
         }
         fn request_depth_snapshot(&self, id: SubscriptionId) {
             self.calls.lock().unwrap().push(Call::Snapshot(id));
@@ -876,6 +974,52 @@ mod tests {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
         }
+    }
+
+    #[test]
+    fn depth_paging_ends_independently_and_drops_old_settings_replies() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(0.25);
+        feed.resolve().send(Ok(instrument));
+        feed.page().send(page(bars(10), true));
+        frames.run(&mut chart);
+        let old = feed.depth.lock().unwrap().remove(0);
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        frames.run(&mut chart);
+        old.send(Ok(DepthPage::new(
+            vec![crate::data::DepthColumn {
+                time: Utc::now(),
+                span: TimeDelta::seconds(1),
+                ..Default::default()
+            }],
+            false,
+        )));
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![], false)));
+        feed.calls();
+        frames.run(&mut chart);
+        chart.set_start_idx(0);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        assert!(feed.calls().iter().all(|c| !matches!(c, Call::Depth(_))));
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            0
+        );
+        assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
     }
 
     #[test]
