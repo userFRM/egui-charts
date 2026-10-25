@@ -1060,6 +1060,59 @@ mod tests {
     }
 
     #[test]
+    fn executions_link_existing_tape_fills_without_counting_twice() {
+        use crate::data::{OrderEvent, RestingOrder};
+        use crate::model::TradeSide::{Buy, Sell};
+        for (timeframe, separate_frames) in [
+            (Timeframe::Min1, false),
+            (Timeframe::Min1, true),
+            ("2v".parse().unwrap(), false),
+            ("2v".parse().unwrap(), true),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_timeframe(timeframe);
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.page().send(page(vec![], true));
+            frames.run(&mut chart);
+            let sink = feed.sink();
+            let time = bars(1)[0].time;
+            let trade = Tick::new(time, 100.0, 2.0, Some(Buy)).with_id(42);
+            sink.set_server_time(time);
+            sink.push_order_snapshot(1, time, vec![RestingOrder::new(8, Sell, 100.0, 5.0)]);
+            sink.push_tick(trade.clone());
+            if separate_frames {
+                frames.run(&mut chart);
+            }
+            sink.push_order_event(
+                2,
+                time,
+                OrderEvent::Execute {
+                    id: 8,
+                    size: 2.0,
+                    trade: Some(trade.with_aggressor_order_id(9)),
+                },
+            );
+            frames.run(&mut chart);
+            let trades: Vec<_> = chart.trades(SeriesId::MAIN).collect();
+            assert_eq!(trades.len(), 1);
+            assert_eq!(
+                (trades[0].resting_order_id, trades[0].aggressor_order_id),
+                (Some(8), Some(9)),
+                "separate frames: {separate_frames}"
+            );
+            assert_eq!(chart.bars(SeriesId::MAIN)[0].volume, 2.0);
+            assert_eq!(chart.order_book(SeriesId::MAIN).unwrap().asks[0].size, 3.0);
+            assert_eq!(
+                chart.combined_trades(SeriesId::MAIN)[0].aggressor_order_id,
+                Some(9)
+            );
+        }
+    }
+
+    #[test]
     fn depth_paging_ends_independently_and_drops_old_settings_replies() {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));

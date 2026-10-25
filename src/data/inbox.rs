@@ -465,6 +465,7 @@ impl Sink {
     /// a trade whose id is among those of the last trades the subscription folded, as many as its
     /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
     /// [`Sink::set_server_time`] describes.
+    /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
     ///
     /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
     /// retained executions on resubscription to rebuild a partial bar. Count bars use the first
@@ -717,6 +718,9 @@ impl Live {
                 live.updates.rejected += 1;
             } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
                 live.updates.repeated_ticks += 1;
+                if tick.aggressor_order_id.is_some() || tick.resting_order_id.is_some() {
+                    live.updates.trades.push(tick);
+                }
             } else if live.last_trade.is_some_and(|last| tick.ts < last) {
                 live.updates.late_ticks += 1;
             } else if live.fold_trade_bar(&tick).is_err() {
@@ -736,10 +740,13 @@ impl Live {
         let updates = &mut live.updates;
         if !trades::valid(&tick) || ahead {
             updates.rejected += 1;
-        } else if live.forming.is_some_and(|forming| open < forming) {
-            updates.late_ticks += 1;
         } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
             updates.repeated_ticks += 1;
+            if tick.aggressor_order_id.is_some() || tick.resting_order_id.is_some() {
+                updates.trades.push(tick);
+            }
+        } else if live.forming.is_some_and(|forming| open < forming) {
+            updates.late_ticks += 1;
         } else {
             let replace_empty = live.empty && live.forming == Some(open);
             match updates.bars.entry(open) {

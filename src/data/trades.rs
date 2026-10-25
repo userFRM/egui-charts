@@ -115,7 +115,7 @@ impl Trades {
     }
 
     /// Appends a trade validated by the caller unless its id is held, evicting the oldest beyond
-    /// capacity.
+    /// capacity. Repeated ids can complete missing order ids without counting the fill again.
     pub(crate) fn push(&mut self, trade: Tick) {
         self.insert(trade, &mut |_, _| ());
     }
@@ -124,6 +124,7 @@ impl Trades {
     /// the trade it evicts (`false`).
     fn insert(&mut self, trade: Tick, changed: &mut impl FnMut(&Tick, bool)) {
         if trade.id.is_some_and(|id| !self.ids.insert(id)) {
+            self.annotate(&trade);
             return;
         }
         changed(&trade, true);
@@ -138,6 +139,17 @@ impl Trades {
         }
     }
 
+    /// A tape print may precede the order execution or recorded fill that identifies its orders.
+    fn annotate(&mut self, trade: &Tick) {
+        if (trade.aggressor_order_id.is_some() || trade.resting_order_id.is_some())
+            && let Some(id) = trade.id.filter(|id| self.ids.contains(id))
+            && let Some(held) = self.trades.iter_mut().rev().find(|t| t.id == Some(id))
+        {
+            held.aggressor_order_id = held.aggressor_order_id.or(trade.aggressor_order_id);
+            held.resting_order_id = held.resting_order_id.or(trade.resting_order_id);
+        }
+    }
+
     /// Appends `newer`, the trades pushed since the last drain, without those a page already
     /// added. Calls `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
@@ -146,7 +158,9 @@ impl Trades {
                 Some(_) => self.paged_without_id_until,
                 None => self.paged_until,
             };
-            if paged_until.is_none_or(|until| trade.ts > until) {
+            if trade.id.is_some_and(|id| self.ids.contains(&id))
+                || paged_until.is_none_or(|until| trade.ts > until)
+            {
                 self.insert(trade, changed);
             }
         }
@@ -163,6 +177,9 @@ impl Trades {
         let received = page.len();
         page.retain(valid);
         let rejected = (received - page.len()) as u64;
+        for trade in &page {
+            self.annotate(trade);
+        }
         // Stable, so trades sharing a time keep the feed's order.
         page.sort_by_key(|trade| trade.ts);
         if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
@@ -237,6 +254,10 @@ mod tests {
                 vec![(4.0, 100.0, 102.0, 101.0, 2)]),
             ("separate drains", 10, vec![Live(vec![fill(1, 100.0, 2.0, Some(7))]),
                 Live(vec![fill(2, 102.0, 2.0, Some(7))])],
+                vec![(4.0, 100.0, 102.0, 101.0, 2)]),
+            ("a page completes order ids on retained fills", 10,
+                vec![Live(vec![fill(1, 100.0, 2.0, None).with_id(1), fill(2, 102.0, 2.0, None).with_id(2)]),
+                    Page(vec![fill(1, 100.0, 2.0, Some(7)).with_id(1), fill(2, 102.0, 2.0, Some(7)).with_id(2)])],
                 vec![(4.0, 100.0, 102.0, 101.0, 2)]),
             ("only retained fills count", 2, vec![Live(vec![fill(1, 100.0, 2.0, Some(7)),
                 fill(2, 101.0, 3.0, Some(7))]), Live(vec![fill(3, 102.0, 1.0, Some(7))])],
