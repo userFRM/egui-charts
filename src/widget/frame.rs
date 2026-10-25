@@ -1331,19 +1331,30 @@ impl Chart {
                         flow,
                         config,
                     );
-                } else if let Some((merged, volume)) = &merged {
-                    rendering::render_chart_type(
-                        self.chart_type,
-                        &rendering::CandleDataContext {
-                            visible_data: &merged.bars[merged.start..],
-                            full_data: &merged.bars,
-                            start_idx: merged.start,
-                            ..render_ctx
-                        },
-                        &merged_params,
-                        |index, min_x| merged_x(merged, index, min_x),
-                    );
-                    if let Some(volume) = volume {
+                } else {
+                    // Share the renderer instantiation between ordinary and merged bars.
+                    let (data, params) = match &merged {
+                        Some((merged, _)) => (
+                            rendering::CandleDataContext {
+                                visible_data: &merged.bars[merged.start..],
+                                full_data: &merged.bars,
+                                start_idx: merged.start,
+                                ..render_ctx
+                            },
+                            &merged_params,
+                        ),
+                        None => (
+                            rendering::CandleDataContext { ..render_ctx },
+                            &render_params,
+                        ),
+                    };
+                    rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
+                        match &merged {
+                            Some((merged, _)) => merged_x(merged, index, min_x),
+                            None => idx_to_coord(index, min_x),
+                        }
+                    });
+                    if let Some((_, Some(volume))) = &merged {
                         rendering::candles::volume::render_volume_bars(
                             &clipped_volume_ctx,
                             &volume.bars[volume.start..],
@@ -1354,13 +1365,6 @@ impl Chart {
                             |index, min_x| merged_x(volume, index, min_x),
                         );
                     }
-                } else {
-                    rendering::render_chart_type(
-                        self.chart_type,
-                        &render_ctx,
-                        &render_params,
-                        idx_to_coord,
-                    );
                 }
                 self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
             }
