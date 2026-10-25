@@ -136,25 +136,6 @@ impl Chart {
         builder.build()
     }
 
-    /// The time formatter for a frame shown in `timezone`, rebuilt only when its options change.
-    fn frame_time_formatter(
-        &mut self,
-        timezone: &crate::scales::TimezoneMode,
-    ) -> std::sync::Arc<dyn crate::scales::TimeFormatter> {
-        let options = &self.chart_options.time_scale;
-        let key = (options.seconds_visible, options.time_visible);
-        if let Some(((seconds, time, zone), formatter)) = &self.frame_time_formatter
-            && (*seconds, *time) == key
-            && zone == timezone
-        {
-            return formatter.clone();
-        }
-        let formatter: std::sync::Arc<dyn crate::scales::TimeFormatter> =
-            self.build_time_formatter().into();
-        self.frame_time_formatter = Some(((key.0, key.1, timezone.clone()), formatter.clone()));
-        formatter
-    }
-
     /// Names months and weekdays in time axis, crosshair and tooltip labels in `locale`'s
     /// language, such as `"de-DE"` (see [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
     /// `None` restores English names.
@@ -162,7 +143,6 @@ impl Chart {
     /// The names need the `locales` cargo feature, on by default; without it they stay English.
     pub fn set_locale(&mut self, locale: Option<String>) {
         self.locale = locale;
-        self.frame_time_formatter = None;
     }
 
     /// Writes crosshair and tooltip dates with a `strftime` pattern, such as `"%d.%m.%Y"`, followed
@@ -170,7 +150,6 @@ impl Chart {
     /// also falls back to.
     pub fn set_date_format(&mut self, date_format: Option<String>) {
         self.date_format = date_format;
-        self.frame_time_formatter = None;
     }
 
     /// Formats time axis marks with [`TimeFormatter::format`], which receives the
@@ -189,7 +168,6 @@ impl Chart {
         formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
     ) {
         self.time_formatter = formatter;
-        self.frame_time_formatter = None;
     }
 
     /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
@@ -994,8 +972,6 @@ impl Chart {
         self.last_rendered_volume_rect = volume_rect;
 
         self.pump_marks(ui.ctx());
-        let timezone = self.display_timezone();
-        let formatter = self.frame_time_formatter(&timezone);
 
         // Get visible data
         let visible_data = self.state.visible_data();
@@ -1084,6 +1060,9 @@ impl Chart {
             bearish_wick: self.config.bearish_wick_color,
             candle_border_width: self.config.candle_border_width,
         };
+
+        let timezone = self.display_timezone();
+        let formatter = self.build_time_formatter();
 
         if self.config.show_grid && self.config.show_vertical_grid {
             let style = self

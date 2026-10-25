@@ -106,6 +106,17 @@ impl DefaultTimeFormatter {
             locale: None,
         }
     }
+
+    fn into_box(self) -> Box<dyn TimeFormatter> {
+        if self.date_format.is_none() {
+            Box::new(ClockTimeFormatter {
+                use_24_hour: self.use_24_hour,
+                show_seconds: self.show_seconds,
+            })
+        } else {
+            Box::new(self)
+        }
+    }
 }
 
 impl TimeFormatter for DefaultTimeFormatter {
@@ -115,6 +126,37 @@ impl TimeFormatter for DefaultTimeFormatter {
 
     fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
         self.style().format_crosshair(time, bar_seconds)
+    }
+
+    fn clone_box(&self) -> Box<dyn TimeFormatter> {
+        self.clone().into_box()
+    }
+}
+
+/// Default clock options without storage for an unused custom date pattern.
+#[derive(Clone)]
+struct ClockTimeFormatter {
+    use_24_hour: bool,
+    show_seconds: bool,
+}
+
+impl TimeFormatter for ClockTimeFormatter {
+    fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
+        DefaultTimeFormatter {
+            use_24_hour: self.use_24_hour,
+            show_seconds: self.show_seconds,
+            date_format: None,
+        }
+        .format(time, mark_type)
+    }
+
+    fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        DefaultTimeFormatter {
+            use_24_hour: self.use_24_hour,
+            show_seconds: self.show_seconds,
+            date_format: None,
+        }
+        .format_crosshair(time, bar_seconds)
     }
 
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
@@ -165,17 +207,26 @@ impl Style<'_> {
         let date = self
             .date_format
             .and_then(|pattern| self.write(time, pattern));
-        if bar_seconds >= 86_400 {
-            return date.unwrap_or_else(|| {
-                let date = self.write(time, "%b %d").unwrap_or_default();
-                if time.format("%Y").to_string() == Utc::now().format("%Y").to_string() {
-                    date
-                } else {
-                    format!("{date}, {}", time.format("%Y"))
-                }
-            });
+        let custom_date = date.is_some();
+        let daily = bar_seconds >= 86_400;
+        let pattern = if daily { "%b %d" } else { "%a %d %b '%y" };
+        #[cfg(feature = "locales")]
+        let date = date.or_else(|| self.locale.and_then(|_| self.write(time, pattern)));
+        // The built-in English date writes straight into the label without a temporary String.
+        let default_date = time.format(pattern);
+        let date: &dyn std::fmt::Display = match &date {
+            Some(date) => date,
+            None => &default_date,
+        };
+        if daily {
+            return if custom_date
+                || time.format("%Y").to_string() == Utc::now().format("%Y").to_string()
+            {
+                date.to_string()
+            } else {
+                format!("{date}, {}", time.format("%Y"))
+            };
         }
-        let date = date.unwrap_or_else(|| self.write(time, "%a %d %b '%y").unwrap_or_default());
         let kind = if bar_seconds >= 60 {
             TickMarkType::Time
         } else {
@@ -558,11 +609,12 @@ impl TimeFormatterBuilder {
                 date_format: self.date_format,
             })
         } else {
-            Box::new(DefaultTimeFormatter {
+            DefaultTimeFormatter {
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
                 date_format: self.date_format,
-            })
+            }
+            .into_box()
         };
 
         let mut formatter = TimezoneAwareFormatter::new(base, self.timezone.unwrap_or_default());
@@ -584,7 +636,7 @@ mod tests {
 
     #[test]
     fn test_default_formatter() {
-        let formatter = DefaultTimeFormatter::default();
+        let formatter = DefaultTimeFormatter::default().clone_box();
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
 
         assert_eq!(formatter.format(time, TickMarkType::Year), "2024");
@@ -601,7 +653,8 @@ mod tests {
         let formatter = DefaultTimeFormatter {
             use_24_hour: false,
             ..Default::default()
-        };
+        }
+        .clone_box();
         let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 45).unwrap();
 
         let result = formatter.format(time, TickMarkType::Time);
@@ -638,9 +691,12 @@ mod tests {
             LocaleTimeFormatter::new("xx-YY").format(time, TickMarkType::Month),
             "Mar"
         );
-        let dated = |date_format: &str| DefaultTimeFormatter {
-            date_format: Some(date_format.into()),
-            ..Default::default()
+        let dated = |date_format: &str| {
+            DefaultTimeFormatter {
+                date_format: Some(date_format.into()),
+                ..Default::default()
+            }
+            .clone_box()
         };
         assert_eq!(
             dated("%d.%m.%Y").format_crosshair(time, 60),
@@ -654,6 +710,14 @@ mod tests {
         assert_eq!(
             dated("%Q").format_crosshair(time, 60),
             "Wed 13 Mar '24 14:30"
+        );
+        let current = time.with_year(Utc::now().year()).unwrap();
+        let previous = current.with_year(current.year() - 1).unwrap();
+        let default = DefaultTimeFormatter::default().clone_box();
+        assert_eq!(default.format_crosshair(current, 86_400), "Mar 13");
+        assert_eq!(
+            default.format_crosshair(previous, 86_400),
+            format!("Mar 13, {}", previous.year())
         );
     }
 
