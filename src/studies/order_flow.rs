@@ -103,7 +103,7 @@ impl Window {
         }
         if self.events.len() > 100_000 {
             let (time, old) = self.events.pop_front().unwrap();
-            self.lost_until = Some(time);
+            self.lost_until = self.lost_until.max(Some(time));
             for (sum, old) in self.sum.iter_mut().zip(old) {
                 *sum -= old;
             }
@@ -431,6 +431,31 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::Timeframe;
+
+    #[test]
+    fn late_trades_do_not_clear_an_overflow_gap_early() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let input = OrderFlowInput::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 3,
+            instant: 3,
+        });
+        for _ in 0..100_001 {
+            input.push_trade(
+                &clock,
+                &Tick::new(start + TimeDelta::seconds(1), 100.0, 1.0, None),
+            );
+        }
+        input.push_trade(&clock, &Tick::new(start, 100.0, 1.0, None));
+        input.advance_time(&clock, start + TimeDelta::milliseconds(3500));
+        assert!(
+            input.values()[&start][1..].iter().all(|x| x.is_nan()),
+            "the lost trade at second 1 is still in both windows"
+        );
+        input.advance_time(&clock, start + TimeDelta::seconds(4));
+        assert_eq!(&input.values()[&start][1..], &[0.0, 0.0]);
+    }
 
     #[test]
     fn rolling_windows_expire_without_counting_heartbeats_as_events() {
