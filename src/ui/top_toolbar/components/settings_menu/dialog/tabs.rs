@@ -306,6 +306,12 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
             ui.vertical(|ui| {
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.show_price_targets,
+                    "Analyst price targets",
+                    style.val_text,
+                );
                 // CANDLE COLORS
                 self.draw_section_header(ui, "CANDLE COLORS", style);
 

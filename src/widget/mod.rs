@@ -133,6 +133,8 @@ mod events;
 mod feed;
 mod marks;
 mod merge;
+mod signals;
+mod targets;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 pub mod export;
 mod frame;
@@ -351,6 +353,10 @@ pub struct Chart {
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
+    signal_source: Option<signals::SignalSource>,
+    targets: targets::TargetState,
+    show_price_targets: bool,
+    hidden_signal_categories: std::collections::BTreeSet<String>,
     event_click: Option<String>,
     /// Timeframe of the bars, for the legend, the session breaks and the feed
     pub(crate) timeframe: Option<Timeframe>,

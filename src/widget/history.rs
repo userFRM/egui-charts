@@ -27,6 +27,7 @@ struct Pending {
 struct Action {
     config: Option<ChartConfig>,
     main_series_visible: Option<bool>,
+    price_targets_visible: Option<bool>,
     options: Option<ChartOptions>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
@@ -168,6 +169,7 @@ impl Chart {
             before: Action {
                 config: Some(self.config.clone()),
                 main_series_visible: Some(self.main_series_visible),
+                price_targets_visible: Some(self.show_price_targets),
                 options: Some(self.chart_options.clone()),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
@@ -208,6 +210,9 @@ impl Chart {
         }
         if action.config.as_ref() == Some(&self.config) {
             action.config = None;
+        }
+        if action.price_targets_visible == Some(self.show_price_targets) {
+            action.price_targets_visible = None;
         }
         if action.main_series_visible == Some(self.main_series_visible) {
             action.main_series_visible = None;
@@ -262,6 +267,7 @@ impl Chart {
         if action.view.is_none()
             && action.config.is_none()
             && action.main_series_visible.is_none()
+            && action.price_targets_visible.is_none()
             && action.options.is_none()
             && action.scale.is_none()
             && action.panes.is_none()
@@ -364,6 +370,9 @@ impl Chart {
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
+        }
+        if let Some(visible) = &mut action.price_targets_visible {
+            std::mem::swap(&mut self.show_price_targets, visible);
         }
         if let Some(visible) = &mut action.main_series_visible {
             let current = self.main_series_visible;

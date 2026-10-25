@@ -29,7 +29,7 @@ const MIN_SCROLL_BACK_PAGE: usize = 600;
 
 /// A chart's link to its feed.
 pub(crate) struct FeedLink {
-    feed: Arc<dyn Datafeed>,
+    pub(super) feed: Arc<dyn Datafeed>,
     inbox: Arc<Inbox>,
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
@@ -155,6 +155,8 @@ impl Chart {
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
         if symbol != self.symbol {
+            self.clear_source_signals();
+            self.reload_price_targets();
             self.set_replay_time(None);
         }
         if symbol != self.symbol
@@ -206,6 +208,7 @@ impl Chart {
     /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
+            self.clear_source_signals();
             self.host_events
                 .push(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;

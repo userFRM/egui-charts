@@ -101,6 +101,10 @@ impl DemoApp {
             .with_visible_candles(0)
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
+        chart.set_price_targets_visible(source.price_targets_visible());
+        if self.api_samples {
+            chart.set_signal_source(Some(live.clone()));
+        }
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {

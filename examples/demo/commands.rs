@@ -20,6 +20,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
         ("samples", "Toggle API samples", "Settings"),
+        ("targets", "Show analyst price targets", "Actions"),
         ("pane", "Add a symbol in a new pane", "Actions"),
     ]
     .into_iter()
@@ -110,6 +111,19 @@ impl DemoApp {
             "grid" => {
                 let config = self.chart.config_mut();
                 config.show_grid = !config.show_grid;
+                return;
+            }
+            "targets" => {
+                self.switch_timeframe(egui_charts::model::Timeframe::Day1);
+                self.chart.set_price_targets_visible(true);
+                if let Some(last) = self.chart.state().shown().last() {
+                    let horizon = last.time + chrono::TimeDelta::days(365);
+                    if let Some(index) = self.chart.time_to_index(horizon) {
+                        self.chart.set_visible_logical_range(
+                            egui_charts::model::LogicalRange::new(-10.0, index as f32 + 120.0),
+                        );
+                    }
+                }
                 return;
             }
             "samples" => {

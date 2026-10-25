@@ -318,6 +318,9 @@ pub struct ChartSettingsState {
     pub candle_colors: CandleColorConfig,
     pub precision: PrecisionMode,
     pub timezone: String,
+    /// Show analyst estimates answered by the host feed.
+    #[serde(default)]
+    pub show_price_targets: bool,
 
     // Status line tab
     pub status_line: StatusLineOptions,
@@ -357,6 +360,7 @@ impl Default for ChartSettingsState {
             candle_colors: CandleColorConfig::default(),
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
+            show_price_targets: false,
 
             status_line: StatusLineOptions::default(),
 
