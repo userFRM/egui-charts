@@ -33,8 +33,6 @@ mod feeds;
 mod live;
 #[path = "market.rs"]
 mod market;
-#[path = "paper.rs"]
-mod paper;
 
 use eframe::egui;
 use egui_charts::Chart;
@@ -120,6 +118,35 @@ fn indicator_from_tree_id(id: usize) -> Option<SeriesId> {
     } else {
         id.checked_sub(INDICATOR_ID_BASE).map(SeriesId)
     }
+}
+
+/// How much of the window the account panel takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccountPanelSize {
+    Closed,
+    Normal,
+    Minimized,
+    Maximized,
+}
+
+/// Example tiles beside the paper account in the broker picker. They show what a host's tiles
+/// carry; connecting to them only reports that the demo has no broker behind them.
+fn example_brokers() -> Vec<egui_charts::ui::trading::BrokerTile> {
+    use egui_charts::ui::trading::BrokerTile;
+    [
+        ("example-stocks", "Example Stocks", 4.8, true),
+        ("example-futures", "Example Futures", 4.6, false),
+        ("example-crypto", "Example Crypto", 4.5, false),
+    ]
+    .into_iter()
+    .map(|(id, name, rating, featured)| {
+        let mut tile = BrokerTile::new(id, name);
+        tile.rating = Some(rating);
+        tile.featured = featured;
+        tile.description = format!("{name} is an example tile: a host lists its brokers here.");
+        tile
+    })
+    .collect()
 }
 
 /// Which right-hand side panel is open, if any.
@@ -301,9 +328,14 @@ pub struct DemoApp {
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
 
-    // Session-only paper account, traded through the library's order ticket.
+    // Session-only paper account, connected from the broker picker and traded through the
+    // library's order ticket and account panel.
     trading: egui_charts::ui::trading::Trading,
-    paper: Arc<paper::PaperAccount>,
+    paper: Arc<egui_charts::services::PaperAccount>,
+    broker_picker: egui_charts::ui::trading::BrokerPicker,
+    account_panel: AccountPanelSize,
+    // The account settings ask whether to reset the paper account.
+    paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     quotes: Arc<live::DemoQuotes>,
@@ -520,7 +552,12 @@ impl DemoApp {
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
             trading: Default::default(),
-            paper: Arc::default(),
+            paper: Arc::new(
+                egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
+            ),
+            broker_picker: egui_charts::ui::trading::BrokerPicker::new(example_brokers()),
+            account_panel: AccountPanelSize::Normal,
+            paper_reset: false,
             watchlist: WatchlistPanel::new(
                 cc.storage
                     .and_then(|storage| eframe::get_value(storage, "watchlists"))
@@ -607,7 +644,6 @@ impl DemoApp {
             .templates
             .set_storage(app.template_storage.clone());
         app.alerts.set_service(app.alert_host.clone());
-        app.trading.set_service(app.paper.clone());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
@@ -1213,7 +1249,14 @@ impl eframe::App for DemoApp {
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
+        let narrow_account = ui.available_width() < 700.0 && self.trading.is_connected();
+        if narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_side_panel(ui);
+        if !narrow_account {
+            self.show_account_panel(ui, panel_bg);
+        }
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -1392,7 +1435,13 @@ impl DemoApp {
                 return;
             }
             TopToolbarAction::ToggleTrading => {
-                self.trading.toggle_ticket(self.chart.symbol().to_owned());
+                if !self.trading.is_connected() {
+                    self.broker_picker.open();
+                } else if self.account_panel == AccountPanelSize::Closed {
+                    self.account_panel = AccountPanelSize::Normal;
+                } else {
+                    self.account_panel = AccountPanelSize::Closed;
+                }
                 return;
             }
             TopToolbarAction::Layout(action) => {
@@ -1744,12 +1793,14 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    egui::Panel::bottom("symbol_details")
-                        .resizable(true)
-                        .default_size(ui.available_height() / 2.0)
-                        .min_size(120.0)
-                        .frame(egui::Frame::NONE)
-                        .show(ui, |ui| self.symbol_details.show(ui));
+                    if ui.available_height() >= 400.0 {
+                        egui::Panel::bottom("symbol_details")
+                            .resizable(true)
+                            .default_size(ui.available_height() / 2.0)
+                            .min_size(120.0)
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| self.symbol_details.show(ui));
+                    }
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
@@ -2077,6 +2128,85 @@ impl DemoApp {
         }
     }
 
+    /// The account panel of the connected broker, under the chart and its interval bar.
+    fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
+
+        match self.broker_picker.show(ui.ctx()) {
+            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
+                self.trading.set_service(self.paper.clone());
+                self.trading.account_panel.broker = "Paper Trading".to_owned();
+                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+                self.account_panel = AccountPanelSize::Normal;
+            }
+            Some(BrokerPickerAction::Connect(_)) => {
+                self.notify("Example brokers have no account behind them in this demo");
+            }
+            Some(BrokerPickerAction::NeedBroker) => {
+                self.notify("Host action: show how to open a broker account");
+            }
+            _ => {}
+        }
+        if self.paper_reset {
+            let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
+                "paper_reset",
+                "Reset paper account",
+                "Close every position, cancel every order and return the balance to 100,000 USD?",
+            )
+            .confirm_text("Reset")
+            .show(ui.ctx(), &mut self.paper_reset);
+            if result.is_confirmed() {
+                self.paper.reset();
+                self.trading.set_service(self.paper.clone());
+                self.paper_reset = false;
+            }
+        }
+        if !self.trading.is_connected() || self.account_panel == AccountPanelSize::Closed {
+            return;
+        }
+        let height = match self.account_panel {
+            AccountPanelSize::Minimized => 42.0,
+            AccountPanelSize::Maximized => (ui.available_height() - 160.0).max(320.0),
+            _ => 320.0,
+        };
+        let height = height.min((ui.available_height() - 96.0).max(42.0));
+        let symbol = self.chart.symbol().to_owned();
+        let trading = &mut self.trading;
+        let action = egui::Panel::bottom("account_panel")
+            .exact_size(height)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |ui| trading.show_account_panel(ui, &symbol))
+            .inner;
+        match action {
+            Some(AccountPanelAction::SelectSymbol(symbol)) => self.open_catalog_symbol(&symbol),
+            Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
+            Some(AccountPanelAction::Settings) => self.paper_reset = true,
+            Some(AccountPanelAction::Minimize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Minimized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Minimized
+                };
+            }
+            Some(AccountPanelAction::Maximize) => {
+                self.account_panel = if self.account_panel == AccountPanelSize::Maximized {
+                    AccountPanelSize::Normal
+                } else {
+                    AccountPanelSize::Maximized
+                };
+            }
+            Some(AccountPanelAction::Export { name, csv }) => {
+                let file = format!("{}.csv", name.to_lowercase().replace(' ', "_"));
+                self.save_text(&file, &csv);
+            }
+            _ => {}
+        }
+    }
+
     fn show_bottom_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         egui::Panel::bottom("bottom")
             .exact_size(39.0)
@@ -2260,32 +2390,34 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                // Trading follows the live stream, so it rests while replay rewinds the chart.
-                if let Some(side) = self.chart.take_quote_action().filter(|_| self.replay.is_none()) {
+                if let Some(bar) = self.chart.bars(SeriesId::MAIN).iter().rfind(|bar| !bar.is_whitespace()) {
+                    self.paper.set_price(self.chart.symbol(), bar.close);
+                    if self.replay.is_some() {
+                        // Replay has no historical spread; its close prices both broker and ticket.
+                        self.trading.set_quote(
+                            self.chart.symbol(),
+                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                        );
+                    }
+                }
+                if let Some(side) = self.chart.take_quote_action() {
                     let side = match side {
                         egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
                         egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
                     };
-                    self.trading.trade(self.chart.symbol().to_owned(), side);
-                }
-                if self.replay.is_none() {
-                    if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
-                        self.paper.set_price(self.chart.symbol(), bar.close);
+                    if self.trading.is_connected() {
+                        self.trading.trade(self.chart.symbol().to_owned(), side);
+                    } else {
+                        self.broker_picker.open();
                     }
-                    self.trading.show(ui, &mut self.chart);
                 }
+                self.trading.show(ui, &mut self.chart);
             });
         self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
-        // Right-click context actions resolve after the chart is shown. Order entries rest with
-        // the rest of trading during replay.
-        self.menus
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
-        self.top_toolbar
-            .set_control_visible(egui_charts::ui::Control::Trading, self.replay.is_none());
         self.menus
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
@@ -2788,6 +2920,85 @@ mod tests {
     use super::*;
     use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn replay_prices_fill_the_connected_paper_account() {
+        use egui_charts::model::OrderSide;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new(&cc);
+        let symbol = app.chart.symbol().to_owned();
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = [100.0, 80.0, 110.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, price)| {
+                egui_charts::model::Bar::new(
+                    start + chrono::Duration::minutes(i as i64),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
+        let paper = app.paper.clone();
+        app.paper.set_price(&symbol, 999.0);
+        app.trading.set_service(app.paper.clone());
+        app.start_replay();
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.one_click = true;
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        app.trading.trade(symbol.clone(), OrderSide::Buy);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == "Filled: BUY 1 at 100.00")
+        );
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        app.trading.trade(symbol.clone(), OrderSide::Sell);
+        app.trading.poll(&ctx, &mut app.toasts);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|t| t.message == "Filled: SELL 1 at 110.00")
+        );
+        assert!(Arc::ptr_eq(&paper, &app.paper));
+
+        // A live quote must not price the ticket while the broker follows replay closes.
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            app.trading.set_quote(
+                &symbol,
+                egui_charts::model::Quote::new(999.0, 990.0, chrono::Utc::now())
+                    .with_bid_ask(998.0, 1_000.0),
+            );
+            app.trading
+                .open_ticket(egui_charts::model::OrderRequest::new(
+                    &symbol,
+                    side,
+                    1.0,
+                    egui_charts::model::OrderType::Market,
+                ));
+            let mut value = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    app.show_chart(ui, app.theme.chart.bg);
+                });
+                value |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == "Value  110.00 USD")
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert!(value, "{side:?} ticket must use the replay close");
+        }
+    }
 
     #[test]
     fn research_toolbar_reports_the_last_chart_click() {

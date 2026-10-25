@@ -191,7 +191,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-dark.svg">
-  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading: every build has the Broker trait; the ui feature adds order tickets and order and position lines. Depth of market is planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
+  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading: every build has the Broker trait and a paper account; the ui feature adds a broker picker, an account panel, order tickets and order and position lines. Depth of market is planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
 </picture>
 
 | Layer | What it gives | Feature |
@@ -200,7 +200,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 | Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
 | Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, drawings, studies on the chart, theme | `widget` |
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
-| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
+| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
 The default features are `ui`, which enables `icons`, `widget` and `studies`, and `locales`.
 

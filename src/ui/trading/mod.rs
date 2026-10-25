@@ -1,9 +1,13 @@
-//! Trading from the chart through the host's [`Broker`]: the order ticket and the Buy and Sell
-//! buttons. The broker holds the account; this module shows what it pushes and sends the orders
-//! the user confirms.
+//! Trading from the chart through the host's [`Broker`]: the broker picker, the order ticket,
+//! the Buy and Sell buttons and the account panel. The broker holds the account; this module
+//! shows what it pushes and sends the orders the user confirms.
 
+mod account_panel;
+mod broker_picker;
 mod ticket;
 
+pub use account_panel::{AccountPanel, AccountPanelAction};
+pub use broker_picker::{BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
 use std::sync::Arc;
@@ -72,6 +76,8 @@ pub struct Trading {
     pub one_click: bool,
     /// The quantity and brackets the user saved in the ticket. Persist them in the host.
     pub presets: Vec<OrderPreset>,
+    /// The account panel's names and the history it lists.
+    pub account_panel: AccountPanel,
 }
 
 impl Default for Trading {
@@ -94,6 +100,7 @@ impl Default for Trading {
             quantity: 1.0,
             one_click: false,
             presets: Vec::new(),
+            account_panel: AccountPanel::default(),
         }
     }
 }
@@ -116,6 +123,21 @@ impl Trading {
         self.connect();
     }
 
+    /// Disconnects from the broker, dropping the account's state.
+    pub fn disconnect(&mut self) {
+        self.listener = None;
+        self.service = None;
+        self.inbox = Arc::default();
+        self.one_click = false;
+        self.ticket.open = false;
+        self.connect();
+    }
+
+    /// Whether a broker is connected.
+    pub fn is_connected(&self) -> bool {
+        self.service.is_some()
+    }
+
     fn connect(&mut self) {
         self.pending = None;
         self.rules = TradingRules::new("");
@@ -123,6 +145,7 @@ impl Trading {
         self.account = None;
         self.orders.clear();
         self.positions.clear();
+        self.account_panel.clear();
         // Stream keys are even; symbol rules use odd keys, and order replies use zero.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
@@ -246,12 +269,24 @@ impl Trading {
         let finite = |value: Option<f64>| value.is_none_or(f64::is_finite);
         let positive = |value: f64| value.is_finite() && value > 0.0;
         let valid = match &event {
-            AccountEvent::Account(account) => account.balance.is_finite() && finite(account.equity),
+            AccountEvent::Account(account) => {
+                account.balance.is_finite()
+                    && [
+                        account.equity,
+                        account.realized_pnl,
+                        account.margin,
+                        account.orders_margin,
+                        account.available_funds,
+                    ]
+                    .into_iter()
+                    .all(finite)
+            }
             AccountEvent::Order(order) => {
                 let request = &order.request;
                 positive(request.quantity)
                     && order.filled.is_finite()
                     && (0.0..=request.quantity).contains(&order.filled)
+                    && finite(order.fill_price)
                     && finite(request.take_profit)
                     && finite(request.stop_loss)
                     && match request.order_type {
@@ -265,14 +300,27 @@ impl Trading {
             AccountEvent::Position(position) => {
                 position.quantity.is_finite()
                     && position.average_price.is_finite()
-                    && finite(position.unrealized_pnl)
+                    && [
+                        position.unrealized_pnl,
+                        position.last_price,
+                        position.trade_value,
+                        position.market_value,
+                        position.leverage,
+                        position.margin,
+                    ]
+                    .into_iter()
+                    .all(finite)
             }
             AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+            AccountEvent::Balance(change) => {
+                change.balance.is_finite() && change.amount.is_finite()
+            }
             _ => true,
         };
         if !valid {
             return;
         }
+        self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
@@ -348,7 +396,9 @@ impl Trading {
         if self.ticket.symbol != symbol {
             self.ticket.open = false;
         }
-        self.load_rules(symbol);
+        if self.account_panel.editing.is_none() {
+            self.load_rules(symbol);
+        }
         let currency = self
             .account
             .as_ref()
@@ -864,6 +914,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn chart_frames_keep_the_edited_orders_symbol_rules() {
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let order = Order::new(
+            OrderId::new("1"),
+            OrderRequest::new("OTHER", OrderSide::Buy, 2.0, OrderType::Limit(100.0)),
+            OrderStatus::Working,
+        );
+        trading.account_panel.editing = Some((order.clone(), order.request));
+        trading.load_rules("OTHER");
+        let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+        let mut rules = TradingRules::new("OTHER");
+        rules.quantity_step = 2.0;
+        reply.send(Ok(rules));
+        let mut chart = crate::ChartBuilder::new().with_symbol("MAIN").build();
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        egui::__run_test_ui(|ui| trading.show(ui, &mut chart));
+        assert_eq!(trading.rules.symbol, "OTHER");
+        assert!(trading.rules_ready);
+        assert!(broker.rules.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Services a host supplies, each through a small trait. Charts consume `Marks`, the alerts
 //! panel `Alerts`, the watchlist `Quotes`, the notifications panel `Notifications` and the chats
 //! panel `Chats`; other contracts define the host side of the assembled terminal.
+//! [`PaperAccount`] is a ready-made [`Broker`] that simulates an account.
 //!
 //! Like [`Datafeed`](crate::data::Datafeed), every service is held as an `Arc<dyn Trait>` and
 //! called on the UI thread. Its methods return at once and answer later through a
@@ -17,6 +18,7 @@ mod chats;
 mod events;
 mod marks;
 mod notifications;
+mod paper;
 mod quotes;
 mod search;
 mod signals;
@@ -30,6 +32,7 @@ pub use events::Events;
 pub(crate) use events::Listener;
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, Notifications};
+pub use paper::PaperAccount;
 pub use quotes::Quotes;
 pub use search::{SymbolQuery, SymbolSearch};
 pub use signals::{SignalEvent, Signals};

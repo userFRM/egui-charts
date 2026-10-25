@@ -141,6 +141,12 @@ pub struct Order {
     pub status: OrderStatus,
     /// The quantity filled so far, from 0 up to the requested quantity.
     pub filled: f64,
+    /// The average price of the filled quantity, when the broker reports it.
+    pub fill_price: Option<f64>,
+    /// When the order was placed, when the broker reports it.
+    pub placed: Option<DateTime<Utc>>,
+    /// When the order filled in full, was cancelled or was rejected, when the broker reports it.
+    pub closed: Option<DateTime<Utc>>,
 }
 
 impl Order {
@@ -151,6 +157,9 @@ impl Order {
             request,
             status,
             filled: 0.0,
+            fill_price: None,
+            placed: None,
+            closed: None,
         }
     }
 }
@@ -185,6 +194,21 @@ pub struct Position {
     /// The profit or loss at the current price in the account's currency, when the broker
     /// reports it.
     pub unrealized_pnl: Option<f64>,
+    /// The price the position is valued at, when the broker reports it.
+    pub last_price: Option<f64>,
+    /// The open quantity at its average price in the account's currency, when the broker reports
+    /// it.
+    pub trade_value: Option<f64>,
+    /// The open quantity at the last price in the account's currency, when the broker reports
+    /// it.
+    pub market_value: Option<f64>,
+    /// How many times the margin the position's market value is, such as 100 for 100:1, when
+    /// the broker reports it.
+    pub leverage: Option<f64>,
+    /// The margin the position holds in the account's currency, when the broker reports it.
+    pub margin: Option<f64>,
+    /// When the instrument expires, for futures and options.
+    pub expiration: Option<DateTime<Utc>>,
 }
 
 impl Position {
@@ -195,6 +219,12 @@ impl Position {
             quantity,
             average_price,
             unrealized_pnl: None,
+            last_price: None,
+            trade_value: None,
+            market_value: None,
+            leverage: None,
+            margin: None,
+            expiration: None,
         }
     }
 }
@@ -244,6 +274,15 @@ pub struct Account {
     pub balance: f64,
     /// The balance plus the open positions' profit or loss, when the broker reports it.
     pub equity: Option<f64>,
+    /// The profit or loss of the closed trades, net of commissions, when the broker reports it.
+    pub realized_pnl: Option<f64>,
+    /// The margin the open positions hold, when the broker reports it.
+    pub margin: Option<f64>,
+    /// The margin the working orders would hold once filled, when the broker reports it.
+    pub orders_margin: Option<f64>,
+    /// The equity less the margin of the positions and the working orders, when the broker
+    /// reports it.
+    pub available_funds: Option<f64>,
     /// The order types the account accepts.
     pub capabilities: Capabilities,
 }
@@ -255,7 +294,58 @@ impl Account {
             currency: currency.into(),
             balance,
             equity: None,
+            realized_pnl: None,
+            margin: None,
+            orders_margin: None,
+            available_funds: None,
             capabilities,
+        }
+    }
+}
+
+/// A change of the account's cash balance, such as a closed trade's profit or a commission.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BalanceChange {
+    /// When the balance changed.
+    pub time: DateTime<Utc>,
+    /// The balance after the change, in the account's currency.
+    pub balance: f64,
+    /// The change, positive for a credit and negative for a debit.
+    pub amount: f64,
+    /// What changed it, such as "Commission for order 12".
+    pub action: String,
+}
+
+impl BalanceChange {
+    /// A change of `amount` that left the balance at `balance`.
+    pub fn new(time: DateTime<Utc>, balance: f64, amount: f64, action: impl Into<String>) -> Self {
+        Self {
+            time,
+            balance,
+            amount,
+            action: action.into(),
+        }
+    }
+}
+
+/// One line of the account's trading journal: an order placed, changed, cancelled or filled, a
+/// position closed, or anything else the broker logs.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct JournalEntry {
+    /// When it happened.
+    pub time: DateTime<Utc>,
+    /// What happened, as a sentence.
+    pub text: String,
+}
+
+impl JournalEntry {
+    /// An entry saying `text`.
+    pub fn new(time: DateTime<Utc>, text: impl Into<String>) -> Self {
+        Self {
+            time,
+            text: text.into(),
         }
     }
 }
