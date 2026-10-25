@@ -856,20 +856,6 @@ impl Trading {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let (header, _) = ui.allocate_exact_size(vec2(width, 32.0), Sense::hover());
-                for ((_, column), cell) in columns.iter().zip(edges(header)) {
-                    let (x, align) = if column.right {
-                        (cell.right(), Align2::RIGHT_CENTER)
-                    } else {
-                        (cell.left(), Align2::LEFT_CENTER)
-                    };
-                    ui.painter().with_clip_rect(cell).text(
-                        egui::pos2(x, cell.center().y),
-                        align,
-                        column.title,
-                        heading.clone(),
-                        theme.ui.text_secondary,
-                    );
-                }
                 let chooser = Rect::from_min_size(
                     egui::pos2(
                         header.right().min(ui.clip_rect().right()) - 36.0,
@@ -877,6 +863,24 @@ impl Trading {
                     ),
                     vec2(24.0, 24.0),
                 );
+                let mut header_clip = ui.clip_rect();
+                header_clip.max.x = chooser.left() - 4.0;
+                for ((_, column), cell) in columns.iter().zip(edges(header)) {
+                    let (x, align) = if column.right {
+                        (cell.right(), Align2::RIGHT_CENTER)
+                    } else {
+                        (cell.left(), Align2::LEFT_CENTER)
+                    };
+                    ui.painter()
+                        .with_clip_rect(cell.intersect(header_clip))
+                        .text(
+                            egui::pos2(x, cell.center().y),
+                            align,
+                            column.title,
+                            heading.clone(),
+                            theme.ui.text_secondary,
+                        );
+                }
                 let chooser = ui.put(chooser, |ui: &mut Ui| {
                     IconButton::new(&icons::COLUMNS)
                         .size(ButtonSize::SM)
