@@ -88,6 +88,8 @@ struct Live {
     book: Book,
     /// Samples the book for the chart's depth history, when it keeps one.
     sampler: Option<Sampler>,
+    study_inputs: Vec<crate::studies::OrderFlowInput>,
+    tick_size: Option<f64>,
     taken: TakenIds,
     updates: Updates,
 }
@@ -213,6 +215,8 @@ impl Inbox {
             empty: false,
             book: Book::new(tick_size),
             sampler: None,
+            study_inputs: Vec::new(),
+            tick_size,
             taken: TakenIds {
                 order: VecDeque::new(),
                 ids: HashSet::new(),
@@ -233,6 +237,18 @@ impl Inbox {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
             live.updates.depth_columns.clear();
+        }
+    }
+
+    /// Connects active stream studies before their inputs are coalesced for the frame.
+    #[cfg(feature = "widget")]
+    pub(crate) fn study_inputs(
+        &self,
+        id: SubscriptionId,
+        inputs: Vec<crate::studies::OrderFlowInput>,
+    ) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.study_inputs = inputs;
         }
     }
 
@@ -537,12 +553,17 @@ impl Sink {
             {
                 return false;
             }
+            if !live.ahead(live.clock.bar_open(now), system) {
+                for input in &live.study_inputs {
+                    input.advance_time(&live.clock, now);
+                }
+            }
             let open = live.clock.bar_open(now);
             let Some(close) = live.last_close else {
                 return false;
             };
             if live.forming.is_none_or(|last| open <= last) || live.ahead(open, system) {
-                return false;
+                return !live.study_inputs.is_empty();
             }
             live.updates.bars.insert(
                 open,
@@ -611,6 +632,11 @@ impl Sink {
                 .as_ref()
                 .is_none_or(|old| quote.ts >= old.ts)
             {
+                if let Some(tick) = live.tick_size {
+                    for input in &live.study_inputs {
+                        input.push_quote(&live.clock, &quote, tick);
+                    }
+                }
                 live.updates.quote = Some(quote);
             }
         });
@@ -720,6 +746,13 @@ impl Live {
             Err(lost) => {
                 self.updates.rejected_depth += u64::from(lost.invalid);
                 self.updates.resnapshot |= lost.request;
+            }
+        }
+        if (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
+            .is_some_and(|limit| ts <= limit)
+        {
+            for input in &self.study_inputs {
+                input.book_levels(&self.clock, ts, self.book.levels());
             }
         }
     }

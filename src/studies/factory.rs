@@ -73,6 +73,28 @@ impl IndicatorFactory {
         };
 
         factory.register_builtin();
+        for kind in [
+            OrderFlowKind::Spread,
+            OrderFlowKind::BookSize {
+                levels: 10,
+                distance: 0.0,
+            },
+            OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+        ] {
+            let name = OrderFlowStudy::new(kind).name().to_owned();
+            factory.constructors.insert(
+                name,
+                (
+                    "Order flow",
+                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                ),
+            );
+        }
         factory
     }
 
@@ -444,6 +466,9 @@ mod tests {
         let mut duplicates = Vec::new();
         for name in names {
             let mut study = factory.create(&name).unwrap();
+            if study.order_flow_input().is_some() {
+                continue;
+            }
             study.calculate(&bars);
             let lines: Vec<Vec<String>> = study
                 .values()
@@ -604,6 +629,19 @@ mod tests {
             Box::new(VolProfileVisible::new(l(0))),
             Box::new(VolProfileFixed::new(l(0))),
             Box::new(TimePriceOpportunity::default()),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::Spread)),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::BookSize {
+                levels: l(0),
+                distance: x(0.0),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: l(0),
+                instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
+                seconds: l(0),
+            })),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
             Box::new(PriceVolumeTrendStudy::new(l(0))),

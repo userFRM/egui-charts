@@ -284,6 +284,12 @@ pub trait Indicator: Send {
     /// any previous state so the indicator can be recalculated on new data.
     fn calculate(&mut self, data: &[Bar]);
 
+    /// Optional source for exact stream studies, connected before feed updates are coalesced.
+    /// Hosts supplying their own events can push them through the returned handle.
+    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+        None
+    }
+
     /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,
     /// given that `data[..from]` is unchanged since the previous call. The values equal those of
     /// [`calculate`](Indicator::calculate) on the same data, bit for bit. After bars are

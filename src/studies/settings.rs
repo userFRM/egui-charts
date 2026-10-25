@@ -118,6 +118,10 @@ impl Indicator for ConfiguredStudy {
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
         self.study.set_input(id, value)
     }
+    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+        self.study.order_flow_input()
+    }
+
     fn calculate(&mut self, data: &[Bar]) {
         self.study.calculate(data);
     }
