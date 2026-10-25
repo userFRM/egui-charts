@@ -458,6 +458,9 @@ impl Chart {
                 config.show_grid &= member_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.price_map = Some(map);
+                if study.is_none() && id.is_some() {
+                    panel.price_formatter = self.price_label_formatter(map.transform().mode);
+                }
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = member_row > 0;
 
