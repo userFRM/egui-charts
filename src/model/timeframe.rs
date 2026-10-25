@@ -216,8 +216,12 @@ impl Timeframe {
 
     /// Convert a resolution string to Timeframe
     pub fn from_resolution(resolution: &str) -> Option<Self> {
+        if let Ok(timeframe) = resolution.parse::<Self>()
+            && timeframe.is_trade_based()
+        {
+            return Some(timeframe);
+        }
         match resolution {
-            value if value.ends_with('T') || value.ends_with('t') => value.parse().ok(),
             "1" => Some(Timeframe::Min1),
             "5" => Some(Timeframe::Min5),
             "15" => Some(Timeframe::Min15),
@@ -401,6 +405,14 @@ mod tests {
         assert_eq!("10t".parse::<Timeframe>(), Ok(ticks));
         assert_eq!(ticks.to_string(), "10t");
         assert_eq!(Timeframe::from_resolution("10T"), Some(ticks));
+        for text in ["100v", "10r", "100delta"] {
+            let timeframe: Timeframe = text.parse().unwrap();
+            assert_eq!(timeframe.to_string(), text);
+            assert_eq!(
+                Timeframe::from_resolution(&text.to_uppercase()),
+                Some(timeframe)
+            );
+        }
         assert!("0t".parse::<Timeframe>().is_err());
         assert!(serde_json::from_str::<Timeframe>(r#"{"Ticks":0}"#).is_err());
         assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));

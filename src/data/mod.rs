@@ -24,10 +24,6 @@ use std::fmt;
 use std::time::Duration;
 
 pub(crate) mod depth;
-#[cfg_attr(
-    not(any(test, feature = "widget")),
-    expect(dead_code, reason = "only the chart widget keeps a depth history")
-)]
 mod depth_history;
 mod footprint;
 mod orders;

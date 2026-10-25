@@ -486,6 +486,8 @@ impl Chart {
                 continue;
             }
             if updates.reset {
+                self.bar_close_time = None;
+                self.server_time_offset = None;
                 self.replace_main_data(Vec::new());
                 self.quote = None;
                 self.session_quote = None;
