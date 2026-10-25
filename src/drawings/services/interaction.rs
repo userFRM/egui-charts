@@ -519,10 +519,14 @@ mod tests {
                     (10.0, 1000.0)
                 };
                 fib.chart_points = vec![ChartPoint::new(0.0, start), ChartPoint::new(10.0, end)];
+                // An unlabelled level must not suppress the nearby price label.
+                let mut unlabelled = FibonacciLevel::new(ratio - 0.001, "", [33, 150, 243, 255]);
+                unlabelled.show_price = false;
                 fib.fib_config = Some(FibonacciConfig {
                     logarithmic,
                     show_background: true,
                     levels: vec![
+                        unlabelled,
                         FibonacciLevel::new(ratio, "level", [33, 150, 243, 255]),
                         FibonacciLevel::new(1.0, "end", [33, 150, 243, 255]),
                     ],

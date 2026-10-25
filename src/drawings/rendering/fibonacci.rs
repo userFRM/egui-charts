@@ -60,9 +60,10 @@ impl Drawing {
             // Draw line with extend support
             painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-            if label_ys
-                .iter()
-                .any(|previous| (y - previous).abs() < typography::XS + 2.0)
+            if (!level.show_price && level.label.is_empty())
+                || label_ys
+                    .iter()
+                    .any(|previous| (y - previous).abs() < typography::XS + 2.0)
             {
                 continue;
             }
@@ -144,9 +145,10 @@ impl Drawing {
                 // Draw line with extend support
                 painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
-                if label_ys
-                    .iter()
-                    .any(|previous| (y - previous).abs() < typography::XS + 2.0)
+                if (!level.show_price && level.label.is_empty())
+                    || label_ys
+                        .iter()
+                        .any(|previous| (y - previous).abs() < typography::XS + 2.0)
                 {
                     continue;
                 }
