@@ -667,11 +667,11 @@ impl Trading {
             };
             chart.trading_tags = lines.tags;
             chart.trading_outlined = lines.outlined;
-            self.pending = self.pending.take().or(lines.action);
-        }
-        if self.display.instant_orders {
-            let action = self.pending.take();
-            self.execute(action);
+            if self.display.instant_orders {
+                self.execute(lines.action);
+            } else {
+                self.pending = self.pending.take().or(lines.action);
+            }
         }
         if let Some(action) = &self.pending {
             let money = |value: f64| format!("{value:.decimals$}");
@@ -1122,6 +1122,36 @@ mod tests {
         current.send(Err(FeedError::NotSupported));
         trading.poll(&egui::Context::default(), &mut Toasts::new());
         assert!(trading.rules_ready);
+    }
+
+    #[test]
+    fn ladder_changes_still_wait_for_confirmation_with_instant_orders() {
+        let broker = Arc::new(Recorder::default());
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let ctx = egui::Context::default();
+        trading.load_rules("SYM");
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.display.instant_orders = true;
+        let order = Order::new(
+            OrderId::new("working"),
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0)),
+            OrderStatus::Working,
+        );
+        let mut changed = order.request.clone();
+        changed.order_type = OrderType::Limit(96.0);
+        let action = TradingLineAction::Modify(order, changed);
+        // The ladder hands confirmed changes to this queue through Action::Confirm.
+        trading.pending = Some(action.clone());
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.symbol = "SYM".into();
+        ctx.run_ui(Default::default(), |ui| {
+            chart.show(ui);
+            trading.show(ui, &mut chart);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(trading.pending, Some(action));
+        assert!(broker.modified.lock().unwrap().is_empty());
     }
 
     /// Line gestures wait for the actual confirmation button and send one broker call.
