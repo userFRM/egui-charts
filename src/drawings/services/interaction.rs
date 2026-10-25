@@ -480,24 +480,95 @@ mod tests {
         assert_eq!(hit(&mut fib, 329.2), Some(7));
     }
 
-    /// Prices 10 then 1000 on a logarithmic axis over 5 to 2000 and 500 px: a level is hit at the
-    /// y of its price, not at the interpolation of the anchors' y. The retracement's 0.5 level
-    /// is the price 505, at y 114.86; the extension's 0.618 level is 10 + 990 * 0.618 = 621.82,
-    /// at y 97.49. The anchors' interpolation puts the levels at 250 and 204.6.
+    /// Lines, labels, bands and selection share the configured price on either axis.
     #[test]
     fn fib_level_hits_follow_the_price_scale() {
+        use crate::drawings::{FibonacciConfig, FibonacciLevel};
         let interaction = DrawingInteraction::new();
-        let price_to_y =
-            |price: f64| (500.0 * (2000f64 / price).ln() / (2000f64 / 5.0).ln()) as f32;
-        for (tool, y) in [
-            (DrawingToolType::FibonacciRetracement, 114.86),
-            (DrawingToolType::FibonacciExtension, 97.49),
+        for (tool, logarithmic, ratio, want) in [
+            (DrawingToolType::FibonacciRetracement, false, 0.5, 505.0),
+            (DrawingToolType::FibonacciRetracement, false, 0.99, 990.1),
+            (DrawingToolType::FibonacciExtension, false, 0.618, 621.82),
+            (
+                DrawingToolType::FibonacciRetracement,
+                true,
+                0.236,
+                29.64831389524342,
+            ),
+            (DrawingToolType::FibonacciRetracement, true, 0.5, 100.0),
+            (
+                DrawingToolType::FibonacciRetracement,
+                true,
+                0.618,
+                172.1868574986006,
+            ),
+            (DrawingToolType::FibonacciExtension, true, 0.5, 100.0),
         ] {
-            let mut fib = Drawing::new(7, tool);
-            fib.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(10.0, 1000.0)];
-            fib.update_screen_coords(|bar| bar * 30.0, price_to_y);
-            let hit = interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
-            assert_eq!(hit, Some(7), "{tool:?}");
+            for log_scale in [false, true] {
+                let price_to_y = |price: f64| {
+                    if log_scale {
+                        (500.0 * (2000f64 / price).ln() / (2000f64 / 5.0).ln()) as f32
+                    } else {
+                        (500.0 - price * 0.2) as f32
+                    }
+                };
+                let mut fib = Drawing::new(7, tool);
+                let (start, end) = if tool == DrawingToolType::FibonacciRetracement {
+                    (1000.0, 10.0)
+                } else {
+                    (10.0, 1000.0)
+                };
+                fib.chart_points = vec![ChartPoint::new(0.0, start), ChartPoint::new(10.0, end)];
+                fib.fib_config = Some(FibonacciConfig {
+                    logarithmic,
+                    show_background: true,
+                    levels: vec![
+                        FibonacciLevel::new(ratio, "level", [33, 150, 243, 255]),
+                        FibonacciLevel::new(1.0, "end", [33, 150, 243, 255]),
+                    ],
+                    ..Default::default()
+                });
+                fib.update_screen_coords(|bar| bar * 30.0, price_to_y);
+                let y = price_to_y(want);
+                let hit =
+                    interaction.hit_test(Pos2::new(150.0, y), std::slice::from_ref(&fib), "1D");
+                assert_eq!(
+                    hit,
+                    Some(7),
+                    "{tool:?}, log levels {logarithmic}, log scale {log_scale}"
+                );
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 500.0));
+                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    if tool == DrawingToolType::FibonacciRetracement {
+                        fib.render_fibonacci(ui.painter(), rect);
+                    } else {
+                        fib.render_fibonacci_extension(ui.painter(), rect);
+                    }
+                });
+                let line = output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::LineSegment { points, .. } if (points[0].y-y).abs() < 1e-3 && (points[1].y-y).abs() < 1e-3));
+                let label = output.shapes.iter().any(|s| {
+                    matches!(&s.shape,
+                    egui::Shape::Text(t) if t.galley.text() == format!("level ({want:.2})")
+                        && t.pos.y + t.galley.size().y < y)
+                });
+                let band = output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::Rect(r) if (r.rect.top()-y).abs() < 1e-3 || (r.rect.bottom()-y).abs() < 1e-3));
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(Rect::from_min_size(t.pos, t.galley.size())),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(labels.windows(2).all(|pair| !pair[0].intersects(pair[1])));
+                output.drop_without_applying_deltas();
+                assert!(
+                    line && label && band,
+                    "{tool:?}, log levels {logarithmic}, log scale {log_scale}"
+                );
+            }
         }
     }
 

@@ -48,6 +48,7 @@ impl Drawing {
         let (x_start, x_end) = (x_range.min, x_range.max);
 
         // Draw lines and labels for visible levels
+        let mut label_ys: Vec<f32> = Vec::new();
         for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
             let lvl_color = Color32::from_rgba_unmultiplied(
                 level.color[0],
@@ -58,6 +59,14 @@ impl Drawing {
 
             // Draw line with extend support
             painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
+
+            if label_ys
+                .iter()
+                .any(|previous| (y - previous).abs() < typography::XS + 2.0)
+            {
+                continue;
+            }
+            label_ys.push(y);
 
             // Draw label with price if show_price is enabled
             let label_text = if level.show_price {
@@ -121,6 +130,7 @@ impl Drawing {
         let x_range = self.fib_level_x_range(&config, chart_rect);
         let (x_start, x_end) = (x_range.min, x_range.max);
 
+        let mut label_ys: Vec<f32> = Vec::new();
         for ((level, &y), &price_at_lvl) in visible_levels.iter().zip(ys).zip(&prices) {
             let lvl_color = Color32::from_rgba_unmultiplied(
                 level.color[0],
@@ -134,6 +144,14 @@ impl Drawing {
                 // Draw line with extend support
                 painter.hline(x_start..=x_end, y, Stroke::new(stroke::HAIRLINE, lvl_color));
 
+                if label_ys
+                    .iter()
+                    .any(|previous| (y - previous).abs() < typography::XS + 2.0)
+                {
+                    continue;
+                }
+                label_ys.push(y);
+
                 // Draw label with price if show_price is enabled
                 let label_text = if level.show_price {
                     format!("{} ({:.2})", level.label, price_at_lvl)
@@ -142,8 +160,11 @@ impl Drawing {
                 };
 
                 painter.text(
-                    Pos2::new(x_end - 80.0, y),
-                    egui::Align2::RIGHT_CENTER,
+                    Pos2::new(
+                        x_end - DESIGN_TOKENS.sizing.technical_labels.fib_label_offset_x,
+                        y - DESIGN_TOKENS.rounding.xl,
+                    ),
+                    egui::Align2::RIGHT_BOTTOM,
                     label_text,
                     egui::FontId::proportional(typography::XS),
                     lvl_color,
@@ -1014,12 +1035,29 @@ mod tests {
             crate::drawings::ChartPoint::new(10.0, 150.0),
             crate::drawings::ChartPoint::new(30.0, 130.0),
         ];
-        extension.update_screen_coords(|b| b, |p| (1000.0 / p) as f32);
-        let (_, prices) = extension.fib_levels().unwrap();
-        // C + ratio*(B-A): levels 0, 0.618 and 1 are 130, 160.9 and 180.
-        for (got, want) in prices.iter().take(3).zip([130.0, 160.9, 180.0]) {
-            assert!((got - want).abs() < 1e-4);
+        for (start, end, origin, logarithmic, ratio, want) in [
+            (100.0, 150.0, 130.0, false, 0.0, 130.0),
+            (100.0, 150.0, 130.0, false, 0.618, 160.9),
+            (100.0, 150.0, 130.0, false, 1.0, 180.0),
+            // C * (B/A)^0.5 = 20 * sqrt(100) = 200.
+            (10.0, 1000.0, 20.0, true, 0.5, 200.0),
+            (10.0, 1000.0, 0.0, true, 0.5, 495.0),
+            (10.0, 1000.0, -20.0, true, 0.5, 475.0),
+            (0.0, 1000.0, 20.0, true, 0.5, 520.0),
+            (10.0, 0.0, 20.0, true, 0.5, 15.0),
+        ] {
+            extension.chart_points[0].price = start;
+            extension.chart_points[1].price = end;
+            extension.chart_points[2].price = origin;
+            extension.fib_config = Some(FibonacciConfig {
+                logarithmic,
+                levels: vec![crate::drawings::FibonacciLevel::new(ratio, "level", [0; 4])],
+                ..FibonacciConfig::extension_default()
+            });
+            let (_, prices) = extension.fib_levels().unwrap();
+            assert!((prices[0] - want).abs() < 1e-4);
         }
+        extension.update_screen_coords(|b| b, |p| (1000.0 - p) as f32);
         extension.tool_type = crate::drawings::DrawingToolType::TrendBasedFibTime;
         let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
             extension.render_trend_based_fib_time(ui.painter(), rect)

@@ -579,10 +579,11 @@ mod tests {
             (true, -10.0, 0.5, 495.0),
         ] {
             for reverse in [false, true] {
-                let mut json = serde_json::to_value(FibonacciConfig::default()).unwrap();
-                json["logarithmic"] = logarithmic.into();
-                json["reverse"] = reverse.into();
-                let config: FibonacciConfig = serde_json::from_value(json).unwrap();
+                let config = FibonacciConfig {
+                    logarithmic,
+                    reverse,
+                    ..Default::default()
+                };
                 let (start, end) = if reverse {
                     (low, 1000.0)
                 } else {
@@ -594,47 +595,6 @@ mod tests {
                     "log {logarithmic}, reverse {reverse}, ratio {ratio}: {got} != {want}"
                 );
             }
-        }
-    }
-
-    /// A geometric swing projects from C, and every scale maps the resulting price.
-    #[test]
-    fn logarithmic_extension_and_saved_levels() {
-        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-        for (origin, want) in [(20.0, 200.0), (0.0, 495.0), (-20.0, 475.0)] {
-            let mut drawing = Drawing::new(7, DrawingToolType::FibonacciExtension);
-            drawing.chart_points = vec![
-                ChartPoint::new(0.0, 10.0),
-                ChartPoint::new(10.0, 1000.0),
-                ChartPoint::new(20.0, origin),
-            ];
-            let mut config = serde_json::to_value(FibonacciConfig::default()).unwrap();
-            config["logarithmic"] = true.into();
-            drawing.fib_config = Some(serde_json::from_value(config).unwrap());
-            // The 50% log extension is C * sqrt(1000/10) = 10*C.
-            for log_scale in [false, true] {
-                let map = |p: f64| {
-                    if log_scale {
-                        (500.0 - 100.0 * p.ln()) as f32
-                    } else {
-                        (1000.0 - p) as f32
-                    }
-                };
-                drawing.update_screen_coords(|b| b, map);
-                assert!((drawing.level_ys[3] - map(want)).abs() < 1e-4);
-            }
-            let mut json = serde_json::to_value(&drawing).unwrap();
-            assert_eq!(json["fib_config"]["logarithmic"], true);
-            let restored: Drawing = serde_json::from_value(json.clone()).unwrap();
-            assert_eq!(restored.fib_config, drawing.fib_config);
-            json["fib_config"]
-                .as_object_mut()
-                .unwrap()
-                .remove("logarithmic");
-            let mut legacy: Drawing = serde_json::from_value(json).unwrap();
-            legacy.chart_points = drawing.chart_points.clone();
-            let (_, prices) = legacy.fib_levels().unwrap();
-            assert!((prices[3] - (origin + 495.0)).abs() < 1e-9);
         }
     }
 }
