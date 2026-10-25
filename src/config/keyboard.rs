@@ -121,7 +121,8 @@ pub enum KeyboardAction {
     // Drawing tools
     /// Enable/disable drawing mode
     ToggleDrawingMode,
-    /// Delete selected drawing (Delete, Backspace)
+    /// Delete the selected drawings, or the selected study when no drawing is selected
+    /// (Delete, Backspace)
     DeleteSelectedDrawing,
     /// Escape/cancel current action (Escape)
     Cancel,
@@ -239,7 +240,7 @@ impl KeyboardAction {
             Self::ToggleVolume => "Toggle volume",
             Self::CycleChartType => "Cycle chart type",
             Self::ToggleDrawingMode => "Toggle drawing mode",
-            Self::DeleteSelectedDrawing => "Delete drawing",
+            Self::DeleteSelectedDrawing => "Delete drawing or study",
             Self::Cancel => "Cancel",
             Self::SetTimeframe1Min => "1 minute",
             Self::SetTimeframe5Min => "5 minutes",

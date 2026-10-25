@@ -255,7 +255,7 @@ fn projected_bars(bars: &[Bar], anchors: [ChartPoint; 3]) -> Option<(f32, Vec<Ba
             high: bar.high + shift,
             low: bar.low + shift,
             close: bar.close + shift,
-            ..*bar
+            ..bar.clone()
         })
         .collect();
     Some((at.bar_idx.round(), projected))

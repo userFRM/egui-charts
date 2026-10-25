@@ -11,6 +11,9 @@ pub fn render_volume_bar(
     _colors: &StyleColors,
     params: &BarRenderParams,
 ) {
+    if candle.is_whitespace() {
+        return;
+    }
     let theme = context.painter.ctx().active_theme();
     let color = if candle.is_bullish() {
         theme.chart.volume_up()

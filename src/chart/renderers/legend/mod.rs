@@ -29,7 +29,7 @@ pub enum QuoteSide {
 }
 
 /// An action on the zero-based study index in a legend's study slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StudyAction {
     /// Open the study's settings in the host.
     Settings(usize),
@@ -37,6 +37,14 @@ pub enum StudyAction {
     ToggleVisibility(usize),
     /// Remove the study.
     Remove(usize),
+    /// Open the study's menu at `pos`: below the more-actions button, or at the pointer after a
+    /// secondary click on the row.
+    Menu {
+        /// Zero-based study index.
+        index: usize,
+        /// Screen position of the menu's corner.
+        pos: Pos2,
+    },
 }
 
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
@@ -465,7 +473,7 @@ impl<'a> Legend<'a> {
                         layout.text(text, typography::MD, color, bounds.width());
                     }
                 }
-                let controls = layout.reserve(Vec2::new(60.0, 20.0)).intersect(bounds);
+                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()
                 } else {
@@ -473,7 +481,7 @@ impl<'a> Legend<'a> {
                 };
                 let row = Rect::from_min_max(row_start, Pos2::new(row_right, controls.bottom()))
                     .intersect(bounds);
-                let responses = study_controls(
+                let (responses, menu) = study_controls(
                     ui,
                     row,
                     controls,
@@ -488,6 +496,9 @@ impl<'a> Legend<'a> {
                     if response.clicked() {
                         study_settings = Some(intent);
                     }
+                }
+                if let Some(pos) = menu {
+                    study_settings = Some(StudyAction::Menu { index, pos });
                 }
                 layout.new_row();
             }
@@ -566,13 +577,16 @@ impl<'a> Legend<'a> {
     }
 }
 
+/// The row outline and its hide, settings, remove and more-actions buttons. Returns the first
+/// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
+/// corner of the study menu.
 pub(crate) fn study_controls(
     ui: &mut Ui,
     row: Rect,
     controls: Rect,
     id: egui::Id,
     visible: bool,
-) -> [Response; 3] {
+) -> ([Response; 3], Option<Pos2>) {
     let theme = ui.active_theme();
     let touch_id = egui::Id::unique("legend_touch_input");
     let input_touch = ui.input(|input| {
@@ -601,6 +615,10 @@ pub(crate) fn study_controls(
     let row_response = ui.interact(row, id.with("row"), Sense::click());
     row_response
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Study controls"));
+    let mut menu = row_response
+        .secondary_clicked()
+        .then(|| row_response.interact_pointer_pos())
+        .flatten();
     let clicked_elsewhere = row_response.clicked_elsewhere();
     let clicked = row_response.clicked();
     let selected = ui.ctx().data_mut(|data| {
@@ -616,7 +634,7 @@ pub(crate) fn study_controls(
     // Keep controls focusable while Tab transfers focus from their row.
     let focused = row_response.has_focus()
         || row_response.lost_focus()
-        || (0..3_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+        || (0..4_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -629,7 +647,7 @@ pub(crate) fn study_controls(
             egui::StrokeKind::Inside,
         );
     }
-    std::array::from_fn(|index| {
+    let buttons: [Response; 4] = std::array::from_fn(|index| {
         let rect = Rect::from_min_size(
             controls.min + Vec2::new(index as f32 * 20.0, 0.0),
             Vec2::splat(20.0),
@@ -639,7 +657,8 @@ pub(crate) fn study_controls(
             0 if visible => "Hide study",
             0 => "Show study",
             1 => "Study settings",
-            _ => "Remove study",
+            2 => "Remove study",
+            _ => "More actions",
         };
         let response = ui.interact(
             rect,
@@ -665,7 +684,8 @@ pub(crate) fn study_controls(
                 0 if visible => &crate::icons::icons::EYE,
                 0 => &crate::icons::icons::EYE_HIDE,
                 1 => &crate::icons::icons::SETTINGS,
-                _ => &crate::icons::icons::CLOSE,
+                2 => &crate::icons::icons::TRASH,
+                _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
             };
             icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
                 .paint_at(ui, rect.shrink(3.0));
@@ -674,12 +694,17 @@ pub(crate) fn study_controls(
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            [if visible { "−" } else { "+" }, "...", "×"][index],
+            [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
             FontId::proportional(14.0),
             theme.ui.text_secondary,
         );
         response
-    })
+    });
+    let [hide, settings, remove, more] = buttons;
+    if more.clicked() {
+        menu = Some(more.rect.left_bottom());
+    }
+    ([hide, settings, remove], menu)
 }
 
 struct Layout<'a> {
@@ -924,19 +949,22 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(200.0, 20.0));
-            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(60.0, 20.0));
+            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(220.0, 20.0));
+            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(80.0, 20.0));
+            let settings = controls.min + Vec2::new(30.0, 10.0);
             let frame = |events| {
                 let mut clicked = [false; 3];
+                let mut menu = None;
                 let output = ctx.run_ui(
                     egui::RawInput {
                         events,
                         ..Default::default()
                     },
                     |ui| {
-                        clicked =
-                            study_controls(ui, row, controls, egui::Id::unique("study"), true)
-                                .map(|response| response.clicked());
+                        let (buttons, opened) =
+                            study_controls(ui, row, controls, egui::Id::unique("study"), true);
+                        clicked = buttons.map(|response| response.clicked());
+                        menu = opened;
                     },
                 );
                 let painted = output.shapes.iter().any(|s| match &s.shape {
@@ -951,7 +979,7 @@ mod tests {
                     }
                 });
                 output.drop_without_applying_deltas();
-                (painted, clicked, focused_label)
+                (painted, clicked, focused_label, menu)
             };
             let touch = |pos, phase| Event::Touch {
                 device_id: egui::TouchDeviceId(0),
@@ -983,9 +1011,9 @@ mod tests {
                 ])
             };
             assert!(!frame(vec![Event::PointerGone]).0);
-            let first = tap(controls.center());
+            let first = tap(settings);
             assert_eq!(first.1, [false; 3], "the first tap only reveals controls");
-            let second = tap(controls.center());
+            let second = tap(settings);
             assert_eq!(
                 second.1,
                 [false, true, false],
@@ -999,12 +1027,25 @@ mod tests {
                 frame(vec![Event::PointerMoved(row.center())]).0,
                 "mouse hover reveals controls"
             );
+            // A secondary click on the row opens the menu at the pointer.
+            let pos = row.left_center() + Vec2::new(20.0, 0.0);
+            frame(vec![Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                let clicked = frame(vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+                assert_eq!(clicked.3, (!pressed).then_some(pos));
+            }
             assert!(!frame(vec![Event::PointerGone]).0);
             for (index, label) in [
                 "Study controls",
                 "Hide study",
                 "Study settings",
                 "Remove study",
+                "More actions",
             ]
             .into_iter()
             .enumerate()
@@ -1029,6 +1070,11 @@ mod tests {
                 assert_eq!(
                     activated.1,
                     std::array::from_fn(|button| index == button + 1)
+                );
+                // The menu opens below the more-actions button.
+                assert_eq!(
+                    activated.3,
+                    (index == 4).then(|| controls.min + Vec2::new(60.0, 20.0))
                 );
             }
 

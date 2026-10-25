@@ -5,10 +5,11 @@
 //! This normalises volatility, giving each bar equal "importance" in price
 //! terms.
 //!
-//! - [`to_range_bars_from_ticks`] -- build from tick data (exact).
+//! - [`to_range_bars_from_ticks`] -- build from trades (exact).
 //! - [`to_range_bars_from_ohlc`] -- approximate from OHLCV bars.
 
 use super::PriceBuilder;
+use super::Tick;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
@@ -110,27 +111,18 @@ impl RangeBar {
             low: self.low,
             close: self.close,
             volume: self.volume,
+            colors: None,
+            payload: None,
         }
     }
 }
 
-/// Minimal tick record for building range bars from raw trade data.
-#[derive(Debug, Clone)]
-pub struct TickData {
-    /// Trade price.
-    pub price: f64,
-    /// Trade size/volume.
-    pub volume: f64,
-    /// Trade timestamp.
-    pub ts: DateTime<Utc>,
-}
-
-/// Build range bars from raw tick data (exact construction). A tick's volume that would make its
-/// bar's volume overflow is left out.
+/// Build range bars from trades (exact construction). A trade's size that would make its bar's
+/// volume overflow is left out.
 ///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
-pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> Vec<RangeBar> {
+pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<RangeBar> {
     if ticks.is_empty() {
         return Vec::new();
     }
@@ -145,7 +137,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         high: first_tick.price,
         low: first_tick.price,
         close: first_tick.price,
-        volume: add_volume(0.0, first_tick.volume),
+        volume: add_volume(0.0, first_tick.size),
         start_time: first_tick.ts,
         end_time: first_tick.ts,
         range_size,
@@ -157,7 +149,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         curr_bar.high = curr_bar.high.max(tick.price);
         curr_bar.low = curr_bar.low.min(tick.price);
         curr_bar.close = tick.price;
-        curr_bar.volume = add_volume(curr_bar.volume, tick.volume);
+        curr_bar.volume = add_volume(curr_bar.volume, tick.size);
         curr_bar.end_time = tick.ts;
         curr_bar.tick_cnt += 1;
 
@@ -354,11 +346,13 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
     let mut total = 0.0;
     for i in (1..bars.len()).rev() {
         let (b, prev) = (&bars[i], &bars[i - 1]);
-        total += ((b.open - prev.close).abs()
+        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
+        total += (((b.open - prev.close).abs()
             + (b.high - b.open).abs()
             + (b.high - b.low)
             + (b.close - b.low).abs())
-            / size
+            / size)
+            .max(0.0)
             + 4.0;
         if total + (prev.high - prev.low) / size > super::MAX_WORK {
             return i;
@@ -410,6 +404,8 @@ mod tests {
                     low: base - 2.0,
                     close: base + 1.0,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -448,13 +444,16 @@ mod tests {
             (0.0, &[100.0, 0.0], &[(100.0, 100.0, 0.0, 0.0)]),
         ];
         for (range, prices, expected) in cases {
-            let ticks: Vec<TickData> = prices
+            let ticks: Vec<Tick> = prices
                 .iter()
                 .enumerate()
-                .map(|(i, &price)| TickData {
-                    price,
-                    volume: 1.0,
-                    ts: DateTime::from_timestamp(i as i64, 0).unwrap(),
+                .map(|(i, &price)| {
+                    Tick::new(
+                        DateTime::from_timestamp(i as i64, 0).unwrap(),
+                        price,
+                        1.0,
+                        None,
+                    )
                 })
                 .collect();
             let bars: Vec<_> = to_range_bars_from_ticks(&ticks, &RangeBarConfig::new(range))
@@ -479,11 +478,7 @@ mod tests {
     #[test]
     fn a_volume_that_would_overflow_is_left_out() {
         let ts = Utc::now();
-        let tick = |volume| TickData {
-            price: 100.0,
-            volume,
-            ts,
-        };
+        let tick = |volume| Tick::new(ts, 100.0, volume, None);
         let bar = |volume| Bar::new(ts, 100.0, 100.0, 100.0, 100.0, volume);
         let volumes = [f64::INFINITY, f64::MAX, f64::MAX];
         let config = RangeBarConfig::new(5.0);

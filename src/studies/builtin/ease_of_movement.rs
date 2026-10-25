@@ -162,6 +162,8 @@ mod tests {
             low,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 

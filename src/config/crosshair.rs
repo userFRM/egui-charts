@@ -1,7 +1,7 @@
 //! Crosshair options for the chart cursor overlay.
 //!
-//! Controls the crosshair mode (Normal vs Magnet-snap), visual style
-//! (Full / Dot / Arrow), line style (Solid / Dashed / Dotted), and colors.
+//! Controls the crosshair mode (free, or snapping to values), visual style
+//! (Full / Dot / Arrow / Hidden), the style of each line, and colors.
 
 /// Crosshair Options.
 ///
@@ -17,6 +17,16 @@ pub enum CrosshairMode {
     Normal,
     /// Magnet crosshair (snaps to the nearest visible OHLC or study value)
     Magnet,
+    /// Magnet crosshair that snaps the price pane to the bar's close only. Volume and study
+    /// panes snap to their values as with `Magnet`.
+    MagnetClose,
+}
+
+impl CrosshairMode {
+    /// Whether the crosshair snaps to values instead of following the pointer.
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, Self::Magnet | Self::MagnetClose)
+    }
 }
 
 /// Crosshair visual style
@@ -31,6 +41,9 @@ pub enum CrosshairStyle {
     Arrow,
     /// A fading pointer trail for presentations, with axis readouts.
     Demonstration,
+    /// No crosshair lines or axis labels. Legends, the data window and tooltips still follow
+    /// the pointer.
+    Hidden,
 }
 
 /// Line style for crosshair rendering (Solid, Dashed, Dotted)
@@ -43,6 +56,10 @@ pub enum CrosshairLineStyle {
     /// Dotted line (default)
     #[default]
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`
+    SparseDotted,
 }
 
 /// Crosshair options
@@ -51,11 +68,14 @@ pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,
 
-    /// Crosshair visual style (Full/Dot/Arrow)
+    /// Crosshair visual style (Full/Dot/Arrow/Hidden)
     pub style: CrosshairStyle,
 
-    /// Line style for crosshair (Solid/Dashed/Dotted)
-    pub line_style: CrosshairLineStyle,
+    /// Vertical line style
+    pub vert_line_style: CrosshairLineStyle,
+
+    /// Horizontal line style
+    pub horz_line_style: CrosshairLineStyle,
 
     /// Show vertical line
     pub vert_line_visible: bool,
@@ -78,8 +98,13 @@ pub struct CrosshairOptions {
     /// Show labels
     pub label_visible: bool,
 
-    /// Label background color (`Color32::PLACEHOLDER`: active theme)
-    pub label_background_color: Color32,
+    /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
+    /// active theme)
+    pub vert_label_background_color: Color32,
+
+    /// Background of the horizontal line's label on the price axis (`Color32::PLACEHOLDER`:
+    /// active theme)
+    pub horz_label_background_color: Color32,
 
     /// Label text color (`Color32::PLACEHOLDER`: active theme)
     pub label_text_color: Color32,
@@ -90,7 +115,8 @@ impl Default for CrosshairOptions {
         Self {
             mode: CrosshairMode::Normal,
             style: CrosshairStyle::Full,
-            line_style: CrosshairLineStyle::Dotted,
+            vert_line_style: CrosshairLineStyle::Dotted,
+            horz_line_style: CrosshairLineStyle::Dotted,
             vert_line_visible: true,
             horz_line_visible: true,
             vert_line_color: Color32::PLACEHOLDER,
@@ -98,7 +124,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
-            label_background_color: Color32::PLACEHOLDER,
+            vert_label_background_color: Color32::PLACEHOLDER,
+            horz_label_background_color: Color32::PLACEHOLDER,
             label_text_color: Color32::PLACEHOLDER,
         }
     }
@@ -118,7 +145,14 @@ impl CrosshairOptions {
         Self {
             vert_line_color: or(self.vert_line_color, chart.crosshair_line),
             horz_line_color: or(self.horz_line_color, chart.crosshair_line),
-            label_background_color: or(self.label_background_color, chart.crosshair_label_bg),
+            vert_label_background_color: or(
+                self.vert_label_background_color,
+                chart.crosshair_label_bg,
+            ),
+            horz_label_background_color: or(
+                self.horz_label_background_color,
+                chart.crosshair_label_bg,
+            ),
             label_text_color: or(self.label_text_color, chart.crosshair_label_text),
             ..*self
         }

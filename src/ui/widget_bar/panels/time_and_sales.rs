@@ -214,7 +214,7 @@ impl TimeAndSalesPanel {
                     let color = match trade.side {
                         Some(TradeSide::Buy) => theme.chart.candle_up,
                         Some(TradeSide::Sell) => theme.chart.candle_down,
-                        Some(TradeSide::Unknown) | None => theme.ui.text,
+                        None => theme.ui.text,
                     };
                     let time = trade.ts.with_timezone(&self.config.timezone);
                     for (column, text, color) in [
