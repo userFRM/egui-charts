@@ -32,7 +32,7 @@ impl Chart {
             .filter(|index| index.is_finite() && *index >= 0.0)
             .map(|index| index.round() as usize)
             .filter(|index| *index < bars.len());
-        if let Some(index) = hovered.or_else(|| bars.len().checked_sub(1)) {
+        if let Some(index) = hovered.or_else(|| bars.iter().rposition(|bar| !bar.is_whitespace())) {
             let bar = &bars[index];
             let _ = write!(
                 text,
@@ -44,7 +44,9 @@ impl Chart {
                 },
                 bar.time.to_rfc3339()
             );
-            if self.main_series_visible {
+            if self.main_series_visible && bar.is_whitespace() {
+                text.push_str(". No value");
+            } else if self.main_series_visible {
                 let decimals = self
                     .instrument()
                     .and_then(crate::scales::instrument_price_precision)
@@ -65,6 +67,8 @@ impl Chart {
                 };
                 let _ = write!(text, ". {}: {value}", study.label());
             }
+        } else if !bars.is_empty() {
+            text.push_str(". No values");
         }
         info.current_text_value = Some(text);
         info
@@ -160,6 +164,29 @@ mod tests {
                 );
                 #[cfg(feature = "studies")]
                 assert!(summary(&harness).contains("SMA: SMA(2): 14.50"));
+                let gap = Bar::whitespace(Utc.timestamp_opt(120, 0).unwrap());
+                let mut bars = harness.state().bars(super::super::SeriesId::MAIN).to_vec();
+                bars.push(gap.clone());
+                harness
+                    .state_mut()
+                    .set_data(super::super::SeriesId::MAIN, bars);
+                harness.run();
+                assert!(summary(&harness).contains("3 bars"));
+                assert!(summary(&harness).contains("Latest bar: 1970-01-01T00:01:00+00:00"));
+                let map = harness.state().get_chart_mapping();
+                harness.hover_at(egui::pos2(map.idx_to_x(2), map.rect.center().y));
+                harness.run();
+                assert!(
+                    summary(&harness).contains("Hovered bar: 1970-01-01T00:02:00+00:00. No value")
+                );
+                assert!(!summary(&harness).contains("NaN"));
+                harness.remove_cursor();
+                harness
+                    .state_mut()
+                    .set_data(super::super::SeriesId::MAIN, vec![gap]);
+                harness.run();
+                assert!(summary(&harness).contains("No values"));
+                assert!(!summary(&harness).contains("NaN"));
                 harness
                     .state_mut()
                     .set_data(super::super::SeriesId::MAIN, Vec::new());
