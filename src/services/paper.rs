@@ -61,25 +61,6 @@ struct State {
     journal: Vec<JournalEntry>,
 }
 
-/// The values a [`PaperAccount`] was created with, which [`State`] needs to value the account.
-struct Terms<'a> {
-    currency: &'a str,
-    initial: f64,
-    leverage: f64,
-    commission: f64,
-}
-
-fn capabilities() -> Capabilities {
-    Capabilities {
-        market: true,
-        limit: true,
-        stop: true,
-        stop_limit: true,
-        brackets: true,
-        modify: true,
-    }
-}
-
 /// Describes an order in the journal, such as "buy 2 AAPL limit 185".
 fn describe(request: &OrderRequest) -> String {
     let side = match request.side {
@@ -129,15 +110,6 @@ impl PaperAccount {
         self
     }
 
-    fn terms(&self) -> Terms<'_> {
-        Terms {
-            currency: &self.currency,
-            initial: self.initial,
-            leverage: self.leverage,
-            commission: self.commission,
-        }
-    }
-
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state
             .lock()
@@ -147,15 +119,14 @@ impl PaperAccount {
     /// Takes `price` as the last price of `symbol`: fills the working orders it reaches and
     /// revalues the position. Non-finite prices are ignored.
     pub fn set_price(&self, symbol: &str, price: f64) {
-        let terms = self.terms();
         let mut state = self.lock();
         if price.is_finite() && state.last.insert(symbol.to_owned(), price) != Some(price) {
-            state.reach(&terms, symbol, price);
+            state.reach(self, symbol, price);
             if let Some(mut position) = state.positions.remove(symbol) {
-                state.value(&terms, &mut position);
+                state.value(self, &mut position);
                 state.positions.insert(symbol.to_owned(), position.clone());
                 state.push(AccountEvent::Position(position));
-                state.push(state.account(&terms));
+                state.push(state.account(self));
             }
         }
     }
@@ -204,7 +175,7 @@ impl State {
     }
 
     /// Values `position` at the symbol's last price.
-    fn value(&self, terms: &Terms, position: &mut Position) {
+    fn value(&self, terms: &PaperAccount, position: &mut Position) {
         let last = self
             .last
             .get(&position.symbol)
@@ -219,8 +190,19 @@ impl State {
         position.margin = Some(size * last.abs() / terms.leverage);
     }
 
-    fn account(&self, terms: &Terms) -> AccountEvent {
-        let mut account = Account::new(terms.currency, self.balance, capabilities());
+    fn account(&self, terms: &PaperAccount) -> AccountEvent {
+        let mut account = Account::new(
+            &terms.currency,
+            self.balance,
+            Capabilities {
+                market: true,
+                limit: true,
+                stop: true,
+                stop_limit: true,
+                brackets: true,
+                modify: true,
+            },
+        );
         let open: f64 = self
             .positions
             .values()
@@ -266,7 +248,7 @@ impl State {
 
     /// Fills `order` in full at `price`: updates the net position, books the realised profit
     /// and the commission, and turns brackets into exit orders.
-    fn fill(&mut self, terms: &Terms, mut order: Order, price: f64) {
+    fn fill(&mut self, terms: &PaperAccount, mut order: Order, price: f64) {
         let request = order.request.clone();
         let signed = match request.side {
             OrderSide::Buy => request.quantity,
@@ -423,7 +405,7 @@ impl State {
     }
 
     /// Fills the working orders of `symbol` that `price` reached.
-    fn reach(&mut self, terms: &Terms, symbol: &str, price: f64) {
+    fn reach(&mut self, terms: &PaperAccount, symbol: &str, price: f64) {
         let mut index = 0;
         while index < self.working.len() {
             let order = &mut self.working[index];
@@ -494,10 +476,9 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
 
 impl Broker for PaperAccount {
     fn connect(&self, events: Events<AccountEvent>) {
-        let terms = self.terms();
         let mut state = self.lock();
         state.events = Some(events);
-        state.push(state.account(&terms));
+        state.push(state.account(self));
         for order in state.working.iter().chain(&state.finished) {
             state.push(AccountEvent::Order(order.clone()));
         }
@@ -516,7 +497,6 @@ impl Broker for PaperAccount {
     }
 
     fn place(&self, order: OrderRequest, reply: Reply<OrderId>) {
-        let terms = self.terms();
         let mut state = self.lock();
         let Some(&last) = state.last.get(&order.symbol) else {
             return reply.send(Err(FeedError::SymbolNotFound(order.symbol)));
@@ -530,23 +510,22 @@ impl Broker for PaperAccount {
         let mut order = Order::new(id, order, OrderStatus::Working);
         order.placed = Some(Utc::now());
         if order.request.order_type == OrderType::Market {
-            state.fill(&terms, order, last);
+            state.fill(self, order, last);
         } else {
             let symbol = order.request.symbol.clone();
             state.push(AccountEvent::Order(order.clone()));
             state.working.push(order);
             // A marketable limit or a reached stop fills at once.
-            state.reach(&terms, &symbol, last);
-            state.push(state.account(&terms));
+            state.reach(self, &symbol, last);
+            state.push(state.account(self));
         }
     }
 
     fn cancel(&self, id: OrderId, reply: Reply<()>) {
-        let terms = self.terms();
         let mut state = self.lock();
         if state.cancel_working(&id) {
             reply.send(Ok(()));
-            state.push(state.account(&terms));
+            state.push(state.account(self));
         } else {
             reply.send(Err(FeedError::Other(format!(
                 "order {id} is no longer working"
@@ -555,7 +534,6 @@ impl Broker for PaperAccount {
     }
 
     fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
-        let terms = self.terms();
         let mut state = self.lock();
         let Some(working) = state.working.iter().find(|working| working.id == id) else {
             return reply.send(Err(FeedError::Other(format!(
@@ -597,9 +575,9 @@ impl Broker for PaperAccount {
         ));
         // A limit moved through the market or a stop moved past it fills at once.
         if let Some(&last) = state.last.get(&symbol) {
-            state.reach(&terms, &symbol, last);
+            state.reach(self, &symbol, last);
         }
-        state.push(state.account(&terms));
+        state.push(state.account(self));
     }
 
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
