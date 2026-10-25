@@ -500,6 +500,107 @@ mod tests {
     }
 
     #[test]
+    fn curved_fills_keep_whitespace_and_baseline_bar_colours() {
+        use crate::model::{BarColors, LineType};
+        use crate::scales::{PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let mut bars: Vec<_> = [60.0, 70.0, 60.0, 0.0, 40.0, 30.0, 40.0]
+            .into_iter()
+            .map(|value| Bar::from_value(chrono::DateTime::UNIX_EPOCH, value))
+            .collect();
+        bars[3] = Bar::whitespace(bars[3].time);
+        bars[1].colors = Some(Box::new(BarColors {
+            top_line: Some(Color32::BLUE),
+            top_fill: Some(Color32::GOLD),
+            ..Default::default()
+        }));
+        for baseline in [false, true] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |ui| {
+                if baseline {
+                    let mut style = BaselineStyle::default();
+                    style.above.line_type = LineType::Curved;
+                    draw_baseline_segments(
+                        ui.painter(),
+                        &bars,
+                        0,
+                        &map,
+                        50.0,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                } else {
+                    let mut style = AreaStyle::default();
+                    style.line.line_type = LineType::Curved;
+                    render_area(
+                        ui.painter(),
+                        rect,
+                        &RenderContext::new(ui.painter(), rect),
+                        &bars,
+                        0,
+                        false,
+                        1.0,
+                        &StyleColors {
+                            bullish: Color32::GREEN,
+                            bearish: Color32::RED,
+                            text: Color32::WHITE,
+                            bullish_border: None,
+                            bearish_border: None,
+                            bullish_wick: None,
+                            bearish_wick: None,
+                            candle_border_width: 0.0,
+                        },
+                        &map,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                }
+            });
+            let meshes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .collect();
+            assert!(!meshes.is_empty());
+            for mesh in &meshes {
+                assert!(mesh.vertices.iter().all(|vertex| vertex.pos.is_finite()));
+                for triangle in mesh.indices.chunks_exact(3) {
+                    let xs: Vec<_> = triangle
+                        .iter()
+                        .map(|i| mesh.vertices[*i as usize].pos.x)
+                        .collect();
+                    assert!(xs.iter().all(|x| *x <= 20.0) || xs.iter().all(|x| *x >= 40.0));
+                }
+            }
+            if baseline {
+                assert!(
+                    meshes
+                        .iter()
+                        .flat_map(|mesh| &mesh.vertices)
+                        .any(|vertex| vertex.color == Color32::GOLD)
+                );
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::LineSegment { points, stroke } if stroke.color == Color32::BLUE && points[0].x >= 10.0 && points[1].x <= 20.0)));
+            }
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
     fn area_gradient_spans_the_fill_or_the_pane_on_either_side() {
         // From y=20 to y=100, y=60 is halfway, so 45% becomes 22.5%. Moving the visible high
         // to y=40 keeps the same endpoint opacities. An inverted fill reaches y=0 and spans the

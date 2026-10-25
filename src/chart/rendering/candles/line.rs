@@ -328,5 +328,45 @@ mod tests {
                 .fold(f32::INFINITY, f32::min)
         };
         assert!(distance(Pos2::new(15.0, 3.75)) <= 0.25);
+
+        // Changing colour at a control point keeps the same spline, and a later gap starts
+        // another path without letting its values change this curve's tangent.
+        let mut bars = vec![Bar::from_value(chrono::DateTime::UNIX_EPOCH, 1.0); 7];
+        bars[1].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::RED),
+            ..Default::default()
+        }));
+        bars[4] = Bar::whitespace(bars[4].time);
+        let all_points = [
+            points[0],
+            points[1],
+            points[2],
+            points[3],
+            Pos2::new(f32::NAN, f32::NAN),
+            Pos2::new(50.0, 5.0),
+            Pos2::new(60.0, 6.0),
+        ];
+        let style = LinePlotStyle {
+            line_type: LineType::Curved,
+            ..Default::default()
+        };
+        let output = egui::Context::default().run_ui(Default::default(), |ui| {
+            draw_bar_line(ui.painter(), &bars, &all_points, &style, false);
+        });
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path) => Some(path.points.clone()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        let mut joined = paths[0].clone();
+        for path in &paths[1..3] {
+            joined.extend_from_slice(&path[1..]);
+        }
+        assert_eq!(joined, curve);
+        assert_eq!(paths[3], all_points[5..]);
     }
 }

@@ -441,9 +441,15 @@ impl Chart {
         use crate::model::LastPriceAnimation;
         let styles = &self.chart_type_params.styles;
         let animation = styles.last_price_animation;
-        let Some(last) = self.state.shown().last() else {
+        let Some(index) = self
+            .state
+            .shown()
+            .iter()
+            .rposition(|bar| !bar.is_whitespace())
+        else {
             return;
         };
+        let last = &self.state.shown()[index];
         let price = self
             .config
             .price_source
@@ -455,6 +461,7 @@ impl Chart {
             &coords.price,
             price_rect,
             price,
+            last,
         )
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
@@ -476,10 +483,7 @@ impl Chart {
             LastPriceAnimation::Continuous => (now / period).fract(),
             _ => (now - started) / period,
         };
-        let point = Pos2::new(
-            coords.idx_to_x(self.state.shown().len() - 1),
-            coords.price.price_to_y(price),
-        );
+        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
         if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
             rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
             ui.ctx().request_repaint();
@@ -2174,6 +2178,7 @@ impl Chart {
                         &price_map,
                         price_rect,
                         value,
+                        bar,
                     ) {
                         rendering::candles::render_crosshair_marker(
                             &painter.with_clip_rect(price_rect),
@@ -2952,6 +2957,7 @@ mod tests {
     #[test]
     fn line_pulse_and_crosshair_marker_follow_their_bars() {
         use crate::model::{ChartType, LastPriceAnimation};
+        use egui::Color32;
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
         chart.set_chart_type(ChartType::Line);
@@ -2994,6 +3000,40 @@ mod tests {
             ),
             vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
         );
+        // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
+        // bar's own colour, and a hovered empty slot has no dot.
+        let mut bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        bars[98].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::GOLD),
+            ..Default::default()
+        }));
+        bars[99] = crate::model::Bar::whitespace(bars[99].time);
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        let map = chart.get_chart_mapping();
+        for (time, index, marker) in [(5.2, 98, true), (5.3, 99, false)] {
+            let hover = Pos2::new(
+                map.idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(hover)]);
+            for radius in [3.0, 5.0] {
+                let dots: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Circle(dot) if dot.radius == radius && dot.fill == Color32::GOLD => {
+                            Some(dot.center)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected = if radius == 3.0 || marker {
+                    vec![Pos2::new(map.idx_to_x(98), map.price_to_y(110.0))]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(dots, expected, "{radius} at {index}");
+            }
+        }
     }
 
     /// Axis buttons route their clicks without changing the price range or viewport.

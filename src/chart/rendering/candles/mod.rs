@@ -41,12 +41,18 @@ pub(crate) fn line_color_at(
     price_map: &PriceMap,
     rect: egui::Rect,
     value: f64,
+    bar: &crate::model::Bar,
 ) -> Option<egui::Color32> {
+    if bar.is_whitespace() {
+        return None;
+    }
+    let own = bar.colors.as_deref();
+    let color = own.and_then(|colors| colors.color);
     match chart_type {
-        ChartType::Line => Some(styles.line.color),
-        ChartType::StepLine => Some(styles.step_line.color),
-        ChartType::LineWithMarkers => Some(styles.line_with_markers.color),
-        ChartType::Area => Some(styles.area.line.color),
+        ChartType::Line => Some(color.unwrap_or(styles.line.color)),
+        ChartType::StepLine => Some(color.unwrap_or(styles.step_line.color)),
+        ChartType::LineWithMarkers => Some(color.unwrap_or(styles.line_with_markers.color)),
+        ChartType::Area => Some(color.unwrap_or(styles.area.line.color)),
         ChartType::Baseline => {
             let base = match baseline {
                 BaselineLevel::Price(price) => price,
@@ -55,9 +61,11 @@ pub(crate) fn line_color_at(
                 }
             };
             Some(if value >= base {
-                styles.baseline.above.color
+                own.and_then(|colors| colors.top_line)
+                    .unwrap_or(styles.baseline.above.color)
             } else {
-                styles.baseline.below.color
+                own.and_then(|colors| colors.bottom_line)
+                    .unwrap_or(styles.baseline.below.color)
             })
         }
         _ => None,
