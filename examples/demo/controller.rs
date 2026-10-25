@@ -3085,8 +3085,18 @@ mod tests {
             "Select a drawing first"
         );
         assert!(app.drawing_templates.templates.entries().is_empty());
-        app.chart
+        let mean = app
+            .chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+        let rsi = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::RSI::new(2)));
+        app.chart
+            .set_indicator_source(
+                mean,
+                egui_charts::studies::StudySource::Study { id: rsi.0, plot: 0 },
+            )
+            .unwrap();
         let mut drawing = Drawing::new(17, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(3.0, 100.0), ChartPoint::new(5.0, 200.0)];
         drawing.completed = true;
@@ -3125,6 +3135,8 @@ mod tests {
                 .entries()
                 .contains_key("Canvas")
         );
+        app.chart
+            .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
         app.handle_top_toolbar(
             &ctx,
             TopToolbarAction::ApplyIndicatorTemplate("Average".into()),
@@ -3132,6 +3144,14 @@ mod tests {
         assert_eq!(
             app.chart.indicators().next().unwrap().1.inputs()[0].value,
             egui_charts::studies::InputValue::Length(7)
+        );
+        let studies: Vec<_> = app.chart.indicators().collect();
+        assert_eq!(
+            studies[0].1.source(),
+            Some(egui_charts::studies::StudySource::Study {
+                id: studies[1].0.0,
+                plot: 0
+            })
         );
         let mut target = Drawing::new(23, DrawingToolType::TrendLine);
         target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];

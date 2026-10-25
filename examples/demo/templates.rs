@@ -4,6 +4,7 @@
 use super::DemoApp;
 use egui_charts::data::Reply;
 use egui_charts::services::{Storage, StoreKind};
+use egui_charts::studies::{InputValue, StudySource};
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,9 +46,22 @@ impl Storage for TemplateStorage {
 
 impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {
-        self.chart
-            .indicators()
-            .map(|(_, study)| StudyTemplate::from_study(study))
+        let studies: Vec<_> = self.chart.indicators().collect();
+        studies
+            .iter()
+            .map(|(_, study)| {
+                let mut template = StudyTemplate::from_study(*study);
+                // Saved sources refer to positions in this template, not the old chart's ids.
+                for (_, value) in &mut template.inputs {
+                    if let InputValue::Source(StudySource::Study { id, .. }) = value {
+                        *id = studies
+                            .iter()
+                            .position(|(source, _)| source.0 == *id)
+                            .unwrap_or(usize::MAX);
+                    }
+                }
+                template
+            })
             .collect()
     }
 
@@ -59,10 +73,30 @@ impl DemoApp {
         {
             Ok(studies) => self.user_action(|app| {
                 app.remove_all_indicators();
+                let mut ids = Vec::new();
                 for study in studies {
                     let inputs = super::study_input_summary(study.as_ref());
                     let id = app.chart.add_indicator(study);
                     app.chart.set_indicator_inputs(id, inputs);
+                    ids.push(id);
+                }
+                for (id, stored) in ids.iter().zip(template) {
+                    for (input, value) in &stored.inputs {
+                        if let InputValue::Source(StudySource::Study { id: parent, plot }) = value {
+                            let study = app.chart.indicator_mut(*id).expect("added study");
+                            study
+                                .set_input(
+                                    input,
+                                    InputValue::Source(StudySource::Study {
+                                        id: ids.get(*parent).map_or(usize::MAX, |id| id.0),
+                                        plot: *plot,
+                                    }),
+                                )
+                                .expect("validated study source");
+                            let inputs = super::study_input_summary(study);
+                            app.chart.set_indicator_inputs(*id, inputs);
+                        }
+                    }
                 }
             }),
             Err(error) => self.notify(error),
