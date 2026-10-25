@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// data and can be aggregated into bars, footprint charts, or volume
 /// profiles. Build it with [`Tick::new`]. A trade names no symbol: the
 /// [`Sink`](crate::data::Sink) it is pushed into stands for one instrument, so a
-/// trade holds no heap data and pushing one allocates nothing.
+/// trade holds no heap data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Tick {
@@ -137,12 +137,12 @@ impl TradeConditions {
     pub const EXTENDED_HOURS: Self = Self(1 << 4);
 
     /// Raw condition bits, including flags a newer feed may define.
-    pub fn bits(self) -> u16 {
+    pub(crate) fn bits(self) -> u16 {
         self.0
     }
 
     /// Restores condition bits without discarding unknown flags in a recording.
-    pub fn from_bits(bits: u16) -> Self {
+    pub(crate) fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
 
