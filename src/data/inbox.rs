@@ -137,6 +137,8 @@ pub(crate) struct Drained {
 
 /// What one subscription pushed since the last drain.
 pub(crate) struct Updates {
+    /// A replay seek discards data from the previous playback position.
+    pub(crate) reset: bool,
     /// One per slot, keyed by its open; the last one is the forming bar.
     pub(crate) bars: BTreeMap<DateTime<Utc>, (Bar, Origin)>,
     /// The trades folded into `bars`, in arrival order.
@@ -169,6 +171,7 @@ pub(crate) struct Updates {
 impl Updates {
     fn new(trades: Trades) -> Self {
         Self {
+            reset: false,
             bars: BTreeMap::new(),
             trades,
             depth: None,
@@ -397,6 +400,32 @@ pub struct Sink {
 }
 
 impl Sink {
+    /// Starts a new replay position on this subscription. The next chart drain clears prior
+    /// bars, trades, depth, quote and sampled history before applying subsequent pushes. Resets
+    /// trade ids and partial event bars too, so rewinding cannot double-count or retain future
+    /// state. Hosts coordinate outstanding history replies and call this on every symbol's sink
+    /// before dispatching `ReplayClock::seek`. Keep using the same subscription and sampler grid.
+    pub fn reset_replay(&self, time: DateTime<Utc>) {
+        self.update(|live| {
+            live.forming = None;
+            live.count_bar = None;
+            live.delta = 0.0;
+            live.event_closed = false;
+            live.last_trade = None;
+            live.last_close = None;
+            live.empty = false;
+            live.offset = time - Utc::now();
+            live.book = Book::new(live.tick_size);
+            live.orders = None;
+            live.orders_changed = true;
+            live.sampler = live.sampler.take().map(|s| Sampler::new(s.config));
+            live.taken.order.clear();
+            live.taken.ids.clear();
+            live.updates = Updates::new(live.updates.trades.empty());
+            live.updates.reset = true;
+        });
+    }
+
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
     /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
     /// of a day or longer is stamped inside its calendar period, as [`HistoryPage::bars`] describes. A
@@ -446,72 +475,7 @@ impl Sink {
     /// starts a fresh bar. History pages should contain complete count bars only.
     pub fn push_tick(&self, tick: Tick) {
         let system = Utc::now();
-        self.update(|live| {
-            if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
-                if !trades::valid(&tick) || live.ahead(tick.ts, system) {
-                    live.updates.rejected += 1;
-                } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
-                    live.updates.repeated_ticks += 1;
-                } else if live.last_trade.is_some_and(|last| tick.ts < last) {
-                    live.updates.late_ticks += 1;
-                } else if live.fold_trade_bar(&tick).is_err() {
-                    live.updates.rejected += 1;
-                } else {
-                    live.last_trade = Some(tick.ts);
-                    if let Some(id) = tick.id {
-                        live.taken.insert(id);
-                    }
-                    live.updates.trades.push(tick);
-                }
-                return;
-            }
-            let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
-            let ticks = Bar::new(open, price, price, price, price, tick.size);
-            let ahead = live.ahead(open, system);
-            let updates = &mut live.updates;
-            if !trades::valid(&tick) || ahead {
-                updates.rejected += 1;
-            } else if live.forming.is_some_and(|forming| open < forming) {
-                updates.late_ticks += 1;
-            } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
-                updates.repeated_ticks += 1;
-            } else {
-                let replace_empty = live.empty && live.forming == Some(open);
-                match updates.bars.entry(open) {
-                    Entry::Occupied(mut pending) if replace_empty => {
-                        pending.insert((ticks, Origin::Live));
-                    }
-                    Entry::Occupied(mut pending) => {
-                        let (bar, origin) = pending.get_mut();
-                        let Some(folded) = fold(bar, &ticks) else {
-                            updates.rejected += 1;
-                            return;
-                        };
-                        *bar = folded;
-                        if let Origin::Ticks(trades) = origin {
-                            *trades += 1;
-                        }
-                    }
-                    Entry::Vacant(slot) => {
-                        slot.insert((
-                            ticks,
-                            if replace_empty {
-                                Origin::Live
-                            } else {
-                                Origin::Ticks(1)
-                            },
-                        ));
-                    }
-                }
-                live.last_close = Some(price);
-                live.empty = false;
-                live.forming = Some(open);
-                if let Some(id) = tick.id {
-                    live.taken.insert(id);
-                }
-                updates.trades.push(tick);
-            }
-        });
+        self.update(|live| live.tick(tick, system));
     }
 
     /// Advances a time-based stream through `now`, opening an empty forming candle at the
@@ -597,19 +561,18 @@ impl Sink {
         time: DateTime<Utc>,
         orders: Vec<RestingOrder>,
     ) {
-        let mut trades = Vec::new();
         self.update(|live| {
             live.sample_book(time);
             let book = live
                 .orders
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.set_snapshot(sequence, time, orders);
-            trades = book.take_executions();
+            let trades = book.take_executions();
             live.sync_orders(sequence, result);
+            for trade in trades {
+                live.tick(trade, Utc::now());
+            }
         });
-        for trade in trades {
-            self.push_tick(trade);
-        }
     }
 
     /// Applies one order event with consecutive sequencing. Repeated sequences are ignored;
@@ -617,19 +580,18 @@ impl Sink {
     /// duplicate adds, invalid sizes and oversized executions lose the book. An execution's
     /// optional trade enters the raw trade store and carries the resting order id it filled.
     pub fn push_order_event(&self, sequence: u64, time: DateTime<Utc>, event: OrderEvent) {
-        let mut trades = Vec::new();
         self.update(|live| {
             live.sample_book(time);
             let book = live
                 .orders
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.event(sequence, time, event);
-            trades = book.take_executions();
+            let trades = book.take_executions();
             live.sync_orders(sequence, result);
+            for trade in trades {
+                live.tick(trade, Utc::now());
+            }
         });
-        for trade in trades {
-            self.push_tick(trade);
-        }
     }
 
     /// Latest best bid and ask. Bursts coalesce to the newest timestamp (last arrival on a tie).
@@ -745,6 +707,75 @@ impl Live {
             && open
                 .checked_sub_signed(TimeDelta::milliseconds(1))
                 .is_some_and(|before| self.clock.bar_open(before) > self.clock.bar_open(now))
+    }
+
+    fn tick(&mut self, tick: Tick, system: DateTime<Utc>) {
+        let live = self;
+
+        if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            if !trades::valid(&tick) || live.ahead(tick.ts, system) {
+                live.updates.rejected += 1;
+            } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+                live.updates.repeated_ticks += 1;
+            } else if live.last_trade.is_some_and(|last| tick.ts < last) {
+                live.updates.late_ticks += 1;
+            } else if live.fold_trade_bar(&tick).is_err() {
+                live.updates.rejected += 1;
+            } else {
+                live.last_trade = Some(tick.ts);
+                if let Some(id) = tick.id {
+                    live.taken.insert(id);
+                }
+                live.updates.trades.push(tick);
+            }
+            return;
+        }
+        let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
+        let ticks = Bar::new(open, price, price, price, price, tick.size);
+        let ahead = live.ahead(open, system);
+        let updates = &mut live.updates;
+        if !trades::valid(&tick) || ahead {
+            updates.rejected += 1;
+        } else if live.forming.is_some_and(|forming| open < forming) {
+            updates.late_ticks += 1;
+        } else if tick.id.is_some_and(|id| live.taken.ids.contains(&id)) {
+            updates.repeated_ticks += 1;
+        } else {
+            let replace_empty = live.empty && live.forming == Some(open);
+            match updates.bars.entry(open) {
+                Entry::Occupied(mut pending) if replace_empty => {
+                    pending.insert((ticks, Origin::Live));
+                }
+                Entry::Occupied(mut pending) => {
+                    let (bar, origin) = pending.get_mut();
+                    let Some(folded) = fold(bar, &ticks) else {
+                        updates.rejected += 1;
+                        return;
+                    };
+                    *bar = folded;
+                    if let Origin::Ticks(trades) = origin {
+                        *trades += 1;
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert((
+                        ticks,
+                        if replace_empty {
+                            Origin::Live
+                        } else {
+                            Origin::Ticks(1)
+                        },
+                    ));
+                }
+            }
+            live.last_close = Some(price);
+            live.empty = false;
+            live.forming = Some(open);
+            if let Some(id) = tick.id {
+                live.taken.insert(id);
+            }
+            updates.trades.push(tick);
+        }
     }
 
     /// Folds exact volume and delta thresholds atomically; raw fills stay intact for order flow.
@@ -981,6 +1012,7 @@ mod tests {
             ),
             (1, Some(8), Some(9))
         );
+        sink.push_order_event(4, time, OrderEvent::Cancel { id: 7 });
         sink.push_order_event(4, time, OrderEvent::Cancel { id: 7 });
         let (_, updates) = inbox.drain().updates.pop().unwrap();
         assert!(updates.resnapshot);

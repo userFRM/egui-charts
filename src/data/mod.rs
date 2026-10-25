@@ -31,7 +31,11 @@ pub(crate) mod depth;
 mod depth_history;
 mod footprint;
 mod orders;
+mod recording;
+mod replay;
 pub use orders::{OrderEvent, OrderQueue, RestingOrder};
+pub use recording::{RecordingReader, RecordingWriter};
+pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")

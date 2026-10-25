@@ -485,6 +485,16 @@ impl Chart {
             if link.subscription != Some(id) {
                 continue;
             }
+            if updates.reset {
+                self.replace_main_data(Vec::new());
+                self.quote = None;
+                self.session_quote = None;
+                link.trades = Trades::new(TRADE_CAPACITY);
+                link.order_book = None;
+                link.order_queue = None;
+                link.depth_history.iter_mut().for_each(DepthHistory::clear);
+                link.rebuild_bubbles();
+            }
             if !updates.bars.is_empty() {
                 let incoming = updates.bars.into_values().collect();
                 let merged = self.apply_by(&link.clock, incoming);
@@ -992,6 +1002,53 @@ mod tests {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
         }
+    }
+
+    #[test]
+    fn replay_reset_removes_future_data_from_the_chart() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve().send(Ok(Instrument::new("A")));
+        feed.page().send(page(bars(10), true));
+        frames.run(&mut chart);
+        let sink = feed.sink();
+        let time = bars(1)[0].time;
+        let future = time + TimeDelta::minutes(20);
+        sink.set_server_time(future);
+        sink.push_tick(Tick::new(future, 120.0, 9.0, None).with_id(7));
+        sink.push_depth_snapshot(
+            1,
+            OrderBook {
+                ts: future,
+                symbol: "A".into(),
+                bids: vec![],
+                asks: vec![],
+            },
+        );
+        frames.run(&mut chart);
+        assert_eq!(chart.trades(SeriesId::MAIN).count(), 1);
+        assert!(chart.order_book(SeriesId::MAIN).is_some());
+        sink.reset_replay(time);
+        sink.push_tick(Tick::new(time, 100.0, 2.0, None).with_id(7));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
+        assert_eq!(
+            (
+                chart.bars(SeriesId::MAIN)[0].close,
+                chart.bars(SeriesId::MAIN)[0].volume
+            ),
+            (100.0, 2.0)
+        );
+        assert_eq!(
+            chart
+                .trades(SeriesId::MAIN)
+                .map(|t| t.price)
+                .collect::<Vec<_>>(),
+            [100.0]
+        );
+        assert!(chart.order_book(SeriesId::MAIN).is_none());
     }
 
     #[test]

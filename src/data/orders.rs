@@ -209,7 +209,10 @@ impl OrderQueue {
         }
         if self.sequence.and_then(|s| s.checked_add(1)) != Some(sequence) {
             if self.held.iter().any(|(held, _, _)| *held == sequence) {
-                return Ok(());
+                return Err(Lost {
+                    invalid: false,
+                    request: false,
+                });
             }
             let lost = self.lose(false);
             if self
@@ -262,6 +265,9 @@ impl OrderQueue {
                 }
                 if let Some(size) = size {
                     order.size = size;
+                }
+                if !order.price.is_finite() || !order.size.is_finite() || order.size < 0.0 {
+                    return Err(invalid());
                 }
                 if order.size == 0.0 {
                     self.orders.remove(at);
@@ -351,6 +357,7 @@ mod tests {
             ("price change", 8, OrderEvent::Modify { id: 1, price: Some(99.0), size: None, keep_priority: true }, vec![(100.0, 5.0, 1), (99.0, 3.0, 1)], vec![2], false),
             ("keeps priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(2.0), keep_priority: true }, vec![(100.0, 7.0, 2)], vec![1, 2], false),
             ("loses priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(4.0), keep_priority: false }, vec![(100.0, 9.0, 2)], vec![2, 1], false),
+            ("invalid zero-size modify", 8, OrderEvent::Modify { id: 1, price: Some(f64::NAN), size: Some(0.0), keep_priority: true }, vec![], vec![], true),
             ("gap", 9, OrderEvent::Cancel { id: 1 }, vec![], vec![], true),
             ("unknown cancel", 8, OrderEvent::Cancel { id: 99 }, vec![], vec![], true),
             ("oversized execution", 8, OrderEvent::Execute { id: 1, size: 4.0, trade: None }, vec![], vec![], true),

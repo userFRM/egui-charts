@@ -136,6 +136,16 @@ impl TradeConditions {
     /// Executed outside the regular trading session.
     pub const EXTENDED_HOURS: Self = Self(1 << 4);
 
+    /// Raw condition bits, including flags a newer feed may define.
+    pub fn bits(self) -> u16 {
+        self.0
+    }
+
+    /// Restores condition bits without discarding unknown flags in a recording.
+    pub fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
     /// Whether any condition of `other` is set.
     pub fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
@@ -287,7 +297,7 @@ pub struct ExtendedHoursQuote {
 /// };
 /// assert_eq!(quote.spread(), 10.0);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Level1Quote {
     /// Ts of the quote
     pub ts: DateTime<Utc>,
@@ -332,7 +342,7 @@ impl Level1Quote {
 ///
 /// Represents the aggregate size (and optionally order count) resting
 /// at one price level on either the bid or ask side.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBookLevel {
     /// Price level
     pub price: f64,
@@ -348,7 +358,7 @@ pub struct OrderBookLevel {
 /// time. Bids are sorted descending (best bid first), asks ascending
 /// (best ask first). Use [`imbalance_ratio`](Self::imbalance_ratio) to
 /// gauge buying vs. selling pressure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBook {
     /// Ts of the snapshot
     pub ts: DateTime<Utc>,
