@@ -254,7 +254,7 @@ impl Chart {
             self.config = config.clone();
         }
         if let Some(options) = &snapshot.options {
-            self.chart_options = options.clone();
+            self.set_chart_options(options.clone());
         }
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
@@ -407,7 +407,12 @@ mod tests {
         let pane = chart.series_pane(rsi).unwrap();
         chart.move_pane(pane, 0);
         chart.set_pane_stretch_factor(pane, 2.0);
-        chart.apply_synced_time_scale(9.0, 4.0);
+        let mut options = chart.chart_options().clone();
+        options.time_scale.min_bar_spacing = 0.1;
+        options.time_scale.max_bar_spacing = 12.0;
+        options.time_scale.right_offset = 7.0;
+        chart.set_chart_options(options);
+        chart.apply_synced_time_scale(0.25, 4.0);
         let empty = chart.add_pane();
         chart.set_preserve_empty_pane(empty, true);
         chart.pane_layout.panes[0].collapsed = Some(true);
@@ -416,7 +421,14 @@ mod tests {
         chart.price_scale_mut().set_range(8.0, 12.0);
         chart.config_mut().candle_width = 0.42;
         chart.config_mut().watermark_text = Some("Saved chart".into());
+        chart.config_mut().grid_line_style = crate::model::LineStyle::LargeDashed;
+        chart.config_mut().vertical_grid_line_style = Some(crate::model::LineStyle::SparseDotted);
         chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        chart.chart_options.crosshair.vert_line_style = crate::config::CrosshairLineStyle::Dashed;
+        chart.chart_options.crosshair.horz_line_style =
+            crate::config::CrosshairLineStyle::SparseDotted;
+        chart.chart_options.crosshair.vert_label_background_color = egui::Color32::RED;
+        chart.chart_options.crosshair.horz_label_background_color = egui::Color32::BLUE;
         chart.chart_options.time_scale.timezone =
             crate::scales::TimezoneMode::Timezone(chrono_tz::Europe::Zurich);
         let mut drawing = Drawing::new(1, DrawingToolType::HorizontalLine);
@@ -458,7 +470,12 @@ mod tests {
         assert_eq!(panes[1], PaneId::MAIN);
         assert_eq!(restored.pane_series(panes[0]), [*rsi, *macd]);
         assert_eq!(restored.pane_stretch_factor(panes[0]), Some(2.0));
-        assert_eq!(restored.get_time_scale_state(), (9.0, 4.0));
+        assert_eq!(restored.get_time_scale_state(), (0.25, 4.0));
+        restored.scroll_to_real_time(false);
+        assert_eq!(restored.get_time_scale_state(), (0.25, 7.0));
+        restored.apply_synced_time_scale(99.0, 4.0);
+        assert_eq!(restored.get_time_scale_state(), (12.0, 4.0));
+        restored.apply_synced_time_scale(0.25, 4.0);
         assert_eq!(restored.config(), chart.config());
         assert_eq!(restored.chart_options(), chart.chart_options());
         assert_eq!(
