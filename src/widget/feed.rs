@@ -1979,5 +1979,25 @@ mod tests {
             [5.0, 18.0, -13.0],
             "decimal price-distance endpoints are inclusive"
         );
+        let input = chart
+            .indicators()
+            .find(|(id, _)| *id == ids[2])
+            .unwrap()
+            .1
+            .order_flow_input()
+            .unwrap();
+        input.clear();
+        input.push_trade(&chart.bar_clock(), &Tick::new(at(125), 100.0, 1.0, None));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            None,
+            "clearing an input removes earlier plot values"
+        );
+        assert_eq!(study.values().value(0, 1), None);
+        assert_eq!(study.values().value(0, 2), Some(1.0));
     }
 }

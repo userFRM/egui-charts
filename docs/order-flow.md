@@ -80,3 +80,6 @@ Inputs retain 10,000 bar outputs and at most 100,000 events per rolling window. 
 events at that limit, it gives no value until those events would have expired. This keeps memory
 bounded without silently understating a rate. The chart's existing trade store also retains at
 most 100,000 executions. Depth history has its own configurable retention and merge tiers.
+
+Clearing a source or evicting its oldest retained bar invalidates the affected plotted history,
+so earlier cached values cannot survive as stale data after a reset or retention change.

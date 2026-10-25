@@ -121,6 +121,8 @@ struct State {
     window: Window,
     instant: Window,
     revision: u64,
+    #[cfg(feature = "widget")]
+    reset_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
 }
 
@@ -145,6 +147,8 @@ impl OrderFlowInput {
             window: Window::default(),
             instant: Window::default(),
             revision: 0,
+            #[cfg(feature = "widget")]
+            reset_revision: 0,
             changes: BTreeMap::new(),
         })))
     }
@@ -173,6 +177,8 @@ impl OrderFlowInput {
             window: Window::default(),
             instant: Window::default(),
             revision,
+            #[cfg(feature = "widget")]
+            reset_revision: revision,
             changes: BTreeMap::new(),
         };
     }
@@ -184,7 +190,11 @@ impl OrderFlowInput {
 
     #[cfg(feature = "widget")]
     pub(crate) fn changed_since(&self, revision: u64) -> Option<DateTime<Utc>> {
-        self.state()
+        let state = self.state();
+        if state.reset_revision > revision {
+            return None;
+        }
+        state
             .changes
             .iter()
             .find(|(_, changed)| **changed > revision)
@@ -400,6 +410,10 @@ impl State {
             && let Some((time, _)) = self.bars.pop_first()
         {
             self.changes.insert(time, self.revision);
+            #[cfg(feature = "widget")]
+            {
+                self.reset_revision = self.revision;
+            }
         }
     }
 }
