@@ -182,6 +182,8 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
+            synced_crosshair_price: None,
+            last_crosshair: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
@@ -195,6 +197,8 @@ impl Chart {
             selection: SelectionState::new(),
             right_click: None,
             menu_open: false,
+            size: None,
+            merge_groups: Default::default(),
         }
     }
 

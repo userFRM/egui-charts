@@ -810,7 +810,7 @@ impl IndicatorPane {
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
         if indicator.is_volume() {
-            return super::volume::range(indicator, visible_range);
+            return super::volume::range(indicator, visible_range, None);
         }
         if let Some((min, max)) = self.config.y_range {
             return (min, max);
@@ -1150,6 +1150,7 @@ impl IndicatorPane {
                 &coords.to_mapping(rect, y_min, y_max),
                 y_min,
                 y_max,
+                None,
             );
             return;
         }
