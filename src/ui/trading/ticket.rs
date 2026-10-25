@@ -7,6 +7,7 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::account_panel::grouped;
 use super::dom::Ladder;
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
@@ -14,7 +15,6 @@ use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderRequest, OrderSide, OrderType, Position, Tick,
     TimeInForce, TradingRules,
 };
-use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
@@ -712,7 +712,7 @@ impl OrderTicket {
                     if let Some(touch) = touch {
                         swapped = swap(ui, "Enter the price or its distance in ticks");
                         let suffix = if in_ticks {
-                            grouped(*price, market.decimals)
+                            grouped(*price, market.decimals, false)
                         } else {
                             let reference = match (self.side, market.ask, market.bid) {
                                 (OrderSide::Buy, Some(_), _) => "Ask",
@@ -788,10 +788,10 @@ impl OrderTicket {
                             &if ticket.sizing == Sizing::Value {
                                 format!(
                                     "{} units",
-                                    grouped(quantity, decimals(rules.quantity_step))
+                                    grouped(quantity, decimals(rules.quantity_step), false)
                                 )
                             } else {
-                                format!("{} {currency}", grouped(entry * per_point, 2))
+                                format!("{} {currency}", grouped(entry * per_point, 2, false))
                             },
                         );
                     }
@@ -853,7 +853,11 @@ impl OrderTicket {
             let row = info(
                 ui,
                 "Est. margin",
-                &format!("{} / {}", grouped(margin, 2), grouped(available, 2)),
+                &format!(
+                    "{} / {}",
+                    grouped(margin, 2, false),
+                    grouped(available, 2, false)
+                ),
                 "",
                 theme.ui.text,
             );
@@ -892,23 +896,23 @@ impl OrderTicket {
         info(
             ui,
             "Tick value",
-            &grouped(tick_value, places),
+            &grouped(tick_value, places, false),
             currency,
             theme.ui.text,
         );
         info(
             ui,
             "Trade value",
-            &grouped(value, 2),
+            &grouped(value, 2, false),
             currency,
             theme.ui.text,
         );
         if let Some(exit) = request.take_profit {
-            let reward = grouped((exit - entry).abs() * per_point, 2);
+            let reward = grouped((exit - entry).abs() * per_point, 2, false);
             info(ui, "Reward", &reward, currency, theme.ui.success);
         }
         if let Some(exit) = request.stop_loss {
-            let risk = grouped((exit - entry).abs() * per_point, 2);
+            let risk = grouped((exit - entry).abs() * per_point, 2, false);
             info(ui, "Risk", &risk, currency, theme.ui.error);
         }
     }
@@ -962,14 +966,14 @@ impl OrderTicket {
             let inner = half.shrink2(vec2(12.0, 8.0));
             let anchor = align.pos_in_rect(&inner);
             text(ui, anchor, align, label, 13.0, text_color);
-            let price = price
-                .or(market.last)
-                .map_or("-".to_owned(), |price| grouped(price, market.decimals));
+            let price = price.or(market.last).map_or("-".to_owned(), |price| {
+                grouped(price, market.decimals, false)
+            });
             let below = anchor + vec2(0.0, 18.0);
             text(ui, below, align, &price, 17.0, text_color);
         }
         if let (Some(bid), Some(ask)) = (market.bid, market.ask) {
-            let spread = grouped(ask - bid, market.decimals);
+            let spread = grouped(ask - bid, market.decimals, false);
             let galley =
                 ui.painter()
                     .layout_no_wrap(spread, FontId::proportional(11.0), theme.ui.text);
@@ -1144,7 +1148,7 @@ impl OrderTicket {
                             &if bracket.1.mode == BracketMode::Price {
                                 format!("{} ticks", ((price - entry) / tick).abs().round())
                             } else {
-                                grouped(price, market.decimals)
+                                grouped(price, market.decimals, false)
                             },
                         );
                     });
@@ -1294,19 +1298,9 @@ pub(super) fn side_name(side: OrderSide) -> &'static str {
     }
 }
 
-/// `value` at `places` decimals with thousands separators, such as "-24,847.24".
-pub(super) fn grouped(value: f64, places: usize) -> String {
-    let text = CurrencyFormatter::new("", places).format(value.abs());
-    if value < 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
-        format!("-{text}")
-    } else {
-        text
-    }
-}
-
 /// An order as the send button and the confirmation write it: "1 ES @ 4,000.25 LIMIT".
 fn summary(request: &OrderRequest, decimals: usize, quantity_decimals: usize) -> String {
-    let at = |price: f64, kind: &str| format!(" @ {} {kind}", grouped(price, decimals));
+    let at = |price: f64, kind: &str| format!(" @ {} {kind}", grouped(price, decimals, false));
     let order_type = match request.order_type {
         OrderType::Limit(price) => at(price, "LIMIT"),
         OrderType::Stop(price) => at(price, "STOP"),
@@ -1315,7 +1309,7 @@ fn summary(request: &OrderRequest, decimals: usize, quantity_decimals: usize) ->
     };
     format!(
         "{} {}{order_type}",
-        grouped(request.quantity, quantity_decimals),
+        grouped(request.quantity, quantity_decimals, false),
         request.symbol
     )
 }

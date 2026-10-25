@@ -45,7 +45,7 @@ pub use crate::scales::TimezoneMode;
 /// Bundles all behavioural and interaction configuration into a single struct
 /// that can be passed to the chart widget.  Each field corresponds to a
 /// focused configuration sub-module.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartOptions {
     /// Time scale (horizontal) options
     pub time_scale: TimeScaleOptions,
@@ -70,4 +70,9 @@ pub struct ChartOptions {
 
     /// Tooltip display options (Floating, Tracking, Magnifier)
     pub tooltip: TooltipOptions,
+
+    /// Draw the main series or overlay study under the pointer above the others in the main
+    /// pane, in the priority a click selects them.
+    /// Default: false
+    pub hovered_series_on_top: bool,
 }

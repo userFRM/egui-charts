@@ -12,7 +12,7 @@ authors = ["userFRM"]
 keywords = ["trading", "charts", "finance", "egui", "candlestick"]
 categories = ["visualization", "gui", "graphics", "rendering::engine"]
 readme = "README.md"
-# `examples/demo` is a self-contained `eframe`+`wgpu`/Trunk workspace built only
+# `examples/demo` is a self-contained `eframe`+`glow`/Trunk workspace built only
 # by Trunk, never by the host crate.  Auto-discovery would otherwise pick up
 # `examples/demo/main.rs` as a `demo` example and try to build it here, so the
 # example set is declared explicitly instead.
@@ -57,6 +57,21 @@ name = "bare_chart"
 path = "examples/bare_chart.rs"
 required-features = ["widget"]
 
+[[example]]
+name = "volatility_smile"
+path = "examples/volatility_smile.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "yield_curve"
+path = "examples/yield_curve.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "primitives"
+path = "examples/primitives.rs"
+required-features = ["widget"]
+
 [[bench]]
 name = "bare_chart"
 path = "benches/bare_chart.rs"
@@ -82,12 +97,12 @@ harness = false
 required-features = ["widget"]
 
 [features]
-default = ["ui"]
+default = ["ui", "locales"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
 ## `Indicator` trait layer of `studies`) and does not depend on egui.
-widget = ["dep:egui", "dep:web-time"]
+widget = ["dep:egui", "dep:web-time", "dep:png"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
 ## build can compute the same studies.
 studies = []
@@ -98,8 +113,23 @@ icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
 ui = ["icons", "studies", "dep:thiserror"]
+## Month and weekday names and the AM/PM marker in the language of a locale, for
+## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
+## Without it those labels stay in English.
+locales = ["chrono/unstable-locales"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
+
+# The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
+# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
+# frame of `benches/bare_chart.rs` costs 30% more instructions than at `release`, at `z` 60% more
+# for a download only 1.5% smaller. `panic` and `strip` stay as they are: wasm32-unknown-unknown
+# aborts on panic anyway, and the web build keeps no symbols.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
 
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
@@ -107,9 +137,20 @@ serde = []
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
 # without a Linux backend.  `clipboard` gives text fields copy and paste.
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "glow", "x11", "wayland"] }
 egui = "0.37.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The tests measure text in egui's fonts, and the examples fall back to them for
+# the characters Roboto lacks.  The web build of the bare chart carries only the
+# Roboto that `theme::apply_to_egui` installs.
+egui = { version = "0.37.0", features = ["default_fonts"] }
+# The examples that draw random sample data run natively only.
 rand = "0.10.0"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# `examples/bare_chart.rs` starts its web runner from the page.
+wasm-bindgen-futures = "0.4.79"
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.
@@ -120,11 +161,13 @@ ecolor = { version = "0.37.0", features = ["serde"] }
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
 # The icon loader rasterises with the same resvg that egui_extras' SVG loader uses.
 resvg = { version = "0.45.1", default-features = false, optional = true }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
-chrono-tz = "0.10.4"
+chrono-tz = { version = "0.10.4", features = ["serde"] }
 web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
+# Encodes chart images rasterised by `Chart::export_png`.
+png = { version = "0.17.16", optional = true }
 thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"

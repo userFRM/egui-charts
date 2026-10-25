@@ -6,8 +6,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
+use super::account_panel::grouped;
 use super::ticket::{
-    Action, Market, chevron, field, grouped, muted, number, order_quantity, side_color, side_fill,
+    Action, Market, chevron, field, muted, number, order_quantity, side_color, side_fill,
     side_name, text, time_in_force_menu,
 };
 use crate::chart::{TradingLineAction, decimals, to_step};
@@ -151,7 +152,7 @@ fn tag(order_type: &OrderType) -> &'static str {
 
 /// A size without trailing zeros, such as "0.2703" or "1,250".
 fn format_size(value: f64) -> String {
-    let text = grouped(value, 4);
+    let text = grouped(value, 4, false);
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
@@ -369,7 +370,7 @@ impl Ladder {
                 }
                 None => theme.ui.text,
             };
-            let label = grouped(price(tick_index), market.decimals);
+            let label = grouped(price(tick_index), market.decimals, false);
             text(
                 ui,
                 cell.center(),
@@ -576,8 +577,8 @@ impl Ladder {
             let tag_response = tag_response.on_hover_text(format!(
                 "{} {} @ {} {label} · {}. Drag to move, right-click to cancel. {} order(s) here; click to choose",
                 side.label(),
-                grouped(working.request.quantity - working.filled, quantity_decimals),
-                grouped(at, market.decimals),
+                grouped(working.request.quantity - working.filled, quantity_decimals, false),
+                grouped(at, market.decimals, false),
                 working.id.0,
                 group.len(),
             ));
@@ -733,8 +734,8 @@ impl Ladder {
                     ),
                     format!(
                         "{} @ {}",
-                        grouped(position.quantity, quantity_decimals),
-                        grouped(position.average_price, market.decimals)
+                        grouped(position.quantity, quantity_decimals, false),
+                        grouped(position.average_price, market.decimals, false)
                     ),
                 ),
                 None => (theme.ui.text_muted, "Flat".to_owned()),
@@ -756,7 +757,7 @@ impl Ladder {
                 pnl if pnl < 0.0 => theme.ui.error,
                 _ => theme.ui.text_muted,
             };
-            let pnl = format!("{} {}", grouped(pnl, 2), market.currency);
+            let pnl = format!("{} {}", grouped(pnl, 2, false), market.currency);
             boxed(&mut halves[1], pnl.trim_end(), color);
         });
 

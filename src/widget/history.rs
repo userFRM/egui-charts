@@ -14,6 +14,10 @@ pub(super) struct ChartHistory {
     redo: Vec<Action>,
     pending: Option<Pending>,
     changed: bool,
+    /// User edits recorded, undone or redone, kept when the history is cleared.
+    pub(super) edits: u64,
+    /// The edits among them that changed drawings.
+    pub(super) drawing_edits: u64,
 }
 
 struct Pending {
@@ -63,7 +67,20 @@ impl ChartHistory {
         }
     }
 
+    /// Forgets every action, keeping the edit counts.
+    pub(super) fn clear(&mut self) {
+        *self = Self {
+            edits: self.edits,
+            drawing_edits: self.drawing_edits,
+            ..Self::default()
+        };
+    }
+
     fn push(&mut self, action: Action) {
+        self.edits += 1;
+        if action.drawings.can_undo() {
+            self.drawing_edits += 1;
+        }
         self.redo.clear();
         if self.undo.len() == 100 {
             self.undo.remove(0);
@@ -127,6 +144,7 @@ impl Study {
             && self.autoscale == other.autoscale
             && self.indicator.is_visible() == other.indicator.is_visible()
             && self.indicator.is_overlay() == other.indicator.is_overlay()
+            && self.indicator.scale() == other.indicator.scale()
             && self.indicator.settings() == other.indicator.settings()
             && self.indicator.colors() == other.indicator.colors()
             && inputs(self.indicator.as_ref()) == inputs(other.indicator.as_ref())
@@ -231,6 +249,7 @@ impl Chart {
         }
         if let Some(panes) = &action.panes
             && panes.maximized == self.pane_layout.maximized
+            && panes.main == self.pane_layout.main
             && panes.panes.len() == self.pane_layout.panes.len()
             && panes
                 .panes
@@ -329,6 +348,13 @@ impl Chart {
     /// reload it if [`Self::timeframe`] or [`Self::bar_clock`] changed, and synchronize their UI.
     pub fn take_history_changed(&mut self) -> bool {
         std::mem::take(&mut self.history.changed)
+    }
+
+    /// A count that changes with every user edit of the chart, undo and redo included, and with
+    /// every change of symbol. Compare it with the count at the last save to tell whether the
+    /// chart changed since, for example to save a layout automatically.
+    pub fn edit_count(&self) -> u64 {
+        self.history.edits
     }
 
     fn step_chart_history(&mut self, redo: bool) -> bool {
@@ -446,6 +472,10 @@ impl Chart {
             while self.drawings.undo() {}
         }
         self.drawings.swap_history(&mut action.drawings);
+        self.history.edits += 1;
+        if action.drawings.can_undo() || action.drawings.can_redo() {
+            self.history.drawing_edits += 1;
+        }
         if redo {
             self.history.undo.push(action);
         } else {

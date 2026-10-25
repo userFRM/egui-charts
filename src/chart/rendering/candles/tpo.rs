@@ -577,6 +577,8 @@ mod tests {
                 low: 98.0,
                 close: 103.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(30),
@@ -585,6 +587,8 @@ mod tests {
                 low: 101.0,
                 close: 106.0,
                 volume: 1200.0,
+                colors: None,
+                payload: None,
             },
             Bar {
                 time: start + Duration::minutes(60),
@@ -593,6 +597,8 @@ mod tests {
                 low: 104.0,
                 close: 105.0,
                 volume: 800.0,
+                colors: None,
+                payload: None,
             },
         ]
     }
@@ -716,6 +722,8 @@ mod tests {
                 low: 100.0,
                 close: 101.0,
                 volume: 1.0,
+                colors: None,
+                payload: None,
             })
             .collect();
         let mut config = TPOConfig::default();

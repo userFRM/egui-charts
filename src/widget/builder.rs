@@ -128,8 +128,12 @@ impl Chart {
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
+            primitives: Vec::new(),
+            next_primitive: 0,
             drawings: DrawingManager::new(),
             symbol_drawings: Default::default(),
+            drawing_store: None,
+            restored_studies: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             pane_options: Default::default(),
@@ -150,6 +154,12 @@ impl Chart {
             indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
+            horizontal_scale: None,
+            locale: None,
+            date_format: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -166,6 +176,8 @@ impl Chart {
             timeframe: None,
             feed_link: None,
             cursor_modes: CursorModeState::new(),
+            main_series_style: crate::model::SeriesStyle::default(),
+            last_price_pulse: std::cell::Cell::new(None),
             last_price_map: PriceMap::new(
                 PriceTransform::default(),
                 PriceRange::new(0.0, 100.0),
@@ -178,6 +190,8 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
+            synced_crosshair_price: None,
+            last_crosshair: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
@@ -191,6 +205,8 @@ impl Chart {
             selection: SelectionState::new(),
             right_click: None,
             menu_open: false,
+            size: None,
+            merge_groups: Default::default(),
         }
     }
 

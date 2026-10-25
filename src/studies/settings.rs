@@ -14,6 +14,10 @@ pub enum PlotPattern {
     Dashed,
     /// Equally spaced dots.
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap.
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`.
+    SparseDotted,
 }
 
 /// Geometry for one output line.
@@ -79,6 +83,7 @@ pub struct ConfiguredStudy {
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
     overlay: Option<bool>,
+    scale: Option<super::StudyScale>,
 }
 
 impl ConfiguredStudy {
@@ -97,6 +102,7 @@ impl ConfiguredStudy {
             timeframe: None,
             instrument_precision: None,
             overlay: None,
+            scale: None,
         }
     }
 }
@@ -219,7 +225,7 @@ impl Indicator for ConfiguredStudy {
         self.study.value_format()
     }
     fn scale(&self) -> super::StudyScale {
-        self.study.scale()
+        self.scale.unwrap_or_else(|| self.study.scale())
     }
     fn precision(&self) -> Option<usize> {
         self.settings
@@ -240,6 +246,9 @@ impl Indicator for ConfiguredStudy {
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
     }
+    fn zones(&self) -> &[super::StudyZone] {
+        self.study.zones()
+    }
     fn extend_right(&self) -> bool {
         self.study.extend_right()
     }
@@ -257,6 +266,10 @@ impl Indicator for ConfiguredStudy {
     }
     fn set_overlay(&mut self, overlay: bool) -> bool {
         self.overlay = Some(overlay);
+        true
+    }
+    fn set_scale(&mut self, scale: super::StudyScale) -> bool {
+        self.scale = Some(scale);
         true
     }
     fn is_visible(&self) -> bool {

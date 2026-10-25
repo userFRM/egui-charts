@@ -121,6 +121,8 @@ mod tests {
             low,
             close: (high + low) / 2.0,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 

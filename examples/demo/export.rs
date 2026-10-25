@@ -1,12 +1,13 @@
 //! Offscreen GPU rendering and readback for chart image delivery.
 
 use super::{Screenshot, ScreenshotTarget};
-use eframe::egui_wgpu::{self, wgpu};
+use eframe::egui_glow::Painter;
+use eframe::glow::{self, HasContext as _};
 use egui_charts::widget::export::ChartImage;
 use std::sync::{Arc, mpsc};
 
 pub(super) fn render_image(
-    state: &egui_wgpu::RenderState,
+    gl: &Arc<glow::Context>,
     mut frame: ChartImage,
     target: ScreenshotTarget,
     generation: u64,
@@ -14,117 +15,71 @@ pub(super) fn render_image(
     ctx: egui::Context,
 ) -> Result<(), String> {
     let [width, height] = frame.size;
-    let device = &state.device;
-    if width.max(height) > device.limits().max_texture_dimension_2d {
+    let mut painter =
+        Painter::new(gl.clone(), "", None, false).map_err(|error| error.to_string())?;
+    if width.max(height) as usize > painter.max_texture_side() {
+        painter.destroy();
         frame.textures_delta.clear();
         return Err("Image exceeds the GPU's maximum texture size".into());
     }
-    let extent = wgpu::Extent3d {
-        width,
-        height,
-        depth_or_array_layers: 1,
-    };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Chart export"),
-        size: extent,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let mut renderer =
-        egui_wgpu::Renderer::new(device, wgpu::TextureFormat::Rgba8Unorm, Default::default());
-    for (id, deltas) in frame.textures_delta.set.drain() {
-        for delta in deltas {
-            renderer.update_texture(device, &state.queue, id, &delta);
-        }
-    }
-    let screen = egui_wgpu::ScreenDescriptor {
-        size_in_pixels: frame.size,
-        pixels_per_point: 1.0,
-    };
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let commands = renderer.update_buffers(
-        device,
-        &state.queue,
-        &mut encoder,
-        &frame.primitives,
-        &screen,
-    );
-    {
-        let mut pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Chart export"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture.create_view(&Default::default()),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            })
-            .forget_lifetime();
-        renderer.render(&mut pass, &frame.primitives, &screen);
-    }
-    let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Chart export readback"),
-        size: u64::from(stride) * u64::from(height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: None,
-            },
-        },
-        extent,
-    );
-    state
-        .queue
-        .submit(commands.into_iter().chain([encoder.finish()]));
-    for id in frame.textures_delta.free.drain() {
-        renderer.free_texture(&id);
-    }
-    let readback = buffer.clone();
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let result = result.map_err(|error| error.to_string()).and_then(|()| {
-                let bytes = readback
-                    .slice(..)
-                    .get_mapped_range()
-                    .map_err(|error| error.to_string())?;
-                let pixels = bytes
-                    .chunks(stride as usize)
-                    .flat_map(|row| {
-                        row[..width as usize * 4].chunks_exact(4).map(|rgba| {
-                            egui::Color32::from_rgba_premultiplied(
-                                rgba[0], rgba[1], rgba[2], rgba[3],
-                            )
-                        })
-                    })
-                    .collect();
-                drop(bytes);
-                readback.unmap();
-                Ok(Arc::new(egui::ColorImage::new(
-                    [width as usize, height as usize],
-                    pixels,
-                )))
-            });
-            let _ = sender.send((result, target, generation));
-            ctx.request_repaint();
-        });
+    let image = paint(gl, &mut painter, &mut frame);
+    painter.destroy();
+    let image = image?;
+    let _ = sender.send((Ok(Arc::new(image)), target, generation));
+    ctx.request_repaint();
     Ok(())
+}
+
+/// Paints `frame` into a texture of its size and reads it back.
+fn paint(
+    gl: &glow::Context,
+    painter: &mut Painter,
+    frame: &mut ChartImage,
+) -> Result<egui::ColorImage, String> {
+    let [width, height] = frame.size;
+    // SAFETY: the context is current on this thread while the app runs, and the texture and
+    // framebuffer made here are unbound and deleted before returning.
+    unsafe {
+        let texture = gl.create_texture()?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA as i32,
+            width as i32,
+            height as i32,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(None),
+        );
+        let framebuffer = gl
+            .create_framebuffer()
+            .inspect_err(|_| gl.delete_texture(texture))?;
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+        gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(texture),
+            0,
+        );
+        let complete = gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE;
+        let image = complete.then(|| {
+            painter.clear(frame.size, [0.0; 4]);
+            painter.paint_and_update_textures(
+                frame.size,
+                1.0,
+                &frame.primitives,
+                &mut frame.textures_delta,
+            );
+            painter.read_screen_rgba(frame.size)
+        });
+        // The app paints to the default framebuffer.
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        gl.delete_framebuffer(framebuffer);
+        gl.delete_texture(texture);
+        image.ok_or_else(|| "The GPU cannot render an image of this size".to_owned())
+    }
 }

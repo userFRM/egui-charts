@@ -109,10 +109,12 @@ impl ChartSettingsState {
         let crosshair = &chart.chart_options().crosshair;
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
-        settings.crosshair.line_style = match crosshair.line_style {
+        settings.crosshair.line_style = match crosshair.horz_line_style {
             CrosshairLineStyle::Solid => LineStyle::Solid,
             CrosshairLineStyle::Dashed => LineStyle::Dashed,
             CrosshairLineStyle::Dotted => LineStyle::Dotted,
+            CrosshairLineStyle::LargeDashed => LineStyle::LargeDashed,
+            CrosshairLineStyle::SparseDotted => LineStyle::SparseDotted,
         };
         let decimals = chart
             .state()
@@ -199,11 +201,14 @@ impl ChartSettingsState {
         crosshair.vert_line_color = self.crosshair.color;
         crosshair.horz_line_width = self.crosshair.line_width;
         crosshair.vert_line_width = self.crosshair.line_width;
-        crosshair.line_style = match self.crosshair.line_style {
+        crosshair.horz_line_style = match self.crosshair.line_style {
             LineStyle::Solid => CrosshairLineStyle::Solid,
             LineStyle::Dashed => CrosshairLineStyle::Dashed,
             LineStyle::Dotted => CrosshairLineStyle::Dotted,
+            LineStyle::LargeDashed => CrosshairLineStyle::LargeDashed,
+            LineStyle::SparseDotted => CrosshairLineStyle::SparseDotted,
         };
+        crosshair.vert_line_style = crosshair.horz_line_style;
         let config = chart.config_mut();
         config.bullish_color = self.candle_colors.body_up;
         config.bearish_color = self.candle_colors.body_down;

@@ -24,8 +24,8 @@ text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helveti
 <text x="60" y="246">with the symbol search and storage traits an app implements.</text>
 <text class="h" x="40" y="302">+ Trading</text>
 <text class="f" x="840" y="302" text-anchor="end">default build: <tspan class="c">ui</tspan></text>
-<text x="40" y="328">Order tickets with a depth ladder, and order and position lines over the host's Broker trait.</text>
-<text x="40" y="350">Every build has the Broker trait.</text>
+<text x="40" y="328">A broker picker, tickets with a depth ladder, trading lines and an account panel.</text>
+<text x="40" y="350">Every build has the Broker trait and a paper account.</text>
 <text class="h" x="20" y="406">+ Order flow</text>
 <text class="f" x="860" y="406" text-anchor="end">no feature yet</text>
 <text x="20" y="432">Footprint, TPO, volume profile, depth heatmap and cumulative delta.</text>
