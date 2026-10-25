@@ -197,6 +197,11 @@ impl DemoApp {
         let (session, adjusted) = self.live.view(self.chart.extended_hours());
         self.timeframe_toolbar.set_session(session);
         self.timeframe_toolbar.state.adjust_for_dividends = adjusted;
+        self.refresh_interval_control();
+        self.top_toolbar.chart_type_selector.current = self.state.chart_type;
+    }
+
+    pub(super) fn refresh_interval_control(&mut self) {
         use egui_charts::ui::top_toolbar::components::timeframe_selector::{
             Timeframe as Interval, TimeframeUnit as Unit,
         };
@@ -216,7 +221,6 @@ impl DemoApp {
         };
         self.top_toolbar.timeframe_selector.current =
             Interval::new(value.min(u32::MAX as u64) as u32, unit);
-        self.top_toolbar.chart_type_selector.current = self.state.chart_type;
     }
 
     pub(super) fn show_layout_tabs(&mut self, ui: &mut egui::Ui) {

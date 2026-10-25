@@ -1,6 +1,6 @@
 //! Timeframe (bar aggregation interval) for financial charts.
 //!
-//! A [`Timeframe`] specifies the time window or execution count represented by a bar.  The library
+//! A [`Timeframe`] specifies the time window or execution-based threshold represented by a bar.  The library
 //! ships with standard presets from 100 ms up to 1 month, and a [`Custom`](Timeframe::Custom)
 //! variant for arbitrary intervals.
 //!
@@ -35,6 +35,9 @@ use std::str::FromStr;
 /// | Tier         | Variants                                               |
 /// |-------------|-------------------------------------------------------|
 /// | Tick count  | `Ticks(count)` -- a nonzero number of executions         |
+/// | Volume      | `Volume(units)` -- exact traded volume                   |
+/// | Range       | `Range(ticks)` -- price range in instrument ticks        |
+/// | Delta       | `Delta(units)` -- absolute buy minus sell volume         |
 /// | Millisecond | `Ms100`, `Ms250`, `Ms500`                              |
 /// | Second      | `Sec1` .. `Sec30`                                      |
 /// | Minute      | `Min1`, `Min5`, `Min15`, `Min30`                       |
@@ -150,7 +153,7 @@ impl Timeframe {
         )
     }
 
-    /// Returns the preset time intervals in ascending duration order. Count intervals are excluded.
+    /// Returns the preset time intervals in ascending duration order. Trade-based intervals are excluded.
     pub fn all() -> Vec<Timeframe> {
         vec![
             Timeframe::Ms100,
@@ -174,7 +177,7 @@ impl Timeframe {
     }
 
     /// Duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes.
-    /// Count intervals have no time duration and return zero; do not use them to step time.
+    /// Trade-based intervals have no time duration and return zero; do not use them to step time.
     pub fn duration_ms(&self) -> i64 {
         match self {
             Timeframe::Ticks(_)
@@ -204,7 +207,7 @@ impl Timeframe {
         }
     }
 
-    /// Duration as a chrono value; zero for count intervals.
+    /// Duration as a chrono value; zero for trade-based intervals.
     pub fn duration(&self) -> Duration {
         Duration::milliseconds(self.duration_ms())
     }

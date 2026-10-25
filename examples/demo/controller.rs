@@ -610,6 +610,7 @@ impl DemoApp {
         self.chart.set_timeframe(tf);
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
+        self.refresh_interval_control();
         // Source playback stays on its own interval when the display interval changes.
         self.configure_replay_intervals();
         self.push_replay_window_to_chart();
@@ -3083,6 +3084,11 @@ mod tests {
         assert_eq!(app.state.timeframe, Timeframe::Min15);
         assert_eq!(app.state.timeframe.duration_ms(), 900_000);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
+        assert_eq!(app.top_toolbar.timeframe_selector.current.value, 15);
+        assert_eq!(
+            app.top_toolbar.timeframe_selector.current.unit,
+            egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute
+        );
         let original = app.chart.config().background_color;
         let mut settings = app.settings_state.clone();
         settings.chart_basic_styles.background_color = egui::Color32::RED;

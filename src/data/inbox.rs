@@ -466,13 +466,13 @@ impl Sink {
     /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
     /// [`Sink::set_server_time`] describes.
     ///
-    /// Count intervals start at the first accepted execution of the subscription. Replay the
+    /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
     /// retained executions on resubscription to rebuild a partial bar. Count bars use the first
     /// trade's time; if that would duplicate a bar time, it advances by one nanosecond. Original
     /// execution times remain unchanged. Volume and delta fills split exactly at the threshold;
     /// range bars need the instrument tick size and close at the first real fill reaching it.
     /// A fill producing more than 100,000 bars is rejected atomically. A pushed trade-based bar must be complete: the next trade
-    /// starts a fresh bar. History pages should contain complete count bars only.
+    /// starts a fresh bar. History pages should contain complete trade-based bars only.
     pub fn push_tick(&self, tick: Tick) {
         let system = Utc::now();
         self.update(|live| live.tick(tick, system));

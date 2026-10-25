@@ -71,7 +71,7 @@ impl BarClock {
 
     /// Open time of the bar containing `t`. Bars shorter than a day align to local midnight,
     /// weekly bars to Monday, monthly bars to the first day of the month, and other bars to the
-    /// Unix epoch. Count bars retain their exact opening timestamp.
+    /// Unix epoch. Trade-based bars retain their exact opening timestamp.
     pub fn bar_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
         let Some(timeframe) = self.timeframe else {
             return t;
