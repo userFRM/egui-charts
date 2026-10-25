@@ -485,6 +485,9 @@ mod tests {
         );
         study.set_bar_clock(&BarClock::new(Timeframe::Min5));
         assert_eq!(study.lower_timeframe(), Some(Timeframe::Min1));
+        study.set_bar_clock(&BarClock::new(Timeframe::Ms100));
+        assert_eq!(study.lower_timeframe(), None);
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
         let bars: Vec<_> = [0, 5, 10, 15]
             .into_iter()
             .map(|m| {

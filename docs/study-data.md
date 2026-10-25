@@ -14,7 +14,7 @@ the viewport.
 
 Up/Down Volume needs actual intrabars from the host. Its `lower_timeframe` request uses one
 second on second charts, one minute on minute and hour charts, five minutes on daily charts
-and one hour on longer intervals. Tick-count charts have no request. Supply the same symbol
+and one hour on longer intervals. Subsecond and tick-count charts have no request. Supply the same symbol
 and session as the chart. Read the request again after a symbol or interval change:
 
 ```rust,ignore

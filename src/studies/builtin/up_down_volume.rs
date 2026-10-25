@@ -55,7 +55,7 @@ impl Indicator for UpDownVolume {
     }
     fn lower_timeframe(&self) -> Option<Timeframe> {
         let tf = self.clock.timeframe()?;
-        if matches!(tf, Timeframe::Ticks(_)) {
+        if matches!(tf, Timeframe::Ticks(_)) || tf.duration_ms() < Timeframe::Sec1.duration_ms() {
             return None;
         }
         Some(if tf.duration_ms() < Timeframe::Min1.duration_ms() {
