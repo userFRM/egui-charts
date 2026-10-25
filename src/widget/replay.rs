@@ -38,7 +38,7 @@ impl Chart {
                         self.replace_main_data(bars);
                     } else if let Some(item) = self.price_series.iter_mut().find(|s| s.id == id) {
                         item.bars = bars;
-                        item.revision += 1;
+                        item.revision = crate::model::next_revision();
                     }
                 }
                 self.quote = replay.quote;
@@ -146,7 +146,7 @@ impl Chart {
         for item in &mut self.price_series {
             if let Some(bars) = replay.bars.get(&item.id) {
                 item.bars = completed(bars, &clock, replay.time).to_vec();
-                item.revision += 1;
+                item.revision = crate::model::next_revision();
             }
         }
         self.replay = Some(replay);
@@ -163,10 +163,11 @@ impl Chart {
         self.apply_replay_window();
     }
 
-    pub(super) fn replay_update(&mut self, id: SeriesId, bar: Bar) {
+    /// Merges `bar` into the retained bars of `id`; returns whether they changed.
+    pub(super) fn replay_update(&mut self, id: SeriesId, bar: Bar) -> bool {
         let clock = self.clock();
         let Some(replay) = &mut self.replay else {
-            return;
+            return false;
         };
         let merged = merge(
             replay.bars.entry(id).or_default(),
@@ -176,6 +177,18 @@ impl Chart {
         );
         self.count_replay_rejections(id, merged.rejected);
         self.apply_replay_window();
+        merged.first_changed.is_some()
+    }
+
+    /// Removes the last `count` retained bars of `id` and returns them.
+    pub(super) fn replay_pop(&mut self, id: SeriesId, count: usize) -> Vec<Bar> {
+        let Some(replay) = &mut self.replay else {
+            return Vec::new();
+        };
+        let bars = replay.bars.entry(id).or_default();
+        let removed = bars.split_off(bars.len().saturating_sub(count));
+        self.apply_replay_window();
+        removed
     }
 
     fn count_replay_rejections(&mut self, id: SeriesId, rejected: u64) {

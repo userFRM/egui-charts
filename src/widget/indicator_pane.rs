@@ -605,7 +605,7 @@ impl IndicatorPane {
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
-                if options.mode == crate::config::CrosshairMode::Magnet
+                if options.mode.snaps()
                     && chart_rect.contains(pos)
                     && let Some(value) = crate::chart::renderers::snap_to_values(
                         pos.y,
@@ -834,6 +834,15 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for zone in indicator.zones().iter().filter(|zone| {
+            zone.bars.end > visible_range.start
+                && zone.bars.start < visible_range.end
+                && indicator.plot_style(zone.plot).visible
+        }) {
+            min_val = min_val.min(zone.bottom);
+            max_val = max_val.max(zone.top);
+        }
+
         if min_val != f64::MAX
             && (0..indicator.line_cnt()).any(|line| {
                 let plot = indicator.plot_style(line);
@@ -982,7 +991,7 @@ impl IndicatorPane {
         // Draw subtle grid lines
         if self.config.show_grid {
             if let Some(map) = self.price_map {
-                for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+                for mark in map.marks() {
                     painter.line_segment(
                         [
                             Pos2::new(rect.left(), mark.y_coord),
@@ -1244,7 +1253,7 @@ impl IndicatorPane {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
 
-        for mark in crate::scales::PriceMarkGenerator::new().generate_marks(&map) {
+        for mark in map.marks() {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
                 let label = indicator.format_value(mark.price);

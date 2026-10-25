@@ -374,7 +374,8 @@ mod tests {
                 let transform = state.fit_price_scale_with_series(
                     [&study as &dyn Indicator],
                     false,
-                    [],
+                    None,
+                    std::iter::empty(),
                     std::iter::empty(),
                 );
                 let fitted = state.price_scale().range();

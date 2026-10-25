@@ -12,17 +12,18 @@ use egui::{Modifiers, PointerButton, Pos2, Ui};
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
     pub time: DateTime<Utc>,
-    /// Price on the main pane, or the study/volume value on another pane.
+    /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the study owning the hovered pane.
+    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
+    /// reports no position.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
     /// Negative or past the last bar in whitespace.
     pub index: isize,
     /// Pointer position in UI points, the coordinates of the chart's `Response::rect`.
     pub pos: Pos2,
-    /// Pane counted from the top: `0` is the main pane, including its volume band, then each
-    /// study pane in display order.
+    /// Pane counted from the top among the panes drawn, the price pane with its volume band
+    /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
     /// Main series bar, or price-based element, at `index`; `None` in whitespace.
     pub bar: Option<Bar>,
@@ -97,11 +98,19 @@ pub enum ChartEvent {
         position: ChartPointer,
     },
     /// A successful history page or `set_data` completed, including an empty result.
-    /// Live updates and failed or obsolete feed replies do not emit this event.
+    /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
     DataLoaded {
         /// Bar series that received data.
         series: SeriesId,
         /// Total accepted bars now held by that series, after cleaning and merging.
+        bars: usize,
+    },
+    /// A live bar from `update` or the chart's feed changed the bars of a series, or `pop_bars`
+    /// removed some. Changes of one series in a row are reported once, with the latest count.
+    DataUpdated {
+        /// Bar series whose bars changed.
+        series: SeriesId,
+        /// Total bars now held by that series.
         bars: usize,
     },
     /// The symbol setter accepted a different symbol.
@@ -171,6 +180,21 @@ impl Chart {
         });
     }
 
+    pub(super) fn data_updated(&mut self, series: SeriesId) {
+        let bars = self.bars(series).len();
+        if let Some(ChartEvent::DataUpdated {
+            series: last,
+            bars: count,
+        }) = self.host_events.queue.back_mut()
+            && *last == series
+        {
+            *count = bars;
+        } else {
+            self.host_events
+                .push(ChartEvent::DataUpdated { series, bars });
+        }
+    }
+
     fn pointer_at(&self, ui: &Ui, pos: Pos2) -> Option<ChartPointer> {
         let scale = self.state.time_scale();
         let plot = self.last_rendered_price_rect;
@@ -179,32 +203,35 @@ impl Chart {
         let time = super::sync::time_at(shown, index)?;
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
-            if self.chart_options.crosshair.mode == crate::config::CrosshairMode::Magnet {
+            if self.chart_options.crosshair.mode.snaps() {
                 crate::chart::renderers::snap_to_values(pos.y, &map, values)
                     .unwrap_or_else(|| map.y_to_price(pos.y))
             } else {
                 map.y_to_price(pos.y)
             }
         };
-        let rendered = &self.last_rendered_indicator_panes;
-        let (series, price, pane) = if let Some(at) = rendered
-            .iter()
-            .position(|pane| pane.chart_rect.contains(pos))
-        {
-            let pane = &rendered[at];
-            // Each study in a pane is listed with the pane's rect, so count the rects.
-            let pane_idx = rendered[..=at]
-                .windows(2)
-                .filter(|pair| pair[0].chart_rect != pair[1].chart_rect)
-                .count();
-            let id = *self.study_ids.get(pane.indicator_idx)?;
-            let group = self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|group| group.studies.contains(&id))?;
+        // Panes are counted as drawn, from the top; the price pane may sit below others.
+        let pane_index = |id: super::PaneId| {
+            (self.pane_layout.panes.iter())
+                .filter(|pane| pane.id == super::PaneId::MAIN || self.pane_shown(pane))
+                .position(|pane| pane.id == id)
+                .unwrap_or_default()
+        };
+        let (series, price, pane) = if let Some(group) =
+            self.pane_layout.panes.iter().find(|group| {
+                group.id != super::PaneId::MAIN
+                    && group.rect.contains(pos)
+                    && plot.x_range().contains(pos.x)
+            }) {
+            let owner = *self.pane_series(group.id).first()?;
+            let map = group.price_map();
+            let closes = group.members.iter().filter_map(|id| {
+                let item =
+                    (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
+                bar_at.and_then(|index| self.series_close_at(item, index))
+            });
             let values = group
-                .studies
+                .members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
                 .map(|index| &self.rendered_studies().indicators()[index])
@@ -224,8 +251,9 @@ impl Chart {
                             bar_at.and_then(|index| study.plot_value(line, index))
                         })
                 })
+                .chain(closes)
                 .collect::<Vec<_>>();
-            (group.id, magnet(pane.mapping.price, values), pane_idx + 1)
+            (owner, magnet(map, values), pane_index(group.id))
         } else if self.last_rendered_volume_rect.contains(pos)
             && let Some(map) = self.host_events.volume_map
         {
@@ -233,12 +261,17 @@ impl Chart {
                 .map(|index| shown[index].volume)
                 .into_iter()
                 .collect();
-            (SeriesId::VOLUME, magnet(map, values), 0)
+            (
+                SeriesId::VOLUME,
+                magnet(map, values),
+                pane_index(super::PaneId::MAIN),
+            )
         } else if plot.contains(pos) {
             let snapped = bar_at.map_or(pos, |index| {
                 self.snap_crosshair(pos, &self.last_price_map, index)
             });
-            (SeriesId::MAIN, self.last_price_map.y_to_price(snapped.y), 0)
+            let price = self.last_price_map.y_to_price(snapped.y);
+            (SeriesId::MAIN, price, pane_index(super::PaneId::MAIN))
         } else {
             return None;
         };
@@ -397,15 +430,42 @@ mod tests {
         assert_eq!(chart.drain_events().count(), 0);
         // With a manual linear 100..200 range, a quarter of the way from bottom is 125.
         // The same fraction on an inverted map is 175; on a logarithmic map it is 100*2^0.25.
-        for (mode, inverted, price) in [
-            (crate::scales::PriceScaleMode::Normal, false, 125.0),
-            (crate::scales::PriceScaleMode::Normal, true, 175.0),
+        // Bars open at their low of 100 and close at their high of 200, so the magnet takes
+        // the nearer 100 and the close magnet 200.
+        use crate::config::CrosshairMode;
+        for (mode, inverted, crosshair, price) in [
+            (
+                crate::scales::PriceScaleMode::Normal,
+                false,
+                CrosshairMode::Normal,
+                125.0,
+            ),
+            (
+                crate::scales::PriceScaleMode::Normal,
+                true,
+                CrosshairMode::Normal,
+                175.0,
+            ),
             (
                 crate::scales::PriceScaleMode::Logarithmic,
                 false,
+                CrosshairMode::Normal,
                 100.0 * 2.0_f64.powf(0.25),
             ),
+            (
+                crate::scales::PriceScaleMode::Normal,
+                false,
+                CrosshairMode::Magnet,
+                100.0,
+            ),
+            (
+                crate::scales::PriceScaleMode::Normal,
+                false,
+                CrosshairMode::MagnetClose,
+                200.0,
+            ),
         ] {
+            chart.set_crosshair_mode(crosshair);
             let scale = chart.state.price_scale_mut();
             scale.options_mut().mode = mode;
             scale.options_mut().invert_scale = inverted;
@@ -478,6 +538,7 @@ mod tests {
                     .any(|event| event == ChartEvent::CrosshairMoved(None))
             );
         }
+        chart.set_crosshair_mode(CrosshairMode::Normal);
         #[cfg(feature = "studies")]
         {
             let id = chart.add_indicator(Box::new(crate::studies::RSI::default()));
@@ -543,15 +604,38 @@ mod tests {
             frame(&ctx, &mut chart, 1.95, vec![Event::PointerMoved(pos)]);
             let events = chart.drain_events().collect::<Vec<_>>();
             assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.target == Some(PointerTarget::Element(ChartElementId::Indicator(other))))), "{events:?}");
-            // The pane below the merged pair is the second pane, not the third study.
+            // The pane below the merged pair is the second pane, not the third study, and a pane
+            // of bar series counts as one, its pointer snapping to their closes.
+            let series = chart.add_series(crate::widget::SeriesOptions::default());
+            chart.set_data(series, bars.clone());
+            let series_pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(series, series_pane));
             let below = chart.add_indicator(Box::new(crate::studies::RSI::default()));
             frame(&ctx, &mut chart, 1.96, vec![Event::PointerGone]);
             chart.drain_events().for_each(drop);
+            let map = chart.series_price_map(series).unwrap();
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(70),
+                map.price_to_y(bars[70].close) + 2.0,
+            );
+            assert!(chart.pane_layout.panes[2].rect.contains(pos));
+            frame(&ctx, &mut chart, 1.965, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == series && point.pane == 2 && point.price == bars[70].close)), "{events:?}");
             let pane = chart.last_rendered_indicator_panes.last().unwrap();
             let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
             frame(&ctx, &mut chart, 1.97, vec![Event::PointerMoved(pos)]);
             let events = chart.drain_events().collect::<Vec<_>>();
-            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == below && point.pane == 2)), "{events:?}");
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == below && point.pane == 3)), "{events:?}");
+            // Panes count from the top as drawn, so the price pane moved to the bottom is fourth.
+            assert!(chart.move_pane(super::super::PaneId::MAIN, usize::MAX));
+            frame(&ctx, &mut chart, 1.98, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            let pos = chart.last_rendered_price_rect.center();
+            frame(&ctx, &mut chart, 1.99, vec![Event::PointerMoved(pos)]);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert!(events.iter().any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(point)) if point.series == SeriesId::MAIN && point.pane == 3)), "{events:?}");
+            chart.remove_series(series);
             chart.remove_series(below);
             chart.remove_series(other);
             chart.remove_series(id);
