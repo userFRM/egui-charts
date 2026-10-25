@@ -368,12 +368,17 @@ mod tests {
                 let InputValue::Length(length) = inputs[0].value else {
                     unreachable!()
                 };
+                assert!(
+                    bars.iter()
+                        .all(|bar| bar.payload.as_deref() == Some(&serde_json::json!(42)))
+                );
                 bars.iter()
                     .map(|bar| IndicatorValue::Single(bar.close * length as f64))
                     .collect()
             })
             .unwrap();
-        let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 3.0, 3.0, 3.0, 3.0, 1.0);
+        let mut bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 3.0, 3.0, 3.0, 3.0, 1.0);
+        bar.payload = Some(Arc::new(serde_json::json!(42)));
         study.calculate(std::slice::from_ref(&bar));
         for (id, bad) in [
             ("length", InputValue::Length(0)),
@@ -397,8 +402,10 @@ mod tests {
         for (id, value) in restored {
             cloned.set_input(&id, value).unwrap();
         }
-        cloned.calculate(&[bar]);
+        cloned.calculate(std::slice::from_ref(&bar));
         assert_eq!(cloned.values().value(0, 0), Some(12.0));
+        cloned.update_source(&[bar], 0, &[5.0]);
+        assert_eq!(cloned.values().value(0, 0), Some(20.0));
     }
 
     #[test]

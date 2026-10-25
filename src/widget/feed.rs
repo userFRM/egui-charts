@@ -145,6 +145,8 @@ impl Chart {
                     link.feed.unsubscribe(id);
                 }
                 link.pending.clear();
+            } else {
+                self.study_data.clear_feed();
             }
         }
     }

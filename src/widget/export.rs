@@ -84,8 +84,13 @@ impl Chart {
             "close".into(),
             "volume".into(),
         ];
+        let clock = self.bar_clock();
         for study in &mut studies {
             study.set_instrument(self.instrument());
+            if let Some(timeframe) = self.timeframe {
+                study.set_timeframe(timeframe);
+            }
+            study.set_bar_clock(&clock);
         }
         let requests = studies
             .iter()

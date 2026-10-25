@@ -326,7 +326,9 @@ impl Indicator for ConfiguredStudy {
                     .next_open(self.clock.bar_open(bar.time))
                     .unwrap_or(bar.time)
             };
-            let output = source.output_at(close, !self.wait_for_close && at + 1 == data.len());
+            let output = source.bar_at(bar.time).and_then(|_| {
+                source.output_at(close, !self.wait_for_close && at + 1 == data.len())
+            });
             self.aligned_bars.push(output);
             let values: Vec<_> = (0..self.study.line_cnt())
                 .map(|line| {

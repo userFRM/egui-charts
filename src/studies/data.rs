@@ -31,9 +31,10 @@ pub struct StudyData<'a> {
 impl StudyData<'_> {
     /// Index of the bar containing `time`, retaining missing intervals as gaps.
     pub fn bar_at(&self, time: DateTime<Utc>) -> Option<usize> {
+        let open = self.clock.bar_open(time);
         let at = self
             .bars
-            .partition_point(|bar| bar.time <= time)
+            .partition_point(|bar| self.clock.bar_open(bar.time) <= open)
             .checked_sub(1)?;
         self.clock.same_bar(self.bars[at].time, time).then_some(at)
     }
@@ -42,14 +43,16 @@ impl StudyData<'_> {
     /// appear only after their bar closes. Disabling `wait_for_close` also exposes the newest
     /// developing bar on the chart's latest bar, which may change with each feed update.
     pub(crate) fn output_at(&self, close: DateTime<Utc>, developing: bool) -> Option<usize> {
-        let end = self.bars.partition_point(|bar| bar.time < close);
+        let end = self
+            .bars
+            .partition_point(|bar| self.clock.bar_open(bar.time) < close);
         let at = end.checked_sub(1)?;
         if developing && at + 1 == self.bars.len() {
             return Some(at);
         }
         let closed = self
             .clock
-            .next_open(self.bars[at].time)
+            .next_open(self.clock.bar_open(self.bars[at].time))
             .is_some_and(|end| end <= close);
         if closed { Some(at) } else { at.checked_sub(1) }
     }

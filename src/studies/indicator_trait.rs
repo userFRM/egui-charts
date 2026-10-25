@@ -274,14 +274,20 @@ pub trait Indicator: Send {
     }
 
     /// Update using an aligned source column. Missing source values remain gaps.
-    /// The default substitutes the source for OHLC and retains timestamps and volume.
+    /// The default substitutes the source for OHLC and retains the bar's other fields.
     fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
         let bars: Vec<_> = data
             .iter()
             .enumerate()
             .map(|(at, bar)| {
                 let value = source.get(at).copied().unwrap_or(f64::NAN);
-                Bar::new(bar.time, value, value, value, value, bar.volume)
+                Bar {
+                    open: value,
+                    high: value,
+                    low: value,
+                    close: value,
+                    ..bar.clone()
+                }
             })
             .collect();
         self.update(&bars, from);

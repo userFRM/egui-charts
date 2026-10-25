@@ -272,77 +272,85 @@ mod tests {
                 [Some(20.0), Some(70.0), Some(120.0), None, Some(135.0)],
             ),
         ] {
-            let mut study = crate::studies::IndicatorFactory::new()
-                .create(name)
-                .unwrap();
-            let requests = study.data_requests();
-            let advancing = bars(&advancing);
-            let declining = bars(&declining);
-            let sources: Vec<_> = requests
-                .into_iter()
-                .zip([&advancing, &declining])
-                .map(|(request, bars)| StudyData {
-                    request,
-                    bars,
-                    clock: BarClock::new(Timeframe::Day1),
-                    instrument: None,
-                    timeframe: Timeframe::Day1,
-                })
-                .collect();
-            study.calculate(&chart);
-            assert!((0..chart.len()).all(|at| study.values().value(0, at).is_none()));
-            study.set_bar_clock(&BarClock::new(Timeframe::Day1));
-            study.update_data(&chart, 0, &sources);
-            let actual: Vec<_> = (0..chart.len())
-                .map(|at| study.values().value(0, at))
-                .collect();
-            assert_eq!(actual, expected, "{name}");
-            let half_days: Vec<_> = (0..11)
-                .map(|at| {
-                    Bar::new(
-                        DateTime::UNIX_EPOCH + Duration::hours(at * 12),
-                        1.0,
-                        1.0,
-                        1.0,
-                        1.0,
-                        1.0,
-                    )
-                })
-                .collect();
-            study.set_bar_clock(&BarClock::new("12h".parse().unwrap()));
-            study.update_data(&half_days, 0, &sources);
-            // Daily values become available on the second half-day; the missing day stays empty.
-            let aligned = [
-                None,
-                expected[0],
-                expected[0],
-                expected[1],
-                expected[1],
-                expected[2],
-                None,
-                None,
-                expected[2],
-                expected[4],
-                None,
-            ];
-            let actual: Vec<_> = (0..11).map(|at| study.values().value(0, at)).collect();
-            assert_eq!(actual, aligned, "{name} confirmed intervals");
-            study.update_data(&half_days[..10], 0, &sources);
-            assert_eq!(
-                study.values().value(0, 9),
-                expected[2],
-                "{name} forming chart bar"
-            );
-            study
-                .set_input("wait_for_close", InputValue::Toggle(false))
-                .unwrap();
-            study.update_data(&half_days[..9], 0, &sources);
-            assert_eq!(
-                study.values().value(0, 8),
-                expected[4],
-                "{name} developing interval"
-            );
-            assert_eq!(study.values().value(0, 0), None);
+            for stamp in [0, 6] {
+                let mut study = crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap();
+                let requests = study.data_requests();
+                let mut advancing = bars(&advancing);
+                let mut declining = bars(&declining);
+                for bar in &mut advancing {
+                    bar.time += Duration::hours(stamp);
+                }
+                for bar in &mut declining {
+                    bar.time += Duration::hours(stamp * 2);
+                }
+                let sources: Vec<_> = requests
+                    .into_iter()
+                    .zip([&advancing, &declining])
+                    .map(|(request, bars)| StudyData {
+                        request,
+                        bars,
+                        clock: BarClock::new(Timeframe::Day1),
+                        instrument: None,
+                        timeframe: Timeframe::Day1,
+                    })
+                    .collect();
+                study.calculate(&chart);
+                assert!((0..chart.len()).all(|at| study.values().value(0, at).is_none()));
+                study.set_bar_clock(&BarClock::new(Timeframe::Day1));
+                study.update_data(&chart, 0, &sources);
+                let actual: Vec<_> = (0..chart.len())
+                    .map(|at| study.values().value(0, at))
+                    .collect();
+                assert_eq!(actual, expected, "{name}");
+                let half_days: Vec<_> = (0..11)
+                    .map(|at| {
+                        Bar::new(
+                            DateTime::UNIX_EPOCH + Duration::hours(at * 12),
+                            1.0,
+                            1.0,
+                            1.0,
+                            1.0,
+                            1.0,
+                        )
+                    })
+                    .collect();
+                study.set_bar_clock(&BarClock::new("12h".parse().unwrap()));
+                study.update_data(&half_days, 0, &sources);
+                // Daily values become available on the second half-day; the missing day stays empty.
+                let aligned = [
+                    None,
+                    expected[0],
+                    expected[0],
+                    expected[1],
+                    expected[1],
+                    expected[2],
+                    None,
+                    None,
+                    expected[2],
+                    expected[4],
+                    None,
+                ];
+                let actual: Vec<_> = (0..11).map(|at| study.values().value(0, at)).collect();
+                assert_eq!(actual, aligned, "{name} confirmed intervals");
+                study.update_data(&half_days[..10], 0, &sources);
+                assert_eq!(
+                    study.values().value(0, 9),
+                    expected[2],
+                    "{name} forming chart bar"
+                );
+                study
+                    .set_input("wait_for_close", InputValue::Toggle(false))
+                    .unwrap();
+                study.update_data(&half_days[..9], 0, &sources);
+                assert_eq!(
+                    study.values().value(0, 8),
+                    expected[4],
+                    "{name} developing interval"
+                );
+                assert_eq!(study.values().value(0, 0), None);
+            }
         }
     }
 }

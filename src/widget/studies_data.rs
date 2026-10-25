@@ -402,12 +402,16 @@ mod tests {
     #[derive(Default)]
     struct Feed {
         sinks: Mutex<Vec<(String, Sink)>>,
+        correction: Mutex<f64>,
     }
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
             let (prices, minutes) = match request.symbol.as_str() {
                 "REMOTE" => (vec![10.0, 14.0, 20.0], 60),
-                "OTHER" => (vec![100.0, 200.0, 300.0], 60),
+                "OTHER" => (
+                    vec![100.0, 200.0, 300.0 + *self.correction.lock().unwrap()],
+                    60,
+                ),
                 _ => (vec![1.0; 5], 30),
             };
             reply.send(Ok(HistoryPage {
@@ -537,9 +541,67 @@ mod tests {
         settle(&mut chart);
         assert!(!other_sink.is_active());
         assert_eq!(output(&chart)[4], Some(250.0));
+        chart.set_feed_paused(true);
+        *feed.correction.lock().unwrap() = 100.0;
+        chart.set_feed_paused(false);
+        settle(&mut chart);
+        assert_eq!(
+            output(&chart)[4],
+            Some(300.0),
+            "resuming reloads missed bars"
+        );
         let request = chart.study_data_requests().pop().unwrap();
         chart.set_study_data(request, bars(&[2.0, 4.0, 8.0], 60), None);
         settle(&mut chart);
         assert_eq!(output(&chart)[4], Some(6.0));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("wait_for_close", InputValue::Toggle(true))
+            .unwrap();
+        for (name, minutes, stamp, missing, expected) in [
+            (
+                "stamped inside hourly slots",
+                60,
+                10,
+                None,
+                [None, None, None, Some(3.0), Some(3.0)],
+            ),
+            ("missing hourly slot", 60, 0, Some(1), [None; 5]),
+            (
+                "missing same-interval slot",
+                30,
+                0,
+                Some(1),
+                [None, None, Some(5.0), None, None],
+            ),
+        ] {
+            let timeframe = if minutes == 60 {
+                Timeframe::Hour1
+            } else {
+                Timeframe::Min30
+            };
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(timeframe)),
+                )
+                .unwrap();
+            let source = bars(&[2.0, 4.0, 8.0], minutes)
+                .into_iter()
+                .enumerate()
+                .filter(|(at, _)| Some(*at) != missing)
+                .map(|(_, mut bar)| {
+                    bar.time += Duration::minutes(stamp);
+                    bar
+                })
+                .collect();
+            let request = chart.study_data_requests().pop().unwrap();
+            chart.set_study_data(request, source, None);
+            settle(&mut chart);
+            assert_eq!(output(&chart), expected, "{name}");
+        }
     }
 }

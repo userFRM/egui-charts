@@ -239,8 +239,8 @@ const REFRESH_INTERVAL: f64 = 0.25;
 
 #[cfg(all(test, feature = "studies"))]
 mod tests {
-    use crate::model::{Bar, BarData};
-    use crate::studies::{InputValue, RSI, SMA};
+    use crate::model::{Bar, BarData, PriceSource};
+    use crate::studies::{InputValue, RSI, SMA, StudySource};
     use crate::widget::{Chart, SeriesId, test_frames::shapes};
     use chrono::{Duration, Utc};
 
@@ -266,18 +266,17 @@ mod tests {
             }
         };
         for (source, expected, shifted) in [
-            ("Open", 4.0, 2.0),
-            ("High", 11.0, 7.0),
-            ("Low", 4.0, 2.0),
-            ("Close", 6.0, 4.0),
-            ("HL2", 7.5, 4.5),
-            ("HLC3", 7.0, 13.0 / 3.0),
-            ("OHLC4", 6.25, 3.75),
+            (PriceSource::Open, 4.0, 2.0),
+            (PriceSource::High, 11.0, 7.0),
+            (PriceSource::Low, 4.0, 2.0),
+            (PriceSource::Close, 6.0, 4.0),
+            (PriceSource::HL2, 7.5, 4.5),
+            (PriceSource::HLC3, 7.0, 13.0 / 3.0),
+            (PriceSource::OHLC4, 6.25, 3.75),
         ] {
             let mut chart = Chart::new(BarData::from_bars(bars.clone()));
             let id = chart.add_indicator(Box::new(SMA::new(2)));
-            let value =
-                serde_json::from_str(&format!(r#"{{"Source":{{"Price":"{source}"}}}}"#)).unwrap();
+            let value = InputValue::Source(StudySource::Price(source));
             chart
                 .indicator_mut(id)
                 .unwrap()
@@ -287,7 +286,7 @@ mod tests {
             assert_eq!(
                 chart.indicators().next().unwrap().1.values().value(0, 2),
                 Some(expected),
-                "{source}"
+                "{source:?}"
             );
             chart
                 .indicator_mut(id)
@@ -298,7 +297,7 @@ mod tests {
             let study = chart.indicators().next().unwrap().1;
             assert!(
                 (study.plot_value(0, 2).unwrap() - shifted).abs() < 1e-12,
-                "{source}"
+                "{source:?}"
             );
             assert_eq!(study.values().value(0, 2), Some(expected));
         }
@@ -311,11 +310,7 @@ mod tests {
         let mut chart = Chart::new(BarData::from_bars(bars.clone()));
         let mean = chart.add_indicator(Box::new(SMA::new(2)));
         let rsi = chart.add_indicator(Box::new(RSI::new(1)));
-        let value: InputValue = serde_json::from_str(&format!(
-            r#"{{"Source":{{"Study":{{"id":{},"plot":0}}}}}}"#,
-            rsi.0
-        ))
-        .unwrap();
+        let value = InputValue::Source(StudySource::Study { id: rsi.0, plot: 0 });
         chart
             .indicator_mut(mean)
             .unwrap()
