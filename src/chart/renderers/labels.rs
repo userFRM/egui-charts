@@ -3,8 +3,8 @@ use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
 use crate::scales::{
-    PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkGenerator, TickMarkGeneratorConfig,
-    TickMarkType, TimeFormatter,
+    PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkGenerator,
+    TickMarkGeneratorConfig, TickMarkType, TimeFormatter,
 };
 use crate::theme::ThemeExt;
 use chrono::Duration;
@@ -16,7 +16,8 @@ const AXIS_TICK_LENGTH: f32 = 3.0;
 
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
-/// through. `axis` sets the border, tick marks and label clipping.
+/// through. `axis` sets the border, tick marks and label clipping. A host `formatter` writes the
+/// labels with [`PriceFormatter::format_tick`].
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,
@@ -24,6 +25,7 @@ pub fn render_price_labels(
     axis: &PriceAxisOptions,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
     render_price_labels_at_pos(
         context,
@@ -33,6 +35,7 @@ pub fn render_price_labels(
         PriceScaleId::Right,
         tags,
         slot,
+        formatter,
     );
 }
 
@@ -46,9 +49,9 @@ pub fn render_price_labels_at_pos(
     position: PriceScaleId,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
-    // Smart price marks using the "nice numbers" algorithm
-    let mut marks = price_scale.marks();
+    let mut marks = price_marks(price_scale, formatter);
 
     // Determine positioning based on scale position
     let (edge, side, alignment) = match position {
@@ -80,9 +83,16 @@ pub fn render_price_labels_at_pos(
                 let value = price_scale.y_to_scale(y);
                 PriceMark {
                     price: value,
-                    label: price_scale
-                        .transform()
-                        .label(value, tick_decimals(price_scale, y)),
+                    label: match formatter {
+                        Some(formatter) => {
+                            formatter.format_tick(price_scale.transform().axis_value(value))
+                        }
+                        None => price_scale.transform().label(
+                            value,
+                            tick_decimals(price_scale, y),
+                            None,
+                        ),
+                    },
                     y_coord: y,
                     weight: 0,
                 }
@@ -145,6 +155,21 @@ pub fn render_price_labels_at_pos(
         shapes.push(Shape::galley(rect.min, galley, colors.text));
     }
     painter.set(slot, shapes);
+}
+
+/// Price axis marks of `price_scale` from the "nice numbers" generator, labelled with
+/// [`PriceFormatter::format_tick`] when the host supplies a `formatter`.
+pub(crate) fn price_marks(
+    price_scale: &PriceMap,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = price_scale.marks();
+    if let Some(formatter) = formatter {
+        for mark in &mut marks {
+            mark.label = formatter.format_tick(mark.price);
+        }
+    }
+    marks
 }
 
 /// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.

@@ -4,7 +4,7 @@ use crate::chart::rendering::axes::paint_crosshair_tag;
 use crate::chart::rendering::draw_dashed_line;
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
-use crate::scales::{PriceMap, PriceScaleMode, TimeFormatter};
+use crate::scales::{PriceFormatter, PriceMap, PriceScaleMode, TimeFormatter};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
@@ -58,6 +58,7 @@ pub fn render_crosshair_full(
         last_price_tag,
         formatter,
         bar_seconds,
+        None,
     )
 }
 
@@ -74,6 +75,7 @@ pub fn render_crosshair_with_options(
     last_price_tag: Option<Rect>,
     formatter: &dyn TimeFormatter,
     bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
 ) -> [Option<Rect>; 2] {
     let options = options.resolved(context.painter.ctx());
     let bar = coords
@@ -99,7 +101,11 @@ pub fn render_crosshair_with_options(
         &options,
         axis_right,
         last_price_tag,
-        None,
+        price_formatter.map(|price_formatter| {
+            price_scale
+                .transform()
+                .label(price_scale.y_to_scale(pos.y), 2, Some(price_formatter))
+        }),
     );
     let time_tag = bar
         .filter(|_| {
@@ -207,7 +213,7 @@ pub(crate) fn render_crosshair_price_tag(
         transform.mode,
         PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
     ) {
-        transform.label(price_scale.y_to_scale(pos.y), 2)
+        transform.label(price_scale.y_to_scale(pos.y), 2, None)
     } else {
         let decimals = price_scale
             .price_precision()
@@ -442,6 +448,7 @@ mod tests {
                                 None,
                                 TimeFormatterBuilder::new().build().as_ref(),
                                 3600,
+                                None,
                             );
                         });
                         let (lines, dots): (Vec<_>, Vec<_>) = output

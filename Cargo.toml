@@ -81,7 +81,7 @@ harness = false
 required-features = ["widget", "studies"]
 
 [features]
-default = ["ui"]
+default = ["ui", "locales"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
@@ -97,6 +97,10 @@ icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
 ui = ["icons", "studies", "dep:thiserror"]
+## Month and weekday names and the AM/PM marker in the language of a locale, for
+## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
+## Without it those labels stay in English.
+locales = ["chrono/unstable-locales"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 
