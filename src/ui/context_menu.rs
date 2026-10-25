@@ -2041,6 +2041,33 @@ mod tests {
         pick(&mut chart, &mut menus, sma, &["Move to", "Main pane"]);
         assert!(study(&chart, sma).unwrap().is_overlay());
 
+        // Stable pane handles also reach empty panes, which stay when a study leaves them.
+        use crate::widget::PaneId;
+        let empty = chart.add_pane();
+        assert!(chart.set_preserve_empty_pane(empty, true));
+        assert_eq!(
+            pick(&mut chart, &mut menus, sma, &["Move to", "empty pane"]),
+            A::MoveTo(crate::ui::dialogs::PaneTarget::Pane(empty))
+        );
+        assert_eq!(chart.series_pane(sma), Some(empty));
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane below"]);
+        let panes = chart.panes();
+        let at = panes.iter().position(|pane| *pane == empty).unwrap();
+        assert_eq!(chart.series_pane(sma), Some(panes[at + 1]));
+        assert!(chart.pane_series(empty).is_empty());
+        pick(&mut chart, &mut menus, sma, &["Move to", "Main pane"]);
+        assert!(chart.remove_pane(empty));
+
+        // Main can sit below another pane; an overlay's new pane is adjacent to main.
+        let rsi_pane = chart.series_pane(rsi).unwrap();
+        assert!(chart.move_pane(rsi_pane, 0));
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane above"]);
+        let sma_pane = chart.series_pane(sma).unwrap();
+        assert_eq!(chart.panes(), [rsi_pane, sma_pane, PaneId::MAIN]);
+        assert!(chart.undo());
+        assert_eq!(chart.series_pane(sma), Some(PaneId::MAIN));
+        assert_eq!(chart.panes(), [rsi_pane, PaneId::MAIN]);
+
         pick(
             &mut chart,
             &mut menus,
