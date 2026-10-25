@@ -260,6 +260,7 @@ impl Chart {
         chart.session_provider = self.session_provider.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
+        chart.drawings.registry = self.drawings.registry.clone();
         chart.drawings.drawings = self.drawings.drawings.clone();
         chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
         chart.marks = self.marks.clone();

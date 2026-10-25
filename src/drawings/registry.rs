@@ -190,6 +190,20 @@ mod tests {
             crate::drawings::persistence::stored_to_drawing(&stored, |t| t as f32 / 1000., 7);
         assert_eq!(restored.custom_tool.as_deref(), Some("midpoint"));
         assert_eq!(restored.custom_settings, serde_json::json!({"radius": 10}));
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.drawings_mut().registry = manager.registry.clone();
+        let mut exported = Drawing::custom("midpoint");
+        exported.chart_points = vec![ChartPoint::new(60.0, 100.0), ChartPoint::new(80.0, 100.0)];
+        chart.drawings_mut().add_drawing(exported).unwrap();
+        let mut image = chart.export_image(&ctx, &Default::default()).unwrap();
+        image.textures_delta.clear();
+        assert!(
+            image.primitives.iter().any(|primitive| matches!(
+                &primitive.primitive, egui::epaint::Primitive::Mesh(mesh)
+                    if mesh.vertices.iter().any(|vertex| vertex.color == egui::Color32::RED)
+            )),
+            "custom drawing missing from export"
+        );
         let mut invalid = Drawing::custom("midpoint");
         invalid.chart_points = vec![ChartPoint::new(1., 1.)];
         assert!(manager.add_drawing(invalid).is_err());
