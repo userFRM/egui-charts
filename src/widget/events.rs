@@ -48,7 +48,7 @@ pub struct ChartPointer {
 pub enum PointerTarget {
     /// A series or study line, as a click there would select it.
     Element(ChartElementId),
-    /// A drawing, by its [`crate::drawings::DrawingManager`] id.
+    /// A drawing, by its drawing id.
     Drawing(usize),
     /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
     Primitive(super::PrimitiveId),
@@ -683,13 +683,16 @@ mod tests {
         // Added series, drawings, touch input and held modifiers reach the payload.
         let series = chart.add_series(Default::default());
         chart.set_data(series, bars.clone());
-        let mut line = crate::drawings::Drawing::with_color(
-            1,
-            crate::drawings::DrawingToolType::HorizontalLine,
-            [255, 0, 0, 255],
-        );
-        line.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 150.0)];
-        chart.drawings_mut().drawings.push(line);
+        #[cfg(feature = "drawings")]
+        {
+            let mut line = crate::drawings::Drawing::with_color(
+                1,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [255, 0, 0, 255],
+            );
+            line.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 150.0)];
+            chart.drawings_mut().drawings.push(line);
+        }
         frame(&ctx, &mut chart, 3.6, vec![]);
         chart.drain_events().for_each(drop);
         let map = chart.get_chart_mapping();
@@ -715,12 +718,14 @@ mod tests {
             panic!("{events:?}")
         };
         assert_eq!(pointer.series_bars, vec![(series, bars[70].clone())]);
+        #[cfg(feature = "drawings")]
         assert_eq!(pointer.target, Some(PointerTarget::Drawing(1)));
         assert_eq!(
             (pointer.modifiers, pointer.kind),
             (Modifiers::SHIFT, PointerKind::Touch)
         );
         chart.remove_series(series);
+        #[cfg(feature = "drawings")]
         chart.drawings_mut().drawings.clear();
         frame(
             &ctx,

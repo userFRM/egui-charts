@@ -28,7 +28,7 @@ To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (
 
 ### A new drawing tool
 
-Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/drawings/domain/tool_type/`](src/drawings/domain/tool_type), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
+Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/config/drawing_tool/`](src/config/drawing_tool), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
 
 To add one: add a variant to `DrawingToolType`, slot it into the right category in `categories.rs`, define its interaction behavior in `behavior.rs` (interaction mode and required points), and implement its rendering in the matching file under `src/drawings/rendering/`.
 

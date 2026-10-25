@@ -5,7 +5,9 @@ use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+#[cfg(feature = "drawings")]
 mod drawings;
+#[cfg(feature = "drawings")]
 use drawings::DrawingLinks;
 
 /// Multi-chart arrangement. Changing presets retains the host's hidden charts.
@@ -202,6 +204,7 @@ pub struct ChartLayout {
     groups: [Option<String>; 16],
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
+    #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
 }
@@ -431,6 +434,7 @@ impl ChartLayout {
         {
             ui.ctx().request_repaint();
         }
+        #[cfg(feature = "drawings")]
         if self.sync.sync_drawings
             && self
                 .drawings
@@ -709,33 +713,38 @@ mod tests {
         for chart in &mut charts {
             chart.apply_synced_time_scale(3.0, 0.0);
         }
-        // Delete applies only to the chart that received the pointer focus.
-        for chart in &mut charts {
-            let mut drawing =
-                crate::drawings::Drawing::new(0, crate::drawings::DrawingToolType::HorizontalLine);
-            drawing.completed = true;
-            drawing
-                .chart_points
-                .push(crate::drawings::ChartPoint::new(10.0, 10.0));
-            chart.drawings_mut().add_synced_drawing(drawing);
-            let id = chart.drawings().drawings[0].id;
-            chart.drawings_mut().select(id);
+        #[cfg(feature = "drawings")]
+        {
+            // Delete applies only to the chart that received the pointer focus.
+            for chart in &mut charts {
+                let mut drawing = crate::drawings::Drawing::new(
+                    0,
+                    crate::drawings::DrawingToolType::HorizontalLine,
+                );
+                drawing.completed = true;
+                drawing
+                    .chart_points
+                    .push(crate::drawings::ChartPoint::new(10.0, 10.0));
+                chart.drawings_mut().add_synced_drawing(drawing);
+                let id = chart.drawings().drawings[0].id;
+                chart.drawings_mut().select(id);
+            }
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![Event::Key {
+                    key: egui::Key::Delete,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            assert!(charts[0].drawings().drawings.is_empty());
+            assert_eq!(charts[1].drawings().drawings.len(), 1);
+            let id = charts[1].drawings().drawings[0].id;
+            charts[1].drawings_mut().delete_drawing(id);
         }
-        frame(
-            &mut layout,
-            &mut charts,
-            vec![Event::Key {
-                key: egui::Key::Delete,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }],
-        );
-        assert!(charts[0].drawings().drawings.is_empty());
-        assert_eq!(charts[1].drawings().drawings.len(), 1);
-        let id = charts[1].drawings().drawings[0].id;
-        charts[1].drawings_mut().delete_drawing(id);
 
         // Hidden chart tabs must not remain crosshair sources.
         charts[0].last_hover_bar_idx = Some(10.0);
@@ -745,31 +754,35 @@ mod tests {
         assert_eq!(charts[0].hover_time(), None);
         assert_eq!(charts[1].synced_crosshair_bar_idx, None);
 
-        // Preset changes retain links, including edits and deletions while a slot is hidden.
-        layout.mode = ChartLayoutMode::TwoHorizontal;
-        layout.sync.sync_drawings = true;
-        let mut drawing =
-            crate::drawings::Drawing::new(0, crate::drawings::DrawingToolType::HorizontalLine);
-        drawing.completed = true;
-        drawing
-            .chart_points
-            .push(crate::drawings::ChartPoint::new(10.0, 10.0));
-        charts[0].drawings_mut().add_synced_drawing(drawing);
-        frame(&mut layout, &mut charts, vec![]);
-        assert_eq!(charts[1].drawings().drawings.len(), 1);
-        layout.mode = ChartLayoutMode::Single;
-        frame(&mut layout, &mut charts, vec![]);
-        layout.mode = ChartLayoutMode::TwoHorizontal;
-        frame(&mut layout, &mut charts, vec![]);
-        assert_eq!(charts[0].drawings().drawings.len(), 1);
-        assert_eq!(charts[1].drawings().drawings.len(), 1);
-        layout.mode = ChartLayoutMode::Single;
-        let id = charts[0].drawings().drawings[0].id;
-        charts[0].drawings_mut().delete_drawing(id);
-        frame(&mut layout, &mut charts, vec![]);
-        layout.mode = ChartLayoutMode::TwoHorizontal;
-        frame(&mut layout, &mut charts, vec![]);
-        assert!(charts[1].drawings().drawings.is_empty());
+        #[cfg(feature = "drawings")]
+        {
+            // Preset changes retain links, including edits and deletions while a slot is hidden.
+            layout.mode = ChartLayoutMode::TwoHorizontal;
+            layout.sync.sync_drawings = true;
+            let mut drawing =
+                crate::drawings::Drawing::new(0, crate::drawings::DrawingToolType::HorizontalLine);
+            drawing.completed = true;
+            drawing
+                .chart_points
+                .push(crate::drawings::ChartPoint::new(10.0, 10.0));
+            charts[0].drawings_mut().add_synced_drawing(drawing);
+            frame(&mut layout, &mut charts, vec![]);
+            assert_eq!(charts[1].drawings().drawings.len(), 1);
+            layout.mode = ChartLayoutMode::Single;
+            frame(&mut layout, &mut charts, vec![]);
+            layout.mode = ChartLayoutMode::TwoHorizontal;
+            frame(&mut layout, &mut charts, vec![]);
+            assert_eq!(charts[0].drawings().drawings.len(), 1);
+            assert_eq!(charts[1].drawings().drawings.len(), 1);
+            layout.mode = ChartLayoutMode::Single;
+            let id = charts[0].drawings().drawings[0].id;
+            charts[0].drawings_mut().delete_drawing(id);
+            frame(&mut layout, &mut charts, vec![]);
+            layout.mode = ChartLayoutMode::TwoHorizontal;
+            frame(&mut layout, &mut charts, vec![]);
+            assert!(charts[1].drawings().drawings.is_empty());
+        }
+
         layout.set_detached(1, true);
         frame(&mut layout, &mut charts, vec![]);
         assert_eq!(charts[1].bars(super::super::SeriesId::MAIN).len(), 100);

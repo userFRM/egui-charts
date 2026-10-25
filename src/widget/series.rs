@@ -96,8 +96,10 @@ impl Chart {
             .size_methods()
             .map(|method| method != crate::model::BoxSizeMethod::Fixed);
         let before = self.edge();
+        #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
         let first_changed = self.state.set_data(BarData::from_bars(bars));
+        #[cfg(feature = "drawings")]
         self.project_drawing_points();
         self.bars_changed(before, first_changed);
     }
@@ -160,6 +162,7 @@ impl Chart {
             item.bars.split_off(item.bars.len().saturating_sub(count))
         } else if self.main_series_present && holds_bars(series, "pop_bars") {
             let before = self.edge();
+            #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
             let mut removed = Vec::new();
             let first_changed = self.state.edit_bars(|bars| {
@@ -170,6 +173,7 @@ impl Chart {
             if let Some(first) = removed.first() {
                 self.from_ticks.split_off(&first.time);
             }
+            #[cfg(feature = "drawings")]
             self.project_drawing_points();
             self.bars_changed(before, first_changed);
             removed
@@ -377,6 +381,7 @@ impl Chart {
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
         let tail = before.tail.as_ref().map(|bar| bar.time);
+        #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
         let closes = self
@@ -392,6 +397,7 @@ impl Chart {
             marks.record(&self.state.data().bars, clock, closes);
         }
         self.feed.rejected_bars += merged.rejected;
+        #[cfg(feature = "drawings")]
         self.project_drawing_points();
         if !self.bars_changed(before, merged.first_changed)
             && !self.state.shows_elements()
@@ -650,6 +656,7 @@ impl Chart {
 
     /// Shows the cached elements before input, keeping the view in the series' slots.
     pub(super) fn show_elements(&mut self) {
+        #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
         self.chart_type_params
             .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
@@ -672,6 +679,7 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        #[cfg(feature = "drawings")]
         self.project_drawing_points();
     }
 
@@ -788,6 +796,7 @@ pub(super) fn holds_bars(series: SeriesId, call: &str) -> bool {
 mod tests {
     use super::super::test_frames::frame;
     use super::*;
+    #[cfg(feature = "drawings")]
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::studies::{IndicatorValue, RSI, SMA};
     use chrono::{DateTime, TimeDelta, Utc};
@@ -1004,6 +1013,7 @@ mod tests {
     /// not be dropped, nor invalid bars drawn; a drawing must stay on its bar when bars are
     /// inserted in front of it.
     #[test]
+    #[cfg(feature = "drawings")]
     fn updates_reach_bars_studies_and_revision() {
         enum Action {
             Update(Bar),
@@ -1316,6 +1326,7 @@ mod tests {
     /// Merges retain anchor times, interpolating gaps and extrapolating whitespace from the
     /// nearest pair. The 360 s future anchor becomes 7 + (360 - 240) / 30 = index 11.
     #[test]
+    #[cfg(feature = "drawings")]
     fn inserted_bars_preserve_drawing_times_including_future_anchors() {
         let start: Vec<Bar> = (0..5).map(|i| bar(i * 60, (i + 1) as f64)).collect();
         let live = |seconds| (bar(seconds, 1.0), Origin::Live);

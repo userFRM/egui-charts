@@ -260,9 +260,12 @@ impl Chart {
         chart.session_provider = self.session_provider.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
-        chart.drawings.registry = self.drawings.registry.clone();
-        chart.drawings.drawings = self.drawings.drawings.clone();
-        chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
+        #[cfg(feature = "drawings")]
+        {
+            chart.drawings.registry = self.drawings.registry.clone();
+            chart.drawings.drawings = self.drawings.drawings.clone();
+            chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
+        }
         chart.marks = self.marks.clone();
         chart.marker_options = self.marker_options;
         chart.price_lines = self.price_lines.clone();
@@ -526,6 +529,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn images_apply_options_and_drawing_visibility_without_changing_the_live_view() {
         let ctx = egui::Context::default();
         let mut chart = Chart::new(BarData::new());

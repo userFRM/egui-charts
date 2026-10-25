@@ -45,7 +45,7 @@ required-features = ["widget", "studies"]
 [[example]]
 name = "drawing_tools"
 path = "examples/drawing_tools.rs"
-required-features = ["widget"]
+required-features = ["widget", "drawings"]
 
 [[example]]
 name = "live_feed"
@@ -72,7 +72,7 @@ required-features = ["widget"]
 name = "frame_time"
 path = "benches/frame_time.rs"
 harness = false
-required-features = ["widget", "studies"]
+required-features = ["widget", "studies", "drawings"]
 
 [[bench]]
 name = "stream"
@@ -82,11 +82,13 @@ required-features = ["widget", "studies"]
 
 [features]
 default = ["ui"]
-## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
+## The egui chart widget: `Chart`, `ChartBuilder`, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
 ## `Indicator` trait layer of `studies`) and does not depend on egui.
 widget = ["dep:egui", "dep:web-time"]
+## Drawing tools, annotation storage and interaction. Enabled by `ui`.
+drawings = ["widget"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
 ## build can compute the same studies.
 studies = []
@@ -96,7 +98,7 @@ icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, the
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
-ui = ["icons", "studies", "dep:thiserror"]
+ui = ["icons", "studies", "drawings", "dep:thiserror"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 

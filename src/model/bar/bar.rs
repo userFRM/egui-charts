@@ -445,7 +445,20 @@ mod tests {
             let bars = &state.data().bars[first..];
             *cache.get((), first, bars, state.revision(), total_volume)
         };
-        let mut bars = crate::drawings::rendering::sample_bars();
+        let mut bars: Vec<_> = [100., 200., 150., 300., 250., 400., 50.]
+            .into_iter()
+            .enumerate()
+            .map(|(i, volume)| {
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    10.,
+                    12.,
+                    9.,
+                    11.,
+                    volume,
+                )
+            })
+            .collect();
         let mut state = ChartState::new(BarData::from_bars(bars.clone()));
         let streaming = state.revision();
         assert_eq!(get(&state, 1), 1350.0);

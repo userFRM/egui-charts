@@ -18,6 +18,7 @@
 
 mod chart;
 mod crosshair;
+mod drawing_tool;
 mod interaction;
 mod keyboard;
 mod kinetic;
@@ -29,6 +30,7 @@ pub use chart::{
     SessionBreakStyle, SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
     HandleScrollOptions, TrackingModeExitMode, TrackingModeOptions,
@@ -70,4 +72,16 @@ pub struct ChartOptions {
 
     /// Tooltip display options (Floating, Tracking, Magnifier)
     pub tooltip: TooltipOptions,
+}
+
+/// Font weight shared by chart watermarks and drawing annotations.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FontWeight {
+    /// Regular weight.
+    #[default]
+    Normal,
+    /// Bold weight.
+    Bold,
 }

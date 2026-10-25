@@ -69,7 +69,7 @@ pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
 mod values;
 pub use values::IndicatorValues;
-#[cfg(any(feature = "studies", feature = "widget"))]
+#[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;

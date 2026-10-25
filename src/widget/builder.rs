@@ -34,10 +34,12 @@
 //! # }
 //! ```
 
+#[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
+#[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
 use crate::model::{BarClock, BarData, ChartState, Timeframe};
 use crate::model::{ChartType, ChartTypeParams};
@@ -130,8 +132,11 @@ impl Chart {
             next_series: 2,
             primitives: Vec::new(),
             next_primitive: 0,
+            #[cfg(feature = "drawings")]
             drawings: DrawingManager::new(),
+            #[cfg(feature = "drawings")]
             symbol_drawings: Default::default(),
+            symbol_markers: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             pane_options: Default::default(),
@@ -167,6 +172,7 @@ impl Chart {
             event_click: None,
             timeframe: None,
             feed_link: None,
+            #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
             main_series_style: crate::model::SeriesStyle::default(),
             last_price_pulse: std::cell::Cell::new(None),
@@ -353,6 +359,7 @@ impl Chart {
         if self.chart_type != chart_type {
             self.state.clear_zoom_history();
             self.selection.deselect();
+            #[cfg(feature = "drawings")]
             self.drawings.deselect();
             self.chart_type = chart_type;
         }
@@ -406,6 +413,7 @@ impl Chart {
         if self.chart_type.is_time_independent() && self.chart_type_params != params {
             self.state.clear_zoom_history();
             self.selection.deselect();
+            #[cfg(feature = "drawings")]
             self.drawings.deselect();
         }
         self.chart_type_params = params;
@@ -841,6 +849,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn drawings_keep_times_through_replacement_streaming_and_symbol_switches() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::SeriesId;

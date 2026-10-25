@@ -226,16 +226,19 @@ mod tests {
         let trailing = chart(&[0, 60, 60], 501.0);
         assert_eq!(time_at(trailing.state.shown(), 3.5), Some(time(105)));
         assert_eq!(index_at(trailing.state.shown(), time(105)), Some(3.5));
-        let mut repeated = repeated;
-        let mut drawing =
-            crate::drawings::Drawing::new(7, crate::drawings::DrawingToolType::TrendLine);
-        drawing
-            .chart_points
-            .push(crate::drawings::ChartPoint::new(1.5, 10.0));
-        repeated.drawings.drawings.push(drawing);
-        repeated.anchor_drawing_points();
-        repeated.project_drawing_points();
-        assert_eq!(repeated.drawings.drawings[0].chart_points[0].bar_idx, 1.5);
+        #[cfg(feature = "drawings")]
+        {
+            let mut repeated = repeated;
+            let mut drawing =
+                crate::drawings::Drawing::new(7, crate::drawings::DrawingToolType::TrendLine);
+            drawing
+                .chart_points
+                .push(crate::drawings::ChartPoint::new(1.5, 10.0));
+            repeated.drawings.drawings.push(drawing);
+            repeated.anchor_drawing_points();
+            repeated.project_drawing_points();
+            assert_eq!(repeated.drawings.drawings[0].chart_points[0].bar_idx, 1.5);
+        }
         let mut source = chart(&[0, 60, 120, 180, 240, 300], 1001.0);
         // Pixel edges at source indices 0.5 and 4.5 represent 30 and 270 seconds.
         source.apply_synced_time_scale(250.0, -1.0);

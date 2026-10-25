@@ -48,7 +48,7 @@
 //! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
-//! | **Drawing tools** | [`drawings`] | 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
+//! | **Drawing tools** | `drawings` | *(feature `drawings`)* 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
 //! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 158 indicator names in `IndicatorFactory` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
@@ -68,10 +68,11 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`] and the `Indicator` trait layer of [`studies`]. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`] and the `Indicator` trait layer of [`studies`]. Required by `drawings`, `icons` and `ui`. |
+//! | `drawings` | **on** | Drawing tools, rendering, hit tests, undo and persistence. Implies `widget`; enabled by `ui`. |
 //! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
-//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons` and `studies`. |
+//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
 //! ## Embedding in an application
@@ -120,7 +121,7 @@ extern crate ecolor as egui;
 
 #[cfg(feature = "widget")]
 pub mod chart;
-#[cfg(feature = "widget")]
+#[cfg(feature = "drawings")]
 pub mod drawings;
 pub mod model;
 pub mod scales;

@@ -344,6 +344,7 @@ mod tests {
     /// Studies consume element OHLC, and time annotations land on completion slots.
     #[cfg(feature = "studies")]
     #[test]
+    #[cfg(feature = "drawings")]
     fn studies_and_annotations_follow_price_based_elements() {
         use crate::{
             drawings::DrawingToolType,

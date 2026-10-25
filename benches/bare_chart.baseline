@@ -3,5 +3,7 @@
 # with `--no-default-features --features widget` by the MSRV toolchain on ubuntu-24.04.
 # The job fails when a figure grows beyond its tolerance. A pull request that accepts the growth
 # commits the values its job summary prints and says why.
-size_bytes=14051256
-frame_instructions=7590263
+# Optional drawings: compared with ada16dbe, size falls 4.45%; frame instructions rise
+# 3.41%, predominantly allocator copies with the same number of reallocations.
+size_bytes=13297056
+frame_instructions=7971242

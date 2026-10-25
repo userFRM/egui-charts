@@ -687,8 +687,19 @@ impl Chart {
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
+        #[cfg(feature = "drawings")]
+        let eraser_mode = self.drawings.eraser_mode;
+        #[cfg(not(feature = "drawings"))]
+        let eraser_mode = false;
+        #[cfg(feature = "drawings")]
+        let drawing_tool_active = self.drawings.active_tool.is_some();
+        #[cfg(not(feature = "drawings"))]
+        let drawing_tool_active = false;
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
+        #[cfg(not(feature = "drawings"))]
+        let is_drawing_interaction = false;
+        #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.active_tool.is_some()
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -1280,20 +1291,26 @@ impl Chart {
             let price = coords.y_to_price(click_pos.y);
 
             // Drawings sit on top of the series, so they take priority.
+            #[cfg(feature = "drawings")]
             let drawing_hit = self.drawings.hit_test(click_pos);
+            #[cfg(not(feature = "drawings"))]
+            let drawing_hit: Option<usize> = None;
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
                 // Right-clicking a drawing selects it and
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();
-                if self.drawings.is_selected(drawing_id) {
-                    let ids: Vec<_> = std::iter::once(drawing_id)
-                        .chain(self.drawings.selected_ids())
-                        .collect();
-                    self.drawings.select_drawings(ids);
-                } else {
-                    self.drawings.select(drawing_id);
+                #[cfg(feature = "drawings")]
+                {
+                    if self.drawings.is_selected(drawing_id) {
+                        let ids: Vec<_> = std::iter::once(drawing_id)
+                            .chain(self.drawings.selected_ids())
+                            .collect();
+                        self.drawings.select_drawings(ids);
+                    } else {
+                        self.drawings.select(drawing_id);
+                    }
                 }
                 RightClickTarget::Drawing {
                     drawing_id,
@@ -1323,14 +1340,17 @@ impl Chart {
 
         // What the pointer is over, for host pointer events, in the right-click priority.
         if let Some(pos) = pointer {
+            #[cfg(feature = "drawings")]
             let drawing = self.drawings.hit_test(pos);
+            #[cfg(not(feature = "drawings"))]
+            let drawing: Option<usize> = None;
             if let Some(hit) = primitive_hit.filter(|_| {
                 drawing.is_none()
                     && response.hovered()
                     && !response.dragged()
                     && !self.zoom_mode_active
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none()
+                    && !eraser_mode
+                    && !drawing_tool_active
             }) {
                 ui.ctx().set_cursor_icon(hit.cursor);
             }
@@ -1758,6 +1778,7 @@ impl Chart {
         }
 
         // Handle drawing tools
+        #[cfg(feature = "drawings")]
         {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
@@ -1824,17 +1845,24 @@ impl Chart {
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
+        #[cfg(feature = "drawings")]
+        let eraser_mode = self.drawings.eraser_mode;
+        #[cfg(feature = "drawings")]
+        let drawing_tool_active = self.drawings.active_tool.is_some();
         let menu_open = std::mem::take(&mut self.menu_open) || response.secondary_clicked();
         let mut crosshair_tags = [None; 2];
-        self.cursor_modes.update(ui.input(|input| input.stable_dt));
-        if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
-            && !self.drawings.eraser_mode
+        #[cfg(feature = "drawings")]
         {
-            self.cursor_modes
-                .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
-            self.cursor_modes.render(ui, price_rect);
-        } else {
-            self.cursor_modes.move_pointer(None);
+            self.cursor_modes.update(ui.input(|input| input.stable_dt));
+            if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
+                && !eraser_mode
+            {
+                self.cursor_modes
+                    .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+                self.cursor_modes.render(ui, price_rect);
+            } else {
+                self.cursor_modes.move_pointer(None);
+            }
         }
         let hover_rect =
             Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));
@@ -1951,11 +1979,11 @@ impl Chart {
                 let held_values = tooltip_options.enabled
                     && tooltip_options.on_long_press
                     && held
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none();
+                    && !eraser_mode
+                    && !drawing_tool_active;
                 let mut crosshair_options = self.chart_options.crosshair;
                 // Arrow keeps the axis labels, which a hidden crosshair never shows.
-                if (held_values || self.drawings.eraser_mode)
+                if (held_values || eraser_mode)
                     && crosshair_options.style != crate::config::CrosshairStyle::Hidden
                 {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
@@ -2058,8 +2086,8 @@ impl Chart {
                 }
                 if tooltip_options.enabled
                     && (!tooltip_options.on_long_press || held)
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none()
+                    && !eraser_mode
+                    && !drawing_tool_active
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                 {
                     let candle = &visible_data[local_idx];
@@ -3869,6 +3897,7 @@ mod tests {
     /// A drag starting on a button belongs to that button even after leaving the row.
     /// Clicking it also preserves a series selection while a drawing tool is active.
     #[test]
+    #[cfg(feature = "drawings")]
     fn navigation_buttons_do_not_start_chart_gestures() {
         use crate::drawings::DrawingToolType;
         use crate::widget::{ChartElementId, SeriesId};

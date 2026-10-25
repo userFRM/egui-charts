@@ -88,13 +88,7 @@ impl ArrowStyle {
     }
 }
 
-/// Font weight for text annotations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
-pub enum FontWeight {
-    #[default]
-    Normal,
-    Bold,
-}
+pub use crate::config::FontWeight;
 
 /// Per-timeframe visibility configuration
 ///
