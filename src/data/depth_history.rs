@@ -242,13 +242,13 @@ mod tests {
         // Spans of a cadence that is not a whole number of milliseconds.
         let older = DepthColumn {
             time: at(0),
-            span: TimeDelta::microseconds(1_500),
+            span: TimeDelta::microseconds(1_250),
             bids: vec![(101, 4.0), (99, 2.0)],
             asks: vec![(102, 6.0)],
         };
         let newer = DepthColumn {
-            time: at(0) + TimeDelta::microseconds(1_500),
-            span: TimeDelta::microseconds(4_500),
+            time: at(0) + TimeDelta::microseconds(1_250),
+            span: TimeDelta::microseconds(3_750),
             bids: vec![(100, 8.0), (99, 6.0)],
             asks: vec![(102, 2.0), (103, 4.0)],
         };
@@ -257,7 +257,7 @@ mod tests {
             merge(older, newer, 2),
             DepthColumn {
                 time: at(0),
-                span: TimeDelta::milliseconds(6),
+                span: TimeDelta::milliseconds(5),
                 bids: vec![(101, 1.0), (100, 6.0)],
                 asks: vec![(102, 3.0), (103, 3.0)],
             }
