@@ -271,7 +271,7 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
                     "level_style",
                     &mut level.line_style,
                     LineStyle::all().iter().copied(),
-                    |v| format!("{v:?}"),
+                    |v| v.name().to_owned(),
                 );
                 if Button::new("Remove").ghost().show(ui).clicked() {
                     remove = Some(i);

@@ -3,7 +3,7 @@ use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::{
-    DefaultPriceFormatter, PriceFormatter, PriceMap, TimeFormatter, VolumeFormatter,
+    DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
 };
 use crate::styles::typography;
@@ -64,7 +64,7 @@ pub fn render_tooltip_with_options(
     price_scale: &PriceMap,
     coords: &ChartMapping,
     visible_data: &[Bar],
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     bar_seconds: i64,
     studies: &[StudyValue],
     instrument: Option<&Instrument>,
@@ -79,7 +79,7 @@ pub fn render_tooltip_with_options(
                 previous_close,
                 options,
                 colors.bar_color(candle.close >= candle.open),
-                formatter,
+                scale,
                 bar_seconds,
                 studies,
                 instrument,
@@ -91,7 +91,7 @@ pub fn render_tooltip_with_options(
                 context.rect,
                 candle,
                 options,
-                formatter,
+                scale,
                 bar_seconds,
                 studies,
                 instrument,
@@ -121,7 +121,7 @@ pub fn render_floating_tooltip(
     previous_close: Option<f64>,
     options: &TooltipOptions,
     value_color: egui::Color32,
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     bar_seconds: i64,
     studies: &[StudyValue],
     instrument: Option<&Instrument>,
@@ -137,7 +137,7 @@ pub fn render_floating_tooltip(
     let mut rows = Vec::new();
 
     if options.show_time {
-        rows.push(("Time", formatter.format_crosshair(candle.time, bar_seconds)));
+        rows.push(("Time", scale.format_crosshair(candle.time, bar_seconds)));
     }
 
     if options.show_ohlc {
@@ -308,7 +308,7 @@ pub fn render_tracking_tooltip(
     chart_rect: Rect,
     candle: &Bar,
     options: &TooltipOptions,
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     bar_seconds: i64,
     studies: &[StudyValue],
     instrument: Option<&Instrument>,
@@ -332,7 +332,7 @@ pub fn render_tracking_tooltip(
     let mut parts = Vec::new();
 
     if options.show_time {
-        parts.push(formatter.format_crosshair(candle.time, bar_seconds));
+        parts.push(scale.format_crosshair(candle.time, bar_seconds));
     }
 
     if options.show_ohlc {
@@ -628,7 +628,7 @@ mod tests {
                                 plot,
                                 &bar,
                                 &TooltipOptions::default(),
-                                crate::scales::TimeFormatterBuilder::new().build().as_ref(),
+                                &crate::scales::TimeFormatterBuilder::new().build(),
                                 3600,
                                 &studies,
                                 None,
@@ -646,7 +646,7 @@ mod tests {
                                 ..Default::default()
                             },
                             egui::Color32::GREEN,
-                            crate::scales::TimeFormatterBuilder::new().build().as_ref(),
+                            &crate::scales::TimeFormatterBuilder::new().build(),
                             3600,
                             &studies,
                             None,

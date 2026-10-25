@@ -15,24 +15,23 @@
 //! the zone's top, and a down gap when its high is above the zone's bottom; touching the edge
 //! does not enter it. By default the first bar to enter a gap closes it, and the zone ends on
 //! that bar. With `close_partially`, the zone ends only when a bar covers it to its far edge;
-//! a bar that enters it part way keeps the zone's extent on that bar, and from the next bar
-//! on the zone holds only the part that bar has not covered. With `limit_trail`, a zone also
-//! closes `trail_length` bars after its left edge, the bar before the gap or, after a partial
-//! fill, the bar that filled it.
+//! a bar that enters it part way narrows it, at that bar, to the part the bar has not covered.
+//! With `limit_trail`, a zone also closes `trail_length` bars after its left edge, the bar
+//! before the gap or, after a partial fill, the bar that filled it.
 //!
-//! Only the latest `max_gaps` gaps are shown, open or closed. Gap `j` (counting from the first
-//! of the series) occupies outputs `2 * (j % max_gaps)` and `2 * (j % max_gaps) + 1`: the near
-//! edge, the side price enters from (the top of an up gap, the bottom of a down gap), then the
-//! far edge. A fill between them is green where the near edge is above the far edge, an up
-//! gap, and red below, a down gap. The defaults are 15 gaps, a deviation of 30%, partial
-//! closing off and a trail length of 300 bars, off.
+//! Only the latest `max_gaps` gaps are shown, open or closed, each as one [`StudyZone`] per
+//! extent it has held, the next starting on the bar where the previous ends. Zones of up gaps
+//! take the style of output 0, "Up gaps", and zones of down gaps that of output 1, "Down gaps";
+//! neither output has values, so memory grows with the zones and not with the bars. The
+//! defaults are 15 gaps, a deviation of 30%, partial closing off and a trail length of 300
+//! bars, off.
 //!
 //! # Example
 //!
 //! ```rust
 //! use chrono::{TimeZone, Utc};
 //! use egui_charts::model::Bar;
-//! use egui_charts::studies::{Gaps, Indicator};
+//! use egui_charts::studies::{Gaps, Indicator, StudyZone};
 //!
 //! // Fourteen bars of range 2 around 100, then a bar that opens a gap from 101 to 102.
 //! let bars: Vec<Bar> = [100.0; 14]
@@ -44,21 +43,19 @@
 //! let mut gaps = Gaps::default();
 //! gaps.calculate(&bars);
 //! // The zone starts at the bar before the gap and is still open on the last bar.
-//! for bar in 13..16 {
-//!     assert_eq!(gaps.values().value(0, bar), Some(102.0));
-//!     assert_eq!(gaps.values().value(1, bar), Some(101.0));
-//! }
+//! let zone = StudyZone { bars: 13..16, top: 102.0, bottom: 101.0, plot: 0 };
+//! assert_eq!(gaps.zones(), [zone]);
 //! ```
 
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::stepper::rolling_mean;
-use crate::studies::{FillBoundary, Indicator, IndicatorValues, StudyFill};
+use crate::studies::{Indicator, IndicatorValues, StudyZone};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
-/// Most gaps a chart shows, each two outputs.
-const MAX_GAPS: usize = 50;
+/// Most gaps a chart shows.
+const MAX_GAPS: usize = 500;
 
 /// Bars in the average range a gap is measured against.
 const RANGE_LENGTH: usize = 14;
@@ -72,24 +69,37 @@ pub struct Gaps {
     limit_trail: bool,
     trail_length: usize,
     values: IndicatorValues,
+    zones: Vec<StudyZone>,
     up_color: Color32,
     down_color: Color32,
     visible: bool,
 }
 
-/// One gap while it is tracked.
+/// One open gap.
 struct Gap {
+    /// Gaps found before it.
+    index: usize,
     up: bool,
     near: f64,
     far: f64,
     left: usize,
-    open: bool,
-    /// The bars it covers and its near edge on each.
-    span: Vec<(usize, f64)>,
+}
+
+impl Gap {
+    /// Its current extent from its left edge to `last`, inclusive.
+    fn zone(&self, last: usize) -> (usize, StudyZone) {
+        let zone = StudyZone {
+            bars: self.left..last + 1,
+            top: self.near.max(self.far),
+            bottom: self.near.min(self.far),
+            plot: usize::from(!self.up),
+        };
+        (self.index, zone)
+    }
 }
 
 impl Gaps {
-    /// The latest `max_gaps` gaps (1 to 50) of at least `deviation` percent (1 to 100, NaN to
+    /// The latest `max_gaps` gaps (1 to 500) of at least `deviation` percent (1 to 100, NaN to
     /// 1) of the average bar range.
     pub fn new(max_gaps: usize, deviation: f64) -> Self {
         Self {
@@ -99,6 +109,7 @@ impl Gaps {
             limit_trail: false,
             trail_length: 300,
             values: IndicatorValues::new(),
+            zones: Vec::new(),
             up_color: DESIGN_TOKENS.semantic.extended.success,
             down_color: DESIGN_TOKENS.semantic.extended.error,
             visible: true,
@@ -120,66 +131,72 @@ impl Gaps {
         self
     }
 
-    /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::missing(data.len());
+    /// The zones over `data`, every bar of which has a finite high and low.
+    fn compute(&self, data: &[Bar]) -> Vec<StudyZone> {
         let ranges: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
         let average = rolling_mean(&ranges, RANGE_LENGTH);
-        // Every gap found, the untracked ones no longer shown.
-        let mut gaps: Vec<Gap> = Vec::new();
+        let mut open: Vec<Gap> = Vec::new();
+        // Each zone with the index of its gap.
+        let mut zones = Vec::new();
+        let mut found = 0;
         for (i, bar) in data.iter().enumerate() {
-            let tracked = gaps.len().saturating_sub(self.max_gaps);
-            for gap in gaps[tracked..].iter_mut().filter(|gap| gap.open) {
-                gap.span.push((i, gap.near));
+            open.retain_mut(|gap| {
                 let (entered, covered) = if gap.up {
                     (bar.low < gap.near, bar.low <= gap.far)
                 } else {
                     (bar.high > gap.near, bar.high >= gap.far)
                 };
-                if entered && (covered || !self.close_partially) {
-                    gap.open = false;
-                } else if entered {
+                if entered {
+                    zones.push(gap.zone(i));
+                    if covered || !self.close_partially {
+                        return false;
+                    }
                     gap.near = if gap.up { bar.low } else { bar.high };
                     gap.left = i;
+                } else if self.limit_trail && i - gap.left >= self.trail_length {
+                    zones.push(gap.zone(i));
+                    return false;
                 }
-                if self.limit_trail && i - gap.left >= self.trail_length {
-                    gap.open = false;
-                }
-            }
+                true
+            });
             let Some(previous) = i.checked_sub(1).map(|p| &data[p]) else {
                 continue;
             };
             let threshold = average[i] * self.deviation / 100.0;
-            let gap = if bar.low > previous.high && bar.low - previous.high >= threshold {
+            let (up, near, far) = if bar.low > previous.high && bar.low - previous.high >= threshold
+            {
                 (true, bar.low, previous.high)
             } else if bar.high < previous.low && previous.low - bar.high >= threshold {
                 (false, bar.high, previous.low)
             } else {
                 continue;
             };
-            gaps.push(Gap {
-                up: gap.0,
-                near: gap.1,
-                far: gap.2,
+            let gap = Gap {
+                index: found,
+                up,
+                near,
+                far,
                 left: i - 1,
-                // A trail of one bar ends on the bar that opens the gap.
-                open: !self.limit_trail || self.trail_length > 1,
-                span: vec![(i - 1, gap.1), (i, gap.1)],
-            });
-        }
-        if !data.is_empty() {
-            // Every column exists, so a bar has a value per line.
-            values.set_value(2 * self.max_gaps - 1, 0, f64::NAN);
-        }
-        let shown = gaps.len().saturating_sub(self.max_gaps);
-        for (j, gap) in gaps.iter().enumerate().skip(shown) {
-            let slot = j % self.max_gaps;
-            for &(bar, near) in &gap.span {
-                values.set_value(2 * slot, bar, near);
-                values.set_value(2 * slot + 1, bar, gap.far);
+            };
+            found += 1;
+            // A trail of one bar ends on the bar that opens the gap.
+            if self.limit_trail && self.trail_length == 1 {
+                zones.push(gap.zone(i));
+            } else {
+                open.push(gap);
             }
+            // Gaps no longer shown need not be followed.
+            open.retain(|gap| gap.index + self.max_gaps >= found);
         }
-        values
+        if let Some(last) = data.len().checked_sub(1) {
+            zones.extend(open.iter().map(|gap| gap.zone(last)));
+        }
+        let shown = found.saturating_sub(self.max_gaps);
+        zones
+            .into_iter()
+            .filter(|(gap, _)| *gap >= shown)
+            .map(|(_, zone)| zone)
+            .collect()
     }
 }
 
@@ -208,47 +225,23 @@ impl Indicator for Gaps {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
-    }
-
-    fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
-        crate::studies::PlotStyle {
-            color: self.up_color,
-            width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
-            plot_type: crate::studies::PlotType::Line,
-            visible: true,
-        }
-    }
-
-    /// Edges in the colour of their gap's direction.
-    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
-        let slot = line / 2 * 2;
-        let (near, far) = (
-            self.values.value(slot, bar)?,
-            self.values.value(slot + 1, bar)?,
-        );
-        Some(if near >= far {
-            self.up_color
+        let finite = |b: &Bar| b.high.is_finite() && b.low.is_finite();
+        self.values = IndicatorValues::missing(data.len());
+        self.zones = if data.iter().all(finite) {
+            self.compute(data)
         } else {
-            self.down_color
-        })
+            let kept: Vec<usize> = (0..data.len()).filter(|&i| finite(&data[i])).collect();
+            let bars: Vec<Bar> = kept.iter().map(|&i| data[i].clone()).collect();
+            let mut zones = self.compute(&bars);
+            for zone in &mut zones {
+                zone.bars = kept[zone.bars.start]..kept[zone.bars.end - 1] + 1;
+            }
+            zones
+        };
     }
 
-    fn fills(&self) -> Vec<StudyFill> {
-        let alpha = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 38);
-        (0..self.max_gaps)
-            .map(|slot| StudyFill {
-                first: FillBoundary::Plot(2 * slot),
-                second: FillBoundary::Plot(2 * slot + 1),
-                color: alpha(self.up_color),
-                inverted_color: Some(alpha(self.down_color)),
-            })
-            .collect()
+    fn zones(&self) -> &[StudyZone] {
+        &self.zones
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -281,8 +274,60 @@ impl Indicator for Gaps {
     }
 
     fn line_names(&self) -> Vec<String> {
-        (1..=self.max_gaps)
-            .flat_map(|k| [format!("Gap {k} near edge"), format!("Gap {k} far edge")])
-            .collect()
+        vec!["Up gaps".to_string(), "Down gaps".to_string()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    /// Gaps keep no per-bar column, so their memory follows the gaps shown, not the bars.
+    #[test]
+    fn memory_grows_with_the_gaps_shown_not_the_bars() {
+        // Range-2 bars that step 10 higher every 100 bars, leaving 999 gaps no bar fills.
+        let bars = |step: f64| -> Vec<Bar> {
+            (0..100_000)
+                .map(|i| {
+                    let p = 100.0 + step * (i / 100) as f64;
+                    let time = Utc.timestamp_opt(i as i64 * 60, 0).unwrap();
+                    Bar::new(time, p, p + 1.0, p - 1.0, p, 1.0)
+                })
+                .collect()
+        };
+        let mut gaps = Gaps::new(500, 30.0);
+        gaps.calculate(&bars(0.0));
+        assert!(gaps.values().columns().is_empty() && gaps.zones().is_empty());
+        gaps.calculate(&bars(10.0));
+        assert!(gaps.values().columns().is_empty());
+        assert_eq!(gaps.zones().len(), 500);
+        assert!(gaps.zones().iter().all(|zone| zone.bars.end == 100_000));
+        assert_eq!(gaps.zones()[0].bars.start, 49_999);
+    }
+
+    /// A study zone that spans the visible bars widens the auto range to its edges, as a
+    /// per-bar value would, although the bars it began on are out of view.
+    #[test]
+    fn visible_study_zones_auto_scale() {
+        // Fourteen bars around 100, a bar that leaves a gap from 101 to 102, then bars at 150.
+        let bars: Vec<Bar> = [100.0; 14]
+            .into_iter()
+            .chain([103.0])
+            .chain([150.0; 100])
+            .enumerate()
+            .map(|(i, p)| {
+                let t = Utc.timestamp_opt(1_700_000_000 + i as i64 * 60, 0).unwrap();
+                Bar::new(t, p, p + 1.0, p - 1.0, p, 1.0)
+            })
+            .collect();
+        let mut gaps = Gaps::default();
+        gaps.calculate(&bars);
+        let mut state = crate::model::ChartState::new(crate::model::BarData::from_bars(bars));
+        state.time_scale_mut().set_width(80.0);
+        state.time_scale_mut().set_bar_spacing(8.0);
+        let transform = state.fit_price_scale([&gaps as &dyn Indicator]);
+        let range = state.price_scale().range();
+        assert!(transform.to_price(range.min) <= 101.0, "{range:?}");
     }
 }

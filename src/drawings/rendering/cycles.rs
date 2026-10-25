@@ -2,6 +2,7 @@
 //!
 //! Includes: cyclic lines, time cycles, and sine line.
 
+use super::style::circle_sides;
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::styles::{stroke, typography};
@@ -159,8 +160,8 @@ impl Drawing {
         let painter = &painter.with_clip_rect(chart_rect);
         let font = egui::FontId::proportional(typography::XS);
         let arc_stroke = Stroke::new(self.stroke_width, color);
-        let segments = 32;
         for (arc_center, radius) in arcs {
+            let segments = circle_sides(radius * painter.pixels_per_point()).div_ceil(2);
             // Upper half circle, from the cycle's start to its end.
             let points = (0..=segments)
                 .map(|j| {

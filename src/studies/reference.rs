@@ -209,6 +209,8 @@ fn fixture() -> Vec<Bar> {
                 low: low as f64 / 4.0,
                 close: close as f64 / 4.0,
                 volume: volume as f64,
+                colors: None,
+                payload: None,
             }
         })
         .collect()
@@ -820,6 +822,7 @@ fn staple_studies_match_published_definitions() {
 
     let mut failures = Vec::new();
     let mut checked_lines = vec![0; studies.len()];
+    let mut gap_rows = std::collections::BTreeMap::<usize, Vec<(usize, Vec<&str>)>>::new();
     for row in EXPECTED.lines() {
         let mut tokens = row.split_whitespace();
         let name = tokens.next().unwrap();
@@ -827,6 +830,13 @@ fn staple_studies_match_published_definitions() {
         let idx = studies.iter().position(|(n, _, _)| *n == name);
         let idx = idx.unwrap_or_else(|| panic!("{name} has expected values but is not built"));
         checked_lines[idx] += 1;
+        if name.starts_with("Gaps") {
+            gap_rows
+                .entry(idx)
+                .or_default()
+                .push((line, tokens.collect()));
+            continue;
+        }
         let values = studies[idx].1.values().to_rows();
         assert_eq!(
             values.len(),
@@ -858,6 +868,48 @@ fn staple_studies_match_published_definitions() {
             failures.push(format!(
                 "{name} line {line}: {} bars differ, first {first}",
                 mismatches.len()
+            ));
+        }
+    }
+    // Gap rows hold gap `j`'s near and far edge on each bar it covers in lines `2 * (j % max)` and
+    // `2 * (j % max) + 1`. Each run of bars with one extent is a zone; a zone after a partial fill
+    // starts on the last bar of the one before.
+    for (idx, mut rows) in gap_rows {
+        rows.sort_by_key(|(line, _)| *line);
+        let mut expected = Vec::new();
+        for pair in rows.chunks(2) {
+            let (near, far) = (&pair[0].1, &pair[1].1);
+            let (mut previous, mut start) = (None, 0);
+            for bar in 0..=near.len() {
+                let current = near.get(bar).filter(|token| **token != "-").map(|token| {
+                    (
+                        token.parse::<f64>().unwrap(),
+                        far[bar].parse::<f64>().unwrap(),
+                    )
+                });
+                if current == previous {
+                    continue;
+                }
+                if let Some((near, far)) = previous {
+                    expected.push(crate::studies::StudyZone {
+                        bars: start..bar,
+                        top: near.max(far),
+                        bottom: near.min(far),
+                        plot: usize::from(near < far),
+                    });
+                }
+                start = if previous.is_some() { bar - 1 } else { bar };
+                previous = current;
+            }
+        }
+        let mut actual = studies[idx].1.zones().to_vec();
+        for zones in [&mut expected, &mut actual] {
+            zones.sort_by_key(|zone| (zone.bars.start, zone.bars.end));
+        }
+        if actual != expected {
+            failures.push(format!(
+                "{}: expected zones {expected:?}, got {actual:?}",
+                studies[idx].0
             ));
         }
     }

@@ -19,6 +19,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("log", "Toggle logarithmic scale", "Settings"),
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
+        ("samples", "Toggle API samples", "Settings"),
         ("pane", "Add a symbol in a new pane", "Actions"),
     ]
     .into_iter()
@@ -109,6 +110,11 @@ impl DemoApp {
             "grid" => {
                 let config = self.chart.config_mut();
                 config.show_grid = !config.show_grid;
+                return;
+            }
+            "samples" => {
+                self.api_samples = !self.api_samples;
+                self.annotate();
                 return;
             }
             "pane" => {

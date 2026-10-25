@@ -103,9 +103,10 @@ impl DemoApp {
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
-        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks(
-            chart.bars(SeriesId::MAIN).to_vec(),
-        ))));
+        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
+            bars: chart.bars(SeriesId::MAIN).to_vec(),
+            samples: self.api_samples,
+        })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {

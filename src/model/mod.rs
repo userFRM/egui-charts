@@ -44,6 +44,7 @@ pub mod quote;
 pub mod range_bar;
 pub mod renko;
 mod series_scale;
+mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
@@ -61,11 +62,16 @@ pub use alert::{
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
-pub(crate) use bar::percent_change;
-pub use bar::{Bar, BarData};
+pub use bar::{Bar, BarColors, BarData};
+pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
-pub use chart_style::{AreaStyle, BaselineStyle, ChartTypeStyles, LinePlotStyle};
+pub use chart_style::{
+    AreaStyle, BarsStyle, BaselineStyle, ChartTypeStyles, LastPriceAnimation, LinePlotStyle,
+    LineType,
+};
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+#[cfg(feature = "widget")]
+pub(crate) use chartstate::next_revision;
 pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
@@ -89,6 +95,7 @@ pub use quote::{
 pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use series_scale::SeriesScale;
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
     MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,
@@ -128,6 +135,8 @@ mod tests {
                 low: p,
                 close: p,
                 volume: 0.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }

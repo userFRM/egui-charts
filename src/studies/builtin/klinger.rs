@@ -250,6 +250,8 @@ mod tests {
             low,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -277,7 +279,7 @@ mod tests {
         }
         data[40] = Bar {
             volume: data[40].volume,
-            ..data[39]
+            ..data[39].clone()
         };
 
         // (KVO, signal) for bars 55 to 79; the trend flips many times along the series.

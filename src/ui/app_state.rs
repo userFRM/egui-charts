@@ -85,9 +85,11 @@ pub enum Control {
     /// Alert creation: the top toolbar's Alert button, the right rail's Alerts button and the
     /// add alert rows of the chart and series menus.
     Alerts,
-    /// Positions and orders: the drawing toolbar's hide rows for them and the chart menu's
-    /// order rows.
+    /// Positions and orders: the top toolbar's Trade button, the drawing toolbar's hide rows for
+    /// them and the chart menu's order rows.
     Trading,
+    /// The top toolbar's Publish button.
+    Publish,
     /// The top toolbar's Replay button.
     Replay,
     /// The top toolbar's Save and Layout setup buttons.

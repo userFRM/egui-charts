@@ -2,8 +2,9 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, SymbolDetails, aggregate_trades, resample,
+    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
+    HotlistEntry, HotlistQuery, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow,
+    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
@@ -404,7 +405,7 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
 
 /// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
 /// which stands for the previous close. `None` for symbols outside the catalog.
-fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
     let spec = catalog(symbol)?;
     let tick_size = if spec.start_price < 10.0 {
         0.0001
@@ -693,6 +694,26 @@ impl Datafeed for LiveFeed {
             let (sequence, book) = market.snapshot(sim.now);
             sub.sink.push_depth_snapshot(sequence, book);
         }
+    }
+
+    /// The catalog symbols ranked on their synthetic quotes.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        reply.send(Ok(super::feeds::hotlist(&query, Utc::now())));
+    }
+
+    /// The catalog symbols screened on their synthetic quotes.
+    fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        reply.send(super::feeds::screen(&query, Utc::now()));
+    }
+
+    /// Synthetic releases, earnings, dividends and offerings.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+        reply.send(Ok(super::feeds::calendar(&query, Utc::now())));
+    }
+
+    /// Synthetic stories about the catalog symbols.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        reply.send(Ok(super::feeds::news(&query, Utc::now())));
     }
 
     /// Synthetic statistics and profile derived from the catalog entry of `symbol`.

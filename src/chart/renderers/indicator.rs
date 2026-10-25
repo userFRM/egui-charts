@@ -108,19 +108,29 @@ pub(crate) fn paint_study_plot(
                     Stroke::new(plot.width, plot.color),
                 ));
             }
-            PlotPattern::Dashed => {
+            PlotPattern::Dashed | PlotPattern::LargeDashed => {
+                let scale = if plot.pattern == PlotPattern::Dashed {
+                    1.0
+                } else {
+                    2.0
+                };
                 painter.extend(egui::Shape::dashed_line(
                     points,
                     Stroke::new(plot.width, plot.color),
-                    6.0,
-                    4.0,
+                    6.0 * scale,
+                    4.0 * scale,
                 ));
             }
-            PlotPattern::Dotted => {
+            PlotPattern::Dotted | PlotPattern::SparseDotted => {
+                let spacing = if plot.pattern == PlotPattern::Dotted {
+                    4.0
+                } else {
+                    8.0
+                };
                 painter.extend(egui::Shape::dotted_line(
                     points,
                     plot.color,
-                    4.0,
+                    spacing,
                     plot.width * 0.5,
                 ));
             }
@@ -291,6 +301,7 @@ impl IndicatorRenderer {
             price_scale,
             coords,
         );
+        crate::studies::plots::paint_zones(&painter, indicator, price_scale, coords);
 
         // Handle multi-line indicators
         let line_cnt = indicator.line_cnt();
