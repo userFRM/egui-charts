@@ -19,16 +19,8 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("log", "Toggle logarithmic scale", "Settings"),
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
-        (
-            "second-pane",
-            "Second instrument in its own pane",
-            "Actions",
-        ),
-        (
-            "second-main",
-            "Second instrument in the main pane",
-            "Actions",
-        ),
+        ("samples", "Toggle API samples", "Settings"),
+        ("pane", "Add a symbol in a new pane", "Actions"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -115,13 +107,18 @@ impl DemoApp {
                 options.invert_scale = !options.invert_scale;
                 return;
             }
-            "second-pane" | "second-main" => {
-                self.place_second_instrument(id == "second-pane");
-                return;
-            }
             "grid" => {
                 let config = self.chart.config_mut();
                 config.show_grid = !config.show_grid;
+                return;
+            }
+            "samples" => {
+                self.api_samples = !self.api_samples;
+                self.annotate();
+                return;
+            }
+            "pane" => {
+                self.add_series_pane();
                 return;
             }
             _ => return,

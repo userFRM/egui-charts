@@ -98,15 +98,36 @@ where
                     )
             });
     }
+    if let Some(zone) = indicator
+        .zones()
+        .iter()
+        .filter(|zone| zone.plot == line_idx)
+        .find(|zone| {
+            zone.rect(coords, &value_to_y)
+                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+        })
+    {
+        return Some(
+            coords
+                .x_to_idx(click_pos.x)
+                .clamp(zone.bars.start, zone.bars.end - 1),
+        );
+    }
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
     {
         plot.width = coords.bar_spacing * 0.8;
     }
+    // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
+    let reach = HIT_TOLERANCE + plot.width + coords.bar_spacing;
+    let start = visible_range
+        .start
+        .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1));
     let end = visible_range
         .end
-        .max(coords.x_to_idx(rect.right()).saturating_add(1));
-    for bar in visible_range.start..end {
+        .max(coords.x_to_idx(rect.right()).saturating_add(1))
+        .min(coords.x_to_idx(click_pos.x + reach).saturating_add(2));
+    for bar in start..end {
         let Some(value) = indicator.plot_value(line_idx, bar) else {
             continue;
         };

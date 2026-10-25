@@ -521,11 +521,13 @@ impl Drawing {
         self.render_original(painter, rect, view);
     }
 
-    /// The screen x range this drawing paints in, for tools that paint within three times the
-    /// diagonal of their anchors plus [`PAINT_MARGIN`] on either side of them, so a drawing
-    /// outside the pane's x range can be skipped. `None` for tools that can reach the pane's
-    /// edges, as lines extended left or right do.
-    pub(crate) fn paint_span(&self) -> Option<egui::Rangef> {
+    /// The screen area this drawing paints in, for tools that paint within three times the
+    /// diagonal of their anchors plus [`PAINT_MARGIN`] around them, so a drawing outside the pane
+    /// can be skipped. Tools that also paint at prices taken from the bars, such as positions and
+    /// volume profiles, or run a leg on a fixed time past its anchor, which a steep leg carries to
+    /// any price, are bounded in time only. `None` for tools that can reach the pane's edges, as
+    /// lines extended left or right do.
+    pub(crate) fn paint_bounds(&self) -> Option<Rect> {
         use DrawingToolType as T;
         let bounded = matches!(
             self.tool_type,
@@ -584,12 +586,28 @@ impl Drawing {
         }
         let hull = self.bounding_rect()?;
         let reach = 3.0 * hull.size().length() + PAINT_MARGIN;
-        Some(hull.x_range().expand(reach))
+        let bounds = hull.expand(reach);
+        let time_only = matches!(
+            self.tool_type,
+            T::LongPos
+                | T::ShortPos
+                | T::Forecast
+                | T::BarsPattern
+                | T::FixedRangeVolumeProfile
+                | T::HeadAndShoulders
+                | T::TrianglePattern
+                | T::ElliottTriangle
+        );
+        Some(if time_only {
+            Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
+        } else {
+            bounds
+        })
     }
 }
 
-/// Room beyond the anchors for the labels, markers and fixed-size extensions of a drawing with a
-/// [`Drawing::paint_span`].
+/// Room beyond the anchors for the labels, markers and fixed-size extensions of a drawing with
+/// [`Drawing::paint_bounds`].
 const PAINT_MARGIN: f32 = 200.0;
 
 /// Bars the data-driven drawing tests share; their reference values were
@@ -708,12 +726,12 @@ mod tests {
         }
     }
 
-    /// Guards culling: a drawing with a paint span paints nothing outside it, for spread,
-    /// near-vertical and tiny anchors, so skipping it when the span misses the pane hides nothing
-    /// in view. A tool added to the bounded list whose paint reaches further, such as a line to the
+    /// Guards culling: a drawing with paint bounds paints nothing outside them, for spread,
+    /// near-vertical and tiny anchors, so skipping it when the bounds miss the pane hides nothing
+    /// in view. A tool added to the bounded list whose paint reaches further, such as a line to a
     /// pane edge, fails it.
     #[test]
-    fn drawings_paint_within_their_span() {
+    fn drawings_paint_within_their_bounds() {
         let layouts: [&[(f32, f32)]; 3] = [
             &[
                 (100., 100.),
@@ -747,8 +765,8 @@ mod tests {
             ],
         ];
         let bars = sample_bars();
-        // Wider than every span, so paint that reaches a pane edge lands outside it.
-        let pane = Rect::from_min_max(Pos2::new(-2000., 0.), Pos2::new(2500., 400.));
+        // Larger than all bounds, so paint that reaches a pane edge lands outside them.
+        let pane = Rect::from_min_max(Pos2::new(-2000., -2000.), Pos2::new(2500., 2500.));
         let mut wrong = Vec::new();
         for &tool in DrawingToolType::all() {
             for layout in layouts {
@@ -763,7 +781,7 @@ mod tests {
                     .map(|p| crate::drawings::ChartPoint::new(p.x / 40.0, 500.0 - p.y as f64))
                     .collect();
                 drawing.text = Some("Sample".into());
-                let Some(span) = drawing.paint_span() else {
+                let Some(bounds) = drawing.paint_bounds() else {
                     continue;
                 };
                 let ctx = Context::default();
@@ -779,10 +797,9 @@ mod tests {
                     drawing.render(ui.painter(), pane, &view);
                 });
                 for shape in &output.shapes {
-                    let x = shape.shape.visual_bounding_rect().x_range();
-                    let span = span.expand(0.5);
-                    if x.min <= x.max && !(span.contains(x.min) && span.contains(x.max)) {
-                        wrong.push(format!("{tool:?} paints {x:?} outside {span:?}"));
+                    let paint = shape.shape.visual_bounding_rect();
+                    if !paint.is_negative() && !bounds.expand(0.5).contains_rect(paint) {
+                        wrong.push(format!("{tool:?} paints {paint:?} outside {bounds:?}"));
                     }
                 }
                 output.drop_without_applying_deltas();

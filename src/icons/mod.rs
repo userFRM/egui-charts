@@ -249,6 +249,12 @@ pub mod icons {
     pub const FULLSCREEN: Icon = crate::icon_from_path!("ui/fullscreen.svg");
     pub const THEME_TOGGLE: Icon = crate::icon_from_path!("ui/theme-toggle.svg");
     pub const QUICK_SEARCH: Icon = crate::icon_from_path!("ui/search.svg");
+    /// Magnifier with a lightning bolt for Quick Search, the command search.
+    pub const COMMAND_SEARCH: Icon = crate::icon_from_path!("ui/quick-search.svg");
+    /// Hex nut for the top toolbar's chart settings.
+    pub const SETTINGS_NUT: Icon = crate::icon_from_path!("ui/settings-nut.svg");
+    /// Light bulb with a plus for publishing the chart.
+    pub const PUBLISH: Icon = crate::icon_from_path!("ui/publish.svg");
     pub const WIDGET_BAR_CALENDAR: Icon = crate::icon_from_path!("ui/calendar.svg");
     pub const GO_TO_DATE: Icon = crate::icon_from_path!("ui/go-to-date.svg");
     pub const WIDGET_BAR_HELP: Icon = crate::icon_from_path!("ui/help.svg");
@@ -258,6 +264,22 @@ pub mod icons {
     pub const STATUS_ERROR: Icon = crate::icon_from_path!("ui/error.svg");
     /// Stacked layers for the widget bar object panel.
     pub const WIDGET_BAR_LAYERS: Icon = crate::icon_from_path!("ui/widget-bar-layers.svg");
+    /// Bulleted list for the widget bar watchlist.
+    pub const WIDGET_BAR_WATCHLIST: Icon = crate::icon_from_path!("ui/widget-bar-watchlist.svg");
+    /// Four-point sparkle for the widget bar highlights.
+    pub const WIDGET_BAR_HIGHLIGHTS: Icon = crate::icon_from_path!("ui/highlights.svg");
+    /// Funnel for the widget bar screener.
+    pub const WIDGET_BAR_SCREENER: Icon = crate::icon_from_path!("ui/screener.svg");
+    /// Flame for the widget bar hotlists.
+    pub const WIDGET_BAR_HOTLISTS: Icon = crate::icon_from_path!("ui/hotlists.svg");
+    /// Folded newspaper for the widget bar news.
+    pub const WIDGET_BAR_NEWS: Icon = crate::icon_from_path!("ui/news.svg");
+    /// Bell for the widget bar notifications.
+    pub const WIDGET_BAR_NOTIFICATIONS: Icon = crate::icon_from_path!("ui/notifications.svg");
+    /// Two speech bubbles for the widget bar chats.
+    pub const WIDGET_BAR_CHATS: Icon = crate::icon_from_path!("ui/chats.svg");
+    /// Grid of filled squares for the widget bar products launcher.
+    pub const WIDGET_BAR_PRODUCTS: Icon = crate::icon_from_path!("ui/products.svg");
     pub const OBJECT_TREE: Icon = crate::icon_from_path!("ui/object-tree.svg");
     pub const EYE: Icon = crate::icon_from_path!("ui/eye.svg");
     pub const EYE_HIDE: Icon = crate::icon_from_path!("ui/eye-off.svg");
@@ -280,9 +302,30 @@ pub mod icons {
     pub const LAYOUT_GRID: Icon = crate::icon_from_path!("ui/layout-grid.svg");
     /// Single chart pane for choosing the chart layout.
     pub const LAYOUT_SINGLE: Icon = crate::icon_from_path!("ui/layout-single.svg");
+    // One glyph per multi-chart preset, the cells arranged as `ChartLayoutMode` tiles them.
+    pub const LAYOUT_TWO_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-2-columns.svg");
+    pub const LAYOUT_TWO_VERTICAL: Icon = crate::icon_from_path!("ui/layout-2-rows.svg");
+    pub const LAYOUT_THREE: Icon = crate::icon_from_path!("ui/layout-3.svg");
+    pub const LAYOUT_FOUR: Icon = crate::icon_from_path!("ui/layout-4.svg");
+    pub const LAYOUT_FIVE: Icon = crate::icon_from_path!("ui/layout-5.svg");
+    pub const LAYOUT_SIX: Icon = crate::icon_from_path!("ui/layout-6.svg");
+    pub const LAYOUT_SEVEN: Icon = crate::icon_from_path!("ui/layout-7.svg");
+    pub const LAYOUT_EIGHT: Icon = crate::icon_from_path!("ui/layout-8.svg");
+    pub const LAYOUT_NINE: Icon = crate::icon_from_path!("ui/layout-9.svg");
+    pub const LAYOUT_TEN: Icon = crate::icon_from_path!("ui/layout-10.svg");
+    pub const LAYOUT_ELEVEN: Icon = crate::icon_from_path!("ui/layout-11.svg");
+    pub const LAYOUT_TWELVE: Icon = crate::icon_from_path!("ui/layout-12.svg");
+    pub const LAYOUT_THIRTEEN: Icon = crate::icon_from_path!("ui/layout-13.svg");
+    pub const LAYOUT_FOURTEEN: Icon = crate::icon_from_path!("ui/layout-14.svg");
+    pub const LAYOUT_FIFTEEN: Icon = crate::icon_from_path!("ui/layout-15.svg");
+    pub const LAYOUT_SIXTEEN: Icon = crate::icon_from_path!("ui/layout-16.svg");
+    /// One chart with a tab strip, for the tabbed preset.
+    pub const LAYOUT_TABS: Icon = crate::icon_from_path!("ui/layout-tabs.svg");
     pub const LAYOUT_SETUP: Icon = crate::icon_from_path!("ui/layout-setup.svg");
     pub const CLOSE: Icon = crate::icon_from_path!("ui/close.svg");
     pub const MOVE_PANE: Icon = crate::icon_from_path!("ui/move-pane.svg");
+    /// An arrow into a price axis, for pinning a study to a scale.
+    pub const PIN_TO_SCALE: Icon = crate::icon_from_path!("ui/pin-scale.svg");
     pub const WATCHLIST: Icon = crate::icon_from_path!("ui/watchlist.svg");
     pub const UI_DRAG_HANDLE: Icon = crate::icon_from_path!("ui/drag-handle.svg");
     pub const UI_MORE_HORIZONTAL: Icon = crate::icon_from_path!("ui/more.svg");

@@ -256,11 +256,7 @@ impl SymbolTab {
             id,
             &mut style.style,
             LineStyle::all().iter().copied(),
-            |s| match s {
-                LineStyle::Solid => "Solid".to_owned(),
-                LineStyle::Dashed => "Dashed".to_owned(),
-                LineStyle::Dotted => "Dotted".to_owned(),
-            },
+            |s| s.name().to_owned(),
         );
         ui.end_row();
     }

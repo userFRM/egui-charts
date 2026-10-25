@@ -211,7 +211,7 @@ impl AxisMenus {
                     Action::ExtendedHours | Action::SessionBreaks => Control::Session,
                     _ => return true,
                 },
-                MenuEntry::Separator => return true,
+                MenuEntry::Submenu { .. } | MenuEntry::Separator => return true,
             };
             !self.hidden.contains(&control)
         });

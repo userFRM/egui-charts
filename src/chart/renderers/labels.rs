@@ -1,32 +1,40 @@
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
-use crate::config::TimeScaleOptions;
+use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
 use crate::scales::{
-    HorizontalScale, PriceMap, PriceMarkGenerator, PriceScaleId, TickMark, TickMarkLayout,
+    HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
 use crate::theme::ThemeExt;
 use chrono::Duration;
 use egui::layers::ShapeIdx;
 use egui::{Color32, FontId, Pos2, Rect, Shape};
 
+/// Length of the tick marks on the price and time axes, from the plot edge.
+const AXIS_TICK_LENGTH: f32 = 3.0;
+
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
-/// through.
+/// through. `axis` sets the border, tick marks and label clipping. A host `formatter` writes the
+/// labels with [`PriceFormatter::format_tick`].
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
+    axis: &PriceAxisOptions,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
     render_price_labels_at_pos(
         context,
         price_scale,
         colors,
+        axis,
         PriceScaleId::Right,
         tags,
         slot,
+        formatter,
     );
 }
 
@@ -36,53 +44,131 @@ pub fn render_price_labels_at_pos(
     context: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
+    axis: &PriceAxisOptions,
     position: PriceScaleId,
     tags: &[Option<Rect>],
     slot: ShapeIdx,
+    formatter: Option<&dyn PriceFormatter>,
 ) {
-    // Create price mark generator with default config
-    let generator = PriceMarkGenerator::new();
-
-    // Generate smart price marks using "nice numbers" algorithm
-    let marks = generator.generate_marks(price_scale);
+    let mut marks = price_marks(price_scale, formatter);
 
     // Determine positioning based on scale position
-    let (x_offset, alignment) = match position {
-        PriceScaleId::Right => (
-            context.rect.max.x + PRICE_LABEL_GAP,
-            egui::Align2::LEFT_CENTER,
-        ),
-        PriceScaleId::Left => (
-            context.rect.min.x - PRICE_LABEL_GAP,
-            egui::Align2::RIGHT_CENTER,
-        ),
+    let (edge, side, alignment) = match position {
+        PriceScaleId::Right => (context.rect.max.x, 1.0, egui::Align2::LEFT_CENTER),
+        PriceScaleId::Left => (context.rect.min.x, -1.0, egui::Align2::RIGHT_CENTER),
     };
+    let x_offset = edge + side * PRICE_LABEL_GAP;
 
     let font = axis_font(context.painter.ctx());
-    let labels: Vec<Shape> = marks
-        .into_iter()
-        .filter_map(|mark| {
-            let galley = if mark.weight >= 80 {
-                context
-                    .painter
-                    .layout_job(egui::text::LayoutJob::single_section(
-                        mark.label,
-                        semibold(font.clone(), colors.text),
-                    ))
-            } else {
-                context
-                    .painter
-                    .layout_no_wrap(mark.label, font.clone(), colors.text)
-            };
-            let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
-            (rect.top() >= context.rect.top()
+    if axis.edge_ticks_visible {
+        // Edge labels sit half a line inside the pane, so they show whole.
+        let inset = context
+            .painter
+            .layout_no_wrap("0".to_owned(), font.clone(), colors.text)
+            .size()
+            .y
+            / 2.0;
+        // A pane too short for two labels gets none at its edges.
+        if context.rect.height() >= inset * 4.0 {
+            let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
+            // An edge label replaces the marks closer to it than they are to each other.
+            let step = marks
+                .windows(2)
+                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
+                .reduce(f32::min)
+                .unwrap_or(inset * 4.0);
+            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
+            marks.extend(edges.map(|y| {
+                let value = price_scale.y_to_scale(y);
+                PriceMark {
+                    price: value,
+                    label: match formatter {
+                        Some(formatter) => {
+                            formatter.format_tick(price_scale.transform().axis_value(value))
+                        }
+                        None => price_scale.transform().label(
+                            value,
+                            tick_decimals(price_scale, y),
+                            None,
+                        ),
+                    },
+                    y_coord: y,
+                    weight: 0,
+                }
+            }));
+        }
+    }
+
+    let painter = if axis.hide_clipped_labels {
+        context.painter.clone()
+    } else {
+        // Labels at the pane edges show cut, not spilling over the neighbouring pane or axis.
+        let clip = context.painter.clip_rect();
+        context.painter.with_clip_rect(Rect::from_x_y_ranges(
+            clip.x_range(),
+            context.rect.y_range().intersection(clip.y_range()),
+        ))
+    };
+    let mut shapes = Vec::new();
+    if axis.border_visible {
+        let color = axis
+            .border_color
+            .unwrap_or_else(|| context.painter.ctx().active_theme().ui.border);
+        shapes.push(Shape::line_segment(
+            [
+                Pos2::new(edge + side * 0.5, context.rect.top()),
+                Pos2::new(edge + side * 0.5, context.rect.bottom()),
+            ],
+            egui::Stroke::new(1.0, color),
+        ));
+    }
+    for mark in marks {
+        let galley = if mark.weight >= 80 {
+            painter.layout_job(egui::text::LayoutJob::single_section(
+                mark.label,
+                semibold(font.clone(), colors.text),
+            ))
+        } else {
+            painter.layout_no_wrap(mark.label, font.clone(), colors.text)
+        };
+        let rect = alignment.anchor_size(Pos2::new(x_offset, mark.y_coord), galley.size());
+        let shown = if axis.hide_clipped_labels {
+            rect.top() >= context.rect.top()
                 && rect.bottom() <= context.rect.bottom()
-                && context.painter.clip_rect().contains_rect(rect)
-                && !under_tag(tags, rect))
-            .then(|| Shape::galley(rect.min, galley, colors.text))
-        })
-        .collect();
-    context.painter.set(slot, labels);
+                && painter.clip_rect().contains_rect(rect)
+        } else {
+            painter.clip_rect().intersects(rect)
+        };
+        if !shown || under_tag(tags, rect) {
+            continue;
+        }
+        if axis.ticks_visible {
+            shapes.push(Shape::line_segment(
+                [
+                    Pos2::new(edge, mark.y_coord),
+                    Pos2::new(edge + side * AXIS_TICK_LENGTH, mark.y_coord),
+                ],
+                egui::Stroke::new(1.0, colors.text),
+            ));
+        }
+        shapes.push(Shape::galley(rect.min, galley, colors.text));
+    }
+    painter.set(slot, shapes);
+}
+
+/// Price axis marks of `price_scale` from the "nice numbers" generator, labelled with
+/// [`PriceFormatter::format_tick`] when the host supplies a `formatter`.
+pub(crate) fn price_marks(
+    price_scale: &PriceMap,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = price_scale.marks();
+    if let Some(formatter) = formatter {
+        for mark in &mut marks {
+            mark.label = formatter.format_tick(mark.price);
+        }
+    }
+    marks
 }
 
 /// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.
@@ -93,15 +179,15 @@ fn under_tag(tags: &[Option<Rect>], rect: Rect) -> bool {
 /// Decimals of the price axis tick label nearest to `y`, so that a price written with them reads
 /// like the ticks.
 pub(crate) fn tick_decimals(price_scale: &PriceMap, y: f32) -> usize {
-    PriceMarkGenerator::new()
-        .generate_marks(price_scale)
+    price_scale
+        .marks()
         .into_iter()
         .min_by(|a, b| (a.y_coord - y).abs().total_cmp(&(b.y_coord - y).abs()))
-        // Normal and logarithmic tick labels are plain numbers.
+        // Percentage labels end in a sign, which is not a decimal.
         .map_or(2, |mark| {
-            mark.label
-                .split_once('.')
-                .map_or(0, |(_, decimals)| decimals.len())
+            mark.label.split_once('.').map_or(0, |(_, decimals)| {
+                decimals.chars().take_while(char::is_ascii_digit).count()
+            })
         })
 }
 
@@ -239,6 +325,7 @@ pub(crate) fn render_time_grid(
     points: &[(chrono::DateTime<chrono::Utc>, usize)],
     coords: &ChartMapping,
     color: Color32,
+    style: crate::model::LineStyle,
 ) {
     for mark in marks {
         let index = time_to_idx(mark.time, points);
@@ -250,6 +337,7 @@ pub(crate) fn render_time_grid(
                 Pos2::new(x, context.rect.top()),
                 Pos2::new(x, context.rect.bottom()),
                 egui::Stroke::new(0.5, color),
+                style,
             );
         }
     }
@@ -332,7 +420,7 @@ pub fn render_time_labels(
                 labels.push(Shape::line_segment(
                     [
                         Pos2::new(x, context.rect.bottom()),
-                        Pos2::new(x, context.rect.bottom() + 3.0),
+                        Pos2::new(x, context.rect.bottom() + AXIS_TICK_LENGTH),
                     ],
                     egui::Stroke::new(1.0, text_color),
                 ));
@@ -522,6 +610,90 @@ mod tests {
                     assert_eq!(popup.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "USD")).count(), 2);
                 }
             }
+        }
+    }
+
+    /// Each price axis option draws its part: the border, a tick beside each label, labels at the
+    /// top and bottom of the pane, and labels the pane edges cut.
+    #[test]
+    fn price_axis_options_draw_border_ticks_and_edge_labels() {
+        use crate::config::PriceAxisOptions;
+        let on = PriceAxisOptions {
+            border_visible: true,
+            ticks_visible: true,
+            ..Default::default()
+        };
+        let edges = PriceAxisOptions {
+            edge_ticks_visible: true,
+            ..Default::default()
+        };
+        let clipped = PriceAxisOptions {
+            hide_clipped_labels: false,
+            ..Default::default()
+        };
+        // (options, border, a tick per label, labels at both edges, a label cut by the pane)
+        for (axis, border, ticks, edge_labels, cut) in [
+            (PriceAxisOptions::default(), false, false, false, false),
+            (on, true, true, false, false),
+            (edges, false, false, true, false),
+            (clipped, false, false, false, true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[120.0], &[180.0]);
+            chart.config_mut().show_volume = false;
+            chart.config_mut().show_symbol_last_val = false;
+            chart.config_mut().price_axis = axis;
+            // Ticks at 100 and 200 fall on the bottom and top of the pane.
+            chart.price_scale_mut().set_range(100.0, 200.0);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let labels: Vec<Rect> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text.pos.x > plot.right()
+                            && text.galley.text().parse::<f64>().is_ok() =>
+                    {
+                        Some(Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let segments: Vec<[Pos2; 2]> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, .. } => Some(*points),
+                    _ => None,
+                })
+                .collect();
+            let has_border = segments.iter().any(|[a, b]| {
+                a.x == plot.right() + 0.5 && b.x == a.x && a.y == plot.top() && b.y == plot.bottom()
+            });
+            let tick_count = segments
+                .iter()
+                .filter(|[a, b]| a.x == plot.right() && b.x == plot.right() + 3.0 && a.y == b.y)
+                .count();
+            let at_edges = labels
+                .iter()
+                .any(|label| (label.top() - plot.top()).abs() < 0.01)
+                && labels
+                    .iter()
+                    .any(|label| (label.bottom() - plot.bottom()).abs() < 0.01);
+            let cut_label = labels.iter().any(|label| {
+                label.top() < plot.top() - 0.01 || label.bottom() > plot.bottom() + 0.01
+            });
+            assert!(!labels.is_empty(), "{axis:?}");
+            assert_eq!(
+                (
+                    has_border,
+                    tick_count > 0 && tick_count == labels.len(),
+                    at_edges,
+                    cut_label
+                ),
+                (border, ticks, edge_labels, cut),
+                "{axis:?}"
+            );
         }
     }
 

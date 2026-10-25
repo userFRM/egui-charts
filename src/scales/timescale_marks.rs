@@ -162,6 +162,7 @@ impl TickMarkGenerator {
         let formatter = Box::new(DefaultTimeFormatter {
             use_24_hour: config.use_24_hour,
             show_seconds: config.show_subseconds,
+            date_format: None,
         });
 
         Self {

@@ -22,6 +22,7 @@ mod session_breaks;
 mod tooltip;
 mod trading_lines;
 mod volume;
+mod watermark;
 
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
 pub use axis_currency::render_axis_currency;
@@ -37,7 +38,10 @@ pub use labels::{
     Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
     render_time_labels,
 };
-pub(crate) use labels::{price_decimals, render_time_grid, study_controls, time_axis_marks};
+pub(crate) use labels::{
+    price_decimals, price_marks, render_time_grid, study_controls, time_axis_marks,
+};
+pub(crate) use markers::render_change_mark;
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
@@ -50,3 +54,5 @@ pub use trading_lines::{
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{decimals, to_step};
 pub use volume::render_volume_bar;
+pub(crate) use watermark::render_watermark;
+pub use watermark::{Watermark, WatermarkLine};

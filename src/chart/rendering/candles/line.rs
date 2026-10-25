@@ -4,12 +4,13 @@
 
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
+use egui::epaint::CubicBezierShape;
 use egui::{Color32, Painter, Pos2, Shape, Stroke};
 
 use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, LinePlotStyle, PriceSource};
+use crate::model::{Bar, LinePlotStyle, LineType, PriceSource};
 
 pub(super) fn render_line(
     painter: &Painter,
@@ -176,27 +177,112 @@ pub(super) fn draw_bar_line(
     step: bool,
 ) {
     for run in valued_runs(bars) {
+        let path = if step {
+            let mut path = vec![points[run.start]];
+            for at in run.start + 1..run.end {
+                path.push(Pos2::new(points[at].x, points[at - 1].y));
+                path.push(points[at]);
+            }
+            path
+        } else {
+            with_line_type(points[run.clone()].to_vec(), style.line_type)
+        };
+        let mut path_from = 0;
         let mut from = run.start;
         while from + 1 < run.end {
             let color = line_color(&bars[from], style);
             let to = (from + 1..run.end - 1)
                 .find(|&at| line_color(&bars[at], style) != color)
                 .unwrap_or(run.end - 1);
-            let mut path = vec![points[from]];
-            for at in from + 1..=to {
-                if step {
-                    path.push(Pos2::new(points[at].x, points[at - 1].y));
-                }
-                path.push(points[at]);
-            }
+            let path_to = path[path_from..]
+                .iter()
+                .position(|point| *point == points[to])
+                .map_or(path.len() - 1, |at| path_from + at);
             let style = LinePlotStyle {
                 color,
                 ..style.clone()
             };
-            draw_styled_line(painter, path, &style);
+            draw_styled_line(painter, path[path_from..=path_to].to_vec(), &style);
+            path_from = path_to;
             from = to;
         }
     }
+}
+
+/// `points` joined as `line_type` asks: unchanged for straight segments, or flattened from a
+/// Catmull-Rom spline through every point.
+pub(super) fn with_line_type(points: Vec<Pos2>, line_type: LineType) -> Vec<Pos2> {
+    match line_type {
+        LineType::Simple => points,
+        LineType::Curved => curve_through(&points),
+    }
+}
+
+/// A polyline within a quarter point of the uniform Catmull-Rom spline through `points`. The
+/// segment from `p1` to `p2` is the cubic Bezier with control points `p1 + (p2 - p0) / 6` and
+/// `p2 - (p3 - p1) / 6`, repeating the end points beyond the ends, so the curve passes through
+/// every point with a continuous tangent and its x stays monotonic when theirs is.
+fn curve_through(points: &[Pos2]) -> Vec<Pos2> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let last = points.len() - 1;
+    let mut curve = vec![points[0]];
+    for i in 0..last {
+        let (p0, p1, p2, p3) = (
+            points[i.saturating_sub(1)],
+            points[i],
+            points[i + 1],
+            points[(i + 2).min(last)],
+        );
+        let segment = CubicBezierShape::from_points_stroke(
+            [p1, p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2],
+            false,
+            Color32::TRANSPARENT,
+            Stroke::NONE,
+        );
+        curve.extend(segment.flatten(Some(0.25)).into_iter().skip(1));
+        if curve.last() != Some(&p2) {
+            curve.push(p2);
+        }
+    }
+    curve
+}
+
+/// Paints the crosshair marker: a dot of `radius` in the series' line colour, ringed in the
+/// chart background so it stands out from the line.
+pub(crate) fn render_crosshair_marker(
+    painter: &Painter,
+    point: Pos2,
+    radius: f32,
+    color: Color32,
+    background: Color32,
+) {
+    if !radius.is_finite() || radius <= 0.0 || !point.is_finite() {
+        return;
+    }
+    painter.circle(
+        point,
+        radius,
+        color,
+        Stroke::new(DESIGN_TOKENS.stroke.thick, background),
+    );
+}
+
+/// Seconds of one last price pulse.
+pub(crate) const LAST_PRICE_PULSE_SECONDS: f64 = 2.6;
+
+/// Paints the last price pulse at `phase`, 0 to 1 through one pulse: a dot in the series' line
+/// colour and a halo that grows from it and fades out.
+pub(crate) fn render_last_price_pulse(painter: &Painter, point: Pos2, color: Color32, phase: f32) {
+    if !point.is_finite() {
+        return;
+    }
+    let phase = phase.clamp(0.0, 1.0);
+    let dot = 3.0;
+    let halo = color.gamma_multiply(0.4 * (1.0 - phase));
+    painter.circle_filled(point, dot + 9.0 * phase, halo);
+    painter.circle_filled(point, dot, color);
 }
 
 /// Paint a line with the chart type's own style; dashes keep their phase through corners.
@@ -211,5 +297,76 @@ pub(super) fn draw_styled_line(painter: &Painter, points: Vec<Pos2>, style: &Lin
         );
     } else {
         painter.add(Shape::line(points, stroke));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The uniform Catmull-Rom segment from p1 to p2 is at (-p0 + 9 p1 + 9 p2 - p3) / 16 halfway,
+    /// which for these points is (15, 3.75) between (10, 10) and (20, 0).
+    #[test]
+    fn curve_passes_through_points_and_the_spline_midpoint() {
+        let points = [
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 10.0),
+            Pos2::new(20.0, 0.0),
+            Pos2::new(30.0, 30.0),
+        ];
+        let curve = with_line_type(points.to_vec(), LineType::Curved);
+        assert!(points.iter().all(|point| curve.contains(point)));
+        assert!(curve.windows(2).all(|pair| pair[0].x <= pair[1].x));
+        let distance = |target: Pos2| {
+            curve
+                .windows(2)
+                .map(|pair| {
+                    let (a, b) = (pair[0], pair[1]);
+                    let t = ((target - a).dot(b - a) / (b - a).length_sq()).clamp(0.0, 1.0);
+                    target.distance(a + (b - a) * t)
+                })
+                .fold(f32::INFINITY, f32::min)
+        };
+        assert!(distance(Pos2::new(15.0, 3.75)) <= 0.25);
+
+        // Changing colour at a control point keeps the same spline, and a later gap starts
+        // another path without letting its values change this curve's tangent.
+        let mut bars = vec![Bar::from_value(chrono::DateTime::UNIX_EPOCH, 1.0); 7];
+        bars[1].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::RED),
+            ..Default::default()
+        }));
+        bars[4] = Bar::whitespace(bars[4].time);
+        let all_points = [
+            points[0],
+            points[1],
+            points[2],
+            points[3],
+            Pos2::new(f32::NAN, f32::NAN),
+            Pos2::new(50.0, 5.0),
+            Pos2::new(60.0, 6.0),
+        ];
+        let style = LinePlotStyle {
+            line_type: LineType::Curved,
+            ..Default::default()
+        };
+        let output = egui::Context::default().run_ui(Default::default(), |ui| {
+            draw_bar_line(ui.painter(), &bars, &all_points, &style, false);
+        });
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path) => Some(path.points.clone()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        let mut joined = paths[0].clone();
+        for path in &paths[1..3] {
+            joined.extend_from_slice(&path[1..]);
+        }
+        assert_eq!(joined, curve);
+        assert_eq!(paths[3], all_points[5..]);
     }
 }
