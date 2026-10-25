@@ -1,4 +1,5 @@
 //! Price-row volume distributions shared by studies and drawings.
+
 use crate::model::Bar;
 use serde::{Deserialize, Serialize};
 use std::ops::{Range, RangeInclusive};

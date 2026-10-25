@@ -374,19 +374,23 @@ mod tests {
     /// at 50 px per unit, so each row is drawn 11.5 px tall with its 1 px gap,
     /// inside a box 300 px tall, whichever way up the scale is. The VAH and VAL
     /// labels sit 8 px outside the value area: beyond the VAH line on the side
-    /// away from the VAL line, and the other way round.
+    /// away from the VAL line, and the other way round. At 1,000 rows the 0.3 px
+    /// rows retain a 0.15 px body instead of disappearing under a fixed 1 px gap.
     #[test]
     fn volume_profile_rows_are_drawn_on_either_scale_orientation() {
         let bars = sample_bars();
-        let drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
         let upright = |price: f64| (16.0 - price) as f32 * 50.0;
         let inverted = |price: f64| (price - 8.0) as f32 * 50.0;
-        for (name, price_to_y, width) in [
-            ("upright", &upright as &dyn Fn(f64) -> f32, 400.0),
-            ("inverted", &inverted, 400.0),
-            ("narrow upright", &upright, 24.0),
-            ("narrow inverted", &inverted, 24.0),
+        for (name, price_to_y, width, row_count, row_height) in [
+            ("upright", &upright as &dyn Fn(f64) -> f32, 400.0, 24, 11.5),
+            ("inverted", &inverted, 400.0, 24, 11.5),
+            ("narrow upright", &upright, 24.0, 24, 11.5),
+            ("narrow inverted", &inverted, 24.0, 24, 11.5),
+            ("dense upright", &upright, 400.0, 1000, 0.15),
+            ("dense inverted", &inverted, 400.0, 1000, 0.15),
         ] {
+            drawing.volume_profile = crate::studies::VolumeProfileConfig::new(row_count, 0.7);
             let view = ChartView {
                 instrument: None,
                 bars: &bars,
@@ -469,9 +473,9 @@ mod tests {
             let (boxes, rows): (Vec<_>, Vec<_>) = rects
                 .into_iter()
                 .partition(|&(_, fill)| fill == Color32::TRANSPARENT);
-            assert_eq!(rows.len(), 24, "{name}");
+            assert_eq!(rows.len(), row_count, "{name}");
             for (row, _) in rows {
-                assert!((row.height() - 11.5).abs() < 1e-3, "{name}: {row:?}");
+                assert!((row.height() - row_height).abs() < 1e-3, "{name}: {row:?}");
             }
             assert_eq!(boxes.len(), 1, "{name}");
             let outline = boxes[0].0;

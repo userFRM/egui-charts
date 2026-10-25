@@ -1,4 +1,5 @@
 //! Volume profiles scoped to the viewport, saved times or exchange calendar periods.
+
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::model::{Bar, Instrument, Timeframe};

@@ -1,4 +1,5 @@
 //! Horizontal price-row histograms shared by drawing and study profiles.
+
 use crate::studies::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -46,6 +47,7 @@ pub(crate) fn paint_profile(
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
+        let gap = ((bottom - top) * 0.5).min(1.0);
         let width = (volume / max_volume) as f32 * max_width;
 
         // Color coding: POC is bright, Value Area is medium, outside is dim
@@ -66,7 +68,7 @@ pub(crate) fn paint_profile(
             painter.rect_filled(
                 Rect::from_min_max(
                     Pos2::new(start, top),
-                    Pos2::new(start + width, (bottom - 1.0).max(top)),
+                    Pos2::new(start + width, bottom - gap),
                 ),
                 0.0,
                 color,
@@ -186,50 +188,49 @@ pub(crate) fn hit_profile(
     price_to_y: &dyn Fn(f64) -> f32,
 ) -> Option<usize> {
     let tolerance = crate::chart::hit_test::HIT_TOLERANCE;
-    study
-        .volume_profiles(profile_range(coords))
+    let profiles = study.volume_profiles(profile_range(coords));
+    profiles.into_iter().find_map(|plot| {
+        let profile = &plot.profile;
+        let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
+        let span = profile_span(&plot, coords);
+        if span.start >= span.end || point.x < span.start || point.x > span.end {
+            return None;
+        }
+        let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
+        let on_level = [
+            (y_at(poc) + y_at(poc + 1)) * 0.5,
+            y_at(va_low),
+            y_at(va_high + 1),
+        ]
         .into_iter()
-        .find_map(|plot| {
-            let profile = &plot.profile;
-            let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
-            let span = profile_span(&plot, coords);
-            if span.start >= span.end || point.x < span.start || point.x > span.end {
-                return None;
+        .any(|y| (point.y - y).abs() <= tolerance);
+        let on_row = profile.volume.iter().enumerate().any(|(row, &volume)| {
+            let amount = if plot.config.display == ProfileDisplay::Delta {
+                (profile.up[row] - profile.down[row]).abs()
+            } else {
+                volume
+            };
+            if amount <= 0.0 {
+                return false;
             }
-            let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
-            let on_level = [
-                (y_at(poc) + y_at(poc + 1)) * 0.5,
-                y_at(va_low),
-                y_at(va_high + 1),
-            ]
-            .into_iter()
-            .any(|y| (point.y - y).abs() <= tolerance);
-            let on_row = profile.volume.iter().enumerate().any(|(row, &volume)| {
-                let amount = if plot.config.display == ProfileDisplay::Delta {
-                    (profile.up[row] - profile.down[row]).abs()
-                } else {
-                    volume
-                };
-                if amount <= 0.0 {
-                    return false;
-                }
-                let width = (amount / profile.volume[poc]) as f32 * (span.end - span.start) * 0.9;
-                let left = if plot.right_aligned {
-                    span.end - width
-                } else {
-                    span.start
-                };
-                let (a, b) = (y_at(row), y_at(row + 1));
-                let top = a.min(b);
-                let bottom = (a.max(b) - 1.0).max(top);
-                Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, bottom))
-                    .expand(tolerance)
-                    .contains(point)
-            });
-            (on_row || on_level).then(|| {
-                coords
-                    .x_to_idx(point.x)
-                    .clamp(plot.bars.start, plot.bars.end - 1)
-            })
+            let width = (amount / profile.volume[poc]) as f32 * (span.end - span.start) * 0.9;
+            let left = if plot.right_aligned {
+                span.end - width
+            } else {
+                span.start
+            };
+            let (a, b) = (y_at(row), y_at(row + 1));
+            let top = a.min(b);
+            let bottom = a.max(b);
+            let bottom = bottom - ((bottom - top) * 0.5).min(1.0);
+            Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, bottom))
+                .expand(tolerance)
+                .contains(point)
+        });
+        (on_row || on_level).then(|| {
+            coords
+                .x_to_idx(point.x)
+                .clamp(plot.bars.start, plot.bars.end - 1)
         })
+    })
 }
