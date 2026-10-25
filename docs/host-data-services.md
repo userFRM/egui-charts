@@ -16,13 +16,13 @@ Connect `Chart::set_signal_source(Some(source))` to an `Arc<dyn services::Signal
 
 The chart ends a subscription immediately on a symbol or interval change. Stop producing when `Events::is_active` becomes false. A burst over 10,000 pushes between frames ends the stream; the chart discards its state and subscribes again. Invalid prices or reversed zone bounds are discarded. No analytics run in the library.
 
-The chart's Signals menu controls category visibility without deleting data. Hosts can also use `set_signal_category_visible`. Hover text comes from `Signal::tooltip`; clicks call `Signals::clicked`. Signal times are projected against the displayed history on every frame, including after history replacement and on price-based charts.
+The chart's Signals menu controls category visibility without deleting data. Hosts can also use `set_signal_category_visible`. Hover text comes from `Signal::tooltip`; clicks call `Signals::clicked`. Signal times are projected against the displayed history on every frame, including after history replacement and on price-based charts. A marker with a supplied price can appear in visible whitespace without a loaded bar.
 
 ## Analyst targets
 
 Implement optional `Datafeed::price_targets` to answer `services::PriceTargets`. Its default returns `FeedError::NotSupported`, which shows neither targets nor an error. Prices must be finite, ordered `low <= average <= high`, and accompanied by an analyst count and publication and horizon dates. The horizon must follow publication.
 
-The Symbol tab's **Analyst price targets** setting, or `Chart::set_price_targets_visible`, enables projections. They start at the last close with a value and end at midnight UTC on the horizon date. Leave enough future whitespace with `set_visible_logical_range` to see that date and its labels. Automatic price fitting includes the target extremes. Percentage change is `(target - close) / close * 100`; a zero close omits the percentage. Hovering an endpoint or label shows the count and dates.
+The Symbol tab's **Analyst price targets** setting, or `Chart::set_price_targets_visible`, enables projections. They start at the last close with a value and end at midnight UTC on the horizon date. Leave enough future whitespace with `set_visible_logical_range` to see that date and its labels. Automatic price fitting includes the target extremes while the projections reach the visible time range. Percentage change is `(target - close) / close * 100`; a zero close omits the percentage. Hovering an endpoint or visible label shows the count and dates, including when the horizon is offscreen.
 
 A symbol change clears the targets and ignores its old replies. `reload_price_targets` requests updated estimates; `take_price_targets_error` reports errors other than unsupported data. Hiding targets retains their answer. Price-based charts do not draw projections.
 

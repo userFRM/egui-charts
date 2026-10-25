@@ -132,23 +132,27 @@ impl Chart {
                     else {
                         continue;
                     };
-                    if index < 0.0 {
-                        continue;
-                    }
-                    let Some(bar) = bars.get(index as usize) else {
-                        continue;
-                    };
-                    let px = coords.idx_to_x(index as usize);
+                    let px = coords.idx_to_x(0) + index as f32 * coords.bar_spacing;
                     let color = match direction {
                         Direction::Up => theme.chart.candle_up,
                         Direction::Down => theme.chart.candle_down,
                         Direction::Neutral => neutral,
                     };
-                    let value = price.unwrap_or(if direction == Direction::Up {
-                        bar.low
+                    let value = if let Some(price) = price {
+                        price
                     } else {
-                        bar.high
-                    });
+                        if index < 0.0 {
+                            continue;
+                        }
+                        let Some(bar) = bars.get(index as usize) else {
+                            continue;
+                        };
+                        if direction == Direction::Up {
+                            bar.low
+                        } else {
+                            bar.high
+                        }
+                    };
                     if !value.is_finite() {
                         continue;
                     }
@@ -439,6 +443,27 @@ mod tests {
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.6, vec![]);
         assert!(label_at(&shapes, "Marker").is_none());
         assert!(label_at(&shapes, "Updated").is_some());
+        let future = signal(
+            SignalShape::Marker {
+                time: chart.state.shown().last().unwrap().time + chrono::TimeDelta::days(5),
+                price: Some(100.0),
+                direction: Direction::Neutral,
+            },
+            "Future",
+        );
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(40.0, 120.0));
+        stream.push(SignalEvent::Upsert(future.clone()));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.61, vec![]);
+        assert!(
+            (label_at(&shapes, "Future")
+                .expect("priced marker in future whitespace")
+                .x
+                - chart.index_to_x(104.0).unwrap()
+                - 9.0)
+                .abs()
+                < 0.01
+        );
+        stream.push(SignalEvent::Remove(future.id));
         let mut bars = chart.state.shown().to_vec();
         let first = bars[0].clone();
         for days in 1..=10 {

@@ -91,7 +91,9 @@ impl Chart {
         .then_some(())?;
         let targets = self.price_targets()?;
         let last = crate::model::last_with_value(self.state.shown())?;
-        (targets.horizon > last.time.date_naive()).then_some(targets)
+        let horizon = targets.horizon.and_hms_opt(0, 0, 0)?.and_utc();
+        let range = self.visible_time_range()?;
+        (horizon > last.time && range.to >= last.time && range.from <= horizon).then_some(targets)
     }
 
     pub(super) fn target_prices(&self) -> Vec<f64> {
@@ -185,21 +187,20 @@ impl Chart {
             }
             painter.rect_filled(label.expand(2.0), 2.0, theme.chart.bg);
             painter.galley(label.min, galley, color);
+            let mut hit = label.expand(4.0);
             if coords.rect.contains(end) {
                 painter.circle_filled(end, 3.0, color);
-                ui.interact(
-                    label
-                        .expand(4.0)
-                        .union(egui::Rect::from_center_size(end, Vec2::splat(12.0)))
-                        .intersect(coords.rect),
-                    ui.scope_id().with(("price_target", name)),
-                    Sense::hover(),
-                )
-                .on_hover_text(format!(
-                    "{name}: {price_text}{change}\n{} analysts\nPublished: {}\nHorizon: {}",
-                    targets.analysts, targets.published, targets.horizon
-                ));
+                hit = hit.union(egui::Rect::from_center_size(end, Vec2::splat(12.0)));
             }
+            ui.interact(
+                hit.intersect(coords.rect),
+                ui.scope_id().with(("price_target", name)),
+                Sense::hover(),
+            )
+            .on_hover_text(format!(
+                "{name}: {price_text}{change}\n{} analysts\nPublished: {}\nHorizon: {}",
+                targets.analysts, targets.published, targets.horizon
+            ));
         }
     }
 }
@@ -306,6 +307,49 @@ mod tests {
                 "missing {label}"
             );
         }
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 40.0));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.101, vec![]);
+        assert!(
+            !shapes.iter().any(
+                |s| matches!(s, egui::Shape::Text(t) if t.galley.text().starts_with("High 120"))
+            ),
+            "projections must stay to the right of the last bar when viewing older history"
+        );
+        assert!(
+            chart.target_prices().is_empty(),
+            "offscreen targets do not widen the price range"
+        );
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(60.0, 130.0));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.102, vec![]);
+        let label = shapes
+            .iter()
+            .find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.text().starts_with("High 120") => {
+                    Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.show_tooltips_only_when_still = false;
+        });
+        let mut hover_shapes = Vec::new();
+        for time in [0.103, 0.104, 0.105] {
+            hover_shapes = test_frames::shapes(
+                &ctx,
+                &mut chart,
+                time,
+                vec![egui::Event::PointerMoved(label.center())],
+            );
+        }
+        assert!(
+            hover_shapes.iter().any(
+                |s| matches!(s, egui::Shape::Text(t) if t.galley.text().contains("12 analysts"))
+            ),
+            "a visible label retains its tooltip when the horizon is offscreen"
+        );
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
         for mode in [
             crate::scales::PriceScaleMode::Percentage,
             crate::scales::PriceScaleMode::IndexedTo100,
@@ -346,8 +390,6 @@ mod tests {
                 );
             }
         }
-        // With daily bars, 2025-01-31 midnight is exactly 365 days after publication.
-        assert_eq!((targets().horizon - targets().published).num_days(), 365);
         chart.user_action(|chart| chart.set_price_targets_visible(false));
         assert!(chart.undo());
         assert!(chart.price_targets_visible());
@@ -355,9 +397,8 @@ mod tests {
         assert!(!chart.price_targets_visible());
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
         assert!(
-            !shapes.iter().any(
-                |s| matches!(s, egui::Shape::Text(t) if t.galley.text().starts_with("High 120"))
-            )
+            !shapes.iter().any(|s| matches!(s, egui::Shape::Text(t) if
+                ["High 100.00", "Average 100.00", "Low 100.00"].iter().any(|prefix| t.galley.text().starts_with(prefix))))
         );
         assert!(
             chart.price_targets().is_some(),
