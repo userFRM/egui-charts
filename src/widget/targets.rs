@@ -102,7 +102,13 @@ impl Chart {
             .unwrap_or_default()
     }
 
-    pub(super) fn paint_targets(&self, ui: &egui::Ui, coords: &ChartMapping) {
+    pub(super) fn paint_targets(
+        &self,
+        ui: &egui::Ui,
+        coords: &ChartMapping,
+        label_top: f32,
+        line_slot: egui::layers::ShapeIdx,
+    ) {
         let Some(targets) = self.visible_targets() else {
             return;
         };
@@ -142,7 +148,8 @@ impl Chart {
                 .price_to_y(a.1)
                 .total_cmp(&coords.price.price_to_y(b.1))
         });
-        let mut label_bottom = coords.rect.top();
+        let mut label_bottom = label_top.max(coords.rect.top());
+        let mut lines = Vec::new();
         for (position, (name, price)) in levels.into_iter().enumerate() {
             let end = Pos2::new(end_x, coords.price.price_to_y(price));
             if !end.is_finite() || !origin.is_finite() {
@@ -155,7 +162,10 @@ impl Chart {
             } else {
                 theme.ui.text_secondary
             };
-            painter.line_segment([origin, end], Stroke::new(1.5, color));
+            lines.push(egui::Shape::line_segment(
+                [origin, end],
+                Stroke::new(1.5, color),
+            ));
             let decimals = self
                 .instrument()
                 .and_then(|instrument| instrument.price_decimals)
@@ -183,13 +193,16 @@ impl Chart {
             );
             label_bottom = label.bottom();
             if (label.center().y - end.y).abs() > size.y / 2.0 {
-                painter.line_segment([end, label.left_center()], Stroke::new(1.0, color));
+                lines.push(egui::Shape::line_segment(
+                    [end, label.left_center()],
+                    Stroke::new(1.0, color),
+                ));
             }
             painter.rect_filled(label.expand(2.0), 2.0, theme.chart.bg);
             painter.galley(label.min, galley, color);
             let mut hit = label.expand(4.0);
             if coords.rect.contains(end) {
-                painter.circle_filled(end, 3.0, color);
+                lines.push(egui::Shape::circle_filled(end, 3.0, color));
                 hit = hit.union(egui::Rect::from_center_size(end, Vec2::splat(12.0)));
             }
             ui.interact(
@@ -202,6 +215,7 @@ impl Chart {
                 targets.analysts, targets.published, targets.horizon
             ));
         }
+        painter.set(line_slot, egui::Shape::Vec(lines));
     }
 }
 
@@ -359,6 +373,53 @@ mod tests {
             assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Text(t) if t.galley.text() == "High 120.00 (+20.00%)")), "target prices stay in instrument units on {mode:?} scales");
         }
         chart.price_scale_mut().options_mut().mode = crate::scales::PriceScaleMode::Normal;
+        chart.state.time_scale_mut().set_min_bar_spacing(0.01);
+        chart.set_size(Some(Vec2::new(260.0, 600.0)));
+        chart.set_quote(Some(crate::model::Level1Quote {
+            ts: chart.state.shown().last().unwrap().time,
+            symbol: "B".into(),
+            bid: 99.0,
+            bid_size: 1.0,
+            ask: 101.0,
+            ask_size: 1.0,
+        }));
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            chart.set_theme(&ctx, &theme);
+            test_frames::frame(&ctx, &mut chart, 0.111, vec![egui::Event::PointerGone]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+            let shapes = test_frames::shapes(&ctx, &mut chart, 0.112, vec![]);
+            let quote_bottom = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) if ["SELL", "BUY"].contains(&text.galley.text()) => {
+                        Some(text.pos.y + text.galley.size().y)
+                    }
+                    _ => None,
+                })
+                .reduce(f32::max)
+                .unwrap();
+            let labels: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text)
+                        if ["High 120", "Average 110", "Low 80"]
+                            .iter()
+                            .any(|prefix| text.galley.text().starts_with(prefix)) =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 3);
+            assert!(
+                labels.iter().all(|text| text.pos.y > quote_bottom),
+                "target labels stay below quote controls in a narrow chart"
+            );
+        }
+        chart.set_size(None);
+        chart.set_quote(None);
+        test_frames::frame(&ctx, &mut chart, 0.113, vec![]);
         chart.reload_price_targets();
         chart.pump_targets(&ctx);
         let mut equal = targets();

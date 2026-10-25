@@ -902,7 +902,7 @@ impl Chart {
     }
 
     /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
-    /// over `rect`.
+    /// over `rect`. Returns the bottom of the last row, or `top` without rows.
     pub(super) fn paint_secondary_legend<'a>(
         &self,
         ui: &egui::Ui,
@@ -910,9 +910,10 @@ impl Chart {
         rect: Rect,
         top: f32,
         items: impl Iterator<Item = &'a PriceSeries>,
-    ) {
+    ) -> f32 {
         let plot = painter.with_clip_rect(painter.clip_rect().intersect(rect));
         let main = self.state.shown();
+        let mut bottom = top;
         for (row, item) in items.enumerate() {
             if self.config.show_indicator_labels || self.config.show_indicator_last_val {
                 let selected_time = ui
@@ -938,7 +939,7 @@ impl Chart {
                     None => crate::model::last_with_value(&item.bars),
                 };
                 let value = bar.map_or_else(|| "∅".into(), |bar| format!("{:.2}", bar.close));
-                plot.text(
+                let label = plot.text(
                     Pos2::new(rect.left() + 8.0, top + row as f32 * 20.0),
                     egui::Align2::LEFT_TOP,
                     format!(
@@ -957,8 +958,10 @@ impl Chart {
                     egui::FontId::proportional(crate::styles::typography::MD),
                     item.options.color,
                 );
+                bottom = label.bottom();
             }
         }
+        bottom
     }
 
     fn secondary_axes(&self, widget: Rect, rect: Rect) -> Vec<(SeriesScale, Rect)> {

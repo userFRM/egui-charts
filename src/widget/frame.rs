@@ -1412,7 +1412,9 @@ impl Chart {
             _ => {}
         }
         self.paint_signals(ui, &coords);
-        self.paint_targets(ui, &coords);
+        let target_lines = self
+            .show_price_targets
+            .then(|| painter.add(egui::Shape::Noop));
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Series);
 
@@ -2096,13 +2098,16 @@ impl Chart {
                 legend_bottom = bottom;
             }
         }
-        self.paint_secondary_legend(
+        let legend_bottom = self.paint_secondary_legend(
             ui,
             &painter,
             price_rect,
             legend_bottom + 4.0,
             self.main_pane_series(),
         );
+        if let Some(lines) = target_lines {
+            self.paint_targets(ui, &coords, legend_bottom + 4.0, lines);
+        }
 
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
