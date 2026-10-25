@@ -174,17 +174,14 @@ pub(crate) fn drawing_prices(
             if !study.plot_style(0).visible || !drawing.visible || bars.is_empty() {
                 return None;
             }
-            let first = drawing
-                .chart_points
-                .iter()
-                .map(|p| p.bar_idx)
-                .reduce(f32::min)?;
-            let last = drawing
-                .chart_points
-                .iter()
-                .map(|p| p.bar_idx)
-                .reduce(f32::max)?;
             let levels = drawing.fib_levels();
+            let extent = if levels.is_some() {
+                &drawing.chart_points[..2]
+            } else {
+                &drawing.chart_points
+            };
+            let first = extent.iter().map(|p| p.bar_idx).reduce(f32::min)?;
+            let last = extent.iter().map(|p| p.bar_idx).reduce(f32::max)?;
             let left = drawing.extend_left
                 || levels
                     .as_ref()
@@ -223,6 +220,7 @@ pub(crate) fn mapped_drawings(
     study
         .drawings()
         .iter()
+        .filter(|drawing| drawing.visible)
         .map(|drawing| {
             let mut drawing = drawing.clone();
             drawing.color = style.color.to_srgba_unmultiplied();

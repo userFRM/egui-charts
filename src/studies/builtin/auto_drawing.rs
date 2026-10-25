@@ -337,18 +337,16 @@ mod tests {
         );
         let coords = ChartMapping::new(rect, 30.0, 0, 9, 0.0, price);
         let data = bars();
-        let mut study = ConfiguredStudy::new(Box::new(AutoDrawing::new(
-            AutoDrawingKind::TrendLine,
-            5.0,
-            3,
-        )));
-        study.calculate(&data);
+        let mut automatic = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
+        automatic.calculate(&data);
         let a = Pos2::new(coords.idx_to_x(3), price.price_to_y(113.0));
         let b = Pos2::new(coords.idx_to_x(9), price.price_to_y(118.0));
         let midpoint = a.lerp(b, 0.5);
-        for visible in [true, false] {
+        for (drawing_visible, plot_visible) in [(true, true), (true, false), (false, true)] {
+            automatic.drawings[0].visible = drawing_visible;
+            let mut study = ConfiguredStudy::new(Box::new(automatic.clone()));
             let mut settings = study.settings();
-            settings.plots[0].visible = visible;
+            settings.plots[0].visible = plot_visible;
             study.apply_settings(&[], settings).unwrap();
             let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 IndicatorRenderer::render_study(
@@ -362,18 +360,24 @@ mod tests {
             });
             let painted = output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::LineSegment{points,..} if points[0].distance(a)<0.01 && points[1].distance(b)<0.01));
             output.drop_without_applying_deltas();
+            let visible = drawing_visible && plot_visible;
             assert_eq!(painted, visible);
             assert_eq!(
                 hit_test_indicator(midpoint, &study, 0, 0..10, &coords, |p| price.price_to_y(p))
                     .is_some(),
                 visible
             );
+            assert_eq!(
+                crate::studies::plots::drawing_prices(&study, 0..10)
+                    .next()
+                    .is_some(),
+                visible
+            );
         }
 
         // Zoom between anchors: the construction still supplies the independent scale's range.
-        let mut settings = study.settings();
-        settings.plots[0].visible = true;
-        study.apply_settings(&[], settings).unwrap();
+        automatic.drawings[0].visible = true;
+        let mut study = ConfiguredStudy::new(Box::new(automatic));
         study.set_scale(crate::studies::StudyScale::Independent);
         let zoomed = ChartMapping::new(rect, 400.0, 6, 7, 0.0, price);
         let mapped = crate::chart::renderers::study_mapping(&study, &zoomed);
@@ -402,5 +406,29 @@ mod tests {
                 .next()
                 .is_none()
         );
+
+        // Without bands or extensions, only A..B is painted; C is the projection price.
+        let mut extension = AutoDrawing::new(AutoDrawingKind::FibonacciExtension, 5.0, 3)
+            .with_fibonacci_config(FibonacciConfig {
+                show_background: false,
+                extend_right: false,
+                ..FibonacciConfig::extension_default()
+            });
+        extension.calculate(&bars());
+        for (visible, reaches) in [
+            (0..3, false),
+            (3..5, true),
+            (5..6, true),
+            (6..9, false),
+            (9..10, false),
+        ] {
+            assert_eq!(
+                crate::studies::plots::drawing_prices(&extension, visible.clone())
+                    .next()
+                    .is_some(),
+                reaches,
+                "{visible:?}"
+            );
+        }
     }
 }
