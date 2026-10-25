@@ -507,10 +507,12 @@ impl IndicatorPane {
             Some(crate::scales::PriceScaleId::Right),
             None,
             &[],
+            false,
         )
     }
 
-    /// Shows the pane with the `primitives` attached to `indicator`, which draw in its passes.
+    /// Shows the pane with attached `primitives`. For a bar series, `indicator` supplies only
+    /// its legend; the caller draws its bars and the series primitive pass afterwards.
     pub(super) fn show_aligned_interactive_in(
         &mut self,
         ui: &mut Ui,
@@ -522,6 +524,7 @@ impl IndicatorPane {
         axis: Option<crate::scales::PriceScaleId>,
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
         primitives: &[&super::primitives::Attached],
+        bar_series: bool,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -590,7 +593,7 @@ impl IndicatorPane {
             .first()
             .map(|item| crate::chart::primitives::PrimitiveView {
                 series: item.series,
-                study: Some(indicator),
+                study: (!bar_series).then_some(indicator),
                 mapping,
                 bars,
                 visible: displayed_range.clone(),
@@ -665,7 +668,9 @@ impl IndicatorPane {
                     &coords,
                 );
             }
-            draw(plot_painter, PrimitivePass::Series);
+            if !bar_series {
+                draw(plot_painter, PrimitivePass::Series);
+            }
 
             if let (Some(view), Some(side)) = (&view, axis)
                 && indicator.scale() != crate::studies::StudyScale::None

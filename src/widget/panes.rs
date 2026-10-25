@@ -563,6 +563,7 @@ impl Chart {
                     &id.into_iter()
                         .flat_map(|id| self.primitives_of(id))
                         .collect::<Vec<_>>(),
+                    study.is_none() && id.is_some(),
                 ) {
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
@@ -757,7 +758,7 @@ impl Chart {
                     }
                 }
             }
-            if let Some((_, chart_rect, _, _)) = &drawing_response {
+            if let Some((_, chart_rect, pane_coords, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
                 let painter = ui
                     .painter()
@@ -775,6 +776,14 @@ impl Chart {
                         painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
                     for item in &items {
                         self.paint_series(&plot_painter, chart_rect, item, map);
+                        let view = self.primitive_view(item.id, *pane_coords);
+                        for primitive in self.primitives_of(item.id) {
+                            primitive.get().draw(
+                                &plot_painter,
+                                &view,
+                                super::PrimitivePass::Series,
+                            );
+                        }
                     }
                     if let Some((mut pos, options)) = series_crosshair {
                         if let Some(index) = hovered {

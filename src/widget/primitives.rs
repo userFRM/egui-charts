@@ -191,6 +191,9 @@ impl Chart {
     /// The view of a primitive drawn in the main pane, from the main pane's mapping. `None`
     /// when its series is hidden or a study in a pane of its own.
     fn main_view(&self, series: SeriesId, coords: &ChartMapping) -> Option<PrimitiveView<'_>> {
+        if self.in_pane(series) {
+            return None;
+        }
         let mapping = if series == SeriesId::MAIN {
             self.main_series_visible.then_some(*coords)?
         } else if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
@@ -362,6 +365,11 @@ mod tests {
         chart.update(line, bars[50].clone());
         frame(&ctx, &mut chart, 0.2, vec![]);
         assert_eq!(take(), ["line data 51"]);
+        let mut corrected = bars[10].clone();
+        corrected.close = 15.0;
+        chart.update(line, corrected);
+        frame(&ctx, &mut chart, 0.25, vec![]);
+        assert_eq!(take(), ["line data 51"], "a correction before the last bar");
         let mut last = bars[99].clone();
         last.close = 15.0;
         chart.update(SeriesId::MAIN, last);
@@ -458,6 +466,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bar_series_primitives_follow_pane_moves_and_layer_around_the_bars() {
+        use crate::model::ChartType;
+        use crate::widget::PaneId;
+
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let color = Color32::from_rgb(10, 11, 12);
+        let id = chart.add_series(SeriesOptions {
+            chart_type: ChartType::Candles,
+            up_color: color,
+            ..Default::default()
+        });
+        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+        chart.attach_primitive(id, Layers);
+        let pane = chart.add_pane();
+        assert!(chart.set_preserve_empty_pane(pane, true));
+        for destination in [pane, PaneId::MAIN, pane] {
+            assert!(chart.move_series_to_pane(id, destination));
+            let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert!(map.range().contains(map.transform().to_scale(500.0)));
+            if destination != PaneId::MAIN {
+                assert!(chart.last_price_map.range().max < 100.0);
+            }
+            let rects = |fill| {
+                painted
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(at, shape)| match shape {
+                        Shape::Rect(rect)
+                            if rect.fill == fill
+                                && (fill == color || rect.rect.size() == egui::vec2(9.0, 9.0)) =>
+                        {
+                            Some((at, rect.rect))
+                        }
+                        _ => None,
+                    })
+            };
+            let (below, rect) = rects(BELOW).next().unwrap();
+            assert_eq!(rects(BELOW).count(), 1, "drawn only in its own pane");
+            let candle = rects(color).next().unwrap().0;
+            let series = rects(SERIES).next().unwrap().0;
+            let above = rects(ABOVE).next().unwrap().0;
+            assert!(
+                below < candle && candle < series && series < above,
+                "{destination:?}: {below} < {candle} < {series} < {above}"
+            );
+            let pane_rect = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == destination)
+                .unwrap()
+                .rect;
+            assert!(pane_rect.contains_rect(rect));
+        }
+        chart.set_series_visible(id, false);
+        assert!(
+            !shapes(&ctx, &mut chart, 0.2, vec![])
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == BELOW))
+        );
+    }
+
     /// Draws a dot at each value of its study, fills a corner of the plot above everything, and
     /// claims the whole plot for the pointer.
     struct Dots;
@@ -513,7 +586,7 @@ mod tests {
             [255, 0, 0, 255],
         );
         drawing.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 10.0)];
-        drawing.pane = Some(id.0);
+        drawing.pane = chart.series_pane(id).map(|pane| pane.0);
         chart.drawings_mut().drawings.push(drawing);
         frame(&ctx, &mut chart, 0.0, vec![]);
         let shapes = shapes(&ctx, &mut chart, 0.1, vec![]);
