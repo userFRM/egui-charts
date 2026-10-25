@@ -38,6 +38,8 @@ pub enum RightBarIcon {
     Highlights,
     Screener,
     Hotlists,
+    /// A treemap of symbols sized and coloured by host-supplied values.
+    MarketHeatmap,
     /// The economic and corporate event calendars.
     Calendar,
     News,
@@ -58,6 +60,7 @@ impl RightBarIcon {
             RightBarIcon::Highlights => &embedded_icons::WIDGET_BAR_HIGHLIGHTS,
             RightBarIcon::Screener => &embedded_icons::WIDGET_BAR_SCREENER,
             RightBarIcon::Hotlists => &embedded_icons::WIDGET_BAR_HOTLISTS,
+            RightBarIcon::MarketHeatmap => &embedded_icons::LAYOUT_GRID,
             RightBarIcon::Calendar => &embedded_icons::WIDGET_BAR_CALENDAR,
             RightBarIcon::News => &embedded_icons::WIDGET_BAR_NEWS,
             RightBarIcon::Notifications => &embedded_icons::WIDGET_BAR_NOTIFICATIONS,
@@ -75,6 +78,7 @@ impl RightBarIcon {
             RightBarIcon::Highlights => "Highlights",
             RightBarIcon::Screener => "Screener",
             RightBarIcon::Hotlists => "Hotlists",
+            RightBarIcon::MarketHeatmap => "Market heatmap",
             RightBarIcon::Calendar => "Calendars",
             RightBarIcon::News => "News",
             RightBarIcon::Notifications => "Notifications",

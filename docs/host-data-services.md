@@ -27,3 +27,9 @@ The Symbol tab's **Analyst price targets** setting, or `Chart::set_price_targets
 A symbol change clears the targets and ignores its old replies. `reload_price_targets` requests updated estimates; `take_price_targets_error` reports errors other than unsupported data. Hiding targets retains their answer. Price-based charts do not draw projections.
 
 The demo's quick search has **Toggle API samples** for host signals and **Show analyst price targets** for SAMPLE's daily projection. Its synthetic feed implements these contracts on native and browser builds.
+
+## Market heatmap
+
+`ui::widget_bar::MarketHeatmapPanel` owns a public list of `MarketHeatmapEntry` values. Supply each symbol, group, positive tile weight and percentage change, then call `show`. It returns the selected symbol for the host to open. Mutate the entries and request a repaint when host data changes; no new panel is needed.
+
+Groups and their tiles share area in proportion to their weights. Invalid weights have no tile. Colours diverge from the theme background towards its rising/falling colours, saturating at five percent; hover shows the original value and percentage. Group captions overlay the tiles so they do not change their proportional layout. Add `RightBarIcon::MarketHeatmap` to the terminal rail when the host supplies this panel. The demo fills it with synthetic weights and updates its percentage changes from its quotes.

@@ -416,3 +416,21 @@ impl Chats for DemoChats {
         reply.send(Ok(()));
     }
 }
+
+/// Synthetic weights for a host-supplied market heatmap, with live quote changes filled later.
+pub(super) fn heatmap() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapEntry> {
+    DemoSymbol::catalog()
+        .iter()
+        .map(|spec| egui_charts::ui::widget_bar::MarketHeatmapEntry {
+            symbol: spec.symbol.into(),
+            group: match spec.symbol {
+                "AAPL" | "MSFT" | "NVDA" => "Technology",
+                "TSLA" => "Consumer",
+                _ => spec.exchange,
+            }
+            .into(),
+            value: (spec.seed % 4 + 1) as f64,
+            change_percent: 0.0,
+        })
+        .collect()
+}

@@ -21,6 +21,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("grid", "Toggle grid", "Settings"),
         ("samples", "Toggle API samples", "Settings"),
         ("targets", "Show analyst price targets", "Actions"),
+        ("heatmap", "Market heatmap", "Actions"),
         ("pane", "Add a symbol in a new pane", "Actions"),
     ]
     .into_iter()
@@ -111,6 +112,10 @@ impl DemoApp {
             "grid" => {
                 let config = self.chart.config_mut();
                 config.show_grid = !config.show_grid;
+                return;
+            }
+            "heatmap" => {
+                self.open_panel = Some(super::SidePanel::MarketHeatmap);
                 return;
             }
             "targets" => {
