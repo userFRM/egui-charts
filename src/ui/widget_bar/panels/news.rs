@@ -218,25 +218,34 @@ impl NewsPanel {
                 .clicked();
         });
         let market = self.market;
-        ui.horizontal(|ui| {
-            if let Some(symbol) = &self.symbol
-                && Button::new(symbol)
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 24.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if Button::new("Market")
                     .small()
-                    .selected(!self.market)
+                    .selected(self.market)
                     .show(ui)
                     .clicked()
-            {
-                self.market = false;
-            }
-            if Button::new("Market")
-                .small()
-                .selected(self.market)
-                .show(ui)
-                .clicked()
-            {
-                self.market = true;
-            }
-        });
+                {
+                    self.market = true;
+                }
+                if let Some(symbol) = &self.symbol
+                    && ui
+                        .add(
+                            egui::Button::new(symbol)
+                                .frame_when_inactive(false)
+                                .selected(!self.market)
+                                .min_size(egui::vec2(0.0, 24.0))
+                                .truncate(),
+                        )
+                        .on_hover_text(symbol)
+                        .clicked()
+                {
+                    self.market = false;
+                }
+            },
+        );
         if refresh || market != self.market {
             self.refresh();
         }

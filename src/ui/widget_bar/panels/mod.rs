@@ -38,6 +38,7 @@ mod tests {
         ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow,
     };
     use crate::model::{Tick, TradeSide};
+    use crate::theme::{Theme, apply_to_egui};
 
     struct Feed;
     impl Datafeed for Feed {
@@ -57,13 +58,12 @@ mod tests {
             ]));
         }
     }
-    use crate::theme::{Theme, apply_to_egui};
 
     #[test]
     fn market_panel_cells_stay_separate_in_narrow_windows() {
         for theme in [Theme::light(), Theme::dark()] {
             for width in [220.0, 280.0] {
-                for panel in ["watchlist", "tape", "hotlist", "screener"] {
+                for panel in ["watchlist", "tape", "hotlist", "screener", "news"] {
                     let tape = panel == "tape";
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
@@ -118,6 +118,8 @@ mod tests {
                     )]);
                     screener.set_feed(std::sync::Arc::new(Feed));
                     screener.poll(&ctx);
+                    let mut news = NewsPanel::new();
+                    news.set_symbol(symbol);
                     let mut used = egui::Rect::NOTHING;
                     let output = ctx.run_ui(
                         egui::RawInput {
@@ -128,7 +130,9 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            if panel == "hotlist" {
+                            if panel == "news" {
+                                news.show(ui);
+                            } else if panel == "hotlist" {
                                 hotlist.show(ui);
                             } else if panel == "screener" {
                                 screener.show(ui);
@@ -156,6 +160,10 @@ mod tests {
                         used.right() <= width,
                         "panel expanded beyond {width}: {used:?}"
                     );
+                    if panel == "news" {
+                        assert!(texts.iter().any(|(text, _)| text == "Market"), "{texts:?}");
+                        continue;
+                    }
                     if matches!(panel, "hotlist" | "screener") {
                         let bounds = |label: &str| {
                             texts
