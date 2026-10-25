@@ -1090,6 +1090,10 @@ impl eframe::App for DemoApp {
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
+        // The order ticket takes its panel beside the chart; it rests while replay rewinds it.
+        if self.replay.is_none() {
+            self.trading.show_ticket(ui, &self.chart);
+        }
         self.show_side_panel(ui);
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);

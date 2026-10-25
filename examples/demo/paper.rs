@@ -302,6 +302,7 @@ impl Broker for PaperAccount {
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let mut rules = TradingRules::new(symbol);
         rules.time_in_force = vec![TimeInForce::Day, TimeInForce::GoodTillCancelled];
+        rules.leverage = Some(20.0);
         reply.send(Ok(rules));
     }
 }

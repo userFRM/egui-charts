@@ -108,6 +108,10 @@ pub enum TimeInForce {
     /// Until the end of the trading day.
     #[default]
     Day,
+    /// Until the end of the trading week.
+    Week,
+    /// Until the end of the trading month.
+    Month,
     /// Until it fills or is cancelled.
     GoodTillCancelled,
     /// Fills what it can at once and cancels the rest.
@@ -121,6 +125,8 @@ impl TimeInForce {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Day => "DAY",
+            Self::Week => "WEEK",
+            Self::Month => "MONTH",
             Self::GoodTillCancelled => "GTC",
             Self::ImmediateOrCancel => "IOC",
             Self::FillOrKill => "FOK",
@@ -317,6 +323,9 @@ pub struct TradingRules {
     pub point_value: f64,
     /// The times in force the broker accepts for the symbol, the default first. Never empty.
     pub time_in_force: Vec<TimeInForce>,
+    /// The trade value per unit of margin, such as 20 for 20:1, if the broker trades the symbol
+    /// on margin. The order ticket shows the margin an order needs from it.
+    pub leverage: Option<f64>,
 }
 
 impl TradingRules {
@@ -330,6 +339,7 @@ impl TradingRules {
             max_quantity: None,
             point_value: 1.0,
             time_in_force: vec![TimeInForce::Day],
+            leverage: None,
         }
     }
 }
