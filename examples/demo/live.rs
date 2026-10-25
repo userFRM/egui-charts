@@ -400,7 +400,7 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
 
 /// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
 /// which stands for the previous close. `None` for symbols outside the catalog.
-fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
     let spec = catalog(symbol)?;
     let tick_size = if spec.start_price < 10.0 {
         0.0001
