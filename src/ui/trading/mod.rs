@@ -411,7 +411,7 @@ impl Trading {
     /// over the marks. Sends the order the user submits, and asks the user to confirm a change
     /// made on a line before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
-        chart.trading_bid_ask = self.service.is_some() && self.display.bid_ask_labels;
+        chart.trading_bid_ask = self.display.bid_ask_labels;
         let symbol = chart.symbol().to_owned();
         let symbol = symbol.as_str();
         let instrument = chart
