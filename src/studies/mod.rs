@@ -65,7 +65,7 @@ mod inputs;
 pub use inputs::{InputKind, InputValue, StudyInput};
 pub(crate) mod plots;
 mod settings;
-pub use plots::{FillBoundary, StudyCandle, StudyFill};
+pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
 mod values;
 pub use values::IndicatorValues;

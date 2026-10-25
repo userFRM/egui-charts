@@ -57,6 +57,44 @@ pub enum MarkerPos {
     AbsoluteDown,
     /// Absolute pixel position (centered)
     Absolute,
+    /// Just above [`Marker::price`], the shape's lower edge on the price.
+    AtPriceTop,
+    /// Just below [`Marker::price`], the shape's upper edge on the price.
+    AtPriceBottom,
+    /// Centred on [`Marker::price`].
+    AtPriceMiddle,
+}
+
+/// Where a series' markers are painted among the other content of the price pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkerZOrder {
+    /// With their series: over it, under the series added after it and under the studies.
+    #[default]
+    Normal,
+    /// Over every series and study, under the price lines and drawings.
+    AboveSeries,
+    /// Over the series, studies, price lines and drawings.
+    Top,
+}
+
+/// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerOptions {
+    /// Whether the prices of the [`MarkerPos::AtPriceTop`], [`AtPriceBottom`](MarkerPos::AtPriceBottom)
+    /// and [`AtPriceMiddle`](MarkerPos::AtPriceMiddle) markers in view widen the autoscaled price
+    /// range, so that they are not cut off. Default true.
+    pub auto_scale: bool,
+    /// Default [`MarkerZOrder::Normal`].
+    pub z_order: MarkerZOrder,
+}
+
+impl Default for MarkerOptions {
+    fn default() -> Self {
+        Self {
+            auto_scale: true,
+            z_order: MarkerZOrder::default(),
+        }
+    }
 }
 
 /// Marker for chart annotations
@@ -79,6 +117,8 @@ pub struct Marker {
     pub size: f32,
     /// Unique ID for the marker (for removal/editing)
     pub id: Option<String>,
+    /// Price of the `AtPrice` positions, in the series' units; without one they use the close.
+    pub price: Option<f64>,
 }
 
 impl Marker {
@@ -93,6 +133,7 @@ impl Marker {
             tooltip: None,
             size: 1.0,
             id: None,
+            price: None,
         }
     }
 
@@ -145,6 +186,14 @@ impl Marker {
         self
     }
 
+    /// Anchors the marker to `price` at `position`, one of the `AtPrice` positions.
+    #[must_use]
+    pub fn at_price(mut self, price: f64, position: MarkerPos) -> Self {
+        self.price = Some(price);
+        self.position = position;
+        self
+    }
+
     /// Quick constructor for a buy signal marker (green arrow up)
     pub fn buy_signal(time: DateTime<Utc>) -> Self {
         Self::new(time)
@@ -173,13 +222,42 @@ impl Marker {
     }
 }
 
-/// Line style of drawings and price lines.
+/// Colours and lifetime of the marks that show where the close of a series rose or fell
+/// between live updates; see `Chart::set_change_markers`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChangeMarkers {
+    /// Colour of a rise.
+    pub up_color: Color32,
+    /// Colour of a fall.
+    pub down_color: Color32,
+    /// How long a mark stays after the update that made it. Default 5 seconds.
+    pub duration: std::time::Duration,
+}
+
+impl Default for ChangeMarkers {
+    fn default() -> Self {
+        Self {
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            duration: std::time::Duration::from_secs(5),
+        }
+    }
+}
+
+/// Line style of drawings, series, grid and price lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum LineStyle {
+    /// A continuous line.
     #[default]
     Solid,
+    /// Short dashes.
     Dashed,
+    /// Closely spaced dots.
     Dotted,
+    /// Dashes twice as long as [`Dashed`](Self::Dashed), with twice the gap.
+    LargeDashed,
+    /// Dots with twice the spacing of [`Dotted`](Self::Dotted).
+    SparseDotted,
 }
 
 impl LineStyle {
@@ -191,12 +269,45 @@ impl LineStyle {
             LineStyle::Solid => None,
             LineStyle::Dashed => Some((8.0, 4.0)),
             LineStyle::Dotted => Some((2.0, 3.0)),
+            LineStyle::LargeDashed => Some((16.0, 8.0)),
+            LineStyle::SparseDotted => Some((2.0, 8.0)),
+        }
+    }
+
+    /// The dash pattern of one-pixel lines such as price, grid and crosshair lines, or `None`
+    /// for solid. Their dots are one pixel long.
+    #[cfg(feature = "widget")]
+    #[inline]
+    pub(crate) fn hairline_pattern(&self) -> Option<(f32, f32)> {
+        match self {
+            LineStyle::Solid => None,
+            LineStyle::Dashed => Some((4.0, 4.0)),
+            LineStyle::Dotted => Some((1.0, 3.0)),
+            LineStyle::LargeDashed => Some((8.0, 8.0)),
+            LineStyle::SparseDotted => Some((1.0, 7.0)),
         }
     }
 
     /// All available line styles
     pub fn all() -> &'static [LineStyle] {
-        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+        &[
+            LineStyle::Solid,
+            LineStyle::Dashed,
+            LineStyle::Dotted,
+            LineStyle::LargeDashed,
+            LineStyle::SparseDotted,
+        ]
+    }
+
+    /// The style's name in settings menus.
+    pub fn name(&self) -> &'static str {
+        match self {
+            LineStyle::Solid => "Solid",
+            LineStyle::Dashed => "Dashed",
+            LineStyle::Dotted => "Dotted",
+            LineStyle::LargeDashed => "Large dashed",
+            LineStyle::SparseDotted => "Sparse dotted",
+        }
     }
 }
 
@@ -215,6 +326,12 @@ pub struct PriceLine {
     pub title: Option<String>,
     /// Price label on the axis, on a tag in the line's colour. Default true.
     pub axis_label: bool,
+    /// Fill of the axis tag; `None` uses [`color`](Self::color).
+    pub axis_label_color: Option<Color32>,
+    /// Text of the axis tag; `None` picks white or black, whichever reads on the fill.
+    pub axis_label_text_color: Option<Color32>,
+    /// Colour of the title; `None` uses [`color`](Self::color).
+    pub title_color: Option<Color32>,
 }
 
 impl PriceLine {
@@ -227,6 +344,9 @@ impl PriceLine {
             style: LineStyle::Dashed,
             title: None,
             axis_label: true,
+            axis_label_color: None,
+            axis_label_text_color: None,
+            title_color: None,
         }
     }
 
@@ -255,6 +375,21 @@ impl PriceLine {
     #[must_use]
     pub fn with_axis_label(mut self, show: bool) -> Self {
         self.axis_label = show;
+        self
+    }
+
+    /// Sets the fill and the text colour of the axis tag.
+    #[must_use]
+    pub fn with_axis_label_colors(mut self, fill: Color32, text: Color32) -> Self {
+        self.axis_label_color = Some(fill);
+        self.axis_label_text_color = Some(text);
+        self
+    }
+
+    /// Sets the colour of the title.
+    #[must_use]
+    pub fn with_title_color(mut self, color: Color32) -> Self {
+        self.title_color = Some(color);
         self
     }
 }

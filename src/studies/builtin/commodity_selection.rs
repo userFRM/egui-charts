@@ -275,6 +275,8 @@ mod tests {
             low: close - 1.0,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

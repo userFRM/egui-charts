@@ -61,8 +61,9 @@
 //! ## Feature flags
 //!
 //! The default build includes the chart widget, the icons, the built-in
-//! studies and the application-level UI components. An application that only
-//! shows charts uses `default-features = false, features = ["widget"]`. With
+//! studies, the application-level UI components and the localized month and
+//! weekday names. An application that only shows charts uses
+//! `default-features = false, features = ["widget"]`. With
 //! `default-features = false` alone the crate is the headless engine, which
 //! does not depend on egui.
 //!
@@ -72,6 +73,7 @@
 //! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons` and `studies`. |
+//! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
 //! ## Embedding in an application

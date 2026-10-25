@@ -32,13 +32,12 @@ impl BoxSizeMethod {
         let size = match self {
             Self::Fixed => fixed,
             Self::Percentage(percent) if positive(percent) => {
-                bars.last()?.close.abs() * (percent / 100.0)
+                super::last_with_value(bars)?.close.abs() * (percent / 100.0)
             }
-            Self::Atr { period, multiplier }
-                if period > 0 && bars.len() >= period && positive(multiplier) =>
-            {
-                let mut average = 0.0;
-                for (i, bar) in bars.iter().enumerate() {
+            // Whitespace bars have no range and are skipped, as the price-based builders skip them.
+            Self::Atr { period, multiplier } if period > 0 && positive(multiplier) => {
+                let (mut average, mut previous, mut count) = (0.0, None::<f64>, 0);
+                for bar in bars.iter().filter(|bar| !bar.is_whitespace()) {
                     let mut range = bar.high - bar.low;
                     if !bar.high.is_finite()
                         || !bar.low.is_finite()
@@ -47,17 +46,21 @@ impl BoxSizeMethod {
                     {
                         return None;
                     }
-                    if i > 0 {
-                        let previous = bars[i - 1].close;
+                    if let Some(previous) = previous {
                         range = range
                             .max((bar.high - previous).abs())
                             .max((bar.low - previous).abs());
                     }
-                    if i < period {
+                    if count < period {
                         average += range / period as f64;
                     } else {
                         average += (range - average) / period as f64;
                     }
+                    previous = Some(bar.close);
+                    count += 1;
+                }
+                if count < period {
+                    return None;
                 }
                 average * multiplier
             }

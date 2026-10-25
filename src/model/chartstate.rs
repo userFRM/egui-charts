@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// histories ever share one.
 static REVISIONS: AtomicU64 = AtomicU64::new(0);
 
-fn next_revision() -> u64 {
+pub(crate) fn next_revision() -> u64 {
     REVISIONS.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -330,23 +330,36 @@ impl ChartState {
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
     ) -> PriceTransform {
-        self.fit_price_scale_with_series(indicators, true, std::iter::empty())
+        self.fit_price_scale_with_series(
+            indicators,
+            true,
+            None,
+            std::iter::empty(),
+            std::iter::empty(),
+        )
     }
 
-    /// Fits visible series and studies together; additional values are already in scale units.
+    /// Fits visible series and studies together. `autoscale` replaces the main series' range of
+    /// lows and highs; `prices` are further prices to fit, such as those of markers;
+    /// `series_values` are already in scale units.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_visible: bool,
+        autoscale: Option<&super::AutoscaleProvider>,
+        prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = &self.shown()[start..end];
-        // In whitespace retain the nearest reference bar so relative axis units stay valid.
-        let base = self
-            .shown()
-            .get(start.min(self.shown().len().saturating_sub(1)))
+        // In whitespace retain the nearest reference bar so relative axis units stay valid: the
+        // first bar with a value from the left edge on, or else the last one before it.
+        let at = start.min(self.shown().len().saturating_sub(1));
+        let base = self.shown()[at..]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,
@@ -408,12 +421,40 @@ impl ChartState {
                             })
                             .flat_map(|candle| [candle.bar.low, candle.bar.high]),
                     )
+                    .chain(
+                        study
+                            .zones()
+                            .iter()
+                            .filter(|zone| {
+                                zone.bars.end > study_start.max(start)
+                                    && zone.bars.start < study_end.max(end)
+                                    && study.plot_style(zone.plot).visible
+                            })
+                            .flat_map(|zone| [zone.bottom, zone.top]),
+                    )
             });
-        let (min, max) = visible
-            .iter()
-            .filter(|_| main_visible)
-            .flat_map(|bar| [bar.low, bar.high])
+        let main = main_visible
+            .then(|| {
+                let range = visible
+                    .iter()
+                    .flat_map(|bar| [bar.low, bar.high])
+                    .filter(|value| value.is_finite())
+                    .fold(None, |range: Option<(f64, f64)>, value| {
+                        Some(range.map_or((value, value), |(min, max)| {
+                            (min.min(value), max.max(value))
+                        }))
+                    });
+                match autoscale {
+                    Some(provider) => provider.range(visible, range),
+                    None => range,
+                }
+            })
+            .flatten();
+        let (min, max) = main
+            .into_iter()
+            .flat_map(|(min, max)| [min, max])
             .chain(study_values)
+            .chain(prices)
             .map(|value| transform.to_scale(value))
             .chain(series_values)
             .filter(|value| value.is_finite())

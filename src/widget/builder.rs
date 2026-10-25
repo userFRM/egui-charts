@@ -128,10 +128,13 @@ impl Chart {
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
+            primitives: Vec::new(),
+            next_primitive: 0,
             drawings: DrawingManager::new(),
             symbol_drawings: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
+            pane_options: Default::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,
@@ -140,6 +143,7 @@ impl Chart {
             currency_choices: Vec::new(),
             currency_choice: None,
             legend_badge: None,
+            watermark: None,
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
@@ -148,6 +152,11 @@ impl Chart {
             indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
+            locale: None,
+            date_format: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -164,6 +173,8 @@ impl Chart {
             timeframe: None,
             feed_link: None,
             cursor_modes: CursorModeState::new(),
+            main_series_style: crate::model::SeriesStyle::default(),
+            last_price_pulse: std::cell::Cell::new(None),
             last_price_map: PriceMap::new(
                 PriceTransform::default(),
                 PriceRange::new(0.0, 100.0),
@@ -176,16 +187,23 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
+            synced_crosshair_price: None,
+            last_crosshair: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
+            marker_options: Default::default(),
+            change_marks: None,
             price_lines: Vec::new(),
+            next_price_line: 0,
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
             menu_open: false,
+            size: None,
+            merge_groups: Default::default(),
         }
     }
 
@@ -434,6 +452,24 @@ impl Chart {
     /// external code that needs to draw overlays (e.g., selection dots).
     pub fn get_rendered_price_rect(&self) -> egui::Rect {
         self.last_rendered_price_rect
+    }
+
+    /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
+    /// hidden: the configured minimum width, or wider when the labels need more room.
+    pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
+        let (shown, minimum) = match side {
+            crate::scales::PriceScaleId::Right => {
+                (self.config.show_right_axis, self.config.right_axis_width)
+            }
+            crate::scales::PriceScaleId::Left => {
+                (self.config.show_left_axis, self.config.left_axis_width)
+            }
+        };
+        if shown {
+            minimum.max(self.measured_axis_width)
+        } else {
+            0.0
+        }
     }
 
     /// Get the volume rect used for actual rendering

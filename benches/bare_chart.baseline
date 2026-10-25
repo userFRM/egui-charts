@@ -3,5 +3,5 @@
 # with `--no-default-features --features widget` by the MSRV toolchain on ubuntu-24.04.
 # The job fails when a figure grows beyond its tolerance. A pull request that accepts the growth
 # commits the values its job summary prints and says why.
-size_bytes=13910176
+size_bytes=14209328
 frame_instructions=7590263
