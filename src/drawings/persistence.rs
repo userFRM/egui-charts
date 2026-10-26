@@ -157,6 +157,18 @@ impl StoredDrawing {
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
+        let sizing = d.position_sizing;
+        if [
+            sizing.point_value,
+            sizing.lot_size,
+            sizing.quantity_step,
+            sizing.leverage,
+        ]
+        .into_iter()
+        .any(bad)
+        {
+            return Some("position_sizing".into());
+        }
         let size = match d.position_size {
             Some(PositionSize::Quantity(value) | PositionSize::RiskAmount(value)) => [value, 0.0],
             Some(PositionSize::RiskPercent {
@@ -802,6 +814,12 @@ mod tests {
         d.arrow_start_style = ArrowStyle::Diamond;
         d.arrow_end_style = ArrowStyle::Circle;
         d.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+        d.position_sizing = PositionSizing {
+            point_value: 50.0,
+            lot_size: 10.0,
+            quantity_step: 0.25,
+            leverage: 5.0,
+        };
         d.position_size = Some(PositionSize::RiskPercent {
             account_size: 25_000.0,
             percent: 1.5,
@@ -1191,7 +1209,11 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 14] = [
+        let cases: [(Spoil, &str); 15] = [
+            (
+                |s| first(s).drawing.position_sizing.leverage = f64::NAN,
+                "non-finite position_sizing",
+            ),
             (
                 |s| first(s).drawing.screen_anchor = Some([f32::NAN, 0.5]),
                 "non-finite screen_anchor",

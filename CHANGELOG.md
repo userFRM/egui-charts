@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+- Position drawings size risk in lots using point value and lot size, round down to a configured quantity step, display its precision, convert profit and loss, and report required capital using leverage. Both position Inputs tabs expose the economics; saved drawings and defaults retain them, and older drawings keep unit sizing. Summaries wrap inside the chart. Migration: `Drawing` literals add `position_sizing: PositionSizing::default()` or use `Drawing::new`; hosts supply point values and lot conventions in the account currency. ([#959](https://github.com/userFRM/egui-charts/issues/959))
+
 - Two-point drawings accept successive clicks with a live preview as well as dragging. Drag and freehand anchors retain the original press, including its snapping, and freehand strokes include the first movement and release. Holding Shift constrains rectangle previews and completed drawings to a square in screen points. Escape cancels unfinished placement. ([#956](https://github.com/userFRM/egui-charts/issues/956), [#957](https://github.com/userFRM/egui-charts/issues/957), [#958](https://github.com/userFRM/egui-charts/issues/958))
 
 ### Added
