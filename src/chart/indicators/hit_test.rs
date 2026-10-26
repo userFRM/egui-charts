@@ -80,6 +80,12 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
+    if !indicator.drawings().is_empty() {
+        let drawings = crate::studies::plots::mapped_drawings(indicator, coords, value_to_y);
+        return crate::drawings::services::DrawingInteraction::new()
+            .hit_test(click_pos, &drawings, "")
+            .map(|_| coords.x_to_idx(click_pos.x));
+    }
     let mut plot = indicator.plot_style(line_idx);
     if !indicator.candles().is_empty() {
         return indicator

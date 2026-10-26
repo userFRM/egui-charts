@@ -3,8 +3,8 @@
 //! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
 //!
 //! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
-//! Output: `<scene>-<theme>@2x.png` for the dark and light themes. The light images set `Theme::light()` on the app
-//! and on the chart config before the first step. `docs/images` holds the chart scenes as written. `hero-<theme>.png`
+//! Output: `<scene>-<theme>@2x.png` for the dark and light themes. Each capture sets its theme on the app and with
+//! `Chart::set_theme` before the first step. `docs/images` holds the chart scenes as written. `hero-<theme>.png`
 //! and `themes-<theme>.png` are the `hero` and `themes` window captures placed in a frame after capture, without
 //! changing a pixel inside the windows.
 
@@ -293,12 +293,8 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     h.run_steps(3);
     let ctx = h.ctx.clone();
     let app = h.state_mut();
-    if light {
-        // The whole light theme, not the demo's toggle, which recolours only part of the chart.
-        app.theme = Theme::light();
-        let config = app.theme.apply_to_config(app.chart.config().clone());
-        *app.chart.config_mut() = config;
-    }
+    app.theme = if light { Theme::light() } else { Theme::dark() };
+    app.chart.set_theme(&ctx, &app.theme);
     for step in &scene.steps {
         apply(app, &ctx, step);
     }

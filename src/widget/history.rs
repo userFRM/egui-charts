@@ -16,6 +16,10 @@ pub(super) struct ChartHistory {
     redo: Vec<Action>,
     pending: Option<Pending>,
     changed: bool,
+    /// User edits recorded, undone or redone, kept when the history is cleared.
+    pub(super) edits: u64,
+    /// The edits among them that changed drawings.
+    pub(super) drawing_edits: u64,
 }
 
 struct Pending {
@@ -68,7 +72,21 @@ impl ChartHistory {
         }
     }
 
+    /// Forgets every action, keeping the edit counts.
+    pub(super) fn clear(&mut self) {
+        *self = Self {
+            edits: self.edits,
+            drawing_edits: self.drawing_edits,
+            ..Self::default()
+        };
+    }
+
     fn push(&mut self, action: Action) {
+        self.edits += 1;
+        #[cfg(feature = "drawings")]
+        if action.drawings.can_undo() {
+            self.drawing_edits += 1;
+        }
         self.redo.clear();
         if self.undo.len() == 100 {
             self.undo.remove(0);
@@ -351,6 +369,13 @@ impl Chart {
         std::mem::take(&mut self.history.changed)
     }
 
+    /// A count that changes with every user edit of the chart, undo and redo included, and with
+    /// every change of symbol. Compare it with the count at the last save to tell whether the
+    /// chart changed since, for example to save a layout automatically.
+    pub fn edit_count(&self) -> u64 {
+        self.history.edits
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
         if self.history.pending.is_some() {
             return false;
@@ -469,6 +494,11 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+        }
+        self.history.edits += 1;
+        #[cfg(feature = "drawings")]
+        if action.drawings.can_undo() || action.drawings.can_redo() {
+            self.history.drawing_edits += 1;
         }
         if redo {
             self.history.undo.push(action);

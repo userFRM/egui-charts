@@ -158,12 +158,18 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
+#[cfg(feature = "ui")]
+mod snapshot;
+#[cfg(feature = "drawings")]
+mod stored_drawings;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane_layout::VisualOrder;
 pub use price_series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+#[cfg(feature = "ui")]
+pub use snapshot::{ChartSnapshot, SavedLayout, SavedPane, SavedStudy};
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
 pub(crate) mod sync;
@@ -323,8 +329,15 @@ pub struct Chart {
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
     #[cfg(feature = "drawings")]
-    symbol_drawings: std::collections::HashMap<String, DrawingManager>,
+    symbol_drawings: std::collections::HashMap<String, (DrawingManager, Vec<crate::model::Marker>)>,
+    #[cfg(not(feature = "drawings"))]
     symbol_markers: std::collections::HashMap<String, Vec<crate::model::Marker>>,
+    /// Where each symbol's drawings are kept; see [`Chart::set_storage`].
+    #[cfg(feature = "drawings")]
+    drawing_store: Option<stored_drawings::DrawingStore>,
+    /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
+    #[cfg(feature = "drawings")]
+    restored_studies: std::collections::HashMap<usize, usize>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)
@@ -348,6 +361,12 @@ pub struct Chart {
     pub(crate) indicator_settings_request: Option<SeriesId>,
     session_quote: Option<crate::model::quote::SessionQuote>,
     session_provider: Option<std::sync::Arc<dyn crate::model::SessionProvider>>,
+    horizontal_scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
+    locale: Option<String>,
+    date_format: Option<String>,
+    time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
+    price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
@@ -412,6 +431,17 @@ pub struct Chart {
     /// Price axis tags of the trading lines drawn over the last frame, shown once on the next.
     #[cfg(feature = "ui")]
     pub(crate) trading_tags: Vec<(f64, egui::Color32)>,
+    #[cfg(feature = "ui")]
+    pub(crate) trading_outlined: Vec<usize>,
+    #[cfg(feature = "ui")]
+    pub(crate) trading_bid_ask: bool,
+    /// The order quantity the legend shows under the quote buttons' spread, set by trading for
+    /// the next frame only, so the box goes when trading stops drawing.
+    #[cfg(feature = "ui")]
+    pub(crate) order_quantity: Option<f64>,
+    /// The legend's quantity box, when the user clicked it, for trading to open its calculator.
+    #[cfg(feature = "ui")]
+    pub(crate) quantity_clicked: Option<egui::Rect>,
 
     // =========================================================================
     // Selection State

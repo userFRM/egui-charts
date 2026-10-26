@@ -34,13 +34,13 @@ pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
 pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
-#[cfg(feature = "drawings")]
-pub(crate) use labels::price_decimals;
 pub use labels::{
     Legend, LegendStatus, QuoteSide, StudyAction, render_price_labels, render_price_labels_at_pos,
     render_time_labels,
 };
-pub(crate) use labels::{render_time_grid, study_controls};
+pub(crate) use labels::{
+    price_decimals, price_marks, render_time_grid, study_controls, time_axis_marks,
+};
 pub(crate) use markers::render_change_mark;
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
@@ -49,7 +49,7 @@ pub use session_breaks::{
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use tooltip::{StudyValue, render_tooltip_with_options};
 pub use trading_lines::{
-    TradingLineAction, TradingLineOptions, TradingLines, render_trading_lines,
+    PnlUnit, TradingLineAction, TradingLineOptions, TradingLines, render_trading_lines,
 };
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{decimals, to_step};

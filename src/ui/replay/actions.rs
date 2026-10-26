@@ -90,14 +90,6 @@ pub enum ReplayAction {
     RemoveMarker(usize),
     /// Clear all markers
     ClearMarkers,
-
-    // Trading Simulation
-    /// Enable trading simulation during replay
-    EnableTradingSimulation,
-    /// Disable trading simulation
-    DisableTradingSimulation,
-    /// Reset trading simulation state
-    ResetTradingSimulation,
 }
 
 impl ReplayAction {

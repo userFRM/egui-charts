@@ -93,6 +93,8 @@ A second table prints the first frame and the median and 95th percentile of stea
 
 `benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
 
+`benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh

@@ -770,6 +770,7 @@ mod tests {
             extend_left: true,
             extend_right: true,
             reverse: true,
+            logarithmic: true,
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
@@ -926,6 +927,7 @@ mod tests {
         for (stored, tool) in v2.drawings().iter().zip(tools) {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
+            want.fib_config.as_mut().unwrap().logarithmic = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")

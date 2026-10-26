@@ -252,7 +252,24 @@ mod tests {
         let map = chart.get_chart_mapping();
         // D=C+(B-A): bar 40+(20-10)=50, price 120+(150-100)=170.
         let target = Pos2::new(map.idx_to_x(50), map.price_to_y(170.0));
-        assert!(output.iter().any(|s|matches!(s,egui::Shape::Rect(r) if (r.rect.width()-20.0).abs()<1e-3 && r.rect.center().distance(target)<1e-2)));
+        // The 20 px target zone, painted as a rect or within a tessellated mesh, whose fill
+        // vertices stop half a pixel inside the rect for the feathered edge.
+        let [r, g, b, _] = chart.drawings().drawings[0].color;
+        let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, 30);
+        assert!(output.iter().any(|s| match s {
+            egui::Shape::Rect(r) =>
+                (r.rect.width() - 20.0).abs() < 1e-3 && r.rect.center().distance(target) < 1e-2,
+            egui::Shape::Mesh(m) => {
+                let zone = Rect::from_points(
+                    &(m.vertices.iter())
+                        .filter(|v| v.color == fill)
+                        .map(|v| v.pos)
+                        .collect::<Vec<_>>(),
+                );
+                (zone.width() - 19.0).abs() < 1e-3 && zone.center().distance(target) < 1e-2
+            }
+            _ => false,
+        }));
         assert!(
             output
                 .iter()

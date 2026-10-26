@@ -49,7 +49,7 @@
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
 //! | **Drawing tools** | `drawings` | *(feature `drawings`)* 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 158 indicator names in `IndicatorFactory` |
+//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 163 indicator names in `IndicatorFactory` with default features; automatic drawing studies also require `widget` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
@@ -61,8 +61,9 @@
 //! ## Feature flags
 //!
 //! The default build includes the chart widget, the icons, the built-in
-//! studies and the application-level UI components. An application that only
-//! shows charts uses `default-features = false, features = ["widget"]`. With
+//! studies, the application-level UI components and the localized month and
+//! weekday names. An application that only shows charts uses
+//! `default-features = false, features = ["widget"]`. With
 //! `default-features = false` alone the crate is the headless engine, which
 //! does not depend on egui.
 //!
@@ -73,6 +74,7 @@
 //! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`. |
+//! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
 //! ## Embedding in an application
@@ -97,6 +99,22 @@
 //!
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.
+//!
+//! ## Building for the web
+//!
+//! The download of a `wasm32` build shrinks with:
+//!
+//! - the `[profile.wasm-release]` of this crate's `Cargo.toml` (`opt-level = "s"`,
+//!   `lto = "fat"`, `codegen-units = 1`) and `wasm-opt -Oz`;
+//! - eframe's `glow` renderer instead of `wgpu`;
+//! - eframe without its `default_fonts` feature: [`theme::apply_to_egui`] installs the
+//!   one font the chart draws with;
+//! - chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
+//!   keeps the zones the application uses and the ones this crate names: `UTC`,
+//!   `America/New_York`, `Europe/London`, `Asia/Tokyo` and `Asia/Hong_Kong`.
+//!
+//! `scripts/web-size.sh` builds `examples/bare_chart.rs`, which takes the first three,
+//! and the demo for the web and prints their sizes.
 //!
 //! ## Crate-level re-exports
 //!

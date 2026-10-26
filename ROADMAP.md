@@ -71,8 +71,8 @@ Each item is marked as complete, partial, or missing.
 - [x] Inverted scale
 - [x] Hierarchical time tick generation with weight system
 - [x] Price mark generation
-- [ ] Price formatters (default, currency, percentage, scientific, volume, custom) defined but not used by axis labels
-- [x] Default time formatter on the time axis (locale, relative, custom defined but not injectable; locale is a stub)
+- [x] Host price and percentage formatters for axis ticks, crosshair labels and price tags (`Chart::set_price_formatter`, `set_percentage_formatter`); per-series formatters and locale number separators not yet
+- [x] Host time formatters for axis marks, crosshair and tooltip labels (`Chart::set_time_formatter`), with month and weekday names in the chart's locale (`set_locale`) and a date pattern (`set_date_format`)
 
 ### Multi-Pane
 - [x] `IndicatorPane` widget for separate-pane indicators
@@ -242,9 +242,9 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (158 registered)
+## Technical Indicators (163 registered)
 
-All 158 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+With default features, all 163 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
@@ -331,13 +331,14 @@ Studies share line renderers. Overlays also support crossing markers, direction 
 
 ### Support / Resistance
 - [x] Pivot Points Standard: Traditional, Fibonacci, Woodie, Classic, DM and Camarilla levels from the previous day, week, month, quarter or year of trading days, up to R5 and S5
-- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
+- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; public pivots include the moving last extreme
+- [x] Automatic trend line, parallel channel, Fibonacci retracement and extension, and pitchfork studies use those pivots and the existing drawing renderers (`widget` feature)
 
 ### Price Oscillators
 - [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 158 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
+- [x] `IndicatorFactory` registers all 163 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
 - [x] The indicator dialog lists every study its `IndicatorFactory` registers, including a host's own, and creates them through it
 
 ---
@@ -491,7 +492,7 @@ The ui_kit components are generic building blocks:
 
 ### Data Layer
 - [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
-- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account
+- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account, and its fills are drawn on the chart and announced with its rejections
 - [ ] `services::SymbolSearch` and `Signals` are defined, but nothing calls them yet
 - [ ] No in-crate `Datafeed` implementation: the host owns the transport
 
@@ -540,7 +541,7 @@ The ui_kit components are generic building blocks:
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 158 registered indicators with calculation code
+- 163 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets

@@ -12,7 +12,7 @@ use egui::Key;
 use std::fmt;
 
 /// Global keyboard shortcut configuration.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct KeyboardOptions {
     /// Enable keyboard shortcuts
     pub enabled: bool,
@@ -310,6 +310,7 @@ impl KeyboardAction {
             Self::OpenQuickSearch => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::K)] },
             Self::GoToDate => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::G)] },
             Self::Snapshot => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::S)] },
+            Self::SaveLayout => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::S)] },
             Self::Undo => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)] },
             Self::Redo => {
                 const {
@@ -394,6 +395,7 @@ impl KeyboardAction {
             Self::OpenIndicatorSearch => "/",
             Self::GoToDate => "Alt+G",
             Self::Snapshot => "Alt+S",
+            Self::SaveLayout => "Ctrl+S",
             Self::MaximizeChart => "Alt+Enter",
             Self::DeleteSelectedDrawing => "Del / Backspace",
             Self::Cancel => "Esc",
@@ -467,6 +469,7 @@ impl KeyboardAction {
                     Self::CreateAlert,
                     Self::GoToDate,
                     Self::Snapshot,
+                    Self::SaveLayout,
                     Self::MaximizeChart,
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,

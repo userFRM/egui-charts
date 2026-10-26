@@ -160,3 +160,115 @@ pub(crate) fn paint_zones(
         painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
     }
 }
+
+/// Anchor and level prices of drawings reaching the visible bars, for all study scales.
+#[cfg(feature = "widget")]
+pub(crate) fn drawing_prices(
+    study: &dyn super::Indicator,
+    bars: std::ops::Range<usize>,
+) -> impl Iterator<Item = f64> + '_ {
+    study
+        .drawings()
+        .iter()
+        .filter_map(move |drawing| {
+            if !study.plot_style(0).visible || !drawing.visible || bars.is_empty() {
+                return None;
+            }
+            let levels = drawing.fib_levels();
+            let extent = if levels.is_some() {
+                &drawing.chart_points[..2]
+            } else {
+                &drawing.chart_points
+            };
+            let first = extent.iter().map(|p| p.bar_idx).reduce(f32::min)?;
+            let last = extent.iter().map(|p| p.bar_idx).reduce(f32::max)?;
+            let left = drawing.extend_left
+                || levels
+                    .as_ref()
+                    .is_some_and(|(c, _)| c.extend_left || c.show_background);
+            let right = drawing.extend_right
+                || drawing.tool_type == crate::drawings::DrawingToolType::Pitchfork
+                || levels
+                    .as_ref()
+                    .is_some_and(|(c, _)| c.extend_right || c.show_background);
+            if (!left && first >= bars.end as f32) || (!right && last < bars.start as f32) {
+                return None;
+            }
+            Some(
+                drawing
+                    .chart_points
+                    .iter()
+                    .map(|p| p.price)
+                    .chain(levels.into_iter().flat_map(|(_, prices)| prices)),
+            )
+        })
+        .flatten()
+        .filter(|price| price.is_finite())
+}
+
+/// Apply the study's presentation and pane mapping before rendering or hit testing.
+#[cfg(feature = "widget")]
+pub(crate) fn mapped_drawings(
+    study: &dyn super::Indicator,
+    coords: &crate::chart::coords::ChartMapping,
+    price_to_y: impl Fn(f64) -> f32,
+) -> Vec<crate::drawings::Drawing> {
+    let style = study.plot_style(0);
+    if !style.visible {
+        return Vec::new();
+    }
+    study
+        .drawings()
+        .iter()
+        .filter(|drawing| drawing.visible)
+        .map(|drawing| {
+            let mut drawing = drawing.clone();
+            drawing.color = style.color.to_srgba_unmultiplied();
+            drawing.stroke_width = style.width;
+            drawing.line_style = match style.pattern {
+                super::PlotPattern::Solid => crate::drawings::LineStyle::Solid,
+                super::PlotPattern::Dashed => crate::drawings::LineStyle::Dashed,
+                super::PlotPattern::Dotted => crate::drawings::LineStyle::Dotted,
+                super::PlotPattern::LargeDashed => crate::drawings::LineStyle::LargeDashed,
+                super::PlotPattern::SparseDotted => crate::drawings::LineStyle::SparseDotted,
+            };
+            drawing.update_screen_coords(
+                |bar: f32| {
+                    let index = bar as usize;
+                    coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
+                },
+                &price_to_y,
+            );
+            drawing
+        })
+        .collect()
+}
+
+#[cfg(feature = "widget")]
+pub(crate) fn paint_drawings(
+    context: &crate::chart::renderers::RenderContext,
+    study: &dyn super::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    let bar_to_x = |bar: f32| {
+        let index = bar as usize;
+        coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
+    };
+    let price_to_y = |p| price.price_to_y(p);
+    let view = crate::drawings::rendering::ChartView {
+        instrument: None,
+        bars: &[],
+        revision: 0,
+        bar_to_x: &bar_to_x,
+        price_to_y: &price_to_y,
+        time_axis: false,
+    };
+    for drawing in mapped_drawings(study, coords, price_to_y) {
+        drawing.render(
+            &context.painter.with_clip_rect(context.rect),
+            context.rect,
+            &view,
+        );
+    }
+}
