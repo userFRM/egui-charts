@@ -613,7 +613,7 @@ mod tests {
             result: Result<HistoryPage, FeedError>,
         ) -> (Option<DateTime<chrono::Utc>>, usize) {
             if metric {
-                let (request, reply) = self.metrics.lock().unwrap().pop().unwrap();
+                let (request, reply) = self.metrics.lock().unwrap().remove(0);
                 reply.send(result.map(|page| {
                     MetricPage {
                         points: page
@@ -629,7 +629,7 @@ mod tests {
                 }));
                 (request.before, request.count)
             } else {
-                let (request, reply) = self.histories.lock().unwrap().pop().unwrap();
+                let (request, reply) = self.histories.lock().unwrap().remove(0);
                 reply.send(result);
                 (request.before, request.count)
             }
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn study_sources_retry_resolve_and_history_at_the_original_boundary() {
+    fn study_sources_retry_original_requests_and_ignore_superseded_replies() {
         for metric in [false, true] {
             for (error, delay) in [
                 (FeedError::Network("offline".into()), 1.0),
@@ -760,6 +760,25 @@ mod tests {
                         .collect::<Vec<_>>(),
                     [12.0, 55.0, 20.0]
                 );
+                // A page from an earlier seek must not change the current request.
+                for time in [now + 10.0, now + 11.0] {
+                    feed.sinks.lock().unwrap()[0].reset_replay(DateTime::UNIX_EPOCH);
+                    pump(&mut chart, time);
+                }
+                feed.answer(metric, Err(FeedError::Network("old page".into())));
+                pump(&mut chart, now + 12.0);
+                assert_eq!(chart.study_data_error(&request), None);
+                feed.answer(
+                    metric,
+                    Ok(HistoryPage {
+                        bars: bars(&[99.0], 60),
+                        end_of_history: true,
+                    }),
+                );
+                pump(&mut chart, now + 13.0);
+                assert_eq!(chart.study_data_error(&request), None);
+                assert_eq!(chart.study_data.series[0].bars[0].close, 99.0);
+                assert_eq!(feed.pending(metric), 0);
             }
         }
     }
