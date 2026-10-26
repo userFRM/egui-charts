@@ -330,6 +330,7 @@ impl ChartState {
     ) -> PriceTransform {
         self.fit_price_scale_with_series(
             indicators,
+            None,
             true,
             None,
             std::iter::empty(),
@@ -339,10 +340,12 @@ impl ChartState {
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
-    /// `series_values` are already in scale units.
+    /// `series_values` are already in scale units. `main_bars` supplies the transformed visible
+    /// bars when the chart type draws different OHLC values from its source.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
+        main_bars: Option<&[Bar]>,
         main_visible: bool,
         autoscale: Option<&super::AutoscaleProvider>,
         prices: impl IntoIterator<Item = f64>,
@@ -350,7 +353,7 @@ impl ChartState {
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
-        let visible = &self.shown()[start..end];
+        let visible = main_bars.unwrap_or(&self.shown()[start..end]);
         // In whitespace retain the nearest reference bar so relative axis units stay valid: the
         // first bar with a value from the left edge on, or else the last one before it.
         let at = start.min(self.shown().len().saturating_sub(1));

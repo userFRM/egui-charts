@@ -1020,6 +1020,10 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
+        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin).then(|| {
+            self.heikin_ashi
+                .bars(&self.state.data().bars, self.state.revision())
+        });
         let transform = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
@@ -1031,6 +1035,7 @@ impl Chart {
             .zip(&self.study_autoscale)
             .filter(|(study, autoscale)| **autoscale && !study.is_volume())
             .map(|(study, _)| study.as_ref()),
+            heikin_ashi.as_ref().map(|bars| &bars[start_idx..end_idx]),
             self.main_series_visible,
             self.main_series_style.autoscale.as_ref(),
             marker_prices
@@ -1039,6 +1044,7 @@ impl Chart {
                 .chain(target_prices),
             series_values,
         );
+        drop(heikin_ashi);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
@@ -1293,6 +1299,7 @@ impl Chart {
             // computed over the complete series, not just the visible slice.
             full_data: &self.state.data().bars,
             revision: self.state.revision(),
+            heikin_ashi: &self.heikin_ashi,
             start_idx,
             clock: &bar_clock,
             tick_size: self

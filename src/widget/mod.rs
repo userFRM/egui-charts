@@ -266,6 +266,7 @@ pub struct Chart {
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
     price_series: Vec<price_series::PriceSeries>,
+    heikin_ashi: crate::chart::rendering::candles::HeikinAshiCache,
     series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,

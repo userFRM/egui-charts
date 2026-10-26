@@ -13,6 +13,7 @@
 mod area;
 mod candlestick;
 mod heikin_ashi;
+pub use heikin_ashi::HeikinAshiCache;
 mod helpers;
 mod japanese;
 mod line;
@@ -128,6 +129,7 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.full_data,
                 ctx.revision,
+                ctx.heikin_ashi,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),

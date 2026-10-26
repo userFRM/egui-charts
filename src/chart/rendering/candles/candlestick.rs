@@ -2,7 +2,7 @@
 //!
 //! Includes: Candlestick, OHLC Bars, Hollow Candles, Heikin-Ashi, Volume Candles, Columns
 
-use super::heikin_ashi;
+use super::HeikinAshiCache;
 use super::helpers::{
     OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks, prev_close,
 };
@@ -194,6 +194,7 @@ pub(super) fn render_heikin_ashi(
     visible_data: &[Bar],
     full_data: &[Bar],
     revision: u64,
+    cache: &HeikinAshiCache,
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -208,32 +209,30 @@ pub(super) fn render_heikin_ashi(
         return;
     }
 
-    heikin_ashi::with_window(
-        full_data,
-        revision,
-        start_idx,
-        visible_data.len(),
-        |ha_window| {
-            let painter = price_ctx.painter;
-            let coords = *price_scale;
+    {
+        let ha_bars = cache.bars(full_data, revision);
+        let start = start_idx.min(ha_bars.len());
+        let end = start.saturating_add(visible_data.len()).min(ha_bars.len());
+        let ha_window = &ha_bars[start..end];
+        let painter = price_ctx.painter;
+        let coords = *price_scale;
 
-            for (i, bar) in ha_window.iter().enumerate() {
-                if bar.is_whitespace() {
-                    continue;
-                }
-                let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-                let color = if bar.close >= bar.open {
-                    bullish_color
-                } else {
-                    bearish_color
-                };
-                let y = OhlcYCoords::from_bar(bar, &coords);
-
-                draw_wicks(painter, x, &y, wick_width, color);
-                draw_body_filled(painter, x, bar_width, &y, color);
+        for (i, bar) in ha_window.iter().enumerate() {
+            if bar.is_whitespace() {
+                continue;
             }
-        },
-    );
+            let x = idx_to_coord(start_idx + i, chart_rect_min_x);
+            let color = if bar.close >= bar.open {
+                bullish_color
+            } else {
+                bearish_color
+            };
+            let y = OhlcYCoords::from_bar(bar, &coords);
+
+            draw_wicks(painter, x, &y, wick_width, color);
+            draw_body_filled(painter, x, bar_width, &y, color);
+        }
+    }
 
     if show_volume {
         render_volume_bars(

@@ -136,6 +136,7 @@ pub(super) struct PriceSeries {
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
+    pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
     pub markers: Vec<Marker>,
     pub marker_options: MarkerOptions,
@@ -252,6 +253,7 @@ impl Chart {
             visible: true,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
+            heikin_ashi: Default::default(),
             feed: FeedState::default(),
             markers: Vec::new(),
             marker_options: MarkerOptions::default(),
@@ -596,7 +598,9 @@ impl Chart {
     /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
     /// chart type draws and the columns' base, or what its autoscale provider makes of them.
     pub(super) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
-        let bars = &item.bars[self.series_range(item)];
+        let heikin_ashi = (item.options.chart_type == ChartType::Heikin)
+            .then(|| item.heikin_ashi.bars(&item.bars, item.revision));
+        let bars = &heikin_ashi.as_deref().unwrap_or(&item.bars)[self.series_range(item)];
         let logarithmic = self
             .series_price_scale(item.id)
             .is_some_and(|scale| scale.options().mode == PriceScaleMode::Logarithmic);
@@ -806,6 +810,7 @@ impl Chart {
                 visible_data: visible,
                 full_data: &item.bars,
                 revision: item.revision,
+                heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,
                 tick_size: None,
@@ -1213,6 +1218,51 @@ mod tests {
                     let (top, bottom) = map.extent();
                     assert!((top..=bottom).contains(&y), "{price}: {y}");
                 }
+            }
+        }
+    }
+
+    /// The first transformed open after the gap is (100 + 100) / 2 = 100,
+    /// although every visible raw bar is between 9 and 11.
+    #[test]
+    fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
+        for secondary in [false, true] {
+            let mut input = bars(&[10.0; 9]);
+            for bar in &mut input {
+                bar.high = 11.0;
+                bar.low = 9.0;
+            }
+            input[0].open = 100.0;
+            input[0].close = 100.0;
+            input[0].high = 101.0;
+            input[0].low = 99.0;
+            let mut chart = Chart::new(BarData::from_bars(input.clone()));
+            let id = if secondary {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: ChartType::Heikin,
+                    scale: SeriesScale::Left,
+                    ..Default::default()
+                });
+                chart.set_data(id, input);
+                id
+            } else {
+                chart.set_chart_type(ChartType::Heikin);
+                SeriesId::MAIN
+            };
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, 8.0));
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert!(
+                (map.range().min - (9.0 - 91.0 / 8.0)).abs() < 1e-8,
+                "secondary={secondary}: {:?}",
+                map.range()
+            );
+            assert!((map.range().max - (100.0 + 91.0 / 8.0)).abs() < 1e-8);
+            for price in [9.0, 10.0, 100.0] {
+                let (top, bottom) = map.extent();
+                assert!((top..=bottom).contains(&map.price_to_y(price)));
             }
         }
     }
