@@ -543,3 +543,9 @@ fn over_finite_bars(
     }
     values
 }
+
+mod trade_profile;
+pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};
+
+mod order_flow;
+pub use order_flow::OrderFlowStudy;

@@ -1494,6 +1494,9 @@ impl Chart {
         };
         let paint_main_series = || {
             if self.main_series_visible {
+                if time_based {
+                    self.paint_liquidity(&clipped_painter, &self.get_chart_mapping());
+                }
                 if let Some((flow, config)) = footprint.filter(|_| time_based) {
                     if show_volume && !cfg!(feature = "studies") {
                         rendering::candles::volume::render_volume_bars(

@@ -127,6 +127,7 @@ impl LiveFeed {
             let paused = sim.paused;
             let continuous = sim.continuous;
             let adjusted = sim.adjusted;
+            let options = std::mem::take(&mut sim.options);
             *sim = Self::new(symbol, sim.now)
                 .0
                 .into_inner()
@@ -134,6 +135,10 @@ impl LiveFeed {
             sim.paused = paused;
             sim.continuous = continuous;
             sim.adjusted = adjusted;
+            sim.options = options;
+            for (query, sink) in &sim.options {
+                sink.push(sim.options_volume(query));
+            }
         }
     }
 
@@ -870,6 +875,31 @@ mod tests {
     use egui_charts::ChartBuilder;
     use egui_charts::chart::selection::SeriesId;
     use std::sync::Arc;
+
+    #[test]
+    fn options_queries_resume_after_switching_back_to_the_underlying() {
+        use egui_charts::studies::{Indicator, OptionsVolumeProfile};
+
+        let now = "2026-10-23T19:07:05Z".parse().unwrap();
+        let feed = LiveFeed::new("SAMPLE", now);
+        let expiry = now.date_naive() + TimeDelta::days(30);
+        let study = OptionsVolumeProfile::new(
+            &feed,
+            OptionsVolumeQuery {
+                symbol: "SAMPLE".into(),
+                expiries: expiry..=expiry,
+            },
+            1.0,
+            || {},
+        )
+        .unwrap();
+        assert!(!study.volume_profiles(0..10).is_empty());
+        for (seconds, symbol, shown) in [(1, "AAPL", false), (2, "SAMPLE", true)] {
+            feed.set_symbol(symbol);
+            feed.advance(now + TimeDelta::seconds(seconds));
+            assert_eq!(study.volume_profiles(0..10).is_empty(), !shown, "{symbol}");
+        }
+    }
 
     /// Minute volume must reflect clustered arrivals and the daily activity profile.
     #[test]

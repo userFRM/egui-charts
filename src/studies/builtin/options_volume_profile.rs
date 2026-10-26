@@ -1,7 +1,7 @@
 //! Options turnover supplied by a host, independent of the underlying's bar volume.
 
 use crate::data::{Datafeed, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSource};
-use crate::model::Bar;
+use crate::model::{Bar, Instrument};
 use crate::studies::{
     Indicator, IndicatorValues, ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig,
 };
@@ -22,6 +22,8 @@ struct CachedProfile {
 #[derive(Clone)]
 pub struct OptionsVolumeProfile {
     source: OptionsVolumeSource,
+    symbol: String,
+    matching_instrument: bool,
     config: VolumeProfileConfig,
     cache: RefCell<CachedProfile>,
     values: IndicatorValues,
@@ -35,7 +37,8 @@ impl OptionsVolumeProfile {
     /// context. Rows are centered on multiples of `row_size`, in underlying price units.
     /// Returns `None` for an empty symbol, reversed expiry range or nonpositive/nonfinite size.
     /// Add the result with `Chart::add_indicator`. The query is host-owned: recreate the
-    /// study when changing the underlying, expiry range or row size.
+    /// study when changing the underlying, expiry range or row size. A chart with metadata
+    /// for another symbol hides the profile until its underlying is shown again.
     ///
     /// ```
     /// # use egui_charts::data::{Datafeed, HistoryRequest, HistoryPage, Reply};
@@ -63,9 +66,12 @@ impl OptionsVolumeProfile {
         let mut config = VolumeProfileConfig::default().with_row_size(Some(row_size))?;
         config.display = ProfileDisplay::UpDown;
         let (source, sink) = OptionsVolumeSource::new(wake);
+        let symbol = query.symbol.clone();
         feed.options_volume(query, sink);
         Some(Self {
             source,
+            symbol,
+            matching_instrument: true,
             config,
             cache: RefCell::new(CachedProfile::default()),
             values: IndicatorValues::new(),
@@ -91,8 +97,12 @@ impl Indicator for OptionsVolumeProfile {
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
+    fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
+        self.matching_instrument = instrument.is_none_or(|i| i.symbol == self.symbol);
+        false
+    }
     fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        if !self.visible || visible.is_empty() {
+        if !self.visible || !self.matching_instrument || visible.is_empty() {
             return Vec::new();
         }
         let values = self.source.values();
@@ -174,7 +184,7 @@ mod tests {
             };
             let wakes = Arc::new(AtomicUsize::new(0));
             let counter = Arc::clone(&wakes);
-            let study = OptionsVolumeProfile::new(&feed, query.clone(), 4.0, move || {
+            let mut study = OptionsVolumeProfile::new(&feed, query.clone(), 4.0, move || {
                 counter.fetch_add(1, Ordering::Relaxed);
             })
             .unwrap();
@@ -202,6 +212,10 @@ mod tests {
                     assert_eq!(plot.profile.down(), [puts]);
                     assert_eq!(plot.profile.volume(), [calls + puts]);
                 }
+            }
+            for (symbol, shown) in [("SAMPLE", true), ("OTHER", false), ("SAMPLE", true)] {
+                study.set_instrument(Some(&Instrument::new(symbol)));
+                assert_eq!(study.volume_profiles(0..10).is_empty(), !shown, "{symbol}");
             }
             sink.push(Vec::new());
             assert!(clone.volume_profiles(0..10).is_empty());
