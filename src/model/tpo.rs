@@ -58,9 +58,9 @@ pub struct TPOProfile {
     pub value_area_high: f64,
     /// Lower boundary of the configured TPO-count value area.
     pub value_area_low: f64,
-    /// Initial Balance High (first hour)
+    /// Highest price during the configured initial balance period.
     pub initial_balance_high: f64,
-    /// Initial Balance Low (first hour)
+    /// Lowest price during the configured initial balance period.
     pub initial_balance_low: f64,
     /// Profile high
     pub profile_high: f64,

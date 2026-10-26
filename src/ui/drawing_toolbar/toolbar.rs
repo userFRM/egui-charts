@@ -43,10 +43,10 @@ impl CursorStateData {
     }
 }
 
-/// Domain state that should be synced with AppState
+/// Drawing and cursor choices shared by the host and drawing toolbar.
 ///
-/// This represents the drawing-related state that is managed centrally
-/// in AppState.drawing, not UI-specific state like expanded menus.
+/// Copy host choices into the toolbar before showing it, then apply its returned
+/// actions to the chart and host state.
 #[derive(Clone, Debug)]
 pub struct DrawingToolbarDomainState {
     /// The chart's active drawing tool, or `None` after construction finishes.
@@ -118,11 +118,7 @@ impl DrawingToolbar {
 
     // === State Sync Methods ===
 
-    /// Sync toolbar state FROM a domain state snapshot.
-    ///
-    /// Call this BEFORE `show_with_action()` to ensure the toolbar
-    /// reflects the current application state. This makes AppState
-    /// the single source of truth for domain state.
+    /// Copy the host's drawing and cursor choices before [`Self::show_with_action`].
     pub fn sync_from_domain_state(&mut self, domain: &DrawingToolbarDomainState) {
         if domain.sel_tool.is_some()
             || domain.eraser_mode_enabled
@@ -139,10 +135,7 @@ impl DrawingToolbar {
         self.state.drawing_color = domain.drawing_color;
     }
 
-    /// Get the current domain state for syncing TO AppState
-    ///
-    /// This can be used to initialize AppState from component state
-    /// during migration.
+    /// Read the toolbar's drawing and cursor choices for synchronization with the host.
     pub fn get_domain_state(&self) -> DrawingToolbarDomainState {
         DrawingToolbarDomainState {
             sel_tool: self.state.sel_tool,

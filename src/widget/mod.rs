@@ -183,18 +183,13 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 /// - **Keyboard shortcuts**: Arrow keys, Home/End, +/- for navigation
 /// - **Double-click**: Reset zoom on price or time axis
 ///
-/// # Architecture
+/// # Undo and redo
 ///
 /// User drawing interactions and shortcuts share [`Chart::undo`] / [`Chart::redo`] with
 /// host toolbar, menu and dialog edits wrapped in [`Chart::user_action`]. Direct programmatic
 /// setters and feed/data updates do not enter this history. Use [`Chart::can_undo`] and
 /// [`Chart::can_redo`] for toolbar availability, and [`Chart::take_history_changed`] to
 /// synchronize host controls and data after restoring an interval or settings.
-///
-/// `Chart` owns a [`ChartState`] (data + coordinate systems) and a
-/// [`ChartConfig`] (visual styling). Rendering is delegated to specialized
-/// modules in `crate::chart::rendering`, while interaction logic lives in
-/// `crate::chart::state`.
 pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,

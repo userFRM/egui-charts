@@ -7,46 +7,46 @@
 // Fixed Desktop Constants (exact dimensions)
 // =============================================================================
 
-/// Top toolbar height: 38px
+/// Default top toolbar height in egui logical points.
 pub const TOOLBAR_HEIGHT: f32 = 38.0;
 
-/// Button size: 32px
+/// Default button side length in egui logical points.
 pub const BUTTON_SIZE: f32 = 32.0;
 
-/// Icon size: 24px
+/// Default icon side length in egui logical points.
 pub const ICON_SIZE: f32 = 24.0;
 
-/// Padding: 4px
+/// Default padding in egui logical points.
 pub const PADDING: f32 = 4.0;
 
-/// Corner rounding: 4px
+/// Default corner radius in egui logical points.
 pub const ROUNDING: f32 = 4.0;
 
 // =============================================================================
 // Config Struct
 // =============================================================================
 
-/// Configuration for the top toolbar - fixed desktop dimensions
+/// Dimensions for the top toolbar in egui logical points.
 #[derive(Clone, Debug)]
 pub struct TopToolbarConfig {
-    /// Toolbar height: 38px
+    /// Toolbar height.
     pub height: f32,
-    /// Icon size: 24px
+    /// Icon side length.
     pub small_icon_size: f32,
-    /// Button size: 32px
+    /// Button side length.
     pub btn_size: f32,
-    /// Padding: 4px
+    /// Padding between button content.
     pub padding: f32,
-    /// Border radius: 4px
+    /// Button corner radius.
     pub rounding: f32,
     // Legacy fields kept for compatibility
-    /// Base height, in egui logical points.
+    /// Retained for source compatibility; rendering uses `height`.
     pub base_height: f32,
-    /// Base icon size, in egui logical points.
+    /// Retained for source compatibility; rendering uses `small_icon_size`.
     pub base_icon_size: f32,
-    /// Base button size, in egui logical points.
+    /// Retained for source compatibility; rendering uses `btn_size`.
     pub base_btn_size: f32,
-    /// Base padding, in egui logical points.
+    /// Retained for source compatibility; rendering uses `padding`.
     pub base_padding: f32,
 }
 

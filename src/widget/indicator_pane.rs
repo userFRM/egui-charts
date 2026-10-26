@@ -71,7 +71,7 @@ mod indicator_sizing {
 /// [`IndicatorPaneConfig::macd`], and [`IndicatorPaneConfig::stochastic`].
 #[derive(Debug, Clone)]
 pub struct IndicatorPaneConfig {
-    /// Panel height in pixels
+    /// Panel height in egui logical points.
     pub height: f32,
     /// Fixed y-axis range (None = auto-scale)
     pub y_range: Option<(f64, f64)>,
@@ -196,7 +196,7 @@ pub use crate::chart::coords::ChartMapping;
 /// after rendering.
 #[derive(Clone, Copy, Debug)]
 pub struct IndicatorCoordParams {
-    /// Bar spacing in pixels
+    /// Bar spacing in egui logical points.
     pub bar_spacing: f32,
     /// Right offset (bars to the right of last data point)
     pub right_offset: f64,
@@ -210,7 +210,7 @@ impl IndicatorCoordParams {
     /// Creates coordinate parameters from the main chart's time-scale state.
     ///
     /// These values are typically obtained from the chart after rendering via
-    /// [`super::Chart::get_chart_mapping`] or the internal time-scale accessors.
+    /// [`super::Chart::get_chart_mapping`].
     pub fn new(
         bar_spacing: f32,
         right_offset: impl Into<f64>,
@@ -227,8 +227,8 @@ impl IndicatorCoordParams {
 
     /// Creates a [`ChartMapping`] from these params, the panel's screen rect, and y-range.
     ///
-    /// The resulting mapping converts bar indices to x-pixel positions and
-    /// price/indicator values to y-pixel positions within the given rect.
+    /// The resulting mapping converts bar indices and price/indicator values to
+    /// screen positions in egui logical points within the given rect.
     pub fn to_mapping(&self, rect: Rect, y_min: f64, y_max: f64) -> ChartMapping {
         ChartMapping::new(
             rect,

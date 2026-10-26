@@ -339,8 +339,7 @@ impl DrawingManager {
         }
     }
 
-    /// Sync drawing manager state from central AppState
-    /// Called at the start of each frame to ensure consistency
+    /// Apply the host's tool, snapping, color, eraser and selection state.
     pub fn sync_from_app_state(&mut self, drawing_state: &DrawingState) {
         if self.active_tool != drawing_state.active_tool {
             self.set_active_tool(drawing_state.active_tool);

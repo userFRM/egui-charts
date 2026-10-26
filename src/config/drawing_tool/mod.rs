@@ -1,20 +1,7 @@
-//! Drawing tool type enumeration and associated behavior.
+//! Drawing tool identifiers and creation behavior.
 //!
-//! This module defines the [`DrawingToolType`] enum covering every drawing
-//! tool, organized into 18 categories. Each variant carries metadata about its
-//! interaction mode, required point count, display name, icon path, and
-//! toolbar-compatible data-name identifier.
-//!
-//! The enum is split across several sub-modules for maintainability:
-//!
-//! - **`behavior`** -- [`DrawingToolType::is_cursor`], [`DrawingToolType::interaction_mode`],
-//!   [`DrawingToolType::required_points`]
-//! - **`categories`** -- [`DrawingToolType::all`], [`DrawingToolType::by_category`],
-//!   [`DrawingToolType::categories`]
-//! - **`display`** -- [`Display`](std::fmt::Display), [`FromStr`](std::str::FromStr)
-//!   and its [`ParseToolTypeError`], [`DrawingToolType::as_str`],
-//!   [`DrawingToolType::data_name`], [`DrawingToolType::icon`]
-//! - **`interaction_mode`** -- [`DrawingInteractionMode`] enum
+//! Use [`DrawingToolType`] to select a tool and inspect its category, interaction
+//! mode and required points when composing a host picker.
 
 mod behavior;
 mod categories;
@@ -28,23 +15,15 @@ pub use interaction_mode::DrawingInteractionMode;
 
 /// Enumeration of all drawing tool types available in the charting engine.
 ///
-/// This is the central type that identifies *what* a drawing is. It determines
-/// rendering behavior, interaction mode, required point count, and toolbar
-/// placement. Tools are grouped into 18 categories (cursors, lines, channels,
-/// pitchforks, fibonacci, gann, patterns, elliott, cycles, projection, volume,
-/// measurers, brushes, arrows, shapes, annotations, content, icons).
+/// Identifies a drawing's rendering behavior, interaction mode, required point
+/// count and toolbar placement. Use [`categories`](Self::categories) and
+/// [`by_category`](Self::by_category) to build a categorized picker.
 ///
 /// # Interaction modes
 ///
-/// Each tool has an associated [`DrawingInteractionMode`] accessible via
-/// [`interaction_mode()`](DrawingToolType::interaction_mode):
-///
-/// - **SingleClick** -- Place with one click (e.g., `HorizontalLine`, `TextLabel`)
-/// - **ClickClick** -- Click start, then click end (e.g., `TrendLine`, `Ray`)
-/// - **DragToDraw** -- Click-drag-release (e.g., `Rect`, `FibonacciRetracement`)
-/// - **MultiPoint** -- Click N points, double-click to finish (e.g., `Polyline`, `XABCDPattern`)
-/// - **ContinuousDraw** -- Hold and draw freehand (e.g., `Brush`)
-/// - **NotDrawing** -- Cursor tools that don't create drawings
+/// [`interaction_mode`](Self::interaction_mode) describes how a tool captures
+/// points; [`required_points`](Self::required_points) gives its completion count,
+/// or `None` for tools without a fixed count.
 ///
 /// # Parsing
 ///

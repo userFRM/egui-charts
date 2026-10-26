@@ -1,53 +1,53 @@
-//! Drawing toolbar and flyout dimensions.
+//! Drawing toolbar dimensions and retained configuration values.
 //!
-//! Use [`DrawingToolbarConfig`] to size the toolbar; colors come from the active
-//! egui visuals and theme.
+//! Use [`DrawingToolbarConfig`] to set toolbar width and padding; colors come from
+//! the active egui visuals and theme.
 
 // =============================================================================
 // Fixed Desktop Constants
 // =============================================================================
 
-/// Drawing toolbar width: 52px
+/// Default drawing toolbar width in egui logical points.
 pub const TOOLBAR_WIDTH: f32 = 52.0;
 
-/// Icon size: 18px
+/// Default icon side length in egui logical points.
 pub const ICON_SIZE: f32 = 18.0;
 
-/// Padding: 4px
+/// Default padding in egui logical points.
 pub const PADDING: f32 = 4.0;
 
-/// Submenu width: 200px
+/// Default submenu width in egui logical points.
 pub const SUBMENU_WIDTH: f32 = 200.0;
 
 // =============================================================================
 // Config Struct
 // =============================================================================
 
-/// Configuration for the drawing toolbar - fixed desktop dimensions
+/// Toolbar width and padding in egui logical points, with retained compatibility values.
 #[derive(Debug, Clone)]
 pub struct DrawingToolbarConfig {
-    /// Current icon size: 18px
+    /// Retained for source compatibility; ignored when rendering.
     pub icon_size: f32,
-    /// Current sidebar width: 52px
+    /// Toolbar width.
     pub width: f32,
-    /// Current padding: 4px
+    /// Padding before the first toolbar control.
     pub padding: f32,
-    /// Current submenu width: 200px
+    /// Retained for source compatibility; ignored when rendering.
     pub submenu_width: f32,
-    /// Whether to show tool names when expanded
+    /// Retained for source compatibility; tool names are shown in flyouts.
     pub show_names: bool,
-    /// Expanded width: 52px
+    /// Retained for source compatibility; rendering uses `width`.
     pub expanded_width: f32,
-    /// Collapsed width: 52px
+    /// Retained for source compatibility; rendering uses `width`.
     pub collapsed_width: f32,
     // Legacy fields kept for compatibility
-    /// Base icon size, in egui logical points.
+    /// Retained for source compatibility; ignored when rendering.
     pub base_icon_size: f32,
-    /// Base width, in egui logical points.
+    /// Retained for source compatibility; rendering uses `width`.
     pub base_width: f32,
-    /// Base padding, in egui logical points.
+    /// Retained for source compatibility; rendering uses `padding`.
     pub base_padding: f32,
-    /// Base submenu width, in egui logical points.
+    /// Retained for source compatibility; ignored when rendering.
     pub base_submenu_width: f32,
 }
 
@@ -72,12 +72,12 @@ impl Default for DrawingToolbarConfig {
 }
 
 impl DrawingToolbarConfig {
-    /// Create config from theme - colors come from ui.style().visuals
+    /// Create default dimensions; the theme argument is unused.
     pub fn from_theme(_theme: &crate::theme::Theme) -> Self {
         Self::default()
     }
 
-    /// Legacy method - no-op with fixed desktop dimensions
+    /// Retained for source compatibility; leaves dimensions unchanged.
     pub fn update_for_window_width(&mut self, _window_width: f32) {
         // no scaling needed
     }

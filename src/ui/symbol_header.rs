@@ -58,7 +58,7 @@ impl OhlcData {
 pub struct SymbolHeaderConfig {
     /// Height, in egui logical points.
     pub height: f32,
-    /// Background color.
+    /// Retained color value; the header lets its parent paint the background.
     pub bg_color: Color32,
     /// Text color.
     pub text_color: Color32,
@@ -70,7 +70,7 @@ pub struct SymbolHeaderConfig {
     pub bearish_color: Color32,
     /// Separator color.
     pub separator_color: Color32,
-    /// Whether to show company name.
+    /// Whether to show the instrument description, exchange and interval label.
     pub show_company_name: bool,
     /// Whether to show bid ask.
     pub show_bid_ask: bool,

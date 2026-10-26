@@ -2,10 +2,10 @@
 //!
 //! Keep [`TopToolbarState`] across frames when using the toolbar in a host layout.
 
-/// Top toolbar state
+/// Replay and action availability shared with the host.
 ///
-/// Note: Symbol, interval, and chart style are NOT stored here.
-/// They live in AppState.chart and are accessed directly during rendering.
+/// Symbol, interval and chart style come from the host's
+/// [`ChartAppState`](crate::ui::app_state::ChartAppState).
 #[derive(Clone, Debug)]
 pub struct TopToolbarState {
     /// Whether replay mode is active

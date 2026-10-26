@@ -21,7 +21,7 @@ pub struct ChartMapping {
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
-    /// Index of the last visible bar (anchor point for x conversion)
+    /// Index of the final bar in the series, used as the horizontal anchor.
     pub base_idx: usize,
     /// Right-side offset for chart scrolling (in bar units)
     pub right_offset: f64,

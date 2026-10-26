@@ -192,11 +192,6 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 
 ## Layers and feature flags
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-dark.svg">
-  <img alt="Charting features: the data model and host contracts, the chart widget, optional built-in studies and application UI, and trading and order flow integrations supplied with host data." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
-</picture>
-
 | Layer | What it gives | Feature |
 |---|---|---|
 | Engine | Bars, symbols and timeframes, price and time scales, the `Datafeed` contract and the host service traits (broker, symbol search, storage, alerts, signals), and the `Indicator` trait with `IndicatorRegistry`. No egui dependency. | always on |

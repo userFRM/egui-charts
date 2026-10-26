@@ -5,13 +5,13 @@ use crate::tokens::DESIGN_TOKENS;
 /// Icon size presets
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IconSize {
-    /// 14x14 pixels
+    /// Small icon preset.
     Small,
-    /// 18x18 pixels
+    /// Medium icon preset.
     Medium,
-    /// 24x24 pixels
+    /// Large icon preset.
     Large,
-    /// 32x32 pixels
+    /// Extra-large icon preset.
     XLarge,
 }
 
