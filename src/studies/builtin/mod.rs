@@ -62,7 +62,6 @@
 //! [`TradingSessions`]
 
 use crate::model::Bar;
-
 mod footprint_studies;
 pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
 mod trade_delta;
@@ -489,32 +488,6 @@ pub use volume_24h::Volume24h;
 /// raise a length of 0 to 1.
 fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
     value.max(min).min(max)
-}
-
-/// A recursive average `prev + alpha * (x - prev)` seeded with the mean of its first `length`
-/// values: alpha `2 / (length + 1)` gives an EMA, `1 / length` Wilder's smoothed average.
-/// Leading NaN inputs are skipped; the output is NaN until the seed.
-fn seeded_average(values: &[f64], length: usize, alpha: f64) -> Vec<f64> {
-    let (mut count, mut average) = (0, 0.0);
-    values
-        .iter()
-        .map(|&x| {
-            if count < length {
-                if x.is_nan() {
-                    return f64::NAN;
-                }
-                count += 1;
-                average += x;
-                if count < length {
-                    return f64::NAN;
-                }
-                average /= length as f64;
-            } else {
-                average += alpha * (x - average);
-            }
-            average
-        })
-        .collect()
 }
 
 /// `compute` run over the bars whose inputs `finite` accepts, the other bars given no

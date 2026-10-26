@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 /// VIDYA - Variable Index Dynamic Avg
 /// Adaptive moving avg that adjusts based on volatility
 /// Uses Chande Momentum Oscillator for volatility measurement
@@ -175,23 +176,6 @@ impl ZLEMA {
         self
     }
 
-    fn ema(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-        if data.is_empty() || period == 0 {
-            return result;
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        result.push(data[0]);
-
-        for i in 1..data.len() {
-            let ema = (data[i] - result[i - 1]) * multiplier + result[i - 1];
-            result.push(ema);
-        }
-
-        result
-    }
-
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
@@ -214,7 +198,7 @@ impl ZLEMA {
         }
 
         // Apply EMA to de-lagged data
-        let zlema = Self::ema(&delagged, self.period);
+        let zlema = helpers::ema(&delagged, self.period);
 
         for i in 0..data.len() {
             if i < self.period - 1 {

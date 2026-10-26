@@ -23,6 +23,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::stepper::{rolling_max, rolling_min, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
@@ -70,14 +71,6 @@ impl Stochastic {
         self.d_color = d_color;
         self
     }
-
-    /// Calculate SMA of a slice
-    fn sma(values: &[f64]) -> f64 {
-        if values.is_empty() {
-            return 0.0;
-        }
-        values.iter().sum::<f64>() / values.len() as f64
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -119,52 +112,8 @@ impl Stochastic {
             }
         }
 
-        // Calculate smoothed %K (Slow Stochastic %K)
-        let mut smooth_k = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i < self.k_period + self.k_smooth - 2 || raw_k[i].is_nan() {
-                smooth_k.push(f64::NAN);
-            } else {
-                let start = i + 1 - self.k_smooth;
-                let valid_values: Vec<f64> = raw_k[start..=i]
-                    .iter()
-                    .filter(|v| !v.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid_values.len() >= self.k_smooth {
-                    smooth_k.push(Self::sma(&valid_values));
-                } else {
-                    smooth_k.push(f64::NAN);
-                }
-            }
-        }
-
-        // Calculate %D (SMA of smoothed %K)
-        let mut d_values = Vec::with_capacity(data.len());
-        let warmup = self
-            .k_period
-            .saturating_add(self.k_smooth)
-            .saturating_add(self.d_period)
-            - 3;
-        for i in 0..data.len() {
-            if i < warmup || smooth_k[i].is_nan() {
-                d_values.push(f64::NAN);
-            } else {
-                let start = i + 1 - self.d_period;
-                let valid_values: Vec<f64> = smooth_k[start..=i]
-                    .iter()
-                    .filter(|v| !v.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid_values.len() >= self.d_period {
-                    d_values.push(Self::sma(&valid_values));
-                } else {
-                    d_values.push(f64::NAN);
-                }
-            }
-        }
+        let smooth_k = helpers::sma(&raw_k, self.k_smooth);
+        let d_values = helpers::sma(&smooth_k, self.d_period);
 
         // Build output values
         for i in 0..data.len() {

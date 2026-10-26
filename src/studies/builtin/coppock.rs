@@ -1,4 +1,5 @@
 use crate::model::Bar;
+use crate::studies::helpers;
 /// Coppock Curve
 /// A momentum indicator originally designed to identify buying opportunities in stock indices
 /// Uses a weighted moving avg of the sum of two ROC periods
@@ -57,38 +58,6 @@ impl CoppockCurve {
         }
 
         roc
-    }
-
-    /// Calculate Weighted Moving Avg
-    fn calculate_wma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut wma = Vec::with_capacity(data.len());
-        let weight_sum: f64 = (1..=period).map(|i| i as f64).sum();
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                wma.push(f64::NAN);
-            } else {
-                let mut weighted_sum = 0.0;
-                let mut has_nan = false;
-
-                for j in 0..period {
-                    let value = data[i + 1 - period + j];
-                    if value.is_nan() {
-                        has_nan = true;
-                        break;
-                    }
-                    weighted_sum += value * (j + 1) as f64;
-                }
-
-                if has_nan {
-                    wma.push(f64::NAN);
-                } else {
-                    wma.push(weighted_sum / weight_sum);
-                }
-            }
-        }
-
-        wma
     }
 }
 
@@ -154,7 +123,7 @@ impl Indicator for CoppockCurve {
             .collect();
 
         // Apply WMA to the sum
-        let coppock = Self::calculate_wma(&roc_sum, self.wma_period);
+        let coppock = helpers::wma(&roc_sum, self.wma_period);
 
         // Store results
         for value in coppock {

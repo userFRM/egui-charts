@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -43,23 +44,6 @@ impl TrueStrengthIndex {
         self
     }
 
-    fn ema(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-        if data.is_empty() || period == 0 {
-            return result;
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        result.push(data[0]);
-
-        for i in 1..data.len() {
-            let ema = (data[i] - result[i - 1]) * multiplier + result[i - 1];
-            result.push(ema);
-        }
-
-        result
-    }
-
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
@@ -81,12 +65,12 @@ impl TrueStrengthIndex {
         let abs_pc: Vec<f64> = pc.iter().map(|x| x.abs()).collect();
 
         // Double smooth the price change
-        let pc_smooth1 = Self::ema(&pc, self.long_period);
-        let pc_smooth2 = Self::ema(&pc_smooth1, self.short_period);
+        let pc_smooth1 = helpers::ema(&pc, self.long_period);
+        let pc_smooth2 = helpers::ema(&pc_smooth1, self.short_period);
 
         // Double smooth the absolute price change
-        let abs_pc_smooth1 = Self::ema(&abs_pc, self.long_period);
-        let abs_pc_smooth2 = Self::ema(&abs_pc_smooth1, self.short_period);
+        let abs_pc_smooth1 = helpers::ema(&abs_pc, self.long_period);
+        let abs_pc_smooth2 = helpers::ema(&abs_pc_smooth1, self.short_period);
 
         // Calculate TSI values
         let mut tsi_values: Vec<f64> = Vec::with_capacity(pc.len());
@@ -99,7 +83,7 @@ impl TrueStrengthIndex {
         }
 
         // Calculate signal line
-        let signal = Self::ema(&tsi_values, self.signal_period);
+        let signal = helpers::ema(&tsi_values, self.signal_period);
 
         // Build output
         for i in 0..data.len() {

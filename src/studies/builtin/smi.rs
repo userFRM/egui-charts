@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
@@ -42,41 +43,6 @@ impl StochasticMomentumIndex {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        let mut first_valid = None;
-        for (i, &value) in data.iter().enumerate() {
-            if !value.is_nan() && first_valid.is_none() {
-                first_valid = Some(i);
-            }
-        }
-
-        let start = first_valid.unwrap_or(0);
-
-        for i in 0..data.len() {
-            if i < start {
-                ema.push(f64::NAN);
-            } else if i == start {
-                ema.push(data[i]);
-            } else {
-                let prev = ema[i - 1];
-                if prev.is_nan() || data[i].is_nan() {
-                    ema.push(f64::NAN);
-                } else {
-                    ema.push((data[i] - prev) * multiplier + prev);
-                }
-            }
-        }
-
-        ema
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
@@ -132,11 +98,11 @@ impl StochasticMomentumIndex {
         }
 
         // Double EMA smoothing
-        let distance_ema1 = Self::calculate_ema(&distance, self.smooth1);
-        let distance_ema2 = Self::calculate_ema(&distance_ema1, self.smooth2);
+        let distance_ema1 = helpers::ema(&distance, self.smooth1);
+        let distance_ema2 = helpers::ema(&distance_ema1, self.smooth2);
 
-        let range_ema1 = Self::calculate_ema(&range, self.smooth1);
-        let range_ema2 = Self::calculate_ema(&range_ema1, self.smooth2);
+        let range_ema1 = helpers::ema(&range, self.smooth1);
+        let range_ema2 = helpers::ema(&range_ema1, self.smooth2);
 
         // Calculate SMI
         let mut smi = Vec::with_capacity(data.len());
@@ -150,7 +116,7 @@ impl StochasticMomentumIndex {
         }
 
         // Calculate signal line
-        let signal = Self::calculate_ema(&smi, self.signal_period);
+        let signal = helpers::ema(&smi, self.signal_period);
 
         // Store results
         for i in 0..data.len() {

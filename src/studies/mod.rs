@@ -61,6 +61,7 @@ pub use data::{StudyData, StudyDataRequest};
 #[cfg(feature = "studies")]
 pub mod factory;
 mod format;
+pub mod helpers;
 mod indicator_trait;
 pub use format::{StudyFormat, StudyScale};
 mod inputs;
@@ -81,8 +82,8 @@ pub use values::IndicatorValues;
 pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
-#[cfg(feature = "studies")]
 mod stepper;
+pub use stepper::Stepper;
 
 #[cfg(feature = "studies")]
 pub use builtin::*;

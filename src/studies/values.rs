@@ -129,7 +129,6 @@ impl IndicatorValues {
         self.len = 0;
     }
 
-    #[cfg(feature = "studies")]
     pub(crate) fn truncate(&mut self, len: usize) {
         self.len = self.len.min(len);
         for line in &mut self.columns {
