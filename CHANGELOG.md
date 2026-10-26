@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Bar CSV/JSON imports and exports and `Chart::export_csv` return errors with `Send + Sync` bounds, allowing results and original error values to cross worker-thread boundaries. Migration: update explicitly typed results, function pointers and error adapters from `Box<dyn std::error::Error>` to `Box<dyn std::error::Error + Send + Sync>`. ([#950](https://github.com/userFRM/egui-charts/issues/950))
+
 - Session range lookup clips its final one-minute check to the requested end and uses checked timestamp addition, so sub-minute ranges do not report a later break and ranges at the maximum UTC timestamp do not panic. Empty and reversed ranges remain empty. ([#953](https://github.com/userFRM/egui-charts/issues/953))
 
 - The example dependency locks replace yanked `clipboard-win` 5.4.1 with 5.4.3. CI checks advisories as well as licences and duplicate versions, rejecting yanked packages. Three unmaintained standalone D-Bus packages required by the egui 0.37 accessibility backend have explicit maintenance exceptions pending its migration to zbus 6; these are development/example dependencies and have no patched standalone releases. ([#952](https://github.com/userFRM/egui-charts/issues/952))

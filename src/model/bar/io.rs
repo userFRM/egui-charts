@@ -1,6 +1,7 @@
 //! Bar Data I/O Operations
 //!
-//! CSV and JSON import/export for bar data.
+//! CSV and JSON import/export for bar data. Errors are `Send + Sync` so imports
+//! and exports can return their results across worker-thread boundaries.
 
 use super::bar::Bar;
 use super::bar_data::BarData;
@@ -29,7 +30,7 @@ impl BarData {
     ///
     /// let data = BarData::from_csv("data.csv").expect("Failed to load CSV");
     /// ```
-    pub fn from_csv(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_csv(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut rdr = csv::Reader::from_path(path)?;
         let header = rdr.headers()?;
         if !header
@@ -102,7 +103,7 @@ impl BarData {
     /// let data = BarData::new();
     /// data.to_csv("output.csv").expect("Failed to export CSV");
     /// ```
-    pub fn to_csv(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn to_csv(&self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::fs::File;
 
         let file = File::create(path)?;
@@ -142,7 +143,7 @@ impl BarData {
     /// let csv = data.to_csv_string().expect("Failed to export CSV");
     /// assert!(csv.starts_with("ts,"));
     /// ```
-    pub fn to_csv_string(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn to_csv_string(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut wtr = csv::Writer::from_writer(Vec::new());
 
         // Write header
@@ -189,7 +190,7 @@ impl BarData {
     pub fn to_csv_with_indicators(
         &self,
         indicators: &[(String, Vec<f64>)],
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut wtr = csv::Writer::from_writer(Vec::new());
 
         // Build header: ts,open,high,low,close,volume,indicator_1,...
@@ -237,7 +238,7 @@ impl BarData {
     /// let data = BarData::new();
     /// data.to_json("output.json").expect("Failed to export JSON");
     /// ```
-    pub fn to_json(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn to_json(&self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::fs::File;
         use std::io::Write;
 
@@ -256,7 +257,7 @@ impl BarData {
     /// let data = BarData::new();
     /// let json = data.to_json_string().expect("Failed to serialize");
     /// ```
-    pub fn to_json_string(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn to_json_string(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         Ok(serde_json::to_string_pretty(&self.bars)?)
     }
 
@@ -267,9 +268,10 @@ impl BarData {
     /// use egui_charts::model::BarData;
     ///
     /// let json = "[]";
-    /// let data = BarData::from_json_string(json).expect("Failed to parse");
+    /// let data = std::thread::spawn(move || BarData::from_json_string(json))
+    ///     .join().expect("Worker panicked").expect("Failed to parse");
     /// ```
-    pub fn from_json_string(json: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_json_string(json: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let bars: Vec<Bar> = serde_json::from_str(json)?;
         Ok(Self::from_bars(bars))
     }
@@ -282,7 +284,7 @@ impl BarData {
     ///
     /// let data = BarData::from_json("data.json").expect("Failed to load");
     /// ```
-    pub fn from_json(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_json(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         use std::fs;
         let content = fs::read_to_string(path)?;
         Self::from_json_string(&content)
