@@ -41,4 +41,4 @@ python3 -m http.server --bind 127.0.0.1 --directory "$preview_root"
 
 Open `http://localhost:8000/egui-charts/docs/`.
 Starlight provides system theme detection, its theme picker and Pagefind search.
-All assets are local. Private browser captures stay outside the repository.
+All assets are local.
