@@ -5,7 +5,8 @@ use super::{
     sync::{index_at, time_at},
 };
 use crate::drawings::persistence::{
-    DrawingStorage, SaveError, SkippedDrawing, drawing_to_stored, stored_to_drawing,
+    DrawingStorage, SaveError, SkippedDrawing, StoredCoord, drawing_to_stored_with,
+    stored_to_drawing_with,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
 
@@ -120,10 +121,11 @@ impl Chart {
                     });
                 }
             }
-            storage.add_drawing(drawing_to_stored(drawing, |index| {
-                time_at(self.state.shown(), index as f64)
-                    .expect("validated anchor")
-                    .timestamp_millis()
+            storage.add_drawing(drawing_to_stored_with(drawing, |index, price| {
+                StoredCoord::from_time(
+                    time_at(self.state.shown(), index as f64).expect("validated anchor"),
+                    price,
+                )
             }));
         }
         // Validate all settings too, before a host replaces its last good save.
@@ -156,10 +158,11 @@ impl Chart {
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
         for stored in storage.drawings() {
-            let drawing = stored_to_drawing(
+            let drawing = stored_to_drawing_with(
                 stored,
-                |ts| {
-                    chrono::DateTime::from_timestamp_millis(ts)
+                |point| {
+                    point
+                        .time()
                         .and_then(|time| index_at(self.state.shown(), time))
                         .unwrap_or(0.0) as f32
                 },
@@ -180,6 +183,63 @@ mod tests {
     use crate::model::{Bar, BarData};
     use crate::widget::SeriesId;
     use chrono::{TimeZone, Utc};
+
+    /// Millisecond JSON fields must not collapse execution bars one nanosecond apart.
+    #[test]
+    fn drawing_storage_preserves_submillisecond_anchors_and_legacy_milliseconds() {
+        for start in [
+            Utc.timestamp_opt(1_704_067_200, 0).unwrap(),
+            Utc.timestamp_opt(-1, 999_999_999).unwrap(),
+        ] {
+            let bars = crate::data::aggregate_trades(
+                &(0..3)
+                    .map(|id| crate::model::Tick::new(start, 10.0, 1.0, None).with_id(id))
+                    .collect::<Vec<_>>(),
+                "1t".parse::<crate::model::Timeframe>().unwrap(),
+            )
+            .unwrap();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 10.0), ChartPoint::new(2.0, 11.0)];
+            drawing.completed = true;
+            chart.drawings_mut().drawings.push(drawing);
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            chart.load_drawings(&saved).unwrap();
+            assert_eq!(
+                chart.drawings().drawings[0]
+                    .chart_points
+                    .iter()
+                    .map(|p| p.bar_idx)
+                    .collect::<Vec<_>>(),
+                [1.0, 2.0]
+            );
+            assert_eq!(
+                chart.drawing_point_time(&chart.drawings().drawings[0].chart_points[1]),
+                Some(start + chrono::Duration::nanoseconds(2))
+            );
+            // Retained anchors also survive a save while history is absent.
+            chart.set_data(SeriesId::MAIN, Vec::new());
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            chart.load_drawings(&saved).unwrap();
+            chart.set_data(SeriesId::MAIN, bars);
+            assert_eq!(
+                chart.drawings().drawings[0]
+                    .chart_points
+                    .iter()
+                    .map(|p| p.bar_idx)
+                    .collect::<Vec<_>>(),
+                [1.0, 2.0]
+            );
+            let mut legacy: serde_json::Value = serde_json::from_str(&saved).unwrap();
+            for point in legacy["drawings"][0]["points"].as_array_mut().unwrap() {
+                point.as_object_mut().unwrap().remove("subms_ns");
+            }
+            assert!(chart.load_drawings(&legacy.to_string()).unwrap().is_empty());
+            let mut invalid = legacy;
+            invalid["drawings"][0]["points"][0]["subms_ns"] = 1_000_000.into();
+            assert_eq!(chart.load_drawings(&invalid.to_string()).unwrap().len(), 1);
+        }
+    }
 
     #[test]
     fn saved_drawings_restore_before_bars_and_report_skipped_records() {

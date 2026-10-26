@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing saves retain the nanosecond remainder after each millisecond, preserving distinct execution-bar anchors when restored immediately or before history loads. Millisecond-only documents remain readable. Migration: `StoredCoord` literals add `subms_ns: 0`, or use `StoredCoord::new` for millisecond coordinates. ([#899](https://github.com/userFRM/egui-charts/issues/899))
+
 - Watchlist service pushes and `set_quote` reject older timestamps and non-finite required or supplied numeric fields, retaining the last usable quote for the watchlist and host consumers. Equal timestamps can still correct prices. ([#904](https://github.com/userFRM/egui-charts/issues/904))
 
 - Depth snapshots resolve duplicate tick prices before removing zero sizes, so the last supplied level removes earlier liquidity on either side. ([#909](https://github.com/userFRM/egui-charts/issues/909))

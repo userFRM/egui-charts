@@ -53,6 +53,9 @@ use std::fmt;
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
     pub ts_ms: i64,
+    /// Nanoseconds after `ts_ms`, less than 1,000,000. Older documents default to zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subms_ns: u32,
     /// Price level at this coordinate.
     pub price: f64,
 }
@@ -60,8 +63,32 @@ pub struct StoredCoord {
 impl StoredCoord {
     /// Creates a new stored coordinate from a timestamp and price.
     pub fn new(ts_ms: i64, price: f64) -> Self {
-        Self { ts_ms, price }
+        Self {
+            ts_ms,
+            subms_ns: 0,
+            price,
+        }
     }
+
+    pub(crate) fn from_time(time: chrono::DateTime<chrono::Utc>, price: f64) -> Self {
+        Self {
+            ts_ms: time.timestamp_millis(),
+            subms_ns: time.timestamp_subsec_nanos() % 1_000_000,
+            price,
+        }
+    }
+
+    pub(crate) fn time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.subms_ns >= 1_000_000 {
+            return None;
+        }
+        chrono::DateTime::from_timestamp_millis(self.ts_ms)?
+            .checked_add_signed(chrono::Duration::nanoseconds(i64::from(self.subms_ns)))
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// A fully serializable representation of a drawing with all its properties.
@@ -317,7 +344,7 @@ impl DrawingStorage {
             if let Some(point) = stored
                 .points
                 .iter()
-                .position(|point| chrono::DateTime::from_timestamp_millis(point.ts_ms).is_none())
+                .position(|point| point.time().is_none())
             {
                 return Err(SaveError::UnmappedAnchor {
                     id: stored.id.clone(),
@@ -404,9 +431,7 @@ impl DrawingStorage {
                                 "{tool} is a cursor, not a drawing"
                             )));
                         }
-                        if drawing.points.iter().any(|point| {
-                            chrono::DateTime::from_timestamp_millis(point.ts_ms).is_none()
-                        }) {
+                        if drawing.points.iter().any(|point| point.time().is_none()) {
                             return Err(serde::de::Error::custom(
                                 "anchor timestamp is outside the supported range",
                             ));
@@ -639,6 +664,15 @@ mod v1 {
 /// and a clamping mapping would move them onto the first or last bar. It must
 /// be the inverse of the `time_to_bar` passed to [`stored_to_drawing`].
 pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) -> StoredDrawing {
+    drawing_to_stored_with(drawing, |index, price| {
+        StoredCoord::new(bar_to_time(index), price)
+    })
+}
+
+pub(crate) fn drawing_to_stored_with(
+    drawing: &Drawing,
+    bar_to_coord: impl Fn(f32, f64) -> StoredCoord,
+) -> StoredDrawing {
     let mut settings = drawing.clone();
     settings.points.clear();
     settings.chart_points.clear();
@@ -650,15 +684,12 @@ pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) ->
         .chart_points
         .iter()
         .map(|p| {
-            StoredCoord::new(
-                p.time_anchor
-                    .filter(|(_, index)| *index == p.bar_idx)
-                    .map_or_else(
-                        || bar_to_time(p.bar_idx),
-                        |(time, _)| time.timestamp_millis(),
-                    ),
-                p.price,
-            )
+            p.time_anchor
+                .filter(|(_, index)| *index == p.bar_idx)
+                .map_or_else(
+                    || bar_to_coord(p.bar_idx, p.price),
+                    |(time, _)| StoredCoord::from_time(time, p.price),
+                )
         })
         .collect();
     stored
@@ -677,6 +708,14 @@ pub fn stored_to_drawing(
     time_to_bar: impl Fn(i64) -> f32,
     next_id: usize,
 ) -> Drawing {
+    stored_to_drawing_with(stored, |point| time_to_bar(point.ts_ms), next_id)
+}
+
+pub(crate) fn stored_to_drawing_with(
+    stored: &StoredDrawing,
+    time_to_bar: impl Fn(&StoredCoord) -> f32,
+    next_id: usize,
+) -> Drawing {
     let mut drawing = stored.drawing.clone();
     drawing.id = next_id;
     drawing.stored_id = Some(stored.id.clone());
@@ -686,9 +725,8 @@ pub fn stored_to_drawing(
         .points
         .iter()
         .map(|p| {
-            let mut point = ChartPoint::new(time_to_bar(p.ts_ms), p.price);
-            point.time_anchor =
-                chrono::DateTime::from_timestamp_millis(p.ts_ms).map(|time| (time, point.bar_idx));
+            let mut point = ChartPoint::new(time_to_bar(p), p.price);
+            point.time_anchor = p.time().map(|time| (time, point.bar_idx));
             point
         })
         .collect();
