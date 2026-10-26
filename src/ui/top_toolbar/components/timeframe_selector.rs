@@ -230,6 +230,10 @@ pub enum TimeframeAction {
     Select(Timeframe),
     /// Toggle the supplied interval's favorite state.
     ToggleFavorite(Timeframe),
+    /// Hide an interval entry without changing the current interval.
+    Hide(Timeframe),
+    /// Restore all hidden interval entries.
+    RestoreHidden,
 }
 
 /// Custom timeframe dialog state
@@ -387,6 +391,9 @@ pub struct TimeframePreferences {
     /// User-created intervals in menu order.
     #[serde(default)]
     pub custom_timeframes: Vec<Timeframe>,
+    /// Hidden entries, including those temporarily unavailable from a source.
+    #[serde(default)]
+    pub hidden_timeframes: Vec<Timeframe>,
 }
 
 /// Timeframe selector
@@ -406,6 +413,7 @@ pub struct TimeframeSelector {
     /// Custom timeframe dialog state
     custom_dialog: CustomTimeframeDialog,
     supported_timeframes: Option<HashSet<crate::model::Timeframe>>,
+    hidden_timeframes: HashSet<Timeframe>,
 }
 
 impl Default for TimeframeSelector {
@@ -435,6 +443,7 @@ impl TimeframeSelector {
             show_custom_input: false,
             custom_dialog: CustomTimeframeDialog::default(),
             supported_timeframes: None,
+            hidden_timeframes: HashSet::new(),
         }
     }
 
@@ -456,15 +465,23 @@ impl TimeframeSelector {
     pub fn preferences(&self) -> TimeframePreferences {
         let mut favorites: Vec<_> = self.favorites.iter().copied().collect();
         favorites.sort_by_key(|tf| (parts(*tf).1 as u8, parts(*tf).0));
+        let mut hidden_timeframes: Vec<_> = self.hidden_timeframes.iter().copied().collect();
+        hidden_timeframes.sort_by_key(|tf| (parts(*tf).1 as u8, parts(*tf).0));
         TimeframePreferences {
             favorites,
+            hidden_timeframes,
             custom_timeframes: self.custom_timeframes.clone(),
         }
     }
 
     /// Restore saved lists, discarding duplicate custom entries.
     pub fn set_preferences(&mut self, preferences: TimeframePreferences) {
-        self.favorites = preferences.favorites.into_iter().collect();
+        self.hidden_timeframes = preferences.hidden_timeframes.into_iter().collect();
+        self.favorites = preferences
+            .favorites
+            .into_iter()
+            .filter(|tf| !self.hidden_timeframes.contains(tf))
+            .collect();
         self.custom_timeframes.clear();
         for tf in preferences.custom_timeframes {
             if !self.custom_timeframes.contains(&tf) && !PRESETS.contains(&tf) {
@@ -527,7 +544,7 @@ impl TimeframeSelector {
         PRESETS
             .iter()
             .chain(&self.custom_timeframes)
-            .filter(|tf| self.supports(**tf))
+            .filter(|tf| self.supports(**tf) && !self.hidden_timeframes.contains(tf))
             .map(|tf| width(display_long(*tf)))
             .fold(0.0, f32::max)
     }
@@ -543,7 +560,7 @@ impl TimeframeSelector {
         let bar = spacing.scroll.allocated_width();
 
         let desc_w = self.label_width(ui);
-        ui.set_width((desc_w + 64.0 + bar).max(self.config.dropdown_width).max(
+        ui.set_width((desc_w + 92.0 + bar).max(self.config.dropdown_width).max(
             if self.show_custom_input {
                 CUSTOM_FORM_W
             } else {
@@ -557,17 +574,21 @@ impl TimeframeSelector {
 
         let row = |ui: &mut Ui, tf: Timeframe, favorite: bool, current: Timeframe| {
             let mut toggle_favorite = false;
+            let mut hide = false;
             let content = TimeframeRow {
                 tf,
                 favorite,
                 theme,
                 toggle_favorite: &mut toggle_favorite,
+                hide: &mut hide,
             };
             let response = ListItem::new()
                 .selected(current == tf)
                 .height(ROW_H)
                 .show(ui, content);
-            if toggle_favorite {
+            if hide {
+                TimeframeAction::Hide(tf)
+            } else if toggle_favorite {
                 TimeframeAction::ToggleFavorite(tf)
             } else if response.clicked() {
                 TimeframeAction::Select(tf)
@@ -597,7 +618,11 @@ impl TimeframeSelector {
                     let available: Vec<_> = PRESETS
                         .iter()
                         .copied()
-                        .filter(|tf| parts(*tf).1 == unit && self.supports(*tf))
+                        .filter(|tf| {
+                            parts(*tf).1 == unit
+                                && self.supports(*tf)
+                                && !self.hidden_timeframes.contains(tf)
+                        })
                         .collect();
                     if available.is_empty() {
                         continue;
@@ -614,7 +639,7 @@ impl TimeframeSelector {
                     .custom_timeframes
                     .iter()
                     .copied()
-                    .filter(|tf| self.supports(*tf))
+                    .filter(|tf| self.supports(*tf) && !self.hidden_timeframes.contains(tf))
                     .collect();
                 if !custom.is_empty() {
                     section_header(ui, theme, "Custom");
@@ -626,6 +651,14 @@ impl TimeframeSelector {
                     }
                 }
 
+                if !self.hidden_timeframes.is_empty()
+                    && ListItem::new()
+                        .height(ROW_H)
+                        .show(ui, LabelContent::new("Restore hidden intervals"))
+                        .clicked()
+                {
+                    action = TimeframeAction::RestoreHidden;
+                }
                 let custom = ListItem::new().height(ROW_H).show(
                     ui,
                     LabelContent::new("Custom interval\u{2026}").with_icon(&embedded_icons::PLUS),
@@ -637,6 +670,7 @@ impl TimeframeSelector {
                     && let Some(tf) = self.custom_dialog.show(ui)
                 {
                     if self.supports(tf) {
+                        self.hidden_timeframes.remove(&tf);
                         if !PRESETS.contains(&tf) && !self.custom_timeframes.contains(&tf) {
                             self.custom_timeframes.push(tf);
                         }
@@ -648,6 +682,14 @@ impl TimeframeSelector {
                 }
             });
 
+        match action {
+            TimeframeAction::Hide(tf) => {
+                self.hidden_timeframes.insert(tf);
+                self.favorites.remove(&tf);
+            }
+            TimeframeAction::RestoreHidden => self.hidden_timeframes.clear(),
+            _ => {}
+        }
         if let TimeframeAction::ToggleFavorite(tf) = action
             && !self.favorites.remove(&tf)
         {
@@ -713,12 +755,13 @@ fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
     );
 }
 
-/// One interval row with a trailing favourite star.
+/// One interval row with trailing hide and favourite buttons.
 struct TimeframeRow<'a> {
     tf: Timeframe,
     favorite: bool,
     theme: &'a Theme,
     toggle_favorite: &'a mut bool,
+    hide: &'a mut bool,
 }
 
 impl ListItemContent for TimeframeRow<'_> {
@@ -739,6 +782,27 @@ impl ListItemContent for TimeframeRow<'_> {
                 &translated_label,
             )
         });
+
+        let hide_rect = Rect::from_center_size(
+            pos2(rect.right() - icon_sizes::SM / 2.0 - 28.0, rect.center().y),
+            vec2(28.0, ROW_H),
+        );
+        let hide = ui.interact(
+            hide_rect,
+            context.response.id.with("hide"),
+            egui::Sense::click(),
+        );
+        let label = l10n::text(ui.ctx(), "Hide interval");
+        hide.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &label));
+        *self.hide = hide.clicked();
+        embedded_icons::CLOSE
+            .as_image_tinted(vec2(icon_sizes::SM, icon_sizes::SM), text)
+            .paint_at(
+                ui,
+                Rect::from_center_size(hide_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
+            );
+        menu_row_focus(ui, &hide);
+        hide.on_hover_text(label);
 
         let star_rect = Rect::from_center_size(
             pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
@@ -876,10 +940,54 @@ mod tests {
             assert_eq!(selector.favorites.contains(&custom), favorite);
             assert_eq!(selector.current, selected);
         }
+        // Hiding a favorite unpins it, retains the selected interval and persists with host settings.
+        for tf in [Timeframe::Min1, custom] {
+            let (_, labels, right) = frame(&mut selector, vec![]);
+            let y = labels
+                .iter()
+                .find(|(label, _)| *label == display_long(tf))
+                .unwrap()
+                .1
+                .y;
+            assert_eq!(
+                click(
+                    &mut selector,
+                    pos2(right - theme.spacing.lg - icon_sizes::SM / 2.0 - 28.0, y)
+                ),
+                TimeframeAction::Hide(tf)
+            );
+            let (_, labels, _) = frame(&mut selector, vec![]);
+            assert!(!labels.iter().any(|(label, _)| *label == display_long(tf)));
+            assert_eq!(selector.current, selected);
+            assert!(!selector.favorites.contains(&tf));
+        }
         let saved = serde_json::to_string(&selector.preferences()).unwrap();
         let mut restored = TimeframeSelector::default();
         restored.set_preferences(serde_json::from_str(&saved).unwrap());
         assert_eq!(restored.preferences(), selector.preferences());
+        restored.set_supported_timeframes(Some(vec![]));
+        frame(&mut restored, vec![]);
+        assert_eq!(restored.preferences(), selector.preferences());
+        restored.set_supported_timeframes(None);
+        let legacy: TimeframePreferences =
+            serde_json::from_str(r#"{"favorites":[],"custom_timeframes":[]}"#).unwrap();
+        assert!(legacy.hidden_timeframes.is_empty());
+        let (_, labels, _) = frame(&mut restored, vec![]);
+        assert!(!labels.iter().any(|(label, _)| label == "1 minute"));
+        let restore = labels
+            .iter()
+            .find(|(label, _)| label == "Restore hidden intervals")
+            .unwrap()
+            .1;
+        click(&mut restored, restore);
+        let (_, labels, _) = frame(&mut restored, vec![]);
+        assert!(labels.iter().any(|(label, _)| label == "1 minute"));
+        assert!(
+            labels
+                .iter()
+                .any(|(label, _)| *label == display_long(custom))
+        );
+        assert!(!restored.favorites.contains(&Timeframe::Min1));
         let saved = restored.preferences();
         restored.set_supported_timeframes(Some(vec![Model::Min1]));
         restored.show_custom_input = true;
