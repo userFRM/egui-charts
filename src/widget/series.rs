@@ -597,12 +597,7 @@ impl Chart {
         self.record_study(id);
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
-        let instrument = self.instrument().cloned();
-        let clock = self.bar_clock();
-        let study = self.studies.indicators_mut()[at].as_mut();
-        study.set_instrument(instrument.as_ref());
-        study.set_bar_clock(&clock);
-        Some(study)
+        Some(self.studies.indicators_mut()[at].as_mut())
     }
 
     /// Updates every study with a pending change, as of `now` in seconds. An incremental study
