@@ -5,9 +5,6 @@
 //! can be triggered by key presses, with methods to map egui key events
 //! to actions and to retrieve human-readable labels for a shortcuts dialog.
 
-/// Keyboard Shortcuts.
-///
-/// Standard keyboard navigation for chart interaction.
 use egui::Key;
 use std::fmt;
 

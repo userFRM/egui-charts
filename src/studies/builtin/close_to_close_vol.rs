@@ -1,10 +1,10 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Close-to-Close Volatility
-/// Standard deviation of log returns, annualized by sqrt(252)
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Close-to-Close Volatility
+/// Standard deviation of log returns, annualized by sqrt(252)
 #[derive(Clone)]
 pub struct CloseToCloseVol {
     period: usize,
@@ -14,6 +14,7 @@ pub struct CloseToCloseVol {
 }
 
 impl CloseToCloseVol {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),

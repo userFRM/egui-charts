@@ -1,12 +1,12 @@
 use super::{ADX, over_finite_bars};
 use crate::model::Bar;
-/// Directional Movement Index (DMI / DI+ / DI-)
-/// Shows the positive and negative directional indicators and the ADX
-/// of the same length (Wilder 1978)
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Directional Movement Index (DMI / DI+ / DI-)
+/// Shows the positive and negative directional indicators and the ADX
+/// of the same length (Wilder 1978)
 #[derive(Clone)]
 pub struct DirectionalMovement {
     /// Period for smoothing (typically 14)
@@ -18,6 +18,7 @@ pub struct DirectionalMovement {
 }
 
 impl DirectionalMovement {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -31,6 +32,7 @@ impl DirectionalMovement {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

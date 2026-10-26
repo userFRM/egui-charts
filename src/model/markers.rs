@@ -1,7 +1,8 @@
-/// Marker API for custom chart annotations
-///
-/// Markers are visual indicators that can be placed at specific data points on the chart.
-/// Common use cases: buy/sell signals, events, annotations, alerts, etc.
+//! Marker API for custom chart annotations
+//!
+//! Markers are visual indicators that can be placed at specific data points on the chart.
+//! Common use cases: buy/sell signals, events, annotations, alerts, etc.
+
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::Color32;

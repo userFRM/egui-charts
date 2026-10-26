@@ -13,6 +13,7 @@ pub struct NetVolume {
 }
 
 impl NetVolume {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),

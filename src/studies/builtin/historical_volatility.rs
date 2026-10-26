@@ -1,12 +1,12 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-/// Historical Volatility (HV)
-/// Measures the annualized standard deviation of log returns
-/// Used for options pricing and risk assessment
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Historical Volatility (HV)
+/// Measures the annualized standard deviation of log returns
+/// Used for options pricing and risk assessment
 #[derive(Clone)]
 pub struct HistoricalVolatility {
     /// Lookback period (typically 20 or 30)
@@ -19,6 +19,7 @@ pub struct HistoricalVolatility {
 }
 
 impl HistoricalVolatility {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -36,11 +37,13 @@ impl HistoricalVolatility {
         self
     }
 
+    /// Annualize over 365 bars instead of the default 252.
     pub fn for_crypto(mut self) -> Self {
         self.trading_days = 365.0;
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

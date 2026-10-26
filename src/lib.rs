@@ -62,7 +62,7 @@
 //!
 //! The default build includes the chart widget, the icons, the built-in
 //! studies, the application-level UI components and the localized month and
-//! weekday names. An application that only shows charts uses
+//! weekday names and IANA time zones. An application that only shows charts uses
 //! `default-features = false, features = ["widget"]`. With
 //! `default-features = false` alone the crate is the headless engine, which
 //! does not depend on egui.
@@ -75,9 +75,13 @@
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
 //! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`. |
 //! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
+//! | `timezones` | **on** | IANA zones and daylight-saving rules through optional chrono-tz. Without it UTC, system local time and fixed offsets remain available through [`model::TimezoneId`]; unavailable names are rejected. Named exchange presets require this feature. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
 //! ## Embedding in an application
+//!
+//! The [`guide`] covers historical and streaming data, custom studies,
+//! drawing persistence, synchronized charts and host strategy or script results.
 //!
 //! A typical setup:
 //!
@@ -116,7 +120,8 @@
 //! - eframe's `glow` renderer instead of `wgpu`;
 //! - eframe without its `default_fonts` feature: [`theme::apply_to_egui`] installs the
 //!   one font the chart draws with;
-//! - chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
+//! - disabling `timezones` when UTC, system local time and fixed offsets suffice;
+//! - with `timezones`, chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
 //!   keeps the zones the application uses and the ones this crate names: `UTC`,
 //!   `America/New_York`, `Europe/London`, `Asia/Tokyo` and `Asia/Hong_Kong`.
 //!
@@ -136,6 +141,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]
 #![allow(clippy::needless_range_loop)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Engine code names colours as `egui::Color32`; without the widget that path
 // resolves to `ecolor`, the crate egui re-exports them from.
@@ -145,16 +151,21 @@ extern crate ecolor as egui;
 // ─── Core engine modules ─────────────────────────────────────────────────────
 
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub mod chart;
 #[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+#[warn(missing_docs)]
 pub mod drawings;
 pub mod model;
 pub mod scales;
+#[warn(missing_docs)]
 pub mod studies;
 
 // ─── Configuration & data ────────────────────────────────────────────────────
 
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub mod config;
 pub mod data;
 pub mod services;
@@ -162,19 +173,32 @@ pub mod services;
 // ─── Theme & design system ───────────────────────────────────────────────────
 
 #[cfg(feature = "ui")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
+#[warn(missing_docs)]
 pub mod ext;
 #[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub mod icons;
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub mod styles;
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub mod theme;
 pub mod tokens;
 
 // ─── Widget layer ────────────────────────────────────────────────────────────
 
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+#[warn(missing_docs)]
 pub mod widget;
+
+#[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+#[doc = include_str!("../docs/builder-guide.md")]
+#[warn(missing_docs)]
+pub mod guide {}
 
 // ─── Application-level UI (feature-gated) ────────────────────────────────────
 
@@ -183,6 +207,7 @@ pub mod widget;
 /// These are domain-agnostic building blocks consumed by the [`ui`] module.
 /// Enable the `ui` feature to access them.
 #[cfg(feature = "ui")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub mod ui_kit;
 
 /// Application-level chart UI: drawing toolbar, top toolbar, timeframe bar,
@@ -191,14 +216,17 @@ pub mod ui_kit;
 /// Built on top of [`ui_kit`] primitives and the core chart engine. Enable the
 /// `ui` feature to access this module.
 #[cfg(feature = "ui")]
+#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub mod ui;
 
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 
 pub use model::ChartType;
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use widget::localization;
 #[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use widget::{Chart, ChartBuilder, RightClickTarget};
 
 // Compiles and runs the README's Rust snippets as doctests.

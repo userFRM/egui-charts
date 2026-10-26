@@ -69,25 +69,23 @@ impl ExchangeDays {
         let daily = data
             .windows(2)
             .all(|pair| pair[0].time.date_naive() != pair[1].time.date_naive());
-        let (zone, windows) = self
-            .0
-            .as_ref()
-            .map_or((chrono_tz::UTC, &[][..]), |(zone, windows)| {
-                (zone.tz(), windows.as_slice())
-            });
+        let (zone, windows) = self.0.as_ref().map_or(
+            (crate::model::TimezoneId::utc(), &[][..]),
+            |(zone, windows)| (zone.clone(), windows.as_slice()),
+        );
         data.iter()
             .map(|bar| {
                 if daily {
                     bar.time.date_naive()
                 } else {
-                    trading_day(bar.time, zone, windows)
+                    trading_day(bar.time, &zone, windows)
                 }
             })
             .collect()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "timezones"))]
 mod tests {
     use super::*;
     use crate::model::Session;

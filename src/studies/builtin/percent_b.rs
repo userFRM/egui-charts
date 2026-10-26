@@ -1,12 +1,12 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Percent B (%B)
-/// Shows where price is relative to Bollinger Bands
-/// 0 = at lower band, 1 = at upper band
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Percent B (%B)
+/// Shows where price is relative to Bollinger Bands
+/// 0 = at lower band, 1 = at upper band
 #[derive(Clone)]
 pub struct PercentB {
     /// Period for Bollinger Bands (typically 20)
@@ -30,6 +30,7 @@ impl PercentB {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

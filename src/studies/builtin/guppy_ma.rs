@@ -1,6 +1,5 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Guppy Multiple Moving Average (GMMA)
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -9,6 +8,7 @@ use egui::Color32;
 const SHORT_PERIODS: [usize; 6] = [3, 5, 8, 10, 12, 15];
 const LONG_PERIODS: [usize; 6] = [30, 35, 40, 45, 50, 60];
 
+/// Guppy Multiple Moving Average (GMMA)
 #[derive(Clone)]
 pub struct GuppyMA {
     values: IndicatorValues,
@@ -17,6 +17,7 @@ pub struct GuppyMA {
 }
 
 impl GuppyMA {
+    /// Create the six short and six long exponential moving averages.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),

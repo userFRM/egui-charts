@@ -16,9 +16,11 @@
 //! cargo run --example with_indicators
 //! ```
 
-use chrono::{Duration, Utc};
+mod support;
+
+use chrono::{TimeDelta, Utc};
 use egui_charts::ChartType;
-use egui_charts::model::{Bar, BarData, Timeframe};
+use egui_charts::model::{BarData, Timeframe};
 use egui_charts::studies::{BollingerBands, EMA, RSI, SMA};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
@@ -43,7 +45,7 @@ struct IndicatorApp {
 impl IndicatorApp {
     fn new() -> Self {
         // Generate enough bars for the longest indicator warmup period
-        let bars = generate_synthetic_bars(300, 50_000.0);
+        let bars = support::sample_bars(300, 50_000.0, TimeDelta::hours(1), Utc::now());
         let data = BarData::from_bars(bars);
 
         // Build chart
@@ -76,33 +78,4 @@ impl eframe::App for IndicatorApp {
             self.chart.show(ui);
         });
     }
-}
-
-// ---------------------------------------------------------------------------
-// Synthetic data generation
-// ---------------------------------------------------------------------------
-
-fn generate_synthetic_bars(count: usize, base_price: f64) -> Vec<Bar> {
-    use rand::RngExt;
-
-    let mut rng = rand::rng();
-    let mut bars = Vec::with_capacity(count);
-    let mut price = base_price;
-    let now = Utc::now();
-    let interval = Duration::hours(1);
-
-    for i in 0..count {
-        let change_pct = rng.random_range(-0.015_f64..0.015);
-        let close = price * (1.0 + change_pct);
-        let open = price;
-        let high = open.max(close) * (1.0 + rng.random_range(0.001..0.008));
-        let low = open.min(close) * (1.0 - rng.random_range(0.001..0.008));
-        let volume = 500.0 + rng.random_range(0.0..3000.0);
-
-        let time = now - interval * (count - i) as i32;
-        bars.push(Bar::new(time, open, high, low, close, volume));
-        price = close;
-    }
-
-    bars
 }

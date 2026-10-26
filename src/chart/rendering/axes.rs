@@ -484,6 +484,7 @@ pub(crate) fn render_quote_tags_with_countdown(
 /// for the host's alert, order or price-line menu. Call before handling price-axis drags.
 /// Pass the resolved label text colour as `foreground` for the hover outline.
 #[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub fn crosshair_price_action(
     ui: &mut egui::Ui,
     tag: Rect,
@@ -513,6 +514,7 @@ pub fn crosshair_price_action(
 /// A 24-point scale-settings target in the price/time-axis corner. The caller opens its
 /// existing scale menu when the returned response is clicked, before handling scale drags.
 #[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
     let target = Rect::from_center_size(corner.center(), Vec2::splat(24.0)).intersect(corner);
     let response = ui.interact(

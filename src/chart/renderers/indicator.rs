@@ -1,14 +1,14 @@
 use crate::chart::renderers::{ChartMapping, RenderContext};
 use crate::model::Bar;
 use crate::scales::PriceMap;
-/// Indicator Renderer
-/// Renders indicator lines overlay on the chart
 use crate::studies::{
     CrossDirection, Indicator, IndicatorLineStyle, PlotPattern, PlotStyle, PlotType,
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke};
 
+/// Indicator Renderer
+/// Renders indicator lines overlay on the chart
 pub struct IndicatorRenderer;
 
 /// Paint one uninterrupted study segment; callers split at missing values.

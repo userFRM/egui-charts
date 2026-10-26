@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Force Index
-/// Measures the force behind price movements using price change and volume
-/// Developed by Alexander Elder
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Force Index
+/// Measures the force behind price movements using price change and volume
+/// Developed by Alexander Elder
 #[derive(Clone)]
 pub struct ForceIndex {
     /// EMA period for smoothing (typically 13)
@@ -17,6 +17,7 @@ pub struct ForceIndex {
 }
 
 impl ForceIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -26,6 +27,7 @@ impl ForceIndex {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

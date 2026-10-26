@@ -134,7 +134,7 @@ fn profile_clock(chart: &Chart) -> BarClock {
         .filter(|i| i.session.is_none())
         .and_then(|i| i.time_zone.as_ref())
     {
-        clock = clock.with_timezone(zone.tz());
+        clock = clock.with_timezone(zone.clone());
     }
     clock
 }

@@ -1,11 +1,11 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Price Volume Trend (Enhanced) with Signal Line
-/// PVT = prev_PVT + volume * (close - prev_close) / prev_close
-/// Signal = EMA(PVT, signal_period)
 use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
+/// Price Volume Trend (Enhanced) with Signal Line
+/// PVT = prev_PVT + volume * (close - prev_close) / prev_close
+/// Signal = EMA(PVT, signal_period)
 #[derive(Clone)]
 pub struct PriceVolumeTrendStudy {
     signal_period: usize,
@@ -15,6 +15,7 @@ pub struct PriceVolumeTrendStudy {
 }
 
 impl PriceVolumeTrendStudy {
+    /// Create with `signal_period` in bars, each clamped to at least one.
     pub fn new(signal_period: usize) -> Self {
         Self {
             signal_period: signal_period.max(1),

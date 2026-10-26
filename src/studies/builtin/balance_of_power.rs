@@ -23,6 +23,7 @@ pub struct BalanceOfPower {
 }
 
 impl BalanceOfPower {
+    /// Create with `smooth_period` in bars, each clamped to at least one.
     pub fn new(smooth_period: usize) -> Self {
         Self {
             smooth_period: smooth_period.max(1),
@@ -32,6 +33,7 @@ impl BalanceOfPower {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Stochastic Momentum Index (SMI)
-/// Enhanced stochastic that measures close relative to HL range midpoint
-/// More responsive than standard stochastic
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Stochastic Momentum Index (SMI)
+/// Enhanced stochastic that measures close relative to HL range midpoint
+/// More responsive than standard stochastic
 #[derive(Clone)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
@@ -25,6 +25,8 @@ pub struct StochasticMomentumIndex {
 }
 
 impl StochasticMomentumIndex {
+    /// Create with `period`, `smooth1`, `smooth2`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(period: usize, smooth1: usize, smooth2: usize, signal_period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -40,6 +42,7 @@ impl StochasticMomentumIndex {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

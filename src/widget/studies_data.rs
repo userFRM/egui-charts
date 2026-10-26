@@ -74,7 +74,7 @@ fn clock(request: &StudyDataRequest, instrument: Option<&Instrument>, extended: 
             .clone()
             .unwrap_or_else(crate::model::TimezoneId::utc);
         if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
-            clock = clock.with_timezone(zone.tz());
+            clock = clock.with_timezone(zone.clone());
         }
         if let Some(session) = &instrument.session {
             clock = clock.with_session(zone, session.clone(), extended);

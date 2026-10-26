@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Double Stochastic
-/// Applies the stochastic formula twice for smoother signals
-/// More responsive to overbought/oversold conditions
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Double Stochastic
+/// Applies the stochastic formula twice for smoother signals
+/// More responsive to overbought/oversold conditions
 #[derive(Clone)]
 pub struct DoubleStochastic {
     /// Period for stochastic calculation
@@ -20,6 +20,7 @@ pub struct DoubleStochastic {
 }
 
 impl DoubleStochastic {
+    /// Create with `period`, `smooth` in bars, each clamped to at least one.
     pub fn new(period: usize, smooth: usize) -> Self {
         Self {
             period: period.max(1),
@@ -30,6 +31,7 @@ impl DoubleStochastic {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

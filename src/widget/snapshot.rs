@@ -461,7 +461,7 @@ mod tests {
         chart.chart_options.crosshair.vert_label_background_color = egui::Color32::RED;
         chart.chart_options.crosshair.horz_label_background_color = egui::Color32::BLUE;
         chart.chart_options.time_scale.timezone =
-            crate::scales::TimezoneMode::Timezone(chrono_tz::Europe::Zurich);
+            crate::scales::TimezoneMode::Timezone("+01:00".parse().unwrap());
         let mut drawing = Drawing::new(1, DrawingToolType::HorizontalLine);
         drawing.chart_points = vec![ChartPoint::new(3.0, 50.0)];
         drawing.completed = true;

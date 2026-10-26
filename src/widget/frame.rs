@@ -62,7 +62,7 @@ impl Chart {
                 }
                 zone => last
                     .time
-                    .with_timezone(&zone.to_tz().unwrap_or(chrono_tz::UTC))
+                    .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
                     .date_naive(),
             };
             date.and_hms_opt(0, 0, 0)?.and_utc()
@@ -117,8 +117,8 @@ impl Chart {
                 crate::scales::TimezoneMode::Exchange(
                     self.instrument()
                         .and_then(|instrument| instrument.time_zone.as_ref())
-                        .map(crate::model::TimezoneId::tz)
-                        .unwrap_or(*fallback),
+                        .cloned()
+                        .unwrap_or_else(|| fallback.clone()),
                 )
             }
             timezone => timezone.clone(),
@@ -1267,7 +1267,7 @@ impl Chart {
             .filter(|instrument| instrument.session.is_none())
             .and_then(|instrument| instrument.time_zone.as_ref())
         {
-            bar_clock = bar_clock.with_timezone(zone.tz());
+            bar_clock = bar_clock.with_timezone(zone.clone());
         }
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
@@ -2803,6 +2803,7 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Event, Pos2, Rect, Shape};
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn countdown_uses_feed_calendar_and_session_trading_dates() {
         use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
@@ -2860,7 +2861,7 @@ mod tests {
             let mut chart = chart(&[100.0], &[110.0]);
             chart.timeframe = Some(timeframe);
             chart.chart_options.time_scale.timezone =
-                crate::scales::TimezoneMode::Exchange(chrono_tz::Europe::Zurich);
+                crate::scales::TimezoneMode::Exchange("Europe/Zurich".parse().unwrap());
             chart.attach_feed(std::sync::Arc::new(Feed), 1);
             let mut instrument =
                 Instrument::new("TEST").with_time_zone(TimezoneId::named("Europe/Zurich").unwrap());
@@ -3520,7 +3521,7 @@ mod tests {
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
         chart.set_timeframe(Timeframe::Min30);
         chart.set_chart_type(ChartType::TimePriceOpportunity);
-        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let new_york = TimezoneId::fixed_offset(-5 * 3600).unwrap();
         chart.set_instrument(Some(Instrument::new("FX").with_time_zone(new_york)));
         let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
         // One initial balance bar beside each profile
@@ -3535,6 +3536,7 @@ mod tests {
         assert_eq!(profiles, 2);
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn configured_sessions_reach_breaks_and_extended_shading() {
         use crate::model::{Bar, BarData, Timeframe};
@@ -3852,7 +3854,8 @@ mod tests {
             chart.chart_options.tooltip.enabled = false;
             // Each change after a frame, as the axis menu makes them, so the time labels follow.
             frame(&ctx, &mut chart, 0.0, vec![]);
-            chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::nyse();
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone("-05:00".parse().unwrap());
             frame(&ctx, &mut chart, 0.03, vec![]);
             let options = &mut chart.chart_options.time_scale;
             options.time_visible = time_visible;
@@ -4025,6 +4028,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn hover_times_share_the_chart_zone_through_dst() {
         use crate::model::{Bar, BarData, Timeframe};
@@ -4315,22 +4319,48 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown() {
         // A host that repaints only on input or new data shows this frame until the next event.
+        use crate::model::{Bar, BarData, ChartType};
         use std::time::Duration;
-        for (server_time, axis, delay) in [
-            (false, true, Duration::MAX),
-            (true, true, Duration::from_secs(1)),
-            (true, false, Duration::MAX),
-        ] {
+        let cases = [
+            (false, true, Duration::MAX, None, ChartType::Candles),
+            (true, true, Duration::from_secs(1), None, ChartType::Candles),
+            (true, false, Duration::MAX, None, ChartType::Candles),
+        ]
+        .into_iter()
+        .chain([0, 1, 128].into_iter().flat_map(|count| {
+            [
+                ChartType::Candles,
+                ChartType::Line,
+                ChartType::Area,
+                ChartType::Heikin,
+            ]
+            .map(move |kind| (false, true, Duration::MAX, Some(count), kind))
+        }));
+        for (server_time, axis, delay, flat_count, kind) in cases {
             let ctx = egui::Context::default();
-            let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+            let mut chart = if let Some(count) = flat_count {
+                let bars = (0..count)
+                    .map(|i| {
+                        let time =
+                            chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap();
+                        Bar::new(time, 100.0, 100.0, 100.0, 100.0, 0.0)
+                    })
+                    .collect();
+                crate::widget::Chart::new(BarData::from_bars(bars))
+            } else {
+                chart(&[100.0, 104.0], &[110.0, 108.0])
+            };
+            chart.set_chart_type(kind);
             chart.set_visible_bars(50);
             chart.set_timeframe(crate::model::Timeframe::Min1);
             chart.config.show_right_axis = axis;
-            let last = chart.state.data().bars.last().unwrap().time;
-            chart.set_server_time(server_time.then(|| last + chrono::Duration::seconds(30)));
+            chart.set_server_time(server_time.then(|| {
+                chart.state.data().bars.last().unwrap().time + chrono::Duration::seconds(30)
+            }));
             let mut run = || {
                 let input = egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
@@ -4340,6 +4370,29 @@ mod tests {
                     chart.show(ui);
                 });
                 let shapes = std::mem::take(&mut output.shapes);
+                assert!(
+                    !shapes.is_empty() && shapes.len() < 2_000,
+                    "{flat_count:?} bars, {kind:?}"
+                );
+                let meshes = ctx.tessellate(shapes.clone(), output.pixels_per_point);
+                let mut vertices = 0;
+                for primitive in meshes {
+                    assert!(primitive.clip_rect.is_finite());
+                    if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                        assert!(mesh.is_valid());
+                        vertices += mesh.vertices.len();
+                        assert!(
+                            mesh.vertices.iter().all(|v| v.pos.is_finite()
+                                && v.pos.x.abs() < 1_600.0
+                                && v.pos.y.abs() < 1_200.0),
+                            "{flat_count:?} bars, {kind:?}: geometry exceeds two screen dimensions"
+                        );
+                    }
+                }
+                assert!(
+                    vertices > 0 && vertices < 100_000,
+                    "{flat_count:?} bars, {kind:?}: {vertices} vertices"
+                );
                 let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
                 output.drop_without_applying_deltas();
                 (shapes, delay)
@@ -4347,14 +4400,16 @@ mod tests {
             let (first, _) = run();
             for _ in 0..3 {
                 let (shapes, actual) = run();
-                // A drawn countdown changes its text as the clock runs.
-                if delay == Duration::MAX {
-                    assert!(
-                        shapes == first,
-                        "the first frame must draw the settled chart"
-                    );
+                if flat_count.is_none() {
+                    // A drawn countdown changes its text as the clock runs.
+                    if delay == Duration::MAX {
+                        assert!(
+                            shapes == first,
+                            "the first frame must draw the settled chart"
+                        );
+                    }
+                    assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
                 }
-                assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
             }
         }
     }

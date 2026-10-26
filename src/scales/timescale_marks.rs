@@ -993,7 +993,12 @@ mod tests {
         let bars: Vec<_> = (0..120)
             .map(|i| (start + Duration::hours(i), i as usize))
             .collect();
-        for zone in [TimezoneMode::Utc, TimezoneMode::nyse()] {
+        for zone in [
+            TimezoneMode::Utc,
+            TimezoneMode::Timezone("+05:45".parse().unwrap()),
+            #[cfg(feature = "timezones")]
+            TimezoneMode::nyse(),
+        ] {
             let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
             let generator = TickMarkGenerator::with_formatter(
                 TickMarkGeneratorConfig::default(),
@@ -1039,10 +1044,13 @@ mod tests {
                 25,
             ),
         ] {
+            let Some(zone) = crate::model::TimezoneId::named(zone) else {
+                continue;
+            };
             let midnight: DateTime<Utc> = midnight.parse().unwrap();
             let next: DateTime<Utc> = next.parse().unwrap();
             let formatter = TimeFormatterBuilder::new()
-                .with_timezone(TimezoneMode::Timezone(zone.parse().unwrap()))
+                .with_timezone(TimezoneMode::Timezone(zone.clone()))
                 .build();
             let generator = TickMarkGenerator::with_formatter(
                 TickMarkGeneratorConfig::default(),
@@ -1075,7 +1083,7 @@ mod tests {
                 .map(|i| (first + step * i as i32, i as usize))
                 .collect();
             let formatter = TimeFormatterBuilder::new()
-                .with_timezone(TimezoneMode::nyse())
+                .with_timezone(TimezoneMode::Timezone("-05:00".parse().unwrap()))
                 .build();
             let generator = TickMarkGenerator::with_formatter(
                 TickMarkGeneratorConfig::default(),

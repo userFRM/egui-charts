@@ -1,12 +1,12 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-/// Chandelier Exit
-/// Trailing stop-loss indicator based on Wilder's ATR
-/// Developed by Chuck LeBeau
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Chandelier Exit
+/// Trailing stop-loss indicator based on Wilder's ATR
+/// Developed by Chuck LeBeau
 #[derive(Clone)]
 pub struct ChandelierExit {
     /// ATR period (typically 22)
@@ -34,6 +34,7 @@ impl ChandelierExit {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

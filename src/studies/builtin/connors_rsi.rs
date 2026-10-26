@@ -26,6 +26,7 @@ pub struct ConnorsRSI {
 }
 
 impl ConnorsRSI {
+    /// Create with price RSI 3, streak RSI 2 and percent-rank period 100.
     pub fn new() -> Self {
         Self {
             rsi_period: 3,
@@ -37,6 +38,7 @@ impl ConnorsRSI {
         }
     }
 
+    /// Set price RSI, streak RSI and percent-rank periods in bars, each at least one.
     pub fn with_periods(mut self, rsi: usize, streak: usize, rank: usize) -> Self {
         self.rsi_period = rsi.max(1);
         self.streak_period = streak.max(1);
@@ -44,6 +46,7 @@ impl ConnorsRSI {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

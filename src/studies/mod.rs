@@ -54,11 +54,13 @@
 //! ```
 
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod builtin;
 mod custom;
 mod data;
 pub use data::{StudyData, StudyDataRequest};
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub mod factory;
 mod format;
 pub mod helpers;
@@ -90,9 +92,11 @@ mod stepper;
 pub use stepper::Stepper;
 
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use builtin::*;
 pub use custom::CustomIndicator;
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use factory::IndicatorFactory;
 pub use indicator_trait::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,

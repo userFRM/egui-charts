@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Mass Index
-/// Identifies trend reversals based on range expansion
-/// Developed by Donald Dorsey
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Mass Index
+/// Identifies trend reversals based on range expansion
+/// Developed by Donald Dorsey
 #[derive(Clone)]
 pub struct MassIndex {
     /// EMA period for range smoothing (typically 9)
@@ -20,6 +20,7 @@ pub struct MassIndex {
 }
 
 impl MassIndex {
+    /// Create with EMA period 9 and rolling-sum period 25.
     pub fn new() -> Self {
         Self {
             ema_period: 9,
@@ -30,12 +31,14 @@ impl MassIndex {
         }
     }
 
+    /// Set the EMA and rolling-sum periods in bars, each at least one.
     pub fn with_periods(mut self, ema_period: usize, sum_period: usize) -> Self {
         self.ema_period = ema_period.max(1);
         self.sum_period = sum_period.max(1);
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

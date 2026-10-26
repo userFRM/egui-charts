@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Elder Ray Index (Bull Power / Bear Power)
-/// Measures buying and selling pressure
-/// Developed by Alexander Elder
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Elder Ray Index (Bull Power / Bear Power)
+/// Measures buying and selling pressure
+/// Developed by Alexander Elder
 #[derive(Clone)]
 pub struct ElderRay {
     /// EMA period (typically 13)
@@ -19,6 +19,7 @@ pub struct ElderRay {
 }
 
 impl ElderRay {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -31,6 +32,7 @@ impl ElderRay {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

@@ -103,6 +103,7 @@ impl Chart {
     /// does not accept, before changing the chart. Study output references need host remapping
     /// and are rejected; hosts restore those inputs through [`Self::add_indicator`].
     #[cfg(feature = "studies")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
     pub fn paste_indicator(
         &mut self,
         text: &str,

@@ -19,6 +19,7 @@ pub struct TrendIntensityIndex {
 }
 
 impl TrendIntensityIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -28,6 +29,7 @@ impl TrendIntensityIndex {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -156,6 +158,7 @@ pub struct Qstick {
 }
 
 impl Qstick {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -165,6 +168,7 @@ impl Qstick {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

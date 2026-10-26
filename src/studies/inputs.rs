@@ -9,7 +9,12 @@ pub enum StudySource {
     /// A field or average of fields of the input bars.
     Price(PriceSource),
     /// A stable chart study id and its zero-based output column, without plot displacement.
-    Study { id: usize, plot: usize },
+    Study {
+        /// Source series identifier assigned by the chart.
+        id: usize,
+        /// Zero-based plot index within the source study.
+        plot: usize,
+    },
 }
 
 /// A study input's current value.

@@ -97,7 +97,9 @@ impl Default for PriceAxisOptions {
     }
 }
 
-/// Trading session configuration
+/// Trading session configuration.
+///
+/// Presets use exchange time zones with `timezones`, or fixed standard-time offsets without it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionConfig {
     /// Session start time in HH:MM format (24-hour)
@@ -122,7 +124,12 @@ impl Default for SessionConfig {
         Self {
             session_start: "09:30".to_string(),
             session_end: "16:00".to_string(),
-            timezone: "America/New_York".to_string(),
+            timezone: if cfg!(feature = "timezones") {
+                "America/New_York"
+            } else {
+                "-05:00"
+            }
+            .to_string(),
             show_premarket: false,
             show_postmarket: false,
             premarket_start: Some("04:00".to_string()),
@@ -142,7 +149,12 @@ impl SessionConfig {
         Self {
             session_start: "08:00".to_string(),
             session_end: "16:30".to_string(),
-            timezone: "Europe/London".to_string(),
+            timezone: if cfg!(feature = "timezones") {
+                "Europe/London"
+            } else {
+                "+00:00"
+            }
+            .to_string(),
             show_premarket: false,
             show_postmarket: false,
             premarket_start: None,
@@ -155,7 +167,12 @@ impl SessionConfig {
         Self {
             session_start: "09:00".to_string(),
             session_end: "15:00".to_string(),
-            timezone: "Asia/Tokyo".to_string(),
+            timezone: if cfg!(feature = "timezones") {
+                "Asia/Tokyo"
+            } else {
+                "+09:00"
+            }
+            .to_string(),
             show_premarket: false,
             show_postmarket: false,
             premarket_start: None,
@@ -181,7 +198,12 @@ impl SessionConfig {
         Self {
             session_start: "17:00".to_string(), // Sunday 5PM EST
             session_end: "17:00".to_string(),   // Friday 5PM EST
-            timezone: "America/New_York".to_string(),
+            timezone: if cfg!(feature = "timezones") {
+                "America/New_York"
+            } else {
+                "-05:00"
+            }
+            .to_string(),
             show_premarket: false,
             show_postmarket: false,
             premarket_start: None,

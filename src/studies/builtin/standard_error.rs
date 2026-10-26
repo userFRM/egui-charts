@@ -13,6 +13,7 @@ pub struct StandardError {
 }
 
 impl StandardError {
+    /// Create with a lookback of `period` bars, clamped to at least 2.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(2),

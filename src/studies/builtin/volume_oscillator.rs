@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Volume Oscillator
-/// Measures the difference between two volume moving avgs
-/// Similar to MACD but for volume
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Volume Oscillator
+/// Measures the difference between two volume moving avgs
+/// Similar to MACD but for volume
 #[derive(Clone)]
 pub struct VolumeOscillator {
     /// Short EMA period (typically 5)
@@ -20,6 +20,7 @@ pub struct VolumeOscillator {
 }
 
 impl VolumeOscillator {
+    /// Create with `short_period`, `long_period` in bars, each clamped to at least one.
     pub fn new(short_period: usize, long_period: usize) -> Self {
         Self {
             short_period: short_period.max(1),
@@ -30,6 +31,7 @@ impl VolumeOscillator {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

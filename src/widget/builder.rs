@@ -755,6 +755,7 @@ impl ChartBuilder {
 
     /// Set host drawing tools and built-in availability before the chart is built.
     #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     #[must_use]
     pub fn with_drawing_registry(mut self, registry: crate::drawings::DrawingToolRegistry) -> Self {
         self.drawing_registry = registry;

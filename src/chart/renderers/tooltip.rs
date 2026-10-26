@@ -1,3 +1,10 @@
+//! Tooltip Renderers
+//!
+//! Provides three tooltip variants:
+//! - Floating: Classic tooltip that follows cursor position
+//! - Tracking: Fixed horizontal bar at top of chart showing OHLC data
+//! - Magnifier: Circular zoom lens for detailed data inspection
+
 use super::context::{ChartMapping, RenderContext, StyleColors};
 use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
@@ -8,12 +15,6 @@ use crate::scales::{
 };
 use crate::styles::typography;
 use crate::theme::ThemeExt;
-/// Tooltip Renderers
-///
-/// Provides three tooltip variants:
-/// - Floating: Classic tooltip that follows cursor position
-/// - Tracking: Fixed horizontal bar at top of chart showing OHLC data
-/// - Magnifier: Circular zoom lens for detailed data inspection
 use crate::tokens::DESIGN_TOKENS;
 use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 

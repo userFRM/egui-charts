@@ -13,9 +13,11 @@
 //! cargo run --example basic_chart
 //! ```
 
-use chrono::{Duration, Utc};
+mod support;
+
+use chrono::{TimeDelta, Utc};
 use egui_charts::ChartType;
-use egui_charts::model::{Bar, BarData, PriceLine, Timeframe};
+use egui_charts::model::{BarData, PriceLine, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::widget::{Chart, ChartEvent, SeriesId};
 
@@ -40,7 +42,7 @@ struct BasicChartApp {
 impl BasicChartApp {
     fn new() -> Self {
         // Generate synthetic candlestick data
-        let bars = generate_synthetic_bars(200, 100.0);
+        let bars = support::sample_bars(200, 100.0, TimeDelta::hours(1), Utc::now());
         // Bar 150 is inside the 100 visible bars, so the line is on screen.
         let entry = PriceLine::new(bars[150].close, Theme::dark().ui.accent).with_title("Entry");
         let data = BarData::from_bars(bars);
@@ -87,41 +89,4 @@ impl eframe::App for BasicChartApp {
             }
         });
     }
-}
-
-// ---------------------------------------------------------------------------
-// Synthetic data generation
-// ---------------------------------------------------------------------------
-
-/// Generate `count` synthetic OHLCV bars starting from `base_price`.
-///
-/// Uses a simple random walk with realistic wick/body proportions and
-/// volume that correlates loosely with price movement.
-fn generate_synthetic_bars(count: usize, base_price: f64) -> Vec<Bar> {
-    use rand::RngExt;
-
-    let mut rng = rand::rng();
-    let mut bars = Vec::with_capacity(count);
-    let mut price = base_price;
-    let now = Utc::now();
-    let interval = Duration::hours(1);
-
-    for i in 0..count {
-        // Random walk for the close price
-        let change_pct = rng.random_range(-0.02_f64..0.02);
-        let close = price * (1.0 + change_pct);
-
-        // Derive OHLC from the walk
-        let open = price;
-        let high = open.max(close) * (1.0 + rng.random_range(0.001..0.01));
-        let low = open.min(close) * (1.0 - rng.random_range(0.001..0.01));
-        let volume = 1000.0 + rng.random_range(0.0..5000.0) * (1.0 + change_pct.abs() * 10.0);
-
-        let time = now - interval * (count - i) as i32;
-
-        bars.push(Bar::new(time, open, high, low, close, volume));
-        price = close;
-    }
-
-    bars
 }

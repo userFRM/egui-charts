@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Williams Accumulation/Distribution
-/// Developed by Larry Williams
-/// Measures buying and selling pressure
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Williams Accumulation/Distribution
+/// Developed by Larry Williams
+/// Measures buying and selling pressure
 #[derive(Clone)]
 pub struct WilliamsAD {
     values: IndicatorValues,
@@ -15,6 +15,7 @@ pub struct WilliamsAD {
 }
 
 impl WilliamsAD {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -23,6 +24,7 @@ impl WilliamsAD {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

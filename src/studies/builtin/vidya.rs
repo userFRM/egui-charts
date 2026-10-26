@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// VIDYA - Variable Index Dynamic Avg
-/// Adaptive moving avg that adjusts based on volatility
-/// Uses Chande Momentum Oscillator for volatility measurement
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// VIDYA - Variable Index Dynamic Avg
+/// Adaptive moving avg that adjusts based on volatility
+/// Uses Chande Momentum Oscillator for volatility measurement
 #[derive(Clone)]
 pub struct VIDYA {
     /// Period for calculation
@@ -18,6 +18,7 @@ pub struct VIDYA {
 }
 
 impl VIDYA {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -27,6 +28,7 @@ impl VIDYA {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -162,6 +164,7 @@ pub struct ZLEMA {
 }
 
 impl ZLEMA {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -171,6 +174,7 @@ impl ZLEMA {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

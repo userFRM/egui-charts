@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Chaikin Volatility
-/// Measures the rate of change of the trading range
-/// High values indicate increased volatility
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Chaikin Volatility
+/// Measures the rate of change of the trading range
+/// High values indicate increased volatility
 #[derive(Clone)]
 pub struct ChaikinVolatility {
     /// EMA period (typically 10)
@@ -20,6 +20,7 @@ pub struct ChaikinVolatility {
 }
 
 impl ChaikinVolatility {
+    /// Create with `ema_period`, `roc_period` in bars, each clamped to at least one.
     pub fn new(ema_period: usize, roc_period: usize) -> Self {
         Self {
             ema_period: ema_period.max(1),
@@ -30,6 +31,7 @@ impl ChaikinVolatility {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// TRIX - Triple Exponential Avg
-/// A momentum oscillator that shows the rate of change of a triple-smoothed EMA
-/// Filters out insignificant price movements
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// TRIX - Triple Exponential Avg
+/// A momentum oscillator that shows the rate of change of a triple-smoothed EMA
+/// Filters out insignificant price movements
 #[derive(Clone)]
 pub struct TRIX {
     period: usize,
@@ -19,6 +19,7 @@ pub struct TRIX {
 }
 
 impl TRIX {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -32,11 +33,13 @@ impl TRIX {
         }
     }
 
+    /// Set the signal EMA period in bars, clamped to at least one.
     pub fn with_signal(mut self, signal_period: usize) -> Self {
         self.signal_period = signal_period.max(1);
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

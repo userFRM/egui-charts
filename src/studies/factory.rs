@@ -1275,7 +1275,7 @@ mod tests {
             Box::new(
                 VolumeWeightedAvgPrice::new()
                     .with_anchor(VwapAnchor::Week)
-                    .with_time_zone(TimezoneId::named("Asia/Tokyo").unwrap()),
+                    .with_time_zone(TimezoneId::fixed_offset(9 * 3600).unwrap()),
             )
         };
         let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);

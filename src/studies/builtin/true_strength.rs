@@ -25,6 +25,8 @@ pub struct TrueStrengthIndex {
 }
 
 impl TrueStrengthIndex {
+    /// Create with `long_period`, `short_period`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(long_period: usize, short_period: usize, signal_period: usize) -> Self {
         Self {
             long_period: long_period.max(1),
@@ -39,6 +41,7 @@ impl TrueStrengthIndex {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

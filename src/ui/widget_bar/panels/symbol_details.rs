@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Offset, Utc};
-use chrono_tz::Tz;
 use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -16,7 +15,7 @@ use super::watchlist::{HEADER_HEIGHT, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
-use crate::model::{ExtendedSession, Instrument, Quote};
+use crate::model::{ExtendedSession, Instrument, Quote, TimezoneId};
 use crate::services::{Storage, StoreKind};
 use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
@@ -76,7 +75,7 @@ pub struct SymbolDetailsPanel {
     quote: Option<Quote>,
     /// Average daily volume over the last 30 days.
     average_volume: Option<f64>,
-    timezone: Tz,
+    timezone: TimezoneId,
     hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
     error: Option<String>,
@@ -153,7 +152,7 @@ impl SymbolDetailsPanel {
     }
 
     /// Shows update times in `timezone`, such as the chart's.
-    pub fn set_timezone(&mut self, timezone: Tz) {
+    pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
     }
 
@@ -795,12 +794,13 @@ mod tests {
 
     /// The extended-hours change is measured from the regular last price, not the previous close,
     /// and update times carry the offset of the chart's time zone on that date.
+    #[cfg(feature = "timezones")]
     #[test]
     fn extended_hours_change_from_the_regular_last_price() {
         let ctx = egui::Context::default();
         let mut panel = SymbolDetailsPanel::new();
         panel.set_instrument(&Instrument::new("QQQ").with_price_decimals(2));
-        panel.set_timezone(chrono_tz::Europe::Berlin);
+        panel.set_timezone("Europe/Berlin".parse().unwrap());
         let quote = Quote::new(704.47, 725.20, "2026-10-22T19:59:00Z".parse().unwrap());
         panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
             session: ExtendedSession::PreMarket,

@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Choppiness Index
-/// Measures market trendiness vs choppiness
-/// Values close to 100 = choppy market, values close to 0 = trending market
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Choppiness Index
+/// Measures market trendiness vs choppiness
+/// Values close to 100 = choppy market, values close to 0 = trending market
 #[derive(Clone)]
 pub struct ChoppinessIndex {
     /// Lookback period (typically 14)
@@ -17,6 +17,7 @@ pub struct ChoppinessIndex {
 }
 
 impl ChoppinessIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -26,6 +27,7 @@ impl ChoppinessIndex {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

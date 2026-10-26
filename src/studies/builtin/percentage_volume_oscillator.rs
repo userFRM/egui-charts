@@ -29,6 +29,8 @@ pub struct PercentageVolumeOscillator {
 }
 
 impl PercentageVolumeOscillator {
+    /// Create with `short_period`, `long_period`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(short_period: usize, long_period: usize, signal_period: usize) -> Self {
         Self {
             short_period: short_period.max(1),
@@ -44,6 +46,7 @@ impl PercentageVolumeOscillator {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.set_colors(colors);
         self

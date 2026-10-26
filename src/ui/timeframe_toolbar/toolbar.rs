@@ -611,6 +611,8 @@ mod tests {
             (Theme::dark(), 640.0, 14.0, "America/New_York"),
             (Theme::light(), 320.0, 14.0, "UTC"),
             (Theme::dark(), 320.0, 14.0, "America/New_York"),
+            (Theme::light(), 320.0, 14.0, "+23:59:59"),
+            (Theme::dark(), 320.0, 14.0, "-23:59:59"),
         ] {
             for hidden in [
                 vec![],

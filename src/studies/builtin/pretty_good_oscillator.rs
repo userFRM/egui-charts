@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Pretty Good Oscillator (PGO)
-/// Measures price distance from moving avg in ATR units
-/// Values > 3 or < -3 indicate potential reversal
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Pretty Good Oscillator (PGO)
+/// Measures price distance from moving avg in ATR units
+/// Values > 3 or < -3 indicate potential reversal
 #[derive(Clone)]
 pub struct PrettyGoodOscillator {
     /// Period for calculations (typically 14)
@@ -17,6 +17,7 @@ pub struct PrettyGoodOscillator {
 }
 
 impl PrettyGoodOscillator {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -26,6 +27,7 @@ impl PrettyGoodOscillator {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

@@ -15,6 +15,7 @@ pub struct AnchoredVWAP {
 }
 
 impl AnchoredVWAP {
+    /// Create with a zero-based anchor bar index for volume-weighted averaging.
     pub fn new(anchor_bar: usize) -> Self {
         Self {
             anchor_bar,

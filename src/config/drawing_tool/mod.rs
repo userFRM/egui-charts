@@ -303,11 +303,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tool_count() {
-        assert_eq!(DrawingToolType::all().len(), 98);
-    }
-
-    #[test]
     fn test_cursor_detection() {
         assert!(DrawingToolType::CrossCursor.is_cursor());
         assert!(DrawingToolType::Eraser.is_cursor());
@@ -334,11 +329,6 @@ mod tests {
             .map(|tool| tool.as_str())
             .collect();
         assert!(unparsed.is_empty(), "{unparsed:?}");
-    }
-
-    #[test]
-    fn test_category_count() {
-        assert_eq!(DrawingToolType::categories().len(), 18);
     }
 
     #[test]

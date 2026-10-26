@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Price Channel
-/// Simple highest high and lowest low channel
-/// Also known as "N-bar high/low"
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Price Channel
+/// Simple highest high and lowest low channel
+/// Also known as "N-bar high/low"
 #[derive(Clone)]
 pub struct PriceChannel {
     /// Lookback period
@@ -18,6 +18,7 @@ pub struct PriceChannel {
 }
 
 impl PriceChannel {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -31,6 +32,7 @@ impl PriceChannel {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

@@ -1,12 +1,12 @@
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Coppock Curve
-/// A momentum indicator originally designed to identify buying opportunities in stock indices
-/// Uses a weighted moving avg of the sum of two ROC periods
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Coppock Curve
+/// A momentum indicator originally designed to identify buying opportunities in stock indices
+/// Uses a weighted moving avg of the sum of two ROC periods
 #[derive(Clone)]
 pub struct CoppockCurve {
     /// Long ROC period (typically 14)
@@ -21,6 +21,7 @@ pub struct CoppockCurve {
 }
 
 impl CoppockCurve {
+    /// Create with rate-of-change periods 14 and 11 and weighted-average period 10.
     pub fn new() -> Self {
         Self {
             long_roc: 14,
@@ -32,6 +33,7 @@ impl CoppockCurve {
         }
     }
 
+    /// Set the long and short rate-of-change and weighted-average periods, each at least one.
     pub fn with_periods(mut self, long_roc: usize, short_roc: usize, wma: usize) -> Self {
         self.long_roc = long_roc.max(1);
         self.short_roc = short_roc.max(1);
@@ -39,6 +41,7 @@ impl CoppockCurve {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

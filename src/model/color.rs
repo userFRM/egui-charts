@@ -4,8 +4,6 @@
 //! serialization-friendly format that integrates with both egui's `Color32`
 //! and CSS-style hex strings.
 
-/// Color type abstraction.
-/// Provides a generic way for users to specify colors in various formats.
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 

@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Volume Price Trend (VPT)
-/// Cumulative volume indicator that considers price changes
-/// Similar to OBV but uses percentage changes
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Volume Price Trend (VPT)
+/// Cumulative volume indicator that considers price changes
+/// Similar to OBV but uses percentage changes
 #[derive(Clone)]
 pub struct VolumePriceTrend {
     values: IndicatorValues,
@@ -15,6 +15,7 @@ pub struct VolumePriceTrend {
 }
 
 impl VolumePriceTrend {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -23,6 +24,7 @@ impl VolumePriceTrend {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -168,6 +170,7 @@ pub struct NegativeVolumeIndex {
 }
 
 impl NegativeVolumeIndex {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -177,6 +180,7 @@ impl NegativeVolumeIndex {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -264,6 +268,7 @@ pub struct PositiveVolumeIndex {
 }
 
 impl PositiveVolumeIndex {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -273,6 +278,7 @@ impl PositiveVolumeIndex {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

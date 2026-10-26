@@ -24,6 +24,7 @@ pub struct RainbowOscillator {
 }
 
 impl RainbowOscillator {
+    /// Create with `levels` moving averages and a base period in bars, each at least one.
     pub fn new(levels: usize, base_period: usize) -> Self {
         Self {
             levels: levels.max(1),
@@ -34,6 +35,7 @@ impl RainbowOscillator {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

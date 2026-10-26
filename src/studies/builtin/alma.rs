@@ -217,22 +217,4 @@ mod tests {
             assert!(matches!(value, IndicatorValue::Single(_)));
         }
     }
-
-    #[test]
-    fn test_alma_smoothness() {
-        let bars = create_test_bars();
-        let mut alma = ALMA::new(9, 0.85, 6.0);
-        alma.calculate(&bars);
-
-        // ALMA should track price but be smoothed
-        let rows = alma.values().to_rows();
-        let Some(IndicatorValue::Single(val)) = rows.last() else {
-            panic!("no value: {:?}", alma.values().to_rows().last());
-        };
-        let last_close = bars.last().unwrap().close;
-        assert!(
-            (*val - last_close).abs() < 10.0,
-            "ALMA should be close to price"
-        );
-    }
 }

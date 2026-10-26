@@ -1,13 +1,13 @@
 use crate::model::Bar;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::tokens::DESIGN_TOKENS;
+use egui::Color32;
+
 /// Typical Price (HLC/3)
 /// Simple avg of high, low, close
 /// Also known as pivot point
 /// Note: Same formula as [`HLC3`](super::HLC3) in average_price; kept for
 /// backwards compatibility under the "TP" indicator name.
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct TypicalPrice {
     values: IndicatorValues,
@@ -16,6 +16,7 @@ pub struct TypicalPrice {
 }
 
 impl TypicalPrice {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -24,6 +25,7 @@ impl TypicalPrice {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -98,6 +100,7 @@ pub struct WeightedClose {
 }
 
 impl WeightedClose {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -106,6 +109,7 @@ impl WeightedClose {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -182,6 +186,7 @@ pub struct MedianPrice {
 }
 
 impl MedianPrice {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -190,6 +195,7 @@ impl MedianPrice {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

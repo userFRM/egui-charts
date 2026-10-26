@@ -1,11 +1,11 @@
 use crate::model::Bar;
-/// Volume Rate of Change (VROC)
-/// Measures the rate of change in volume over a specified period
-/// Helps identify volume trends and divergences
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Volume Rate of Change (VROC)
+/// Measures the rate of change in volume over a specified period
+/// Helps identify volume trends and divergences
 #[derive(Clone)]
 pub struct VolumeRateOfChange {
     /// Lookback period
@@ -16,6 +16,7 @@ pub struct VolumeRateOfChange {
 }
 
 impl VolumeRateOfChange {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -25,6 +26,7 @@ impl VolumeRateOfChange {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

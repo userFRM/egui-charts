@@ -28,6 +28,7 @@ pub struct KDJ {
 }
 
 impl KDJ {
+    /// Create with `period`, `k_smooth`, `d_smooth` in bars, each clamped to at least one.
     pub fn new(period: usize, k_smooth: usize, d_smooth: usize) -> Self {
         Self {
             period: period.max(1),
@@ -43,6 +44,7 @@ impl KDJ {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

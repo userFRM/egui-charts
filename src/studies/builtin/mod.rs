@@ -149,6 +149,7 @@ mod std_dev;
 
 // Support/Resistance indicators
 #[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod gaps;
 mod pivot_points;
@@ -350,6 +351,7 @@ pub use std_dev::StandardDeviation;
 
 // Re-exports - Support/Resistance indicators
 #[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use gaps::Gaps;
 pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};

@@ -91,6 +91,24 @@ impl Default for SettingsDialog {
 impl SettingsDialog {
     pub fn new() -> Self {
         let settings = ChartSettingsState::default();
+        let timezones: &[&str] = if cfg!(feature = "timezones") {
+            &[
+                "UTC",
+                "America/New_York",
+                "America/Chicago",
+                "America/Los_Angeles",
+                "Europe/London",
+                "Europe/Paris",
+                "Asia/Tokyo",
+                "Asia/Hong_Kong",
+                "Asia/Singapore",
+                "Australia/Sydney",
+            ]
+        } else {
+            &[
+                "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
+            ]
+        };
         Self {
             is_open: false,
             active_tab: SettingsTab::Symbol,
@@ -123,18 +141,7 @@ impl SettingsDialog {
             template_menu_open: false,
             templates: TemplateStore::new(StoreKind::ChartTemplates),
             save_name: None,
-            timezones: vec![
-                "UTC".to_string(),
-                "America/New_York".to_string(),
-                "America/Chicago".to_string(),
-                "America/Los_Angeles".to_string(),
-                "Europe/London".to_string(),
-                "Europe/Paris".to_string(),
-                "Asia/Tokyo".to_string(),
-                "Asia/Hong_Kong".to_string(),
-                "Asia/Singapore".to_string(),
-                "Australia/Sydney".to_string(),
-            ],
+            timezones: timezones.iter().map(|zone| (*zone).to_owned()).collect(),
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             execution_sounds: Vec::new(),
@@ -640,6 +647,26 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn offered_time_zones_and_session_presets_are_available() {
+        use crate::config::SessionConfig;
+        let mut zones = SettingsDialog::new().timezones;
+        zones.extend(
+            [
+                SessionConfig::default(),
+                SessionConfig::nyse(),
+                SessionConfig::lse(),
+                SessionConfig::tse(),
+                SessionConfig::crypto_24_7(),
+                SessionConfig::forex(),
+            ]
+            .map(|session| session.timezone),
+        );
+        for zone in zones {
+            assert!(zone.parse::<crate::model::TimezoneId>().is_ok(), "{zone}");
+        }
+    }
 
     #[test]
     fn save_as_prompts_for_a_name_without_saving_automatically() {

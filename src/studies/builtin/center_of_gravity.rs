@@ -1,11 +1,11 @@
 use crate::model::Bar;
-/// Center of Gravity Oscillator
-/// Developed by John Ehlers
-/// Uses a weighted moving avg to identify reversal points
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Center of Gravity Oscillator
+/// Developed by John Ehlers
+/// Uses a weighted moving avg to identify reversal points
 #[derive(Clone)]
 pub struct CenterOfGravity {
     /// Lookback period (typically 10)
@@ -17,6 +17,7 @@ pub struct CenterOfGravity {
 }
 
 impl CenterOfGravity {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -29,6 +30,7 @@ impl CenterOfGravity {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

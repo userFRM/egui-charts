@@ -30,9 +30,12 @@ pub(crate) use volume_bubbles::VolumeBubbles;
 pub use volume_bubbles::{BubbleColor, BubbleScalingMode, VolumeBubblesConfig};
 
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use footprint::render_footprint_studies;
 
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod trade_profile;
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use trade_profile::render_trade_profiles;

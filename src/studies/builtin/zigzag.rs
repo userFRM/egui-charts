@@ -87,11 +87,13 @@ impl ZigZag {
         &self.pivots
     }
 
+    /// Select high/low, close or typical prices for reversal detection.
     pub fn with_mode(mut self, mode: ZigZagMode) -> Self {
         self.mode = mode;
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

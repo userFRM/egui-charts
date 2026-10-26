@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Vortex Indicator (VI)
-/// Identifies trend direction and strength
-/// Uses True Range and directional movement concepts
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Vortex Indicator (VI)
+/// Identifies trend direction and strength
+/// Uses True Range and directional movement concepts
 #[derive(Clone)]
 pub struct VortexIndicator {
     /// Lookback period (typically 14)
@@ -18,6 +18,7 @@ pub struct VortexIndicator {
 }
 
 impl VortexIndicator {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -30,6 +31,7 @@ impl VortexIndicator {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

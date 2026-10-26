@@ -4,8 +4,6 @@
 //! It tracks which bars are visible, manages price auto-scaling, and maintains
 //! a zoom-history stack for undo/redo.
 
-/// ChartState Backend - Pure state management (no rendering).
-/// Combines data with coordinate systems.
 use super::{Bar, BarData, TimeScale};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::Indicator;

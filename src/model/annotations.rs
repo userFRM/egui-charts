@@ -4,10 +4,6 @@
 //! [`Marker`](super::Marker) API used for signal arrows). They are
 //! serializable and typically managed through the chart's drawing tools.
 
-/// Chart Annotations and Markers.
-///
-/// Allows placing visual markers and labels at specific price/time points on the chart.
-/// Useful for highlighting important events, price levels, or analysis points.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;

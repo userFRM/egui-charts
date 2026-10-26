@@ -52,6 +52,7 @@ mod symbol;
 mod time_scale_event;
 mod timeframe;
 mod timescale;
+mod timezone;
 pub mod tpo;
 mod trading;
 
@@ -76,7 +77,7 @@ pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType, TimezoneId};
+pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
@@ -109,6 +110,7 @@ pub use symbol::Symbol;
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
+pub use timezone::{TimezoneId, TimezoneOffset};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,

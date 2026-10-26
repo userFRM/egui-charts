@@ -677,7 +677,7 @@ mod tests {
         let mut session = VolProfileSession::new(2);
         session
             .set_instrument(Some(&Instrument::new("SYNTH").with_time_zone(
-                crate::model::TimezoneId::named("America/New_York").unwrap(),
+                crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
             )));
         session.calculate(&bars);
         let got = session.volume_profiles(1..3);

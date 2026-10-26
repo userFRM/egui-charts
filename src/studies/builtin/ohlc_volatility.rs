@@ -1,11 +1,11 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// OHLC Volatility (Garman-Klass)
-/// Uses OHLC data for more efficient volatility estimation
-/// GK = 0.5 * ln(H/L)^2 - (2*ln(2)-1) * ln(C/O)^2
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// OHLC Volatility (Garman-Klass)
+/// Uses OHLC data for more efficient volatility estimation
+/// GK = 0.5 * ln(H/L)^2 - (2*ln(2)-1) * ln(C/O)^2
 #[derive(Clone)]
 pub struct OhlcVolatility {
     period: usize,
@@ -15,6 +15,7 @@ pub struct OhlcVolatility {
 }
 
 impl OhlcVolatility {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),

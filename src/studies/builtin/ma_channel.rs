@@ -1,10 +1,10 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Moving Average Channel
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Moving Average Channel
 #[derive(Clone)]
 pub struct MAChannel {
     period: usize,

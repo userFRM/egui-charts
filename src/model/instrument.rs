@@ -1,8 +1,7 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use super::Timeframe;
+use super::{Timeframe, TimezoneId};
 use chrono::{NaiveDate, NaiveTime, Weekday};
-use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
@@ -206,31 +205,6 @@ pub enum DataStatus {
     Delayed,
     /// Updates once a day, after the close.
     EndOfDay,
-}
-
-/// A time zone.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TimezoneId(Tz);
-
-impl TimezoneId {
-    /// Coordinated Universal Time.
-    pub fn utc() -> Self {
-        Self(Tz::UTC)
-    }
-
-    /// The zone of an IANA name such as "America/New_York", if known.
-    pub fn named(name: &str) -> Option<Self> {
-        name.parse().ok().map(Self)
-    }
-
-    /// The IANA name, such as "America/New_York" or "UTC".
-    pub fn name(&self) -> &str {
-        self.0.name()
-    }
-
-    pub(crate) fn tz(&self) -> Tz {
-        self.0
-    }
 }
 
 /// Trading hours: the windows in which an instrument trades.

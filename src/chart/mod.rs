@@ -50,5 +50,6 @@ pub use renderers::{
 #[cfg(feature = "ui")]
 pub(crate) use renderers::{decimals, to_step};
 #[cfg(feature = "icons")]
+#[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub use rendering::axes::{axis_settings_button, crosshair_price_action};
 pub use rendering::axes::{price_axis_width, render_quote_tags};

@@ -65,6 +65,7 @@ impl DetrendedPriceOscillator {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

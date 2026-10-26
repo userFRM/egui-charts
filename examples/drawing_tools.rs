@@ -17,10 +17,12 @@
 //! cargo run --example drawing_tools
 //! ```
 
-use chrono::{Duration, Utc};
+mod support;
+
+use chrono::{TimeDelta, Utc};
 use egui_charts::ChartType;
 use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
-use egui_charts::model::{Bar, BarData, Timeframe};
+use egui_charts::model::{BarData, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::widget::Chart;
 
@@ -43,7 +45,7 @@ struct DrawingApp {
 
 impl DrawingApp {
     fn new() -> Self {
-        let bars = generate_synthetic_bars(200, 2_000.0);
+        let bars = support::sample_bars(200, 2_000.0, TimeDelta::hours(4), Utc::now());
         let data = BarData::from_bars(bars);
 
         let mut chart = Chart::new(data);
@@ -94,33 +96,4 @@ impl eframe::App for DrawingApp {
             self.chart.show(ui);
         });
     }
-}
-
-// ---------------------------------------------------------------------------
-// Synthetic data generation
-// ---------------------------------------------------------------------------
-
-fn generate_synthetic_bars(count: usize, base_price: f64) -> Vec<Bar> {
-    use rand::RngExt;
-
-    let mut rng = rand::rng();
-    let mut bars = Vec::with_capacity(count);
-    let mut price = base_price;
-    let now = Utc::now();
-    let interval = Duration::hours(4);
-
-    for i in 0..count {
-        let change_pct = rng.random_range(-0.02_f64..0.02);
-        let close = price * (1.0 + change_pct);
-        let open = price;
-        let high = open.max(close) * (1.0 + rng.random_range(0.001..0.01));
-        let low = open.min(close) * (1.0 - rng.random_range(0.001..0.01));
-        let volume = 200.0 + rng.random_range(0.0..2000.0);
-
-        let time = now - interval * (count - i) as i32;
-        bars.push(Bar::new(time, open, high, low, close, volume));
-        price = close;
-    }
-
-    bars
 }

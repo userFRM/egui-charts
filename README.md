@@ -203,7 +203,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
 | Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets with a depth ladder and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
-The default features are `ui`, which enables `icons`, `widget`, `studies` and `drawings`, and `locales`.
+The default features are `ui`, `locales` and `timezones`. `ui` enables `icons`, `widget`, `studies` and `drawings`.
 
 ```toml
 # The chart with toolbars, panels, dialogs, icons and built-in studies (default)
@@ -219,6 +219,8 @@ egui-charts = { version = "0.2", default-features = false, features = ["widget",
 egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
 ```
 
+`timezones` (on by default) supplies IANA zones and daylight-saving rules through the optional `chrono-tz` dependency. Without it, UTC, system local time and fixed offsets remain available: `TimezoneMode::Timezone("+05:45".parse()?)` and `TimezoneId::fixed_offset(5 * 3600 + 45 * 60)` need no database. Named zones are rejected when the feature is off; Trading Sessions uses fixed standard-time offsets (+09:00, +00:00 and -05:00) for its default sessions, which the host can override with `with_session`; the exchange presets (`TimezoneMode::{nyse,lse,jse,hkex}` and `DailySessionProvider::nyse`) require it. Session configuration presets and the settings time zone list use fixed offsets when the feature is off. Add `"timezones"` to the feature list above when the host supplies named exchange zones. Time zone APIs use the crate's `model::TimezoneId`; callers no longer depend on a particular `chrono-tz` version. Persisted named-zone strings keep their format.
+
 `locales` names months and weekdays and the AM/PM marker in the language given to `Chart::set_locale` or `LocaleTimeFormatter`, from chrono's locale tables; the builds above with `default-features = false` leave it out and write those names in English unless they list it. `serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
 
 ## Performance
@@ -229,16 +231,44 @@ On Linux with glibc, freeing large tessellation buffers can cause heap trimming 
 
 ## Connect your data
 
+The [builder guide](docs/builder-guide.md), also included in the
+[API documentation](https://docs.rs/egui-charts/latest/egui_charts/guide/), covers
+history, streaming, custom studies, drawing persistence, synchronized charts and
+host strategy and script integration. docs.rs builds every feature; module badges
+show the feature needed to use each optional part.
+
 Implement `Datafeed` to connect any market data provider, as in the [terminal example](#a-terminal-around-it); only `history` is required. The chart calls the feed from `show` on the UI thread and never waits for it: answer through the `Reply` and push into the `Sink` from any thread, runtime or browser task. The chart asks for older pages as the user scrolls back, and unsubscribes when the symbol or timeframe changes. [`examples/live_feed.rs`](examples/live_feed.rs) serves history from memory and streams synthetic trades.
+
+## Workflow examples
+
+Run each with `cargo run --example <name>`. CI compiles them through the existing
+`--all-targets` checks. The standalone historical examples share generated OHLCV
+data in `examples/support`; the demo separately builds its history from executions.
+
+| Example | Workflow |
+|---|---|
+| [basic_chart](examples/basic_chart.rs) | Historical bars, a price line and click events |
+| [live_feed](examples/live_feed.rs) | Paged history and a cancellable stream of executions |
+| [with_indicators](examples/with_indicators.rs) | Built-in overlays and study panes |
+| [custom_indicator](examples/custom_indicator.rs) | A calculation closure with explicit warm-up values |
+| [drawing_tools](examples/drawing_tools.rs) | Programmatic and interactive annotations |
+| [drawing_persistence](examples/drawing_persistence.rs) | Save and load timestamped drawing JSON, reporting errors |
+| [backtesting](examples/backtesting.rs) | A host buy-and-hold run, fees, equity and strategy metrics; also runs with `--no-default-features` |
+| [scripting](examples/scripting.rs) | A minimal host expression evaluator connected to a custom study |
+| [synchronized_charts](examples/synchronized_charts.rs) | Crosshairs and viewports shared by UTC across 1-hour and 4-hour charts |
+
+The host owns market data, durable storage, strategy execution and its scripting
+runtime. The scripting example accepts only `close - close[N]`; it demonstrates
+the adapter and error handling, and adds no language support to the library.
 
 ## Platform support
 
 | Target | Status |
 |---|---|
 | Linux x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| WebAssembly (wasm32-unknown-unknown) | The demo is built for it in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
+| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| WebAssembly (wasm32-unknown-unknown) | Widget tests run in headless Chrome; the demo is built in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
 
 Other targets are expected to work but are not built in CI. The chart is an egui widget, so it runs wherever egui runs: in an eframe window on Linux, macOS and Windows, or in the browser through eframe's web runner.
 

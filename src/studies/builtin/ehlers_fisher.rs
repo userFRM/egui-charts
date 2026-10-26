@@ -1,15 +1,15 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::tokens::DESIGN_TOKENS;
+use egui::Color32;
+
 /// Ehlers Fisher Transform (John Ehlers version)
 /// Converts prices into a Gaussian normal distribution
 /// More responsive than standard Fisher Transform
 ///
 /// Related: [`FisherTransform`](super::FisherTransform) clamps the smoothed
 /// value instead of the normalized price.
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct EhlersFisher {
     /// Lookback period (typically 10)
@@ -21,6 +21,7 @@ pub struct EhlersFisher {
 }
 
 impl EhlersFisher {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -33,6 +34,7 @@ impl EhlersFisher {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

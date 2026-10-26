@@ -127,7 +127,7 @@ pub enum SessionBreakType {
 
 /// Daily session provider with a configurable break hour.
 ///
-/// Detects day boundaries at the break hour and minute, in its zone (UTC by default). Use [`nyse`](Self::nyse) for a preset
+/// Detects day boundaries at the break hour and minute, in its zone (UTC by default). Use `nyse` (with `timezones`) for a preset
 /// matching NYSE regular-session close in exchange time, or [`continuous`](Self::continuous)
 /// for 24/7 markets (midnight UTC).
 #[derive(Debug, Clone)]
@@ -157,6 +157,7 @@ impl DailySessionProvider {
     }
 
     /// Create provider for NYSE regular session (9:30 AM - 4:00 PM ET)
+    #[cfg(feature = "timezones")]
     pub fn nyse() -> Self {
         Self {
             time_zone: TimezoneId::named("America/New_York").unwrap(),
@@ -177,11 +178,11 @@ impl SessionProvider for DailySessionProvider {
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak> {
         let day = |time: &DateTime<Utc>| {
-            let local = local_time(self.time_zone.tz(), *time);
+            let local = local_time(self.time_zone.clone(), *time);
             let clock =
                 NaiveTime::from_hms_opt(self.break_hour.min(23), self.break_minute.min(59), 0)
                     .unwrap();
-            let boundary = local_instant(self.time_zone.tz(), local.date().and_time(clock));
+            let boundary = local_instant(self.time_zone.clone(), local.date().and_time(clock));
             if boundary.is_some_and(|boundary| *time < boundary) {
                 local.date().pred_opt().unwrap_or(local.date())
             } else {
@@ -239,7 +240,7 @@ impl ExchangeSessionProvider {
         if self.local_zone {
             local_time(chrono::Local, time)
         } else {
-            local_time(self.time_zone.tz(), time)
+            local_time(self.time_zone.clone(), time)
         }
     }
 
@@ -247,7 +248,7 @@ impl ExchangeSessionProvider {
         if self.local_zone {
             local_instant(chrono::Local, time)
         } else {
-            local_instant(self.time_zone.tz(), time)
+            local_instant(self.time_zone.clone(), time)
         }
     }
 
@@ -259,7 +260,6 @@ impl ExchangeSessionProvider {
                 .map(|time| time.to_utc())
         } else {
             self.time_zone
-                .tz()
                 .from_local_datetime(&time)
                 .latest()
                 .map(|time| time.to_utc())
@@ -776,15 +776,25 @@ mod tests {
                 "2024-03-14T20:59:59Z",
                 "2024-03-14T21:00:00Z",
             ),
+            #[cfg(feature = "timezones")]
             (
                 DailySessionProvider::nyse(),
                 "2024-03-11T19:59:59Z",
                 "2024-03-11T20:00:00Z",
             ),
+            #[cfg(feature = "timezones")]
             (
                 DailySessionProvider::nyse(),
                 "2024-11-04T20:59:59Z",
                 "2024-11-04T21:00:00Z",
+            ),
+            (
+                DailySessionProvider {
+                    time_zone: TimezoneId::fixed_offset(5 * 3600 + 45 * 60).unwrap(),
+                    ..DailySessionProvider::new(16, 0)
+                },
+                "2024-03-14T10:14:59Z",
+                "2024-03-14T10:15:00Z",
             ),
             (
                 DailySessionProvider::continuous(),
@@ -807,6 +817,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn exchange_dates_follow_dst_windows_and_holidays() {
         use crate::model::SessionWindow;

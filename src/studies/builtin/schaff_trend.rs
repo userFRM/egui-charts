@@ -2,13 +2,13 @@ use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
 use crate::studies::stepper::{rolling_max, rolling_min};
-/// Schaff Trend Cycle (STC)
-/// Combines MACD with stochastic to create a faster, more accurate oscillator
-/// Oscillates between 0 and 100
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Schaff Trend Cycle (STC)
+/// Combines MACD with stochastic to create a faster, more accurate oscillator
+/// Oscillates between 0 and 100
 #[derive(Clone)]
 pub struct SchaffTrendCycle {
     /// MACD short period (typically 23)
@@ -23,6 +23,7 @@ pub struct SchaffTrendCycle {
 }
 
 impl SchaffTrendCycle {
+    /// Create with MACD periods 23 and 50 and cycle length 10.
     pub fn new() -> Self {
         Self {
             macd_short: 23,
@@ -34,6 +35,7 @@ impl SchaffTrendCycle {
         }
     }
 
+    /// Set the short and long MACD periods and cycle length in bars, each at least one.
     pub fn with_periods(mut self, short: usize, long: usize, cycle: usize) -> Self {
         self.macd_short = short.max(1);
         self.macd_long = long.max(1);
@@ -41,6 +43,7 @@ impl SchaffTrendCycle {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

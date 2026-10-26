@@ -15,6 +15,7 @@ pub struct MajorityRule {
 }
 
 impl MajorityRule {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),

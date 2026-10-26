@@ -27,6 +27,7 @@ pub struct KlingerOscillator {
 }
 
 impl KlingerOscillator {
+    /// Create with short EMA 34, long EMA 55 and signal EMA 13.
     pub fn new() -> Self {
         Self {
             short_period: 34,
@@ -41,6 +42,7 @@ impl KlingerOscillator {
         }
     }
 
+    /// Set the short, long and signal EMA periods in bars, each at least one.
     pub fn with_periods(mut self, short: usize, long: usize, signal: usize) -> Self {
         self.short_period = short.max(1);
         self.long_period = long.max(1);
@@ -48,6 +50,7 @@ impl KlingerOscillator {
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

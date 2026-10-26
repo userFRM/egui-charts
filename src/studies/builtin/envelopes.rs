@@ -1,10 +1,10 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Moving Average Envelopes
 use crate::studies::{Indicator, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Moving Average Envelopes
 #[derive(Clone)]
 pub struct Envelopes {
     period: usize,

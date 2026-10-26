@@ -3,9 +3,6 @@
 //! Controls the crosshair mode (free, or snapping to values), visual style
 //! (Full / Dot / Arrow / Hidden), the style of each line, and colors.
 
-/// Crosshair Options.
-///
-/// Controls crosshair behavior and appearance.
 use crate::theme::ThemeExt;
 use egui::Color32;
 

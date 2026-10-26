@@ -1,7 +1,8 @@
+//! Avg Price Indicators
+//! Simple price calculations useful for analysis
+
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Avg Price Indicators
-/// Simple price calculations useful for analysis
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -15,6 +16,7 @@ pub struct OHLC4 {
 }
 
 impl OHLC4 {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -23,6 +25,7 @@ impl OHLC4 {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -99,6 +102,7 @@ pub struct HLC3 {
 }
 
 impl HLC3 {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -107,6 +111,7 @@ impl HLC3 {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -183,6 +188,7 @@ pub struct HL2 {
 }
 
 impl HL2 {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -191,6 +197,7 @@ impl HL2 {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -265,6 +272,7 @@ pub struct TrueRange {
 }
 
 impl TrueRange {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
@@ -273,6 +281,7 @@ impl TrueRange {
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self

@@ -11,6 +11,8 @@
 //! cargo run --example live_feed
 //! ```
 
+mod support;
+
 use chrono::{DurationRound, TimeDelta, Utc};
 use egui_charts::ChartBuilder;
 use egui_charts::chart::overlays::VolumeBubblesConfig;
@@ -75,19 +77,8 @@ struct SyntheticFeed {
 
 impl SyntheticFeed {
     fn new(count: usize) -> Self {
-        let mut rng = rand::rng();
         let now = Utc::now().duration_trunc(TimeDelta::minutes(1)).unwrap();
-        let mut price = 100.0_f64;
-        let bars = (0..count)
-            .map(|i| {
-                let open = price;
-                price *= 1.0 + rng.random_range(-0.004..0.004);
-                let high = open.max(price) * (1.0 + rng.random_range(0.0..0.002));
-                let low = open.min(price) * (1.0 - rng.random_range(0.0..0.002));
-                let time = now - TimeDelta::minutes((count - i) as i64);
-                Bar::new(time, open, high, low, price, rng.random_range(10.0..500.0))
-            })
-            .collect();
+        let bars = support::sample_bars(count, 100.0, TimeDelta::minutes(1), now);
         Self { bars }
     }
 }

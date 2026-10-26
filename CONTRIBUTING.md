@@ -46,7 +46,7 @@ To add one: add a `Theme::<name>()` constructor in `src/theme/presets.rs` and ad
 
 ## Development setup
 
-Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.95**. CI runs the library and doc tests on Linux, macOS and Windows with current `stable` and on Linux with `1.95.0`.
+Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.95**. CI runs the library and doc tests on Linux, macOS and Windows with current `stable` and `1.95.0`. Library tests run with default features, all features and no default features. Widget tests also run in headless Chrome with all features and with the widget alone.
 
 For the web demo you also need the WebAssembly target and [Trunk](https://trunkrs.dev/):
 

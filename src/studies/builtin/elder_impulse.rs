@@ -1,9 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Elder Impulse System
-/// Combines EMA slope and MACD histogram for trend signals
-/// Green = bullish, Red = bearish, Blue = neutral
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -19,6 +16,9 @@ pub enum ImpulseSignal {
     Neutral,
 }
 
+/// Elder Impulse System
+/// Combines EMA slope and MACD histogram for trend signals
+/// Green = bullish, Red = bearish, Blue = neutral
 #[derive(Clone)]
 pub struct ElderImpulseSystem {
     /// EMA period (typically 13)
@@ -36,6 +36,8 @@ pub struct ElderImpulseSystem {
 }
 
 impl ElderImpulseSystem {
+    /// Create with `ema_period`, `macd_fast`, `macd_slow`, `macd_signal` in bars, each clamped
+    /// to at least one.
     pub fn new(ema_period: usize, macd_fast: usize, macd_slow: usize, macd_signal: usize) -> Self {
         Self {
             ema_period: ema_period.max(1),
@@ -52,6 +54,7 @@ impl ElderImpulseSystem {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

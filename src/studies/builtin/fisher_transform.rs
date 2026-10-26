@@ -1,12 +1,12 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-/// Fisher Transform
-/// Converts prices into a Gaussian normal distribution
-/// Creates sharper turning points for identifying reversals
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Fisher Transform
+/// Converts prices into a Gaussian normal distribution
+/// Creates sharper turning points for identifying reversals
 #[derive(Clone)]
 pub struct FisherTransform {
     /// Lookback period
@@ -18,6 +18,7 @@ pub struct FisherTransform {
 }
 
 impl FisherTransform {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -30,6 +31,7 @@ impl FisherTransform {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

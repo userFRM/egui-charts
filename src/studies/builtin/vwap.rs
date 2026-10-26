@@ -17,6 +17,7 @@
 //!
 //! # Example
 //! ```
+//! # #[cfg(feature = "timezones")] {
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
 //! use chrono::{NaiveTime, Weekday};
 //! use egui_charts::model::{Session, SessionWindow, TimezoneId};
@@ -31,6 +32,7 @@
 //!     .with_std_dev_bands([1.0, 2.0]);
 //! vwap.calculate(&bars);
 //! assert_eq!(vwap.line_cnt(), 5);
+//! # }
 //! ```
 
 use super::clamp_param;
@@ -39,7 +41,6 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
-use chrono_tz::Tz;
 use egui::Color32;
 
 /// The period over which [`VolumeWeightedAvgPrice`] accumulates before it restarts.
@@ -86,7 +87,11 @@ impl VwapAnchor {
 
 /// The trading day of `time`: its date in `zone`, or the next date from the open of a
 /// window that spans midnight, since a window is named by the day on which it closes.
-pub(super) fn trading_day(time: DateTime<Utc>, zone: Tz, windows: &[SessionWindow]) -> NaiveDate {
+pub(super) fn trading_day(
+    time: DateTime<Utc>,
+    zone: &TimezoneId,
+    windows: &[SessionWindow],
+) -> NaiveDate {
     let utc = time.naive_utc();
     // Near the ends of the representable range the local time may not exist; keep UTC there.
     let local = utc
@@ -318,8 +323,8 @@ impl Indicator for VolumeWeightedAvgPrice {
         let from = if daily != self.daily { 0 } else { from };
         self.daily = daily;
         let (zone, windows) = self.instrument_session.as_ref().map_or(
-            (self.time_zone.tz(), self.windows.as_slice()),
-            |(zone, windows)| (zone.tz(), windows.as_slice()),
+            (&self.time_zone, self.windows.as_slice()),
+            |(zone, windows)| (zone, windows.as_slice()),
         );
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
@@ -709,7 +714,9 @@ mod tests {
         let hour = |h| NaiveTime::from_hms_opt(h, 0, 0).unwrap();
         let mut failures = Vec::new();
         for case in cases {
-            let zone: Tz = case.zone.unwrap_or("UTC").parse().unwrap();
+            let Some(zone) = TimezoneId::named(case.zone.unwrap_or("UTC")) else {
+                continue;
+            };
             let bars: Vec<Bar> = case
                 .bars
                 .iter()
@@ -802,6 +809,7 @@ mod tests {
 
     /// A dialog-created VWAP inherits metadata both when added and when metadata arrives later.
     #[cfg(feature = "widget")]
+    #[cfg(feature = "timezones")]
     #[test]
     fn chart_supplies_the_exchange_session_to_vwap() {
         use crate::model::{BarData, Instrument};
@@ -899,8 +907,8 @@ mod tests {
     #[test]
     fn extreme_bar_times_do_not_panic_in_a_zone() {
         for (zone, time) in [
-            ("Australia/Sydney", DateTime::<Utc>::MAX_UTC),
-            ("America/Chicago", DateTime::<Utc>::MIN_UTC),
+            ("+11:00", DateTime::<Utc>::MAX_UTC),
+            ("-06:00", DateTime::<Utc>::MIN_UTC),
         ] {
             let mut study =
                 VolumeWeightedAvgPrice::new().with_time_zone(TimezoneId::named(zone).unwrap());

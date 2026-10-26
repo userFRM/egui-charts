@@ -1,13 +1,13 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::helpers;
-/// Squeeze Momentum Indicator
-/// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
-/// When BB is inside KC = "squeeze" (low volatility period)
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Squeeze Momentum Indicator
+/// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
+/// When BB is inside KC = "squeeze" (low volatility period)
 #[derive(Clone)]
 pub struct SqueezeMomentum {
     /// Bollinger Bands period (typically 20)
@@ -27,6 +27,7 @@ pub struct SqueezeMomentum {
 }
 
 impl SqueezeMomentum {
+    /// Create with the default Bollinger and Keltner channel settings.
     pub fn new() -> Self {
         Self {
             bb_period: 20,
@@ -61,6 +62,7 @@ impl SqueezeMomentum {
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

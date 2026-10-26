@@ -5,12 +5,6 @@
 //! - **Tracking**: Fixed horizontal bar at the top of the chart showing OHLC data
 //! - **Magnifier**: Circular zoom lens for detailed data inspection on dense charts
 
-/// Tooltip Configuration for data tooltips.
-///
-/// Provides three tooltip variants:
-/// - Floating: Classic tooltip that follows cursor position
-/// - Tracking: Fixed horizontal bar showing OHLC data at top of chart
-/// - Magnifier: Circular zoom lens for detailed data inspection.
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 

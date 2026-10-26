@@ -1,13 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::stepper::rolling_mean;
-/// Relative Vigor Index (RVI)
-/// Measures conviction of price movement
-/// Uses the relationship between close-open vs high-low
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+/// Relative Vigor Index (RVI)
+/// Measures conviction of price movement
+/// Uses the relationship between close-open vs high-low
 #[derive(Clone)]
 pub struct RelativeVigorIndex {
     /// Period for smoothing (typically 10)
@@ -19,6 +19,7 @@ pub struct RelativeVigorIndex {
 }
 
 impl RelativeVigorIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -31,6 +32,7 @@ impl RelativeVigorIndex {
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self

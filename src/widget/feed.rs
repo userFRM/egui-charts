@@ -475,7 +475,7 @@ impl Chart {
         let clock = BarClock::new(self.timeframe.unwrap_or_default());
         let clock = match self.display_timezone() {
             crate::scales::TimezoneMode::Local => clock.with_local_timezone(),
-            zone => clock.with_timezone(zone.to_tz().unwrap_or(chrono_tz::UTC)),
+            zone => clock.with_timezone(zone.to_tz().unwrap_or(crate::model::TimezoneId::utc())),
         };
         match self.instrument().and_then(|instrument| {
             Some((
@@ -1563,16 +1563,18 @@ mod tests {
 
     /// Resolving an exchange zone must realign history, live aggregation and the countdown
     /// once, then keep the subscription stable through ordinary repaints.
+    #[cfg(feature = "timezones")]
     #[test]
     fn calendar_reload_uses_the_resolved_exchange_zone() {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.chart_options.time_scale.timezone =
-            crate::scales::TimezoneMode::Exchange(chrono_tz::UTC);
+            crate::scales::TimezoneMode::Exchange(crate::model::TimezoneId::utc());
         chart.set_timeframe(Timeframe::Hour4);
         let mut frames = Frames::new();
         let zone = crate::model::TimezoneId::named("America/New_York").unwrap();
-        let expected = BarClock::new(Timeframe::Hour4).with_timezone(chrono_tz::America::New_York);
+        let expected =
+            BarClock::new(Timeframe::Hour4).with_timezone("America/New_York".parse().unwrap());
         frames.run(&mut chart);
         feed.page().send(page(Vec::new(), true));
         feed.resolve()

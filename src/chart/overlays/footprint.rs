@@ -370,6 +370,7 @@ pub fn render_footprint_statistics(
 /// Stacks and naked POCs extend to their first revisit or the last displayed bar; local
 /// annotations remain inside their originating bar. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub fn render_footprint_studies(
     painter: &Painter,
     mapping: &ChartMapping,
