@@ -126,7 +126,7 @@ A crash is saved under `fuzz/artifacts/<target>/`; rerun it with `cargo +nightly
 
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):
 
-- [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
+- [`model`](src/model): domain types (`Bar`, `Instrument`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
 - [`data`](src/data): the `Datafeed` contract, trades, depth and bar merging.
 - [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays.
 - [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; the trading UI routes confirmed orders to the broker.
@@ -147,7 +147,7 @@ The default build includes the chart widget, the icons, the built-in studies and
 - `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
-- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`.
+- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow

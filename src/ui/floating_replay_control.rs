@@ -96,6 +96,7 @@ pub struct ReplayControlState {
 
 /// Actions emitted by the replay control
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ReplayControlAction {
     /// No action
     None,

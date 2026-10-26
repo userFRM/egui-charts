@@ -11,7 +11,7 @@
 //! they can also be used standalone:
 //!
 //! ```rust
-//! use egui_charts::widget::indicator_pane::{
+//! use egui_charts::widget::{
 //!     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig
 //! };
 //!
@@ -247,6 +247,7 @@ impl IndicatorCoordParams {
 /// Returned by [`IndicatorPane::show_aligned_interactive`]. Besides the rects
 /// and y-axis range used for click hit-testing, it carries the [`Response`] for
 /// the legend's close "x" so the host can offer one-click pane removal.
+#[non_exhaustive]
 pub struct PaneInteraction {
     /// Full panel rect, including the y-axis label gutter.
     pub panel_rect: Rect,

@@ -44,7 +44,7 @@
 //!
 //! | Layer | Modules | Purpose |
 //! |---|---|---|
-//! | **Domain model** | [`model`] | `Bar`, `BarData`, `Symbol`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
+//! | **Domain model** | [`model`] | `Bar`, `BarData`, `Instrument`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
 //! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
@@ -89,7 +89,7 @@
 //!
 //!    ```toml
 //!    [dependencies]
-//!    egui-charts = "0.2"
+//!    egui-charts = "0.3"
 //!    ```
 //!
 //! 2. Implement [`data::Datafeed`] to bridge your backend (IPC, a WebSocket
@@ -110,6 +110,21 @@
 //! English; replacing or clearing the lookup takes effect on the next frame.
 //! The host supplies translation resources and any additional fonts. Date and
 //! numeric formatting remain controlled by the chart's formatters and locale.
+//!
+//! ## API compatibility
+//!
+//! Documented public exports are supported API. Implementation modules and state are
+//! private; `Chart`, `ChartBuilder`, `ChartState`, `BarData`, `TimeScale`, `PriceScale` and
+//! `IndicatorRegistry` expose their state through methods. Configuration and host data records
+//! have editable fields deliberately. Build extensible options from `Default` or their
+//! constructors and include a fallback when matching a `#[non_exhaustive]` enum.
+//!
+//! Before 1.0, breaking API changes require the next minor version; patch releases preserve
+//! compatibility within that minor line. From 1.0, breaking changes require a major version.
+//! This includes an egui upgrade that changes types exposed by this crate: the 0.3 line uses
+//! egui 0.37, and an incompatible egui upgrade requires a new breaking crate release. Compatible
+//! egui patch upgrades may ship in patch releases. CI checks the API against the latest
+//! published crate version, including when CI is called by the release workflow.
 //!
 //! ## Building for the web
 //!

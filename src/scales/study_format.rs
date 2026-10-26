@@ -4,6 +4,7 @@ use crate::scales::{PriceFormatter, VolumeFormatter};
 
 /// Units used in study legends, axes, tooltips and data windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StudyFormat {
     /// Price, following instrument precision unless explicitly overridden.
     Price,

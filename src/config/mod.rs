@@ -48,6 +48,7 @@ pub use crate::scales::TimezoneMode;
 /// that can be passed to the chart widget.  Each field corresponds to a
 /// focused configuration sub-module.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartOptions {
     /// Time scale (horizontal) options
     pub time_scale: TimeScaleOptions,

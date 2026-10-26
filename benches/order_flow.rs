@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 use chrono::{TimeDelta, Utc};
 use egui::{Pos2, RawInput, Rect, vec2};
 use egui_charts::ChartBuilder;
-use egui_charts::chart::selection::SeriesId;
 use egui_charts::data::{
     Datafeed, DepthHistory, DepthHistoryConfig, HistoryPage, HistoryRequest, Reply, Sink,
     Subscription, SubscriptionId,
 };
 use egui_charts::model::{Instrument, Level1Quote, OrderBook, OrderSide, Tick, Timeframe};
+use egui_charts::widget::SeriesId;
 
 #[expect(dead_code, reason = "this bench reports only the frame time")]
 mod frame;

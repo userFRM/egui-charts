@@ -204,6 +204,7 @@ impl SessionConfig {
 ///
 /// Defaults follow a common dark-theme charting palette.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,

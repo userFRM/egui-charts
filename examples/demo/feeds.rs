@@ -4,7 +4,11 @@
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, Utc, Weekday};
 use std::sync::Mutex;
 
-use egui_charts::data::{CalendarEvent, CalendarKind, CalendarQuery, FeedError, HotlistEntry, HotlistQuery, Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery, ScreenerRow};
+use egui_charts::data::{
+    CalendarEvent, CalendarKind, CalendarQuery, FeedError, HotlistEntry, HotlistQuery, Importance,
+    NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery,
+    ScreenerRow,
+};
 use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification, Notifications};
 
 use crate::sampledata::DemoSymbol;

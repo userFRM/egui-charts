@@ -11,6 +11,7 @@ use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
 /// Action that can be triggered from the floating toolbar
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum FloatingToolbarAction {
     /// Change a color slot (index, new color)
     ChangeColor(usize, Color32),

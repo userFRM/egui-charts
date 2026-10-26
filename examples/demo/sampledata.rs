@@ -9,7 +9,7 @@ use egui_charts::model::{Bar, Instrument, SymbolType};
 /// Deterministic executions inside each fixture bar's UTC slot. These are synthetic aggressors,
 /// independent of historical trades. Sizes sum to the fixture volume.
 pub fn synthetic_trades(bars: &[Bar]) -> Vec<egui_charts::model::Tick> {
-    use egui_charts::model::{Tick, OrderSide};
+    use egui_charts::model::{OrderSide, Tick};
     bars.iter()
         .flat_map(|bar| {
             (0..64).map(move |i| {
@@ -134,7 +134,10 @@ impl DemoSymbol {
                     "Synthetic" => SymbolType::Fund,
                     _ => SymbolType::Stock,
                 };
-                Instrument::new(s.symbol).with_description(s.company_name).with_exchange(s.exchange).with_symbol_type(kind)
+                Instrument::new(s.symbol)
+                    .with_description(s.company_name)
+                    .with_exchange(s.exchange)
+                    .with_symbol_type(kind)
             })
             .collect()
     }

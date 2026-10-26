@@ -114,7 +114,7 @@ pub struct ExportConfig {
     /// Export format (PNG, CSV or Clipboard)
     pub format: ExportFormat,
     /// Size, header and background options for PNG and clipboard exports.
-    pub image: crate::widget::export::ImageExportOptions,
+    pub image: crate::widget::ImageExportOptions,
 }
 
 impl Default for ExportConfig {

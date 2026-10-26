@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 /// Image options shared by the export dialog and offscreen rendering.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ImageExportOptions {
     /// Output width and height in pixels.
     pub size: [u32; 2],
@@ -40,6 +41,7 @@ impl Default for ImageExportOptions {
 /// This uses its own texture namespace; render with a dedicated egui renderer. Hosts must also
 /// bind any user textures referenced by their image sources before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
+#[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.
     pub size: [u32; 2],

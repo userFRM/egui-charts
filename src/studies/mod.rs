@@ -97,6 +97,15 @@ pub use indicator_trait::{
     StudyPane,
 };
 
+mod chart_state;
+pub use chart_state::{ChartState, ZoomState};
+
+#[cfg(feature = "studies")]
+mod template;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use template::StudyTemplate;
+
 use crate::model::Bar;
 
 /// A registry that owns a collection of [`Indicator`] trait objects and
@@ -193,12 +202,3 @@ impl Default for IndicatorRegistry {
         Self::new()
     }
 }
-
-mod chart_state;
-pub use chart_state::{ChartState, ZoomState};
-
-#[cfg(feature = "studies")]
-mod template;
-#[cfg(feature = "studies")]
-#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
-pub use template::StudyTemplate;

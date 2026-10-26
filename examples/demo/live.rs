@@ -1,8 +1,17 @@
 //! Synthetic executions delivered through the same feed contract as host market data.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use egui_charts::data::{CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink, Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample};
-use egui_charts::model::{Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote, Tick, Timeframe, OrderSide};
+use egui_charts::data::{
+    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
+    HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
+    MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink,
+    Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
+    aggregate_trades, resample,
+};
+use egui_charts::model::{
+    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote,
+    OrderSide, Quote, Tick, Timeframe,
+};
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
 use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
 use std::collections::{BTreeMap, VecDeque};
@@ -939,7 +948,7 @@ impl Datafeed for LiveFeed {
 mod tests {
     use super::*;
     use egui_charts::ChartBuilder;
-    use egui_charts::chart::selection::SeriesId;
+    use egui_charts::widget::SeriesId;
     use std::sync::Arc;
 
     #[test]

@@ -17,6 +17,7 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
 /// Actions emitted by the indicator template panel
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum IndicatorTemplateAction {
     /// No action taken
     None,

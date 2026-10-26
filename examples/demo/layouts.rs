@@ -421,6 +421,7 @@ impl DemoApp {
                 self.export_dialog.open();
             }
             LayoutAction::None => {}
+            _ => {}
         }
     }
 

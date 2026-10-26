@@ -815,7 +815,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- Runtime module dependencies are acyclic. Shared bar interpolation, streaming study inputs, profile calculations and formatting live below rendering; study geometry and timestamp drawing methods live with their chart and widget consumers. Chart settings and study recipes no longer depend on UI modules, localization is shared at the crate root, and UI extension traits live beside the UI kit. CI rejects module cycles. The crate remains one package. ([#93](https://github.com/userFRM/egui-charts/issues/93))
+- The next release is 0.3.0. Public implementation modules are private, extensible options and output records are non-exhaustive, and growing chart, interval, drawing, study and host-intent enums require fallback matches. The timezone formatter wrapper is crate-private; hosts keep using `TimeFormatterBuilder::with_timezone`. Main stateful types retain their private fields and accessors. Public configuration and data fields remain intentionally editable. CI compares the API with the latest published crate version and also gates release publication. Before 1.0, an incompatible API or exposed egui upgrade requires a new minor release; from 1.0 it requires a major release. The 0.3 line uses egui 0.37; compatible egui patch upgrades may ship in patch releases. ([#253](https://github.com/userFRM/egui-charts/issues/253))
+
+  | Old path or construction | New path or construction |
+  | --- | --- |
+  | `widget::builder::ChartBuilder` | `widget::ChartBuilder` or the crate-root `ChartBuilder` |
+  | `widget::indicator_pane::ChartMapping` | `chart::coords::ChartMapping` |
+  | `widget::indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction}` | `widget::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction}` |
+  | `widget::keyboard::{ShortcutMap, ShortcutRequest}` | `widget::{ShortcutMap, ShortcutRequest}` |
+  | `widget::layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions}` | `widget::{ChartLayout, ChartLayoutMode, ChartSyncOptions}` |
+  | `widget::export::{ChartImage, ImageExportOptions}` | `widget::{ChartImage, ImageExportOptions}` |
+  | `chart::selection::{SeriesId, ChartElementId}` | `widget::{SeriesId, ChartElementId}`; use `Chart::{selected_element, selected_bar, clear_selection}` instead of selection state helpers |
+  | `chart::selection::{SelectionState, SelectableId}` | Use `Chart::{selected_element, selected_bar, clear_selection}` for a chart, or a host-owned `Option<Id>` for standalone selection |
+  | Complete literals of `config::{ChartConfig, ChartOptions, CrosshairOptions, TooltipOptions}`, `widget::ImageExportOptions` | Start from constructors or `Default` and assign fields; struct literals, including update syntax, are unavailable. Output geometry and image records are returned by the chart |
+  | Complete literals of `widget::{RenderedIndicatorPane, ChartLayoutRects, PaneInteraction, ChartImage}` | Obtain output geometry and image records from the chart and pane methods; `PaneInteraction::default()` remains available |
+  | Exhaustive matches on growing chart, timeframe, drawing, keyboard, event, study and UI intent enums | Add a fallback arm for future variants |
+
+- Runtime module dependencies are acyclic. Shared bar interpolation, streaming study inputs, profile calculations and formatting live below rendering; study geometry and timestamp drawing methods live with their chart and widget consumers. Chart settings and study recipes no longer depend on UI modules, localization is shared at the crate root, and UI extension traits live beside the UI kit. CI rejects module cycles and inherent methods defined outside their type's module. The crate remains one package. ([#93](https://github.com/userFRM/egui-charts/issues/93))
 
   | Old path or member | New path or member |
   | --- | --- |
@@ -836,7 +852,7 @@ All notable changes to this project are documented in this file. The format is b
   | `ui::top_toolbar::components::settings_menu::data::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState}` | `widget::settings::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState}` |
   | `ui::top_toolbar::components::settings_menu::types::{BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` | `widget::settings::{BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` |
 
-- Breaking API cleanup: interval controls, settings, drawings, studies and trading share the domain types below. The small `prelude` exports common host types and traits, with widget and UI exports following their features. There are no compatibility aliases. Symbol search returns the host's `Instrument` with its metadata intact. ([#95](https://github.com/userFRM/egui-charts/issues/95))
+- Breaking API cleanup: interval controls, settings, drawings, studies and trading share the domain types below. The small `prelude` exports common host types and traits, with widget exports following their feature. There are no compatibility aliases. Symbol search returns the host's `Instrument` with its metadata intact. ([#95](https://github.com/userFRM/egui-charts/issues/95))
 
   | Old path or member | New path or member |
   | --- | --- |
@@ -845,16 +861,18 @@ All notable changes to this project are documented in this file. The format is b
   | `config::CrosshairLineStyle`, `config::SessionBreakStyle` | `model::LineStyle`; crosshair and session defaults remain dotted and dashed respectively |
   | `studies::PlotPattern` | `model::LineStyle` |
   | `ui::top_toolbar::components::settings_menu::LineStyle`, `ui::top_toolbar::components::settings_menu::data::LineStyle` | `model::LineStyle` |
-  | `ui::widget_bar::panels::object_tree::LineStyle`, `ui::widget_bar::panels::object_tree::types::LineStyle` | `model::LineStyle::name()` replaces `as_str()` |
-  | `ui::dialogs::drawing_properties::DrawingLineStyle`, `ui::dialogs::drawing_properties::actions::DrawingLineStyle` | `model::LineStyle`; `name()` replaces `label()`, `all().iter().copied()` yields values |
+  | `ui::widget_bar::LineStyle`, `ui::widget_bar::panels::LineStyle`, `ui::widget_bar::panels::object_tree::LineStyle`, `ui::widget_bar::panels::object_tree::types::LineStyle` | `model::LineStyle::name()` replaces `as_str()` |
+  | `ui::dialogs::DrawingLineStyle`, `ui::dialogs::drawing_properties::DrawingLineStyle`, `ui::dialogs::drawing_properties::actions::DrawingLineStyle` | `model::LineStyle`; `name()` replaces `label()`, `all().iter().copied()` yields values |
   | `model::TradeSide`, `model::quote::TradeSide` | `model::OrderSide`; unknown aggressors remain `None` |
   | `model::StrategySide::{Long, Short}` | `model::OrderSide::{Buy, Sell}`; migrate saved strategy sides from `"Long"`/`"Short"` to `"Buy"`/`"Sell"` |
   | `model::Symbol` | `model::Instrument`; `name` becomes `symbol`, `display_name` becomes optional `description`, `exchange` becomes optional, and subscription state belongs to the host; use `with_exchange` and `with_symbol_type` instead of `with_market` |
   | `ui::symbol_header::SymbolInfo`, `SymbolHeader::symbol_info` | `model::Instrument`, `SymbolHeader::instrument`; pass the interval label separately to `SymbolHeader::new(instrument, timeframe)` |
   | `ui::top_toolbar::ScaleMode`, `ui::top_toolbar::components::ScaleMode`, `ui::top_toolbar::components::settings_menu::ScaleMode`, `ui::top_toolbar::components::settings_menu::types::ScaleMode` | `scales::PriceScaleMode`; `Auto` becomes `Normal` |
-  | `ui::top_toolbar::components::settings_menu::types::{CandleColorConfig, StatusLineOptions}` | `ui::top_toolbar::components::settings_menu::{CandleColorConfig, StatusLineOptions}`; use `..Default::default()` for additional status fields |
+  | `ui::top_toolbar::components::settings_menu::types::{CandleColorConfig, StatusLineOptions}` | `widget::settings::{CandleColorConfig, StatusLineOptions}`; use `..Default::default()` for additional status fields |
   | `Indicator::line_cnt`, `CustomIndicator::with_line_cnt`, `LineBreakConfig::line_cnt` | `Indicator::line_count`, `CustomIndicator::with_line_count`, `LineBreakConfig::line_count` |
   | `ui::top_toolbar::components::settings_menu::TradingSettings::show_poss` | `TradingSettings::show_positions`; migrate the saved JSON key too |
+
+  The selector accepts model intervals directly, including subsecond presets, and preserves full nonzero execution counts and custom seconds in its labels.
 
   Interval preferences now serialize `model::Timeframe` values instead of `{value, unit}` objects. Convert each old entry with its unit (`Minute` uses `"min"`, `Month` uses `"month"`), parse it and serialize the resulting value. Presets and arbitrary intervals use the same nonzero model representation. Existing line-pattern JSON variant names are unchanged.
 

@@ -12,6 +12,24 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  semver:
+    name: Public API compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve the latest published crate version
+        id: baseline
+        shell: bash
+        run: |
+          version=$(curl --fail --silent --show-error --retry 3 -A "egui-charts-ci (https://github.com/userFRM/egui-charts)" https://crates.io/api/v1/crates/egui-charts | jq -er '.crate.newest_version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check the declared release against the published API
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          baseline-version: ${{ steps.baseline.outputs.version }}
+
   check:
     name: Check
     runs-on: ${{ matrix.os }}

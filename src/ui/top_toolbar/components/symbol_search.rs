@@ -826,6 +826,7 @@ impl CompareSymbolsConfig {
 
 /// Action from compare symbols dialog
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum CompareAction {
     /// No action
     None,

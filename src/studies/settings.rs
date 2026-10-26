@@ -7,6 +7,7 @@ use egui::Color32;
 
 /// Geometry for one output line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum PlotType {
     /// Connected values, broken at missing bars.
     #[default]

@@ -77,6 +77,7 @@ impl ReplayToolbarState {
 
 /// Action emitted by the replay toolbar
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ReplayToolbarAction {
     /// Play was clicked
     Play,

@@ -46,6 +46,7 @@ pub enum CrosshairStyle {
 
 /// Crosshair options
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,

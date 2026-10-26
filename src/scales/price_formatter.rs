@@ -414,6 +414,18 @@ impl Default for PriceFormatterBuilder {
     }
 }
 
+/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
+#[cfg(feature = "widget")]
+pub(crate) fn price_decimals(price: f64) -> usize {
+    if price.abs() >= 100.0 {
+        2
+    } else if price.abs() >= 1.0 {
+        4
+    } else {
+        6
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,17 +522,5 @@ mod tests {
             .with_precision(2)
             .build();
         assert!(currency_formatter.format(100.0).contains("$"));
-    }
-}
-
-/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
-#[cfg(feature = "widget")]
-pub(crate) fn price_decimals(price: f64) -> usize {
-    if price.abs() >= 100.0 {
-        2
-    } else if price.abs() >= 1.0 {
-        4
-    } else {
-        6
     }
 }

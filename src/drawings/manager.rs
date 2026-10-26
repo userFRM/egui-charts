@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 /// [`drawing_to_stored`](crate::drawings::persistence::drawing_to_stored). A host that writes
 /// to [`DrawingManager::drawings`] directly queues nothing.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum DrawingSyncAction {
     /// A new drawing was created and should be saved. Carries the drawing ID.
     SaveDrawing(usize),

@@ -32,6 +32,7 @@ pub enum QuoteSide {
 
 /// An action on the zero-based study index in a legend's study slice.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum StudyAction {
     /// Open the study's settings in the host.
     Settings(usize),

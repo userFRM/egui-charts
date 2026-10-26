@@ -148,6 +148,7 @@ impl DemoApp {
                 }
             }
             CompareAction::None | CompareAction::Close => {}
+            _ => {}
         }
         self.sync_comparisons();
     }

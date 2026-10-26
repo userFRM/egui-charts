@@ -4,6 +4,7 @@
 
 /// Actions that can be performed on objects in the tree
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum ObjectTreeAction {
     /// No action
     #[default]

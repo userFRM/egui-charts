@@ -89,6 +89,7 @@ impl Default for ChartTypeSelectorConfig {
 
 /// Action from chart type selector
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChartTypeAction {
     None,
     Select(ChartType),

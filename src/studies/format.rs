@@ -2,6 +2,7 @@
 
 /// Value scale in the pane selected by [`super::Indicator::is_overlay`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum StudyScale {
     /// Share the pane's main price scale and participate in its auto-range.
     Main,

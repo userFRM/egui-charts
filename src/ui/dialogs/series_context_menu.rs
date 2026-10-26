@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 /// Actions from the series context menu
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SeriesContextMenuAction {
     /// No action
     None,

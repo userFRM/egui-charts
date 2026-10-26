@@ -70,6 +70,7 @@ impl Default for DrawingProps {
 
 /// Actions from the drawing properties dialog
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum DrawingPropertiesAction {
     None,
     Cancel,
