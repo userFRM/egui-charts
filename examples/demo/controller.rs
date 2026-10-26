@@ -1609,6 +1609,7 @@ impl DemoApp {
         } else {
             MagnetType::Strong
         };
+        self.drawing_toolbar.state.snap_to_indicators = dm.options.snap_to_indicators;
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool,
@@ -1751,6 +1752,9 @@ impl DemoApp {
                     egui_charts::config::CrosshairMode::Normal
                 };
                 self.chart.set_crosshair_mode(mode);
+            }
+            DrawingToolbarAction::SetSnapToIndicators(enabled) => {
+                dm.options.snap_to_indicators = enabled;
             }
             DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;

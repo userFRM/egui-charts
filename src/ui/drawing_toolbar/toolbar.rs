@@ -601,7 +601,12 @@ impl DrawingToolbar {
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
-            "Magnet" => MagnetButton::show_submenu(ui, state.magnet_mode, state.magnet_type),
+            "Magnet" => MagnetButton::show_submenu(
+                ui,
+                state.magnet_mode,
+                state.magnet_type,
+                state.snap_to_indicators,
+            ),
             "Hide" => {
                 let mut action = HideMenu::show_submenu(ui, trading, state);
                 if templates {
@@ -677,6 +682,7 @@ impl DrawingToolbar {
             A::ToggleValuesTooltip => {
                 self.state.values_tooltip_on_long_press = !self.state.values_tooltip_on_long_press;
             }
+            A::SetSnapToIndicators(enabled) => self.state.snap_to_indicators = *enabled,
             A::SetMagnetType(kind) => {
                 self.state.magnet_type = *kind;
                 self.state.magnet_mode = true;
@@ -1312,6 +1318,15 @@ mod tests {
             assert_eq!(toolbar.state.sel_tool, tool);
             assert_eq!(toolbar.state.eraser_mode_enabled, eraser);
             assert_eq!(toolbar.state.current_cursor_type, CursorType::Dot);
+        }
+        for enabled in [false, true] {
+            let mode = toolbar.state.magnet_type;
+            let on = toolbar.state.magnet_mode;
+            let action = DrawingToolbarAction::SetSnapToIndicators(enabled);
+            assert_eq!(toolbar.apply_pick(action.clone()), Some(action));
+            assert_eq!(toolbar.state.snap_to_indicators, enabled);
+            assert_eq!(toolbar.state.magnet_type, mode);
+            assert_eq!(toolbar.state.magnet_mode, on);
         }
         toolbar.registry.set_availability(
             TrendLine,

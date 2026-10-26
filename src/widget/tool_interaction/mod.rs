@@ -183,7 +183,8 @@ impl Chart {
                     .iter()
                     .zip(self.rendered_studies().indicators())
                     .filter(|(id, s)| {
-                        s.is_visible()
+                        drawing_manager.options.snap_to_indicators
+                            && s.is_visible()
                             && if pane.is_some() {
                                 members.contains(&Some(id.0))
                             } else {
@@ -531,7 +532,11 @@ mod tests {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::{Pos2, vec2};
 
-        for ((magnet, strong, price, overlay_visible, snaps, offset, off_scale), kind) in [
+        for (
+            (magnet, strong, price, overlay_visible, snaps, offset, off_scale),
+            kind,
+            snap_to_indicators,
+        ) in [
             (true, false, 10.0, true, true, 3.0, false),
             (true, false, 20.0, true, true, 3.0, false),
             (true, false, 12.0, true, true, 3.0, false),
@@ -545,14 +550,30 @@ mod tests {
             (true, true, 20.0, false, true, 3.0, true),
         ]
         .into_iter()
-        .map(|case| (case, "main"))
+        .map(|case| (case, "main", true))
         .chain([
-            ((true, false, 15.0, true, false, 3.0, false), "independent"),
-            ((true, false, 15.0, true, false, 3.0, false), "none"),
-            ((true, false, 15.0, true, false, 3.0, false), "background"),
-            ((true, false, 15.0, true, true, 3.0, false), "displaced"),
-            ((true, false, 15.0, true, true, 3.0, false), "pane"),
-            ((true, true, 15.0, true, true, 30.0, false), "pane"),
+            (
+                (true, false, 15.0, true, false, 3.0, false),
+                "independent",
+                true,
+            ),
+            ((true, false, 15.0, true, false, 3.0, false), "none", true),
+            (
+                (true, false, 15.0, true, false, 3.0, false),
+                "background",
+                true,
+            ),
+            (
+                (true, false, 15.0, true, true, 3.0, false),
+                "displaced",
+                true,
+            ),
+            ((true, false, 15.0, true, true, 3.0, false), "pane", true),
+            ((true, true, 15.0, true, true, 30.0, false), "pane", true),
+            ((true, false, 15.0, true, false, 3.0, false), "main", false),
+            ((true, false, 17.0, true, false, 3.0, false), "main", false),
+            ((true, false, 20.0, true, true, 3.0, false), "main", false),
+            ((true, false, 15.0, true, false, 3.0, false), "pane", false),
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
@@ -598,6 +619,7 @@ mod tests {
                 chart.set_start_idx(start);
                 chart.drawings_mut().options.magnet_mode = magnet;
                 chart.drawings_mut().options.strong_magnet = strong;
+                chart.drawings_mut().options.snap_to_indicators = snap_to_indicators;
                 chart.drawings_mut().update_snap_options();
                 if off_scale {
                     chart.price_scale_mut().set_range(12.0, 18.0);
