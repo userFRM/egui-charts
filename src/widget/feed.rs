@@ -11,8 +11,8 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, TradePage, TradeRequest,
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, HistoryPage,
+    HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
@@ -51,8 +51,13 @@ pub(crate) struct FeedLink {
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
+    order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
+    depth_complete: bool,
+    heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    study_inputs: Vec<(crate::studies::OrderFlowInput, u64)>,
+    time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -65,6 +70,7 @@ enum Request {
         scroll_back: bool,
     },
     Trades,
+    Depth(DepthRequest),
 }
 
 impl FeedLink {
@@ -123,7 +129,12 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             order_book: None,
+            order_queue: None,
             depth_history: None,
+            depth_complete: false,
+            heatmap: None,
+            study_inputs: Vec::new(),
+            time: None,
             paging_stopped: false,
         });
     }
@@ -315,6 +326,13 @@ impl Chart {
         link.into_iter().flat_map(|link| link.trades.iter())
     }
 
+    /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
+    /// 100,000 entries; fills without an id stay separate. Rebuilds the view on request, including
+    /// fills arriving in separate pages or frames. Per-price consumers keep using `trades`.
+    pub fn combined_trades(&self, series: SeriesId) -> Vec<crate::data::CombinedTrade> {
+        crate::data::combine_trades(self.trades(series))
+    }
+
     /// Draws the trades the feed sends as bubbles, one per bar and price level, from the next
     /// frame, or stops with `None`. A chart without a feed holds no trades and draws none, and
     /// Renko, Kagi, line break, point and figure and range charts draw none, since their x axis
@@ -335,7 +353,19 @@ impl Chart {
         link.order_book.as_ref()
     }
 
-    /// Keeps `history` of the order book the feed sends, sampled from the next update, or stops
+    /// Individual resting orders and their queue priority, when the feed sends order-level data.
+    /// Use `OrderQueue::aggregate` with a minimum size for filtered ladders or heatmaps, and
+    /// `largest_order` for the largest resting order at a level. Aggregated-only feeds return
+    /// `None`; a lost order book has no orders until a replacement snapshot arrives.
+    pub fn order_queue(&self, series: SeriesId) -> Option<&crate::data::OrderQueue> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)?
+            .order_queue
+            .as_ref()
+    }
+
+    /// Loads recorded depth from the feed and keeps `history` of its live book, or stops
     /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
     /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
     /// Columns follow the times of the depth updates: an update stamped more than a minute after
@@ -351,6 +381,82 @@ impl Chart {
                 link.inbox.sample_depth(id, config);
             }
             link.depth_history = history;
+            link.depth_complete = false;
+            link.pending
+                .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+            link.retries
+                .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+        }
+    }
+
+    /// Shows resting liquidity behind the price series. A feed and instrument tick size are
+    /// required. Enabling starts the default depth history if none is configured; disabling
+    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// enabled independently through the existing chart options.
+    pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
+        if enabled && self.depth_history(SeriesId::MAIN).is_none() {
+            self.set_depth_history(Some(
+                DepthHistory::new(Default::default()).expect("default depth history"),
+            ));
+        }
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+        }
+    }
+
+    pub(super) fn paint_liquidity(
+        &self,
+        painter: &egui::Painter,
+        mapping: &crate::chart::coords::ChartMapping,
+    ) {
+        let Some(link) = &self.feed_link else { return };
+        let (Some(heatmap), Some(history), Some(tick)) = (
+            &link.heatmap,
+            &link.depth_history,
+            self.instrument().and_then(|i| i.tick_size),
+        ) else {
+            return;
+        };
+        heatmap.borrow_mut().render(
+            painter,
+            mapping,
+            history,
+            tick * history.config().ticks_per_row as f64,
+            |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
+            [self.config.bullish_color, self.config.bearish_color],
+        );
+        if let Some(book) = &link.order_book {
+            let max = book
+                .bids
+                .iter()
+                .chain(&book.asks)
+                .map(|l| l.size)
+                .fold(0.0, f64::max);
+            if max > 0.0 {
+                for (levels, color) in [
+                    (&book.bids, self.config.bullish_color),
+                    (&book.asks, self.config.bearish_color),
+                ] {
+                    for level in levels {
+                        let y0 = mapping.price_to_y(level.price);
+                        let y1 = mapping.price_to_y(level.price + tick);
+                        let rect = egui::Rect::from_min_max(
+                            egui::pos2(
+                                mapping.rect.right() - 60.0 * (level.size / max) as f32,
+                                y0.min(y1),
+                            ),
+                            egui::pos2(mapping.rect.right(), y0.max(y1)),
+                        );
+                        if rect.is_finite() && rect.intersects(mapping.rect) {
+                            painter.with_clip_rect(mapping.rect).rect_filled(
+                                rect,
+                                0.0,
+                                color.gamma_multiply(0.7),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -425,6 +531,43 @@ impl Chart {
             });
         }
 
+        let mut inputs: Vec<crate::studies::OrderFlowInput> = Vec::new();
+        for study in self.studies.indicators() {
+            if let Some(input) = study.order_flow_input()
+                && !inputs.iter().any(|old| input.same_source(old))
+            {
+                inputs.push(input);
+            }
+        }
+        if inputs.len() != link.study_inputs.len()
+            || inputs
+                .iter()
+                .zip(&link.study_inputs)
+                .any(|(a, (b, _))| !a.same_source(b))
+        {
+            let previous = std::mem::take(&mut link.study_inputs);
+            link.study_inputs = inputs
+                .iter()
+                .map(|input| {
+                    let seen = previous
+                        .iter()
+                        .find(|(old, _)| input.same_source(old))
+                        .map(|(_, seen)| *seen);
+                    if let Some(seen) = seen {
+                        (input.clone(), seen)
+                    } else {
+                        input.replace_trades(&link.clock, link.trades.iter());
+                        if let Some(now) = link.time {
+                            input.advance_time(&link.clock, now);
+                        }
+                        (input.clone(), u64::MAX)
+                    }
+                })
+                .collect();
+            if let Some(id) = link.subscription {
+                link.inbox.study_inputs(id, inputs);
+            }
+        }
         let now = ctx.input(|input| input.time);
         let drained = link.inbox.drain();
         for (key, answer) in drained.answers {
@@ -445,13 +588,47 @@ impl Chart {
                     Ok(page) => self.apply_page(&link, page, scroll_back),
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
+                Request::Depth(request) => match result::<DepthPage>(answer) {
+                    Ok(mut page) => {
+                        page.columns
+                            .retain(|c| request.before.is_none_or(|before| c.time < before));
+                        page.columns.sort_by_key(|c| c.time);
+                        if page.columns.len() > request.count {
+                            page.columns.drain(..page.columns.len() - request.count);
+                        }
+                        link.depth_complete |= page.end_of_history || page.columns.is_empty();
+                        if let Some(history) = &mut link.depth_history {
+                            if let Err(error) = history.merge_page(page.columns) {
+                                link.depth_complete = true;
+                                self.feed.last_error = Some(error);
+                            }
+                            link.depth_complete |= request.before.is_some_and(|before| {
+                                history.columns().next().is_none_or(|c| c.time >= before)
+                            });
+                        }
+                    }
+                    Err(error) => self.request_failed(
+                        &mut link,
+                        Request::Depth(request),
+                        failures,
+                        error,
+                        now,
+                    ),
+                },
                 Request::Trades => match result::<TradePage>(answer) {
                     Ok(page) => {
                         let bubbles = &mut link.bubbles;
+                        let mut changed = false;
                         let fold = &mut |trade: &Tick, added| {
+                            changed |= added;
                             bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                         };
                         self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
+                        if changed {
+                            for (input, _) in &link.study_inputs {
+                                input.replace_trades(&link.clock, link.trades.iter());
+                            }
+                        }
                     }
                     Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
                 },
@@ -462,6 +639,19 @@ impl Chart {
         for (id, updates) in drained.updates {
             if link.subscription != Some(id) {
                 continue;
+            }
+            if updates.reset {
+                link.time = None;
+                self.bar_close_time = None;
+                self.server_time_offset = None;
+                self.replace_main_data(Vec::new());
+                self.quote = None;
+                self.session_quote = None;
+                link.trades = Trades::new(TRADE_CAPACITY);
+                link.order_book = None;
+                link.order_queue = None;
+                link.depth_history.iter_mut().for_each(DepthHistory::clear);
+                link.rebuild_bubbles();
             }
             if !updates.bars.is_empty() {
                 let incoming = updates.bars.into_values().collect();
@@ -487,11 +677,27 @@ impl Chart {
             feed.rejected_bars += updates.rejected;
             feed.rejected_depth += updates.rejected_depth;
             let bubbles = &mut link.bubbles;
+            let inputs = &link.study_inputs;
+            let clock = &link.clock;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+                if added {
+                    for (input, _) in inputs {
+                        input.push_trade(clock, trade);
+                    }
+                }
             };
             link.trades.append(updates.trades, fold);
+            link.time = link.time.max(updates.time);
+            if let Some(now) = link.time {
+                for (input, _) in &link.study_inputs {
+                    input.advance_time(&link.clock, now);
+                }
+            }
             link.order_book = updates.depth.or(link.order_book.take());
+            if updates.orders_changed {
+                link.order_queue = updates.orders;
+            }
             if let Some(history) = &mut link.depth_history {
                 updates
                     .depth_columns
@@ -526,6 +732,11 @@ impl Chart {
                     link.pending.last_mut().unwrap().2 = failures;
                     feed.history(history, reply);
                 }
+                Request::Depth(depth) => {
+                    let reply = link.reply(request);
+                    link.pending.last_mut().unwrap().2 = failures;
+                    feed.depth_history(depth, reply);
+                }
                 Request::Trades => unreachable!(),
             }
         }
@@ -535,7 +746,29 @@ impl Chart {
                     .unwrap_or(std::time::Duration::MAX),
             );
         }
+        for (input, seen) in &mut link.study_inputs {
+            let revision = input.revision();
+            if revision != *seen {
+                for (at, study) in self.studies.indicators().iter().enumerate() {
+                    if study
+                        .order_flow_input()
+                        .is_some_and(|other| input.same_source(&other))
+                    {
+                        let from = input.changed_since(*seen).map_or(0, |time| {
+                            self.state
+                                .data()
+                                .bars
+                                .partition_point(|bar| link.clock.bar_open(bar.time) < time)
+                        });
+                        self.pending_from[at] =
+                            Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                    }
+                }
+                *seen = revision;
+            }
+        }
         self.scroll_back(&mut link);
+        self.scroll_depth(&mut link);
         self.feed_link = Some(link);
     }
 
@@ -554,8 +787,17 @@ impl Chart {
             .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
+        for study in self.studies.indicators() {
+            if let Some(input) = study.order_flow_input() {
+                input.clear();
+            }
+        }
+        link.study_inputs.clear();
+        link.time = None;
         link.order_book = None;
+        link.order_queue = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        link.depth_complete = false;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -632,6 +874,13 @@ impl Chart {
         );
         let config = link.depth_history.as_ref().map(|h| h.config().clone());
         link.inbox.sample_depth(sink.id, config);
+        link.inbox.study_inputs(
+            sink.id,
+            link.study_inputs
+                .iter()
+                .map(|(input, _)| input.clone())
+                .collect(),
+        );
         link.subscription = Some(sink.id);
         let subscription = Subscription {
             id: sink.id,
@@ -699,10 +948,63 @@ impl Chart {
                 request,
                 failures.saturating_add(1),
             ));
+        } else if matches!(request, Request::Depth(_)) {
+            link.depth_complete = true;
+            if error == FeedError::NotSupported {
+                return;
+            }
         } else {
             link.paging_stopped = true;
         }
         self.feed.last_error = Some(error);
+    }
+
+    /// Depth pages have their own boundary and completion state, independent of bar history.
+    fn scroll_depth(&mut self, link: &mut FeedLink) {
+        if link.depth_complete
+            || link.subscription.is_none()
+            || link
+                .pending
+                .iter()
+                .any(|(_, r, _)| matches!(r, Request::Depth(_)))
+            || link
+                .retries
+                .iter()
+                .any(|(_, r, _)| matches!(r, Request::Depth(_)))
+        {
+            return;
+        }
+        let Some(history) = &link.depth_history else {
+            return;
+        };
+        let Some(tick) = link
+            .instrument
+            .as_ref()
+            .and_then(|i| i.tick_size)
+            .filter(|t| t.is_finite() && *t > 0.0)
+        else {
+            return;
+        };
+        let before = history.columns().next().map(|c| c.time);
+        if let Some(before) = before
+            && (!self.older_bars_drawn
+                || self
+                    .state
+                    .shown()
+                    .get(self.state.visible_range().0)
+                    .is_none_or(|bar| bar.time > before))
+        {
+            return;
+        }
+        let mut request = DepthRequest::new(
+            self.symbol.clone(),
+            history.config().columns,
+            history.config().clone(),
+            tick,
+        );
+        request.before = before;
+        let reply = link.reply(Request::Depth(request.clone()));
+        link.feed.depth_history(request, reply);
     }
 
     /// Asks for the page before the oldest bar once the view nears it.
@@ -782,6 +1084,7 @@ mod tests {
         Unsubscribe(SubscriptionId),
         Trades(TradeRequest),
         Snapshot(SubscriptionId),
+        Depth(DepthRequest),
     }
 
     /// A feed that records every call and keeps the replies and sinks for the test to answer.
@@ -791,6 +1094,7 @@ mod tests {
         resolves: Mutex<Vec<Reply<Instrument>>>,
         pages: Mutex<Vec<Reply<HistoryPage>>>,
         trades: Mutex<Vec<Reply<TradePage>>>,
+        depth: Mutex<Vec<Reply<DepthPage>>>,
         sinks: Mutex<Vec<Sink>>,
         /// `unsubscribe` drops the replies it keeps.
         drop_replies: AtomicBool,
@@ -847,6 +1151,10 @@ mod tests {
         fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
             self.calls.lock().unwrap().push(Call::Trades(request));
             self.trades.lock().unwrap().push(reply);
+        }
+        fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+            self.calls.lock().unwrap().push(Call::Depth(request));
+            self.depth.lock().unwrap().push(reply);
         }
         fn request_depth_snapshot(&self, id: SubscriptionId) {
             self.calls.lock().unwrap().push(Call::Snapshot(id));
@@ -907,6 +1215,261 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    #[test]
+    fn replay_reset_removes_future_data_from_the_chart() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        #[cfg(feature = "studies")]
+        let studies: Vec<_> = {
+            let factory = crate::studies::IndicatorFactory::new();
+            ["Quoted Spread", "Trade Rate", "Book Size"]
+                .map(|name| chart.add_indicator(factory.create(name).unwrap()))
+                .into()
+        };
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(0.25);
+        feed.resolve().send(Ok(instrument));
+        feed.page().send(page(bars(10), true));
+        frames.run(&mut chart);
+        let sink = feed.sink();
+        let time = bars(1)[0].time;
+        let future = time + TimeDelta::minutes(20);
+        sink.set_server_time(future);
+        sink.push_tick(Tick::new(future, 120.0, 9.0, None).with_id(7));
+        let quote = |ts, bid, ask| crate::model::Level1Quote {
+            ts,
+            symbol: "A".into(),
+            bid,
+            ask,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        };
+        sink.push_quote(quote(future, 119.0, 121.0));
+        sink.advance_time(future + TimeDelta::seconds(1));
+        sink.push_depth_snapshot(
+            1,
+            OrderBook {
+                ts: future,
+                symbol: "A".into(),
+                bids: vec![],
+                asks: vec![],
+            },
+        );
+        frames.run(&mut chart);
+        assert_eq!(chart.trades(SeriesId::MAIN).count(), 1);
+        assert!(chart.order_book(SeriesId::MAIN).is_some());
+        sink.reset_replay(time);
+        sink.push_tick(Tick::new(time, 100.0, 2.0, None).with_id(7));
+        sink.push_quote(quote(time, 99.0, 100.0));
+        sink.advance_time(time + TimeDelta::seconds(1));
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
+        assert_eq!(
+            (
+                chart.bars(SeriesId::MAIN)[0].close,
+                chart.bars(SeriesId::MAIN)[0].volume
+            ),
+            (100.0, 2.0)
+        );
+        assert_eq!(
+            chart
+                .trades(SeriesId::MAIN)
+                .map(|t| t.price)
+                .collect::<Vec<_>>(),
+            [100.0]
+        );
+        assert!(chart.order_book(SeriesId::MAIN).is_none());
+        #[cfg(feature = "studies")]
+        {
+            for _ in 0..8 {
+                frames.run(&mut chart);
+            }
+            for (id, expected) in studies.into_iter().zip([Some(4.0), Some(1.0), None]) {
+                let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+                let values = study.order_flow_input().unwrap().values();
+                assert!(values.keys().all(|at| *at == time), "{}", study.name());
+                assert_eq!(study.values().value(0, 0), expected, "{}", study.name());
+                if study.name() == "Trade Rate" {
+                    assert_eq!(study.values().value(2, 0), Some(1.0 / 3.0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn executions_link_existing_tape_fills_without_counting_twice() {
+        use crate::data::{OrderEvent, RestingOrder};
+        use crate::model::TradeSide::{Buy, Sell};
+        for (timeframe, separate_frames) in [
+            (Timeframe::Min1, false),
+            (Timeframe::Min1, true),
+            ("2v".parse().unwrap(), false),
+            ("2v".parse().unwrap(), true),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_timeframe(timeframe);
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.page().send(page(vec![], true));
+            frames.run(&mut chart);
+            let sink = feed.sink();
+            let time = bars(1)[0].time;
+            let trade = Tick::new(time, 100.0, 2.0, Some(Buy)).with_id(42);
+            sink.set_server_time(time);
+            sink.push_order_snapshot(1, time, vec![RestingOrder::new(8, Sell, 100.0, 5.0)]);
+            sink.push_tick(trade.clone());
+            if separate_frames {
+                frames.run(&mut chart);
+            }
+            sink.push_order_event(
+                2,
+                time,
+                OrderEvent::Execute {
+                    id: 8,
+                    size: 2.0,
+                    trade: Some(trade.with_aggressor_order_id(9)),
+                },
+            );
+            frames.run(&mut chart);
+            let trades: Vec<_> = chart.trades(SeriesId::MAIN).collect();
+            assert_eq!(trades.len(), 1);
+            assert_eq!(
+                (trades[0].resting_order_id, trades[0].aggressor_order_id),
+                (Some(8), Some(9)),
+                "separate frames: {separate_frames}"
+            );
+            assert_eq!(chart.bars(SeriesId::MAIN)[0].volume, 2.0);
+            assert_eq!(chart.order_book(SeriesId::MAIN).unwrap().asks[0].size, 3.0);
+            assert_eq!(
+                chart.combined_trades(SeriesId::MAIN)[0].aggressor_order_id,
+                Some(9)
+            );
+        }
+    }
+
+    #[test]
+    fn depth_paging_ends_independently_and_drops_old_settings_replies() {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(0.25);
+        feed.resolve().send(Ok(instrument));
+        feed.page().send(page(bars(10), true));
+        frames.run(&mut chart);
+        let old = feed.depth.lock().unwrap().remove(0);
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        frames.run(&mut chart);
+        old.send(Ok(DepthPage::new(
+            vec![crate::data::DepthColumn {
+                time: Utc::now(),
+                span: TimeDelta::seconds(1),
+                ..Default::default()
+            }],
+            false,
+        )));
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![], false)));
+        feed.calls();
+        frames.run(&mut chart);
+        chart.set_start_idx(0);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        assert!(feed.calls().iter().all(|c| !matches!(c, Call::Depth(_))));
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            0
+        );
+        assert!(chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+    }
+
+    #[test]
+    fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
+        for (name, offset, span, end, expected) in [
+            ("overlapping page", Some(899), 120, false, vec![900]),
+            ("final page", Some(899), 60, true, vec![899, 900]),
+            ("empty page", None, 60, false, vec![900]),
+            ("repeated page", Some(900), 60, false, vec![900]),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            let mut instrument = Instrument::new("A");
+            instrument.tick_size = Some(0.25);
+            feed.resolve().send(Ok(instrument));
+            let bars = bars(1000);
+            feed.page().send(page(bars.clone(), true));
+            frames.run(&mut chart);
+            let column = |index: usize, seconds| crate::data::DepthColumn {
+                time: bars[index].time,
+                span: TimeDelta::seconds(seconds),
+                bids: vec![(400, 2.0)],
+                asks: vec![],
+            };
+            chart.set_visible_logical_range(crate::model::LogicalRange {
+                left: 950.0,
+                right: 999.0,
+            });
+            feed.depth
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(DepthPage::new(vec![column(900, 60)], false)));
+            frames.run(&mut chart);
+            feed.calls();
+            chart.set_visible_logical_range(crate::model::LogicalRange {
+                left: 850.0,
+                right: 899.0,
+            });
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let calls = feed.calls();
+            assert_eq!(calls.len(), 1, "{name}: {calls:?}");
+            assert!(
+                matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
+                "{name}: {calls:?}"
+            );
+            feed.depth.lock().unwrap().remove(0).send(Ok(DepthPage::new(
+                offset.map(|i| column(i, span)).into_iter().collect(),
+                end,
+            )));
+            for _ in 0..3 {
+                frames.run(&mut chart);
+            }
+            assert!(feed.calls().is_empty(), "{name}: paging did not stop");
+            let held: Vec<_> = chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .map(|c| (c.time, c.span, c.bids.clone()))
+                .collect();
+            assert_eq!(
+                held,
+                expected
+                    .into_iter()
+                    .map(|i| (bars[i].time, TimeDelta::seconds(60), vec![(400, 2.0)]))
+                    .collect::<Vec<_>>(),
+                "{name}"
+            );
         }
     }
 
@@ -1641,5 +2204,278 @@ mod tests {
             "removed main cannot restart its feed"
         );
         assert_eq!(chart.state.data().bars, bars(1000));
+    }
+    #[cfg(feature = "studies")]
+    #[test]
+    fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
+        use crate::model::{Level1Quote, OrderBookLevel};
+        use crate::studies::{IndicatorFactory, InputValue};
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let factory = IndicatorFactory::new();
+        let names = [
+            "Quoted Spread",
+            "Book Size",
+            "Trade Rate",
+            "Levels Traded Through",
+        ];
+        let ids: Vec<_> = names
+            .iter()
+            .map(|name| chart.add_indicator(factory.create(name).unwrap()))
+            .collect();
+        let mut volume = factory.create("Trade Rate").unwrap();
+        volume
+            .set_input("volume", InputValue::Toggle(true))
+            .unwrap();
+        let volume_id = chart.add_indicator(volume);
+        let mut near = factory.create("Book Size").unwrap();
+        near.set_input("levels", InputValue::Length(1)).unwrap();
+        let near_id = chart.add_indicator(near);
+        let mut distance = factory.create("Book Size").unwrap();
+        distance
+            .set_input("distance", InputValue::Number(1.0))
+            .unwrap();
+        let distance_id = chart.add_indicator(distance);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.page().send(page(bars(3), true));
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(1.0);
+        feed.resolve().send(Ok(instrument));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        let sink = feed.sink();
+        let start = bars(1)[0].time;
+        let at = |second| start + TimeDelta::seconds(second);
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(
+                vec![Tick::new(at(2), 100.0, 3.0, None).with_id(1)],
+                true,
+            )));
+        for (second, bid, ask) in [(0, 99.0, 101.0), (10, 100.0, 103.0), (20, 98.0, 102.0)] {
+            sink.push_quote(Level1Quote {
+                ts: at(second),
+                symbol: "A".into(),
+                bid,
+                ask,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            });
+        }
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: None,
+        };
+        let book = |second, bids, asks| OrderBook {
+            ts: at(second),
+            symbol: "A".into(),
+            bids,
+            asks,
+        };
+        sink.push_depth_snapshot(
+            1,
+            book(
+                0,
+                vec![level(99.0, 2.0), level(98.0, 3.0)],
+                vec![level(101.0, 7.0), level(102.0, 11.0)],
+            ),
+        );
+        // A sequence gap erases the first book even though it was valid earlier in this bar.
+        sink.push_depth_delta(3, &book(20, vec![], vec![]));
+        for _ in 0..12 {
+            frames.run(&mut chart);
+        }
+        assert!(
+            chart
+                .indicators()
+                .find(|(id, _)| *id == ids[1])
+                .unwrap()
+                .1
+                .values()
+                .value(0, 0)
+                .is_none()
+        );
+        sink.push_depth_snapshot(
+            4,
+            book(
+                30,
+                vec![level(98.0, 6.0), level(97.0, 9.0)],
+                vec![level(102.0, 8.0), level(103.0, 12.0)],
+            ),
+        );
+        // No quotes in bar 1. The first quote after loss seeds the path rather than counting
+        // an unobserved jump from the old inside market.
+        sink.push_quote(Level1Quote {
+            ts: at(125),
+            symbol: "A".into(),
+            bid: 105.0,
+            ask: 107.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        });
+        for (id, (second, size)) in [(0, 2.0), (2, 3.0), (5, 5.0), (65, 7.0)]
+            .into_iter()
+            .enumerate()
+        {
+            sink.push_tick(Tick::new(at(second), 100.0, size, None).with_id(id as u64));
+        }
+        sink.push_tick(Tick::new(at(65), 100.0, 7.0, None).with_id(3));
+        for _ in 0..20 {
+            frames.run(&mut chart);
+        }
+        let expected = [
+            (
+                ids[0],
+                [[Some(4.0), Some(3.0), Some(4.0)], [None; 3], [Some(2.0); 3]],
+            ),
+            (
+                ids[1],
+                [[Some(15.0), Some(20.0), Some(-5.0)], [None; 3], [None; 3]],
+            ),
+            (
+                near_id,
+                [[Some(6.0), Some(8.0), Some(-2.0)], [None; 3], [None; 3]],
+            ),
+            (
+                distance_id,
+                [[Some(15.0), Some(20.0), Some(-5.0)], [None; 3], [None; 3]],
+            ),
+            (
+                ids[2],
+                [
+                    [Some(3.0), Some(3.0 / 60.0), Some(1.0 / 3.0)],
+                    [Some(1.0), Some(1.0 / 60.0), Some(1.0 / 3.0)],
+                    [None; 3],
+                ],
+            ),
+            (
+                volume_id,
+                [
+                    [Some(10.0), Some(10.0 / 60.0), Some(5.0 / 3.0)],
+                    [Some(7.0), Some(7.0 / 60.0), Some(7.0 / 3.0)],
+                    [None; 3],
+                ],
+            ),
+            (
+                ids[3],
+                [[Some(3.0), Some(3.0), Some(6.0)], [None; 3], [Some(0.0); 3]],
+            ),
+        ];
+        for (id, rows) in expected {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            for (bar, row) in rows.into_iter().enumerate() {
+                for (line, want) in row.into_iter().enumerate() {
+                    assert_eq!(
+                        study.values().value(line, bar),
+                        want,
+                        "{} bar {bar} line {line}",
+                        study.name()
+                    );
+                }
+            }
+        }
+        sink.advance_time(at(68));
+        for _ in 0..4 {
+            frames.run(&mut chart);
+        }
+        for id in [ids[2], volume_id] {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            assert_eq!(study.values().value(2, 1), Some(0.0), "idle instant rate");
+        }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(2.0),
+            "new rate replays the two retained bar-0 executions"
+        );
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(3.0),
+            "existing rate keeps the execution already evicted from raw history"
+        );
+        assert_eq!(
+            study.values().value(2, 1),
+            Some(0.0),
+            "adding another study preserves the idle clock"
+        );
+        let band = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
+            levels: 10,
+            distance: 0.3,
+        });
+        band.push_book(
+            &Timeframe::Min1.into(),
+            at(130),
+            Some(&book(
+                130,
+                vec![level(0.4, 2.0), level(0.1, 3.0)],
+                vec![level(0.7, 7.0), level(1.0, 11.0)],
+            )),
+        );
+        assert_eq!(
+            band.values()[&at(120)],
+            [5.0, 18.0, -13.0],
+            "decimal price-distance endpoints are inclusive"
+        );
+        let input = chart
+            .indicators()
+            .find(|(id, _)| *id == ids[2])
+            .unwrap()
+            .1
+            .order_flow_input()
+            .unwrap();
+        input.clear();
+        input.push_trade(&chart.bar_clock(), &Tick::new(at(125), 100.0, 1.0, None));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            None,
+            "clearing an input removes earlier plot values"
+        );
+        assert_eq!(study.values().value(0, 1), None);
+        assert_eq!(study.values().value(0, 2), Some(1.0));
+
+        let copy = study.clone_box();
+        let copy_id = chart.add_indicator(copy);
+        frames.run(&mut chart);
+        sink.push_tick(Tick::new(at(130), 100.0, 2.0, None).with_id(4));
+        sink.advance_time(at(134));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        for id in [ids[2], copy_id] {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            assert_eq!(
+                study.values().value(0, 2),
+                Some(2.0),
+                "shared sources count once"
+            );
+            assert_eq!(
+                study.values().value(2, 2),
+                Some(0.0),
+                "heartbeat follows queued trades"
+            );
+        }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(2, 2),
+            Some(0.0),
+            "new sources retain the idle clock"
+        );
     }
 }

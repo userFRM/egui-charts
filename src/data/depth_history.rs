@@ -105,12 +105,91 @@ impl DepthHistory {
         self.tiers.iter().rev().flatten()
     }
 
+    /// Merges a historical page, preserving every held column on overlap and keeping time gaps.
+    /// Columns must use this history's grid and sorted, unique rows, with finite non-negative
+    /// sizes and at most `config.rows` per side. Invalid pages leave the history unchanged.
+    /// Memory remains bounded by the configured tiers. Returns the number of columns accepted.
+    pub fn merge_page(&mut self, mut page: Vec<DepthColumn>) -> Result<usize, FeedError> {
+        let cadence = self.config.cadence;
+        let valid_side = |side: &[(i64, f64)], bid: bool| {
+            side.len() <= self.config.rows
+                && side
+                    .iter()
+                    .all(|(_, size)| size.is_finite() && *size >= 0.0)
+                && side.windows(2).all(|w| {
+                    if bid {
+                        w[0].0 > w[1].0
+                    } else {
+                        w[0].0 < w[1].0
+                    }
+                })
+        };
+        if page.iter().any(|c| {
+            start(c.time, cadence) != Some(c.time)
+                || c.span <= TimeDelta::zero()
+                || c.span
+                    .num_nanoseconds()
+                    .zip(cadence.num_nanoseconds())
+                    .is_none_or(|(span, cadence)| span % cadence != 0)
+                || c.time.checked_add_signed(c.span).is_none()
+                || !valid_side(&c.bids, true)
+                || !valid_side(&c.asks, false)
+        }) {
+            return Err(FeedError::InvalidData(
+                "invalid historical depth columns".into(),
+            ));
+        }
+        page.sort_by_key(|c| c.time);
+        let mut held: Vec<_> = self.columns().cloned().collect();
+        let mut accepted = 0;
+        for column in page {
+            let at = held.partition_point(|c| c.time < column.time);
+            let overlaps = (at > 0 && held[at - 1].time + held[at - 1].span > column.time)
+                || held
+                    .get(at)
+                    .is_some_and(|c| c.time < column.time + column.span);
+            if !overlaps {
+                held.insert(at, column);
+                accepted += 1;
+            }
+        }
+        self.clear();
+        for column in held {
+            self.push(column);
+        }
+        Ok(accepted)
+    }
+
     pub(crate) fn clear(&mut self) {
         self.tiers.iter_mut().for_each(VecDeque::clear);
     }
 
-    /// Appends `column`, newer than every column held, and merges the oldest of each full tier.
+    /// Live columns supersede overlapping history, including a page answered in the same drain.
     pub(crate) fn push(&mut self, column: DepthColumn) {
+        if self
+            .columns()
+            .next_back()
+            .is_some_and(|last| last.time + last.span > column.time)
+        {
+            let end = column.time + column.span;
+            let mut held: Vec<_> = self
+                .columns()
+                .filter(|c| c.time >= end || c.time + c.span <= column.time)
+                .cloned()
+                .collect();
+            held.push(column);
+            held.sort_by_key(|c| c.time);
+            self.clear();
+            for c in held {
+                self.push_tail(c);
+            }
+        } else {
+            self.push_tail(column);
+        }
+    }
+
+    /// Appends a newer column and merges the oldest of each full tier.
+    fn push_tail(&mut self, column: DepthColumn) {
         self.tiers[0].push_back(column);
         for tier in 0..TIERS {
             if self.tiers[tier].len() <= self.config.columns {
@@ -167,7 +246,9 @@ impl Sampler {
 /// Start of the period of `cadence` that holds `ts`, counted from the Unix epoch.
 fn start(ts: DateTime<Utc>, cadence: TimeDelta) -> Option<DateTime<Utc>> {
     let (ts, cadence) = (ts.timestamp_nanos_opt()?, cadence.num_nanoseconds()?);
-    Some(DateTime::from_timestamp_nanos(ts - ts.rem_euclid(cadence)))
+    Some(DateTime::from_timestamp_nanos(
+        ts.checked_sub(ts.rem_euclid(cadence))?,
+    ))
 }
 
 /// One column spanning `older` and `newer`, adjacent, each row's size averaged over their spans.
@@ -287,6 +368,39 @@ mod tests {
             held,
             [(at(0), one, 1.0), (at(5), one, 3.0), (at(6), one, 5.0)]
         );
+    }
+
+    #[test]
+    fn historical_pages_preserve_live_columns_and_gaps() {
+        #[rustfmt::skip]
+        let cases = [
+            ("overlap", vec![column(1, 1, 1.0), column(2, 1, 99.0)],
+                vec![(1, 1.0), (2, 2.0), (3, 3.0)]),
+            ("gap", vec![column(-4, 1, 4.0)], vec![(-4, 4.0), (2, 2.0), (3, 3.0)]),
+            ("empty", vec![], vec![(2, 2.0), (3, 3.0)]),
+        ];
+        for (name, page, expected) in cases {
+            let mut history = DepthHistory::new(config_columns(10)).unwrap();
+            history.push(column(2, 1, 2.0));
+            history.push(column(3, 1, 3.0));
+            history.merge_page(page).unwrap();
+            let held: Vec<_> = history
+                .columns()
+                .map(|c| (c.time.timestamp(), c.bids[0].1))
+                .collect();
+            assert_eq!(held, expected, "{name}");
+            history.push(column(3, 1, 30.0));
+            assert_eq!(history.columns().filter(|c| c.time == at(3)).count(), 1);
+            assert_eq!(history.columns().next_back().unwrap().bids, [(100, 30.0)]);
+            let before: Vec<_> = history.columns().cloned().collect();
+            assert!(history.merge_page(vec![column(1, -1, 1.0)]).is_err());
+            let edge = DepthColumn {
+                time: DateTime::from_timestamp_nanos(i64::MIN),
+                ..column(1, 1, 1.0)
+            };
+            assert!(history.merge_page(vec![edge]).is_err());
+            assert_eq!(history.columns().cloned().collect::<Vec<_>>(), before);
+        }
     }
 
     fn config_columns(columns: usize) -> DepthHistoryConfig {

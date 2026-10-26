@@ -350,6 +350,10 @@ impl Indicator for ConfiguredStudy {
         }
         self.aligned = Some(aligned);
     }
+    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+        self.study.order_flow_input()
+    }
+
     fn calculate(&mut self, data: &[Bar]) {
         self.update(data, 0);
     }

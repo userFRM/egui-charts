@@ -15,7 +15,7 @@ impl super::DemoApp {
         Modal::new("interval_entry", "Change interval")
             .width(320.0)
             .show(ctx, &mut open, |ui| {
-                ui.label("Minutes, or an interval such as 30s, 2h, 1D or 10T");
+                ui.label("Minutes, or an interval such as 30s, 2h, 1D, 10T, 100V, 10R or 100delta");
                 let input_id = egui::Id::unique("interval_entry_input");
                 if std::mem::take(&mut self.interval_focus) {
                     ui.memory_mut(|memory| memory.request_focus(input_id));

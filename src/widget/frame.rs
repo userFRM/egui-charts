@@ -34,7 +34,7 @@ impl Chart {
         }
         let last = crate::model::last_with_value(&self.state.data().bars)?;
         let timeframe = self.timeframe?;
-        if matches!(timeframe, crate::model::Timeframe::Ticks(_)) {
+        if timeframe.is_trade_based() {
             return None;
         }
         let now = self.replay_time().or_else(|| {
@@ -1494,6 +1494,9 @@ impl Chart {
         };
         let paint_main_series = || {
             if self.main_series_visible {
+                if time_based {
+                    self.paint_liquidity(&clipped_painter, &self.get_chart_mapping());
+                }
                 if let Some((flow, config)) = footprint.filter(|_| time_based) {
                     if show_volume && !cfg!(feature = "studies") {
                         rendering::candles::volume::render_volume_bars(

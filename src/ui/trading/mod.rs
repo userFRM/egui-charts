@@ -1628,6 +1628,51 @@ mod tests {
             assert!(!covered, "the position's label is drawn over the marks");
             assert_eq!(chart.trading_tags.is_empty(), !drawn);
         }
+
+        // A finer fill stays on the only revealed candle, with an exclusive replay cutoff.
+        let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        trading.display.show_executions = true;
+        trading.display.show_execution_labels = true;
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [1440.0, 320.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = Chart::new(crate::model::BarData::from_bars(vec![
+                    crate::model::Bar::new(time, 100.0, 110.0, 90.0, 100.0, 1.0),
+                ]));
+                chart.symbol = "SYM".into();
+                chart.set_timeframe(crate::model::Timeframe::Min1);
+                chart.set_replay_time(Some(time + chrono::Duration::minutes(1)));
+                for (seconds, expected) in [(0, true), (30, true), (-1, false), (60, false)] {
+                    for fill in &mut trading.account_panel.fills.executions {
+                        fill.time = time + chrono::Duration::seconds(seconds);
+                    }
+                    let mut marked = false;
+                    for _ in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 600.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                                trading.show(ui, &mut chart);
+                            },
+                        );
+                        marked |= output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape, egui::Shape::Text(text)
+                                if text.galley.text() == "3 @ 97.00")
+                        });
+                        output.drop_without_applying_deltas();
+                        chart.fit_content();
+                    }
+                    assert_eq!(marked, expected, "fill at {seconds} seconds, width {width}");
+                }
+            }
+        }
     }
 
     /// The legend shows the order quantity under the spread; clicking it opens the calculator,

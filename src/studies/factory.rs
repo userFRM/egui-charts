@@ -77,9 +77,8 @@ impl IndicatorFactory {
 
     /// Register every built-in indicator under its canonical name.
     ///
-    /// The list below is the single registration site for built-ins: adding a
-    /// new indicator type here makes it constructible by name with zero further
-    /// wiring. Types use their defaults; automatic drawings also select a construction kind.
+    /// Types use their defaults; automatic drawings select a construction kind and
+    /// stream studies select aggregation parameters. Names come from each study.
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
@@ -274,6 +273,28 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
+        for kind in [
+            OrderFlowKind::Spread,
+            OrderFlowKind::BookSize {
+                levels: 10,
+                distance: 0.0,
+            },
+            OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+        ] {
+            let name = OrderFlowStudy::new(kind).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Order flow",
+                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                ),
+            );
+        }
         #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
@@ -908,6 +929,9 @@ mod tests {
         let mut duplicates = Vec::new();
         for name in names {
             let mut study = factory.create(&name).unwrap();
+            if study.order_flow_input().is_some() {
+                continue;
+            }
             // External series have no values until the host supplies their distinct inputs.
             if !study.data_requests().is_empty() {
                 continue;
@@ -1094,6 +1118,19 @@ mod tests {
             Box::new(VolProfileAnchored::new(l(0))),
             Box::new(VolProfileAutoAnchored::new(l(0))),
             Box::new(TimePriceOpportunity::default()),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::Spread)),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::BookSize {
+                levels: l(0),
+                distance: x(0.0),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: l(0),
+                instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
+                seconds: l(0),
+            })),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
             Box::new(PriceVolumeTrendStudy::new(l(0))),
