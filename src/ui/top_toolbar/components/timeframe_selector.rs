@@ -23,6 +23,12 @@ const CUSTOM_FORM_W: f32 = 232.0;
 pub enum TimeframeUnit {
     /// A fixed number of executions per bar.
     Tick,
+    /// Traded volume in whole units, split exactly at the threshold.
+    Volume,
+    /// Price range in instrument ticks.
+    Range,
+    /// Absolute buy minus sell volume in whole units.
+    Delta,
     Second,
     Minute,
     Hour,
@@ -35,6 +41,9 @@ impl TimeframeUnit {
     pub fn short_name(&self) -> &'static str {
         match self {
             TimeframeUnit::Tick => "T",
+            TimeframeUnit::Volume => "V",
+            TimeframeUnit::Range => "R",
+            TimeframeUnit::Delta => "delta",
             TimeframeUnit::Second => "S",
             TimeframeUnit::Minute => "m",
             TimeframeUnit::Hour => "h",
@@ -47,6 +56,9 @@ impl TimeframeUnit {
     pub fn name(&self) -> &'static str {
         match self {
             TimeframeUnit::Tick => "ticks",
+            TimeframeUnit::Volume => "volume units",
+            TimeframeUnit::Range => "range ticks",
+            TimeframeUnit::Delta => "delta units",
             TimeframeUnit::Second => "seconds",
             TimeframeUnit::Minute => "minutes",
             TimeframeUnit::Hour => "hours",
@@ -79,6 +91,9 @@ impl Timeframe {
         let unit_name = if self.value == 1 {
             match self.unit {
                 TimeframeUnit::Tick => "tick",
+                TimeframeUnit::Volume => "volume unit",
+                TimeframeUnit::Range => "range tick",
+                TimeframeUnit::Delta => "delta unit",
                 TimeframeUnit::Second => "second",
                 TimeframeUnit::Minute => "minute",
                 TimeframeUnit::Hour => "hour",
@@ -99,6 +114,14 @@ impl Timeframe {
             TimeframeUnit::Tick => {
                 return std::num::NonZeroU64::new(u64::from(self.value))
                     .map(crate::model::Timeframe::Ticks);
+            }
+            TimeframeUnit::Volume | TimeframeUnit::Range | TimeframeUnit::Delta => {
+                let count = std::num::NonZeroU64::new(u64::from(self.value))?;
+                return Some(match self.unit {
+                    TimeframeUnit::Volume => crate::model::Timeframe::Volume(count),
+                    TimeframeUnit::Range => crate::model::Timeframe::Range(count),
+                    _ => crate::model::Timeframe::Delta(count),
+                });
             }
             TimeframeUnit::Second => 1,
             TimeframeUnit::Minute => 60,
@@ -127,6 +150,10 @@ impl Timeframe {
             Timeframe::new(10, TimeframeUnit::Tick),
             Timeframe::new(100, TimeframeUnit::Tick),
             Timeframe::new(1000, TimeframeUnit::Tick),
+            Timeframe::new(100, TimeframeUnit::Volume),
+            Timeframe::new(1000, TimeframeUnit::Volume),
+            Timeframe::new(10, TimeframeUnit::Range),
+            Timeframe::new(100, TimeframeUnit::Delta),
             // Seconds
             Timeframe::new(1, TimeframeUnit::Second),
             Timeframe::new(5, TimeframeUnit::Second),
@@ -268,6 +295,9 @@ impl CustomTimeframeDialog {
     fn available_units() -> &'static [(TimeframeUnit, &'static str)] {
         &[
             (TimeframeUnit::Tick, "Ticks"),
+            (TimeframeUnit::Volume, "Volume"),
+            (TimeframeUnit::Range, "Range"),
+            (TimeframeUnit::Delta, "Delta"),
             (TimeframeUnit::Second, "Seconds"),
             (TimeframeUnit::Minute, "Minutes"),
             (TimeframeUnit::Hour, "Hours"),
@@ -557,6 +587,9 @@ impl TimeframeSelector {
             .show(ui, |ui| {
                 for (unit, header) in [
                     (TimeframeUnit::Tick, "Ticks"),
+                    (TimeframeUnit::Volume, "Volume"),
+                    (TimeframeUnit::Range, "Range"),
+                    (TimeframeUnit::Delta, "Delta"),
                     (TimeframeUnit::Second, "Seconds"),
                     (TimeframeUnit::Minute, "Minutes"),
                     (TimeframeUnit::Hour, "Hours"),
@@ -997,6 +1030,10 @@ mod tests {
             "10t".parse().unwrap(),
             "100t".parse().unwrap(),
             "1000t".parse().unwrap(),
+            "100v".parse().unwrap(),
+            "1000v".parse().unwrap(),
+            "10r".parse().unwrap(),
+            "100delta".parse().unwrap(),
             Model::Sec1,
             Model::Sec5,
             Model::Sec10,

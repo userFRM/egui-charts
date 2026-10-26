@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// data and can be aggregated into bars, footprint charts, or volume
 /// profiles. Build it with [`Tick::new`]. A trade names no symbol: the
 /// [`Sink`](crate::data::Sink) it is pushed into stands for one instrument, so a
-/// trade holds no heap data and pushing one allocates nothing.
+/// trade holds no heap data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Tick {
@@ -45,6 +45,12 @@ pub struct Tick {
     /// as off-exchange or auction trades.
     #[serde(default)]
     pub conditions: TradeConditions,
+    /// Exchange aggressor order id, unique per symbol. Only explicit matching ids combine fills.
+    #[serde(default)]
+    pub aggressor_order_id: Option<u64>,
+    /// Resting order filled by this execution, when supplied by an order-level feed.
+    #[serde(default)]
+    pub resting_order_id: Option<u64>,
 }
 
 impl Tick {
@@ -57,12 +63,26 @@ impl Tick {
             side,
             id: None,
             conditions: TradeConditions::NONE,
+            aggressor_order_id: None,
+            resting_order_id: None,
         }
     }
 
     /// Sets [`id`](Self::id).
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = Some(id);
+        self
+    }
+
+    /// Sets [`resting_order_id`](Self::resting_order_id).
+    pub fn with_resting_order_id(mut self, id: u64) -> Self {
+        self.resting_order_id = Some(id);
+        self
+    }
+
+    /// Sets [`aggressor_order_id`](Self::aggressor_order_id).
+    pub fn with_aggressor_order_id(mut self, id: u64) -> Self {
+        self.aggressor_order_id = Some(id);
         self
     }
 
@@ -115,6 +135,16 @@ impl TradeConditions {
     pub const OUT_OF_SEQUENCE: Self = Self(1 << 3);
     /// Executed outside the regular trading session.
     pub const EXTENDED_HOURS: Self = Self(1 << 4);
+
+    /// Raw condition bits, including flags a newer feed may define.
+    pub(crate) fn bits(self) -> u16 {
+        self.0
+    }
+
+    /// Restores condition bits without discarding unknown flags in a recording.
+    pub(crate) fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
 
     /// Whether any condition of `other` is set.
     pub fn intersects(self, other: Self) -> bool {
@@ -267,7 +297,7 @@ pub struct ExtendedHoursQuote {
 /// };
 /// assert_eq!(quote.spread(), 10.0);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Level1Quote {
     /// Ts of the quote
     pub ts: DateTime<Utc>,
@@ -312,7 +342,7 @@ impl Level1Quote {
 ///
 /// Represents the aggregate size (and optionally order count) resting
 /// at one price level on either the bid or ask side.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBookLevel {
     /// Price level
     pub price: f64,
@@ -328,7 +358,7 @@ pub struct OrderBookLevel {
 /// time. Bids are sorted descending (best bid first), asks ascending
 /// (best ask first). Use [`imbalance_ratio`](Self::imbalance_ratio) to
 /// gauge buying vs. selling pressure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBook {
     /// Ts of the snapshot
     pub ts: DateTime<Utc>,

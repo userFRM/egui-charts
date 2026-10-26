@@ -12,7 +12,7 @@ pub fn bar_countdown(
     now: DateTime<Utc>,
     close: Option<DateTime<Utc>>,
 ) -> Option<String> {
-    if matches!(timeframe, Timeframe::Ticks(_)) {
+    if timeframe.is_trade_based() {
         return None;
     }
     let end = close.or_else(|| {

@@ -153,7 +153,12 @@ impl LiveFeed {
             .collect();
         let mut bars = if timeframe.duration_ms() < 60_000 || timeframe.duration_ms() % 60_000 != 0
         {
-            aggregate_trades(&trades, clock.clone()).expect("generated executions")
+            egui_charts::data::aggregate_trades_with_tick_size(
+                &trades,
+                clock.clone(),
+                Some(sim.tick_size),
+            )
+            .expect("generated executions")
         } else {
             let mut minutes = sim.shown_history(extended_hours);
             minutes

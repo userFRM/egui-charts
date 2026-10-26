@@ -42,5 +42,7 @@ pub mod symbol_header;
 mod tpo_context_menu;
 pub mod trading;
 
+mod trade_profile_menu;
+pub use trade_profile_menu::trade_profile_menu;
 #[cfg(test)]
 mod accessibility_tests;
