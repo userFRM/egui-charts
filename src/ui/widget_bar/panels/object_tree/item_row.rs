@@ -443,7 +443,7 @@ fn render_properties(
 
             // Line style
             ui.hint_label("Style");
-            ui.label(l10n::text(ui.ctx(), props.line_style.as_str()));
+            ui.label(l10n::text(ui.ctx(), props.line_style.name()));
             ui.end_row();
 
             // Transparency

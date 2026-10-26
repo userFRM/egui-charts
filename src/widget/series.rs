@@ -880,7 +880,7 @@ mod tests {
                         })
                         .collect()
                 })
-                .with_line_cnt(if case == "multiple" { 5 } else { 1 })
+                .with_line_count(if case == "multiple" { 5 } else { 1 })
                 .with_overlay(case != "pane")
                 .with_offsets(vec![if case == "displaced_future" { 5 } else { 0 }])
                 .with_scale(match case {

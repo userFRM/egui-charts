@@ -24,7 +24,7 @@ use egui::Color32;
 ///   indicator's warmup period, or on a bar whose inputs are not finite.
 ///
 /// An indicator with more than one line emits `Multiple` with
-/// [`line_cnt`](Indicator::line_cnt) values or `None`, never `Single`.
+/// [`line_count`](Indicator::line_count) values or `None`, never `Single`.
 #[derive(Debug, Clone)]
 pub enum IndicatorValue {
     /// A single computed value (e.g. SMA output at one bar).
@@ -160,7 +160,7 @@ pub trait Indicator: Send {
         super::PlotStyle {
             color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
             width: self.line_style(line).width,
-            pattern: super::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: super::PlotType::Line,
             visible: true,
         }
@@ -200,7 +200,7 @@ pub trait Indicator: Send {
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
         super::StudySettings {
-            plots: (0..self.line_cnt())
+            plots: (0..self.line_count())
                 .map(|line| self.plot_style(line))
                 .collect(),
             precision: self.precision(),
@@ -496,18 +496,18 @@ pub trait Indicator: Send {
     }
 
     /// The number of output columns this indicator plots. Renderers draw lines
-    /// `0..line_cnt()`.
+    /// `0..line_count()`.
     ///
     /// For example, SMA returns `1`, MACD returns `3` (MACD line, signal,
     /// histogram), and Ichimoku returns `5`. Defaults to the number of
     /// [`line_names`](Indicator::line_names).
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         self.line_names().len()
     }
 
     /// Return display names for each line, used in chart legends.
     ///
-    /// The length of the returned `Vec` must match [`line_cnt`](Indicator::line_cnt).
+    /// The length of the returned `Vec` must match [`line_count`](Indicator::line_count).
     /// Defaults to a single entry containing [`name`](Indicator::name).
     fn line_names(&self) -> Vec<String> {
         vec![self.name().to_string()]

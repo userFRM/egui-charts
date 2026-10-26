@@ -1,13 +1,12 @@
 //! Drawing options and configuration types.
 //!
-//! Contains styling enums ([`LineStyle`], [`ArrowStyle`], [`FontWeight`]),
+//! Contains styling enums ([`LineStyle`](crate::model::LineStyle), [`ArrowStyle`], [`FontWeight`]),
 //! interaction configuration ([`DrawingOptions`], [`HandlePos`]),
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
 
-pub use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

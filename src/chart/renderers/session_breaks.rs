@@ -15,7 +15,7 @@
 
 use super::context::{ChartMapping, RenderContext};
 use crate::chart::rendering::draw_dashed_line;
-use crate::config::SessionBreakStyle;
+use crate::model::LineStyle;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
 use egui::{Color32, Pos2, Stroke};
 
@@ -116,18 +116,18 @@ pub(crate) fn render_extended_hours(
     }
 }
 
-/// Convert a [`SessionBreakStyle`] into the dash pattern egui needs.
+/// Convert a [`LineStyle`] into the dash pattern egui needs.
 ///
 /// `Solid` yields a single segment so the caller can take a plain
 /// `line_segment` fast path; `Dashed`/`Dotted` return on/off lengths scaled so
 /// the pattern reads at the typical divider width.
-fn dash_pattern(style: SessionBreakStyle) -> Option<(f32, f32)> {
+fn dash_pattern(style: LineStyle) -> Option<(f32, f32)> {
     match style {
-        SessionBreakStyle::Solid => None,
-        SessionBreakStyle::Dashed => Some((6.0, 4.0)),
-        SessionBreakStyle::Dotted => Some((2.0, 3.0)),
-        SessionBreakStyle::LargeDashed => Some((12.0, 8.0)),
-        SessionBreakStyle::SparseDotted => Some((2.0, 8.0)),
+        LineStyle::Solid => None,
+        LineStyle::Dashed => Some((6.0, 4.0)),
+        LineStyle::Dotted => Some((2.0, 3.0)),
+        LineStyle::LargeDashed => Some((12.0, 8.0)),
+        LineStyle::SparseDotted => Some((2.0, 8.0)),
     }
 }
 
@@ -139,7 +139,7 @@ pub struct SessionBreakRenderConfig {
     /// Base line width in points.
     pub line_width: f32,
     /// Line style (solid / dashed / dotted).
-    pub style: SessionBreakStyle,
+    pub style: LineStyle,
 }
 
 impl Default for SessionBreakRenderConfig {
@@ -147,7 +147,7 @@ impl Default for SessionBreakRenderConfig {
         Self {
             line_color: Color32::from_gray(80),
             line_width: 1.0,
-            style: SessionBreakStyle::Dashed,
+            style: LineStyle::Dashed,
         }
     }
 }
@@ -339,8 +339,8 @@ mod tests {
 
     #[test]
     fn solid_style_has_no_dash_pattern() {
-        assert!(dash_pattern(SessionBreakStyle::Solid).is_none());
-        assert!(dash_pattern(SessionBreakStyle::Dashed).is_some());
-        assert!(dash_pattern(SessionBreakStyle::Dotted).is_some());
+        assert!(dash_pattern(LineStyle::Solid).is_none());
+        assert!(dash_pattern(LineStyle::Dashed).is_some());
+        assert!(dash_pattern(LineStyle::Dotted).is_some());
     }
 }

@@ -386,7 +386,7 @@ impl<T: Send + 'static> Drop for Reply<T> {
 /// ```
 /// use chrono::Utc;
 /// use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
-/// use egui_charts::model::{OrderBook, OrderBookLevel, Tick, TradeSide};
+/// use egui_charts::model::{OrderBook, OrderBookLevel, Tick, OrderSide};
 ///
 /// struct Exchange;
 ///
@@ -403,7 +403,7 @@ impl<T: Send + 'static> Drop for Reply<T> {
 ///         let book = |bids, asks| OrderBook { ts: Utc::now(), symbol: symbol.clone(), bids, asks };
 ///
 ///         sink.push_depth_snapshot(7, book(vec![level(99.75, 3.0)], vec![level(100.0, 2.0)]));
-///         let side = Some(TradeSide::Buy);
+///         let side = Some(OrderSide::Buy);
 ///         sink.push_tick(Tick::new(Utc::now(), 100.0, 2.0, side).with_id(41_207));
 ///         // The buy took the whole offer at 100.
 ///         sink.push_depth_delta(8, &book(vec![], vec![level(100.0, 0.0)]));
@@ -816,7 +816,7 @@ impl Live {
 
     /// Folds exact volume and delta thresholds atomically; raw fills stay intact for order flow.
     fn fold_trade_bar(&mut self, tick: &Tick) -> Result<(), ()> {
-        use crate::model::{Timeframe, TradeSide};
+        use crate::model::{OrderSide, Timeframe};
         let timeframe = self.clock.timeframe().ok_or(())?;
         let mut forming = self.forming;
         let mut current = self.count_bar.clone();
@@ -846,8 +846,8 @@ impl Live {
             let size = match timeframe {
                 Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
                 Timeframe::Delta(limit) => match tick.side {
-                    Some(TradeSide::Buy) => remaining.min(limit.get() as f64 - delta),
-                    Some(TradeSide::Sell) => remaining.min(limit.get() as f64 + delta),
+                    Some(OrderSide::Buy) => remaining.min(limit.get() as f64 - delta),
+                    Some(OrderSide::Sell) => remaining.min(limit.get() as f64 + delta),
                     None => remaining,
                 },
                 _ => remaining,
@@ -857,8 +857,8 @@ impl Live {
             );
             let bar = fold(&old, &fill).ok_or(())?;
             delta += match tick.side {
-                Some(TradeSide::Buy) => size,
-                Some(TradeSide::Sell) => -size,
+                Some(OrderSide::Buy) => size,
+                Some(OrderSide::Sell) => -size,
                 None => 0.0,
             };
             closed = match timeframe {
@@ -972,7 +972,7 @@ mod tests {
     /// Exact volume/delta splitting preserves total size, while range bars use only real fills.
     #[test]
     fn trade_bar_thresholds_survive_drains_and_keep_raw_fills() {
-        use crate::model::TradeSide::{Buy, Sell};
+        use crate::model::OrderSide::{Buy, Sell};
         #[rustfmt::skip]
         let cases = [
             ("5v", vec![(100.0, 3.0, Buy), (102.0, 9.0, Sell)],
@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn order_events_feed_aggregated_depth_and_link_execution_trades() {
-        use crate::model::TradeSide::{Buy, Sell};
+        use crate::model::OrderSide::{Buy, Sell};
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
         let input = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {

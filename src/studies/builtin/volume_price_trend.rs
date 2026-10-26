@@ -245,7 +245,7 @@ impl Indicator for NegativeVolumeIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -343,7 +343,7 @@ impl Indicator for PositiveVolumeIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -446,7 +446,7 @@ mod tests {
         ];
         for (mut study, expected) in cases {
             study.calculate(&data);
-            assert_eq!(study.line_cnt(), 2, "{}", study.name());
+            assert_eq!(study.line_count(), 2, "{}", study.name());
             assert_eq!(study.values().len(), expected.len(), "{}", study.name());
             for (bar, (value, &(index, signal))) in
                 study.values().to_rows().iter().zip(&expected).enumerate()

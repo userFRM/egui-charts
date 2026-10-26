@@ -107,7 +107,7 @@ impl Chart {
             .filter(|(_, study)| study.is_visible())
         {
             let names = study.line_names();
-            for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
+            for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
                 header.push(format!(
                     "{}: {}",
                     study.name(),
@@ -449,7 +449,7 @@ mod tests {
                         })
                         .collect()
                 })
-                .with_line_cnt(3)
+                .with_line_count(3)
                 .with_line_names(vec!["mean".into(), "shifted".into(), "hidden".into()])
                 .with_offsets(vec![0, -1, 0]),
             ));

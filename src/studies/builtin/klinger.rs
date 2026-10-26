@@ -186,7 +186,7 @@ impl Indicator for KlingerOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -298,7 +298,7 @@ mod tests {
                 other => panic!("bar {bar}: expected two lines, got {other:?}"),
             }
         }
-        assert_eq!(klinger.line_cnt(), 2);
+        assert_eq!(klinger.line_count(), 2);
 
         // A bar with a non-finite price has no value; the study carries on after it.
         data[60].high = f64::NAN;

@@ -388,7 +388,7 @@ impl ChartState {
                     study,
                     study_start.max(start)..study_end.max(end),
                 );
-                (0..study.line_cnt())
+                (0..study.line_count())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
                         plot.visible

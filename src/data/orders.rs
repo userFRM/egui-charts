@@ -2,7 +2,7 @@
 
 use super::FeedError;
 use super::depth::{Lost, MAX_LEVELS, key};
-use crate::model::{OrderBook, OrderBookLevel, Tick, TradeSide};
+use crate::model::{OrderBook, OrderBookLevel, OrderSide, Tick};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -14,7 +14,7 @@ pub struct RestingOrder {
     /// Exchange order id, unique within the subscription's current book.
     pub id: u64,
     /// Buy for bids, sell for asks.
-    pub side: TradeSide,
+    pub side: OrderSide,
     /// Limit price.
     pub price: f64,
     /// Remaining size, finite and strictly positive.
@@ -23,7 +23,7 @@ pub struct RestingOrder {
 
 impl RestingOrder {
     /// A resting order with its remaining size.
-    pub fn new(id: u64, side: TradeSide, price: f64, size: f64) -> Self {
+    pub fn new(id: u64, side: OrderSide, price: f64, size: f64) -> Self {
         Self {
             id,
             side,
@@ -97,7 +97,7 @@ impl OrderQueue {
     }
 
     /// Orders at `price`, first in queue first. Prices share the aggregated book's tick rounding.
-    pub fn queue(&self, side: TradeSide, price: f64) -> impl Iterator<Item = &RestingOrder> {
+    pub fn queue(&self, side: OrderSide, price: f64) -> impl Iterator<Item = &RestingOrder> {
         let price = key(self.tick, price);
         self.orders
             .iter()
@@ -105,7 +105,7 @@ impl OrderQueue {
     }
 
     /// Largest resting order at a price, if any. Ties keep the earliest queue priority.
-    pub fn largest_order(&self, side: TradeSide, price: f64) -> Option<&RestingOrder> {
+    pub fn largest_order(&self, side: OrderSide, price: f64) -> Option<&RestingOrder> {
         self.queue(side, price)
             .reduce(|a, b| if b.size > a.size { b } else { a })
     }
@@ -126,7 +126,7 @@ impl OrderQueue {
             .iter()
             .filter(|o| minimum_size.is_finite() && minimum_size >= 0.0 && o.size >= minimum_size)
         {
-            let side = if order.side == TradeSide::Buy {
+            let side = if order.side == OrderSide::Buy {
                 &mut bids
             } else {
                 &mut asks
@@ -179,7 +179,7 @@ impl OrderQueue {
         orders: Vec<RestingOrder>,
     ) -> Result<(), Lost> {
         let mut ids = HashSet::new();
-        let bids = orders.iter().filter(|o| o.side == TradeSide::Buy).count();
+        let bids = orders.iter().filter(|o| o.side == OrderSide::Buy).count();
         if bids > MAX_LEVELS
             || orders.len() - bids > MAX_LEVELS
             || orders.iter().any(|o| !valid(o) || !ids.insert(o.id))
@@ -340,7 +340,7 @@ fn invalid() -> FeedError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use TradeSide::{Buy, Sell};
+    use OrderSide::{Buy, Sell};
 
     #[test]
     fn orders_preserve_priority_and_derive_levels() {

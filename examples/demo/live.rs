@@ -6,12 +6,10 @@ use egui_charts::data::{
     HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
     MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink,
     Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
-    aggregate_trades, resample,
-};
+    aggregate_trades, resample};
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
-    Tick, Timeframe, TradeSide,
-};
+    Tick, Timeframe, OrderSide};
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
 use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
 use std::collections::{BTreeMap, VecDeque};
@@ -589,9 +587,9 @@ impl Simulation {
         let u = (self.random() % 1000 + 1) as f64 / 1001.0;
         let size = (10.0 / u.sqrt()).round();
         let side = if step >= 0 {
-            TradeSide::Buy
+            OrderSide::Buy
         } else {
-            TradeSide::Sell
+            OrderSide::Sell
         };
         let trade = Tick::new(
             self.next_trade,

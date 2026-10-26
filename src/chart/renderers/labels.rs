@@ -803,7 +803,7 @@ mod tests {
                         ]
                     })
                     .with_overlay(overlay)
-                    .with_line_cnt(4)
+                    .with_line_count(4)
                     .with_colors(vec![
                         colors[0],
                         colors[1],

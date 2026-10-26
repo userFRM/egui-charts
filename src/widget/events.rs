@@ -240,7 +240,7 @@ impl Chart {
                 .map(|index| &self.rendered_studies().indicators()[index])
                 .filter(|study| study.is_visible())
                 .flat_map(|study| {
-                    (0..study.line_cnt())
+                    (0..study.line_count())
                         .filter(|line| {
                             let plot = study.plot_style(*line);
                             plot.visible

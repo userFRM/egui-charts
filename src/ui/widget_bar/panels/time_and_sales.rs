@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::object_tree::format_price;
 use crate::icons::icons;
-use crate::model::{Tick, TimezoneId, TradeSide};
+use crate::model::{OrderSide, Tick, TimezoneId};
 use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
@@ -212,8 +212,8 @@ impl TimeAndSalesPanel {
                     );
                     let cells = columns(rect);
                     let color = match trade.side {
-                        Some(TradeSide::Buy) => theme.chart.candle_up,
-                        Some(TradeSide::Sell) => theme.chart.candle_down,
+                        Some(OrderSide::Buy) => theme.chart.candle_up,
+                        Some(OrderSide::Sell) => theme.chart.candle_down,
                         None => theme.ui.text,
                     };
                     let time = trade.ts.with_timezone(&self.config.timezone);

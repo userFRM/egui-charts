@@ -36,7 +36,7 @@ pub use layout_menu::{LayoutAction, LayoutMenu, LayoutMenuConfig};
 
 // From settings_menu (ChartType comes from chart_type_selector - single source of truth)
 pub use settings_menu::{
-    CandleColorConfig, ChartSettings, ChartSettingsState, PrecisionMode, ScaleMode, SettingsAction,
+    CandleColorConfig, ChartSettings, ChartSettingsState, PrecisionMode, SettingsAction,
     SettingsDialog, SettingsDialogConfig, SettingsMenu, SettingsTab, StatusLineOptions,
 };
 
@@ -48,6 +48,6 @@ pub use symbol_search::{
 
 // From timeframe_selector
 pub use timeframe_selector::{
-    Timeframe, TimeframeAction, TimeframePreferences, TimeframeSelector, TimeframeSelectorConfig,
+    TimeframeAction, TimeframePreferences, TimeframeSelector, TimeframeSelectorConfig,
     TimeframeUnit,
 };

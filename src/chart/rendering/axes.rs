@@ -138,7 +138,7 @@ pub(crate) fn render_study_tags(
         return;
     };
     let transform = map.transform();
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let plot_style = study.plot_style(line);
         let Some(value) = study.plot_value(line, bar) else {
             continue;

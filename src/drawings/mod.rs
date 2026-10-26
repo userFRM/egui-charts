@@ -83,8 +83,10 @@
 //! ```
 //! use egui_charts::drawings::{
 //!     Drawing, DrawingToolType, DrawingManager, ChartPoint,
-//!     LineStyle, ArrowStyle, FibonacciConfig,
+//!     ArrowStyle, FibonacciConfig,
 //! };
+//!
+//! use egui_charts::model::LineStyle;
 //!
 //! // Create a drawing programmatically
 //! let mut drawing = Drawing::new(1, DrawingToolType::TrendLine);
@@ -130,7 +132,7 @@ pub mod services;
 // Re-export domain types at module root for convenience
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
-    DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos, LineStyle,
+    DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos,
     ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, ProfileDisplay,
     RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };

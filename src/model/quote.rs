@@ -13,6 +13,7 @@
 //! symbol's panels and the order ticket; the host streams it through the
 //! [`Quotes`](crate::services::Quotes) service.
 
+use crate::model::OrderSide;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,7 @@ pub struct Tick {
     /// Trade size/volume
     pub size: f64,
     /// Aggressor side, `None` when the feed does not classify the trade.
-    pub side: Option<TradeSide>,
+    pub side: Option<OrderSide>,
     /// Exchange trade id or sequence number, unique per symbol and never reused: a number that
     /// restarts each session, such as a daily sequence number, is not an id unless combined with
     /// the session date. With it, history and live trades join without losing or repeating a
@@ -55,7 +56,7 @@ pub struct Tick {
 
 impl Tick {
     /// A trade without an id.
-    pub fn new(ts: DateTime<Utc>, price: f64, size: f64, side: Option<TradeSide>) -> Self {
+    pub fn new(ts: DateTime<Utc>, price: f64, size: f64, side: Option<OrderSide>) -> Self {
         Self {
             ts,
             price,
@@ -91,20 +92,6 @@ impl Tick {
         self.conditions = conditions;
         self
     }
-}
-
-/// Aggressor side of a trade.
-///
-/// Indicates whether the trade was initiated by a buyer lifting the ask
-/// or a seller hitting the bid. This is essential for computing delta
-/// (buy volume minus sell volume) in footprint and order-flow analysis.
-/// A trade of unknown side has no `TradeSide`: [`Tick::side`] is `None`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TradeSide {
-    /// Buy side (aggressor was buyer)
-    Buy,
-    /// Sell side (aggressor was seller)
-    Sell,
 }
 
 /// Sale conditions of a trade, as a set of flags. Combine them with `|` and test them with

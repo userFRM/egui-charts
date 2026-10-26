@@ -44,40 +44,34 @@ use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
 use egui_charts::ui::context_menu::{
-    ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry,
-};
+    ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry};
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
     KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
-    StudyContextMenuAction,
-};
+    StudyContextMenuAction};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
 use egui_charts::ui::timeframe_toolbar::{
-    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction,
-};
+    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction};
 #[cfg(test)]
 use egui_charts::ui::top_toolbar::CompareAction;
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
-};
+    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog};
 use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
-    DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
-};
+    DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
     CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
     NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
     ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
-    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
-};
+    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
@@ -466,10 +460,7 @@ impl DemoApp {
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
         );
         top_toolbar.timeframe_selector.current =
-            egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
-                1,
-                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
-            );
+            Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
         let mut menus = ChartMenus::default();
@@ -663,23 +654,13 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
-        let catalog: Vec<_> = DemoSymbol::symbols()
-            .into_iter()
-            .map(|symbol| {
-                let mut instrument = egui_charts::model::Instrument::new(&symbol.name)
-                    .with_description(&symbol.display_name)
-                    .with_exchange(&symbol.exchange);
-                instrument.symbol_type = symbol.symbol_type;
-                instrument
-            })
-            .collect();
-        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(catalog);
+        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(DemoSymbol::symbols());
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
-            .find(|row| row.name == symbol)
+            .find(|row| row.symbol == symbol)
         {
             app.symbol_search.record_symbol(&row);
         }
@@ -766,7 +747,7 @@ impl DemoApp {
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
-            .find(|row| row.name == symbol)
+            .find(|row| row.symbol == symbol)
         {
             self.symbol_search.record_symbol(&row);
         }
@@ -980,9 +961,9 @@ impl DemoApp {
         self.handle_comparison(action);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
-                self.watchlist.add_symbol(&picked.name);
+                self.watchlist.add_symbol(&picked.symbol);
             } else {
-                self.switch_symbol(&picked.name);
+                self.switch_symbol(&picked.symbol);
             }
         }
         self.watchlist_search &= self.symbol_search.is_open();
@@ -1608,8 +1589,7 @@ impl DemoApp {
         self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         use egui_charts::config::CrosshairStyle;
         use egui_charts::ui::drawing_toolbar::{
-            DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType,
-        };
+            DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType};
         let dm = self.chart.drawings();
         let magnet_type = if !dm.options.strong_magnet {
             MagnetType::Weak
@@ -2505,15 +2485,15 @@ impl DemoApp {
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.is_connected() {
                         self.broker_picker.open();
-                    } else if side == egui_charts::widget::QuoteSide::Ticket {
+                    } else if side == egui_charts::widget::OrderSide::Ticket {
                         self.trading.open_ticket(egui_charts::model::OrderRequest::new(
                             self.chart.symbol(), egui_charts::model::OrderSide::Buy,
                             self.trading.quantity, egui_charts::model::OrderType::Market));
                     } else {
                         let side = match side {
-                            egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
-                            egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
-                            egui_charts::widget::QuoteSide::Ticket => unreachable!(),
+                            egui_charts::widget::OrderSide::Buy => egui_charts::model::OrderSide::Buy,
+                            egui_charts::widget::OrderSide::Sell => egui_charts::model::OrderSide::Sell,
+                            egui_charts::widget::OrderSide::Ticket => unreachable!(),
                         };
                         self.trading.trade(self.chart.symbol().to_owned(), side);
                     }
@@ -3026,7 +3006,7 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
+    use egui_charts::ui::dialogs::{LineStyle, DrawingProps};
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
@@ -3735,11 +3715,7 @@ mod tests {
         assert_eq!(app.state.timeframe, Timeframe::Min15);
         assert_eq!(app.state.timeframe.duration_ms(), 900_000);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
-        assert_eq!(app.top_toolbar.timeframe_selector.current.value, 15);
-        assert_eq!(
-            app.top_toolbar.timeframe_selector.current.unit,
-            egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute
-        );
+        assert_eq!(app.top_toolbar.timeframe_selector.current, Timeframe::Min15);
         let original = app.chart.config().background_color;
         let mut settings = app.settings_state.clone();
         settings.chart_basic_styles.background_color = egui::Color32::RED;
@@ -4265,10 +4241,9 @@ mod tests {
 
     #[test]
     fn display_settings_apply_styles_and_read_back() {
-        use egui_charts::config::{BackgroundStyle, CrosshairLineStyle};
+        use egui_charts::config::{BackgroundStyle, LineStyle};
         use egui_charts::ui::top_toolbar::components::settings_menu::{
-            BackgroundType, PrecisionMode, WatermarkMode,
-        };
+            BackgroundType, PrecisionMode, WatermarkMode};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         let mut state = app.settings_state.clone();
@@ -4286,7 +4261,7 @@ mod tests {
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
         state.margins.right_bars = 17;
-        state.trading.show_poss = false;
+        state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
         state.trading.show_execution_labels = true;
@@ -4301,11 +4276,11 @@ mod tests {
         );
         assert_eq!(
             app.chart.chart_options().crosshair.vert_line_style,
-            CrosshairLineStyle::Solid
+            LineStyle::Solid
         );
         assert_eq!(
             app.chart.chart_options().crosshair.horz_line_style,
-            CrosshairLineStyle::Solid
+            LineStyle::Solid
         );
         assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
         assert_eq!(
@@ -5053,7 +5028,7 @@ mod tests {
             [51, 102, 153, 85]
         );
         assert_eq!(props.font_size, 24.0);
-        assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
+        assert!(matches!(props.line_style, LineStyle::Dotted));
         assert!(props.extend_left);
         assert!(
             DrawingProps {
@@ -5123,8 +5098,7 @@ mod tests {
         assert!(!app.drawing_toolbar.state.lock_all);
         use egui_charts::drawings::{
             FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
-            VolumeProfileConfig,
-        };
+            VolumeProfileConfig};
         for tool in [
             DrawingToolType::FibonacciRetracement,
             DrawingToolType::Pitchfork,
@@ -5482,7 +5456,7 @@ mod tests {
                     vec![IndicatorValue::Multiple(vec![f64::NAN, 42.125]); bars.len()]
                 })
                 .with_overlay(false)
-                .with_line_cnt(2)
+                .with_line_count(2)
                 .with_line_names(vec!["Missing".into(), "Hidden plot".into()]),
             ));
             let study = app.chart.indicator_mut(gap).unwrap();

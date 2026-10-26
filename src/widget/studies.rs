@@ -40,7 +40,7 @@ impl Chart {
                 .iter()
                 .position(|candidate| candidate.0 == parent)
                 .ok_or("unknown source study")?;
-            if plot >= self.studies.indicators()[parent_at].line_cnt() {
+            if plot >= self.studies.indicators()[parent_at].line_count() {
                 return Err("unknown source plot");
             }
             let mut next = Some(parent);
@@ -129,7 +129,7 @@ pub(super) fn order(studies: &[Box<dyn Indicator>], ids: &[SeriesId]) -> Vec<usi
                     .iter()
                     .position(|candidate| candidate.0 == id)
                     .is_some_and(|parent| {
-                        ordered.contains(&parent) && plot < studies[parent].line_cnt()
+                        ordered.contains(&parent) && plot < studies[parent].line_count()
                     }),
                 _ => true,
             };

@@ -53,10 +53,10 @@ where
         });
     }
 
-    let line_cnt = indicator.line_cnt();
+    let line_count = indicator.line_count();
 
     // Test each line of the indicator
-    for line_idx in 0..line_cnt {
+    for line_idx in 0..line_count {
         if !indicator.plot_style(line_idx).visible {
             continue;
         }
@@ -262,12 +262,12 @@ pub fn hit_test_pane_indicator(
         });
     }
 
-    let line_cnt = indicator.line_cnt();
+    let line_count = indicator.line_count();
 
     let value_to_y = |value| coords.price_to_y(value);
 
     // Test each line of the indicator
-    for line_idx in 0..line_cnt {
+    for line_idx in 0..line_count {
         if !indicator.plot_style(line_idx).visible {
             continue;
         }

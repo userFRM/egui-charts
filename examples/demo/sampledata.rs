@@ -4,21 +4,21 @@
 //! price series seeded from its name. Switching symbols therefore yields a
 //! stable, distinct chart rather than random noise that changes each frame.
 
-use egui_charts::model::{Bar, Symbol, SymbolType};
+use egui_charts::model::{Bar, Instrument, SymbolType};
 
 /// Deterministic executions inside each fixture bar's UTC slot. These are synthetic aggressors,
 /// independent of historical trades. Sizes sum to the fixture volume.
 pub fn synthetic_trades(bars: &[Bar]) -> Vec<egui_charts::model::Tick> {
-    use egui_charts::model::{Tick, TradeSide};
+    use egui_charts::model::{Tick, OrderSide};
     bars.iter()
         .flat_map(|bar| {
             (0..64).map(move |i| {
                 let fraction = ((i * 17) % 64) as f64 / 63.0;
                 let price = bar.low + (bar.high - bar.low) * fraction;
                 let side = if (i * 13 + bar.time.timestamp() as usize) % 11 < 6 {
-                    TradeSide::Buy
+                    OrderSide::Buy
                 } else {
-                    TradeSide::Sell
+                    OrderSide::Sell
                 };
                 Tick::new(
                     bar.time + chrono::TimeDelta::microseconds(i as i64),
@@ -122,8 +122,8 @@ impl DemoSymbol {
             .unwrap_or(&cat[0])
     }
 
-    /// The catalog as `Symbol` rows for the symbol-search dialog.
-    pub fn symbols() -> Vec<Symbol> {
+    /// The catalog as `Instrument` rows for the symbol-search dialog.
+    pub fn symbols() -> Vec<Instrument> {
         Self::catalog()
             .iter()
             .map(|s| {
@@ -134,7 +134,7 @@ impl DemoSymbol {
                     "Synthetic" => SymbolType::Fund,
                     _ => SymbolType::Stock,
                 };
-                Symbol::new(s.symbol, s.company_name).with_market(s.exchange, kind)
+                Instrument::new(s.symbol).with_description(s.company_name).with_exchange(s.exchange).with_symbol_type(kind)
             })
             .collect()
     }

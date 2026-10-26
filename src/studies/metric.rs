@@ -56,7 +56,7 @@ impl Indicator for MetricStudy {
         super::PlotStyle {
             color: self.color,
             width: 1.0,
-            pattern: super::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: super::PlotType::StepLine,
             visible: true,
         }

@@ -241,7 +241,7 @@ impl Indicator for StochasticRSI {
         false // StochRSI is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // %K and %D
     }
 

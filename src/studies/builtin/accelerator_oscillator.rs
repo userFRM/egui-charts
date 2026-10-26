@@ -83,7 +83,7 @@ impl Indicator for AcceleratorOscillator {
         crate::studies::PlotStyle {
             color: self.rising_color,
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
@@ -141,7 +141,7 @@ impl Indicator for AcceleratorOscillator {
         false
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

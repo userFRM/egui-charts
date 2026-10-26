@@ -3,49 +3,9 @@
 //! Defines scale modes, background types, grid line modes, button visibility,
 //! watermark display, candle colors, status line options, and precision modes.
 
-use crate::theme::Theme;
-use egui::Color32;
-use std::fmt;
-use std::str::FromStr;
-
 // ============================================================================
 // Core Types (used throughout codebase)
 // ============================================================================
-
-/// Price axis scale mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ScaleMode {
-    /// Automatic scale based on visible data
-    #[default]
-    Auto,
-    /// Display as percentage change from reference price
-    Percentage,
-    /// Logarithmic price scale
-    Logarithmic,
-}
-
-impl fmt::Display for ScaleMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ScaleMode::Auto => write!(f, "Auto"),
-            ScaleMode::Percentage => write!(f, "Percentage"),
-            ScaleMode::Logarithmic => write!(f, "Logarithmic"),
-        }
-    }
-}
-
-impl FromStr for ScaleMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "auto" => Ok(ScaleMode::Auto),
-            "percentage" | "percent" | "%" => Ok(ScaleMode::Percentage),
-            "logarithmic" | "log" => Ok(ScaleMode::Logarithmic),
-            _ => Err(format!("Invalid scale mode: {s}")),
-        }
-    }
-}
 
 // ChartType is re-exported from chart_type_selector - use that as the single source of truth
 
@@ -209,61 +169,6 @@ impl WatermarkMode {
             WatermarkMode::Symbol => "Symbol",
             WatermarkMode::SymbolAndDescription => "Symbol and desc",
             WatermarkMode::Custom => "Custom",
-        }
-    }
-}
-
-/// Candle color configuration
-#[derive(Debug, Clone, PartialEq)]
-pub struct CandleColorConfig {
-    pub body_up: Color32,
-    pub body_down: Color32,
-    pub border_up: Color32,
-    pub border_down: Color32,
-    pub wick_up: Color32,
-    pub wick_down: Color32,
-}
-
-impl CandleColorConfig {
-    /// Create config from `theme`
-    pub fn from_theme(theme: &Theme) -> Self {
-        let chart = &theme.chart;
-        Self {
-            body_up: chart.candle_up,
-            body_down: chart.candle_down,
-            border_up: chart.candle_up,
-            border_down: chart.candle_down,
-            wick_up: chart.candle_up,
-            wick_down: chart.candle_down,
-        }
-    }
-}
-
-impl Default for CandleColorConfig {
-    fn default() -> Self {
-        // Default uses standard theme
-        Self::from_theme(&Theme::dark())
-    }
-}
-
-/// Status line display options
-#[derive(Debug, Clone, PartialEq)]
-pub struct StatusLineOptions {
-    pub show_symbol: bool,
-    pub show_ohlc: bool,
-    pub show_change: bool,
-    pub show_change_percent: bool,
-    pub show_volume: bool,
-}
-
-impl Default for StatusLineOptions {
-    fn default() -> Self {
-        Self {
-            show_symbol: true,
-            show_ohlc: true,
-            show_change: true,
-            show_change_percent: true,
-            show_volume: true,
         }
     }
 }

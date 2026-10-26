@@ -151,7 +151,7 @@ impl Indicator for VolumeWeightedMACD {
         false // VW-MACD is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

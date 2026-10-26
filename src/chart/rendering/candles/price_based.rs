@@ -177,7 +177,7 @@ pub(super) fn line_break(
         line_break::MAX_LINES,
         || {
             LineBreakBuilder::new(&LineBreakConfig {
-                line_cnt: count,
+                line_count: count,
                 source: params.line_break_source,
             })
         },

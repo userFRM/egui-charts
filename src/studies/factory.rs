@@ -876,7 +876,7 @@ mod tests {
             })
             .collect();
         let colours = |study: &ConfiguredStudy| -> Vec<_> {
-            (0..study.line_cnt())
+            (0..study.line_count())
                 .flat_map(|line| {
                     let style = study.plot_style(line).color;
                     (0..bars.len()).map(move |bar| study.plot_color(line, bar).unwrap_or(style))
@@ -1462,7 +1462,7 @@ mod tests {
                             bars.len()
                         )),
                         Ok(_) => {
-                            let lines = study.line_cnt();
+                            let lines = study.line_count();
                             if study.line_names().len() != lines {
                                 failures.push(format!(
                                     "{}: {lines} lines with names {:?}",

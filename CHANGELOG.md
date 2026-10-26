@@ -815,6 +815,28 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Breaking API cleanup: interval controls, settings, drawings, studies and trading share the domain types below. The small `prelude` exports common host types and traits, with widget and UI exports following their features. There are no compatibility aliases. Symbol search returns the host's `Instrument` with its metadata intact. ([#95](https://github.com/userFRM/egui-charts/issues/95))
+
+  | Old path or member | New path or member |
+  | --- | --- |
+  | `ui::top_toolbar::Timeframe`, `ui::top_toolbar::components::Timeframe`, `ui::top_toolbar::components::timeframe_selector::Timeframe` | `model::Timeframe`; use its variants or parse `"7min"`, and pass it directly to the selector |
+  | `drawings::LineStyle`, `drawings::domain::LineStyle`, `drawings::domain::options::LineStyle` | `model::LineStyle` |
+  | `config::CrosshairLineStyle`, `config::SessionBreakStyle` | `model::LineStyle`; crosshair and session defaults remain dotted and dashed respectively |
+  | `studies::PlotPattern` | `model::LineStyle` |
+  | `ui::top_toolbar::components::settings_menu::LineStyle`, `ui::top_toolbar::components::settings_menu::data::LineStyle` | `model::LineStyle` |
+  | `ui::widget_bar::panels::object_tree::LineStyle`, `ui::widget_bar::panels::object_tree::types::LineStyle` | `model::LineStyle::name()` replaces `as_str()` |
+  | `ui::dialogs::drawing_properties::DrawingLineStyle`, `ui::dialogs::drawing_properties::actions::DrawingLineStyle` | `model::LineStyle`; `name()` replaces `label()`, `all().iter().copied()` yields values |
+  | `model::TradeSide`, `model::quote::TradeSide` | `model::OrderSide`; unknown aggressors remain `None` |
+  | `model::StrategySide::{Long, Short}` | `model::OrderSide::{Buy, Sell}`; migrate saved strategy sides from `"Long"`/`"Short"` to `"Buy"`/`"Sell"` |
+  | `model::Symbol` | `model::Instrument`; `name` becomes `symbol`, `display_name` becomes optional `description`, `exchange` becomes optional, and subscription state belongs to the host; use `with_exchange` and `with_symbol_type` instead of `with_market` |
+  | `ui::symbol_header::SymbolInfo`, `SymbolHeader::symbol_info` | `model::Instrument`, `SymbolHeader::instrument`; pass the interval label separately to `SymbolHeader::new(instrument, timeframe)` |
+  | `ui::top_toolbar::ScaleMode`, `ui::top_toolbar::components::ScaleMode`, `ui::top_toolbar::components::settings_menu::ScaleMode`, `ui::top_toolbar::components::settings_menu::types::ScaleMode` | `scales::PriceScaleMode`; `Auto` becomes `Normal` |
+  | `ui::top_toolbar::components::settings_menu::types::{CandleColorConfig, StatusLineOptions}` | `ui::top_toolbar::components::settings_menu::{CandleColorConfig, StatusLineOptions}`; use `..Default::default()` for additional status fields |
+  | `Indicator::line_cnt`, `CustomIndicator::with_line_cnt`, `LineBreakConfig::line_cnt` | `Indicator::line_count`, `CustomIndicator::with_line_count`, `LineBreakConfig::line_count` |
+  | `ui::top_toolbar::components::settings_menu::TradingSettings::show_poss` | `TradingSettings::show_positions`; migrate the saved JSON key too |
+
+  Interval preferences now serialize `model::Timeframe` values instead of `{value, unit}` objects. Convert each old entry with its unit (`Minute` uses `"min"`, `Month` uses `"month"`), parse it and serialize the resulting value. Presets and arbitrary intervals use the same nonzero model representation. Existing line-pattern JSON variant names are unchanged.
+
 - IANA time zones and daylight-saving rules are behind the `timezones` feature, enabled by default, so builds with `default-features = false` omit `chrono-tz`. UTC, system local time and signed fixed offsets remain available. All time zone APIs now use `model::TimezoneId`, including `TimezoneMode::{Timezone, Exchange}`, `TimezoneMode::to_tz`, `BarClock::with_timezone`, `TimeAndSalesConfig::timezone` and `SymbolDetailsPanel::set_timezone`. Migration: replace a `chrono_tz` constant with a parsed name such as `"America/New_York".parse()?`; add `"timezones"` to an explicit feature list to keep named exchange zones and presets. Without it, Trading Sessions uses fixed standard-time offsets (+09:00, +00:00 and -05:00), configurable through `with_session`. Use offsets such as `"+05:45".parse()?` or `TimezoneId::fixed_offset(seconds)`; unknown or unavailable names are rejected instead of approximated. Persisted named-zone strings retain their format. Session presets and the settings time zone list also use fixed offsets without `timezones`. CI checks licences and duplicate versions in both the library and demo against `deny.toml`, with pinned exceptions for existing upstream version splits. ([#256](https://github.com/userFRM/egui-charts/issues/256))
 
 - Ordinary solid study lines draw each uninterrupted run as one joined path instead of a separate shape for every pair of bars, reducing painting and tessellation work on charts with many studies while keeping gaps, colours and stroke widths. Directional colours and gradient fills retain their segment rendering. The README links performance notes with application-owned glibc allocator settings for large native charts. ([#472](https://github.com/userFRM/egui-charts/issues/472))

@@ -465,7 +465,7 @@ impl<'a> Legend<'a> {
                         (study.value_format() == crate::studies::StudyFormat::Price)
                             .then_some(precision)
                     });
-                    for index in (0..study.line_cnt()).filter(|index| {
+                    for index in (0..study.line_count()).filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.plot_style(*index).visible

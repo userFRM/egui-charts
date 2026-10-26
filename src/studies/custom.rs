@@ -62,7 +62,7 @@ pub struct CustomIndicator {
     values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
-    line_cnt: usize,
+    line_count: usize,
     line_names: Vec<String>,
     visible: bool,
     value_format: Option<super::StudyFormat>,
@@ -96,7 +96,7 @@ impl CustomIndicator {
             values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.caution], // Yellow default
             is_overlay: true,
-            line_cnt: 1,
+            line_count: 1,
             visible: true,
             value_format: None,
             scale: None,
@@ -158,8 +158,8 @@ impl CustomIndicator {
     }
 
     /// Set the number of output lines (must match the closure's output).
-    pub fn with_line_cnt(mut self, count: usize) -> Self {
-        self.line_cnt = count;
+    pub fn with_line_count(mut self, count: usize) -> Self {
+        self.line_count = count;
         self
     }
 
@@ -248,7 +248,7 @@ impl Indicator for CustomIndicator {
         super::PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: super::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: self.plot_types.get(line).copied().unwrap_or_default(),
             visible: true,
         }
@@ -302,8 +302,8 @@ impl Indicator for CustomIndicator {
         self.is_overlay
     }
 
-    fn line_cnt(&self) -> usize {
-        self.line_cnt
+    fn line_count(&self) -> usize {
+        self.line_count
     }
 
     fn line_names(&self) -> Vec<String> {

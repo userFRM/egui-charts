@@ -643,7 +643,7 @@ impl IndicatorPane {
                     && let Some(value) = crate::chart::renderers::snap_to_values(
                         pos.y,
                         &mapping.price,
-                        (0..indicator.line_cnt())
+                        (0..indicator.line_count())
                             .filter(|line| {
                                 let plot = indicator.plot_style(*line);
                                 plot.visible
@@ -854,7 +854,7 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for line in (0..indicator.line_cnt()).filter(|line| {
+        for line in (0..indicator.line_count()).filter(|line| {
             let plot = indicator.plot_style(*line);
             plot.visible
                 && !matches!(
@@ -909,7 +909,7 @@ impl IndicatorPane {
         }
 
         if min_val != f64::MAX
-            && (0..indicator.line_cnt()).any(|line| {
+            && (0..indicator.line_count()).any(|line| {
                 let plot = indicator.plot_style(line);
                 plot.visible
                     && matches!(
@@ -1378,7 +1378,8 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            for line in
+                (0..indicator.line_count()).filter(|line| indicator.plot_style(*line).visible)
             {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
@@ -1671,7 +1672,7 @@ mod tests {
                 vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
             })
             .with_colors(colors.clone())
-            .with_line_cnt(3);
+            .with_line_count(3);
             study.calculate(&[]);
             let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {

@@ -7,9 +7,7 @@
 mod support;
 
 use chrono::{TimeDelta, TimeZone, Utc};
-use egui_charts::model::{
-    Bar, StrategyExit, StrategyReport, StrategySide, StrategyTrade, Timeframe,
-};
+use egui_charts::model::{Bar, OrderSide, StrategyExit, StrategyReport, StrategyTrade, Timeframe};
 
 fn buy_and_hold(bars: &[Bar]) -> StrategyReport {
     let mut report = StrategyReport::new("Buy and hold", "SAMPLE", Timeframe::Hour1, 10_000.0);
@@ -20,7 +18,7 @@ fn buy_and_hold(bars: &[Bar]) -> StrategyReport {
     let quantity = 2.0;
     let commission = 1.0;
     let profit = (last.close - first.open) * quantity - 2.0 * commission;
-    let mut trade = StrategyTrade::new(StrategySide::Long, quantity, first.time, first.open);
+    let mut trade = StrategyTrade::new(OrderSide::Buy, quantity, first.time, first.open);
     trade.fees = 2.0 * commission;
     trade.exit = Some(StrategyExit::new(
         last.time + TimeDelta::hours(1),

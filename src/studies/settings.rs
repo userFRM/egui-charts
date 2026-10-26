@@ -1,24 +1,9 @@
 //! Applied study presentation and transactional input edits.
 
 use super::{Indicator, IndicatorLineStyle, IndicatorValues, InputValue};
+use crate::model::LineStyle;
 use crate::model::{Bar, Instrument, Timeframe};
 use egui::Color32;
-
-/// Stroke pattern for a study plot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PlotPattern {
-    /// A continuous stroke.
-    #[default]
-    Solid,
-    /// Equally spaced dashes.
-    Dashed,
-    /// Equally spaced dots.
-    Dotted,
-    /// Dashes twice as long as `Dashed`, with twice the gap.
-    LargeDashed,
-    /// Dots with twice the spacing of `Dotted`.
-    SparseDotted,
-}
 
 /// Geometry for one output line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -56,7 +41,7 @@ pub struct PlotStyle {
     /// Stroke width in logical pixels, from 0.5 to 10.
     pub width: f32,
     /// Stroke pattern for line plots.
-    pub pattern: PlotPattern,
+    pub pattern: LineStyle,
     /// Plot geometry.
     pub plot_type: PlotType,
     /// Whether the plot participates in rendering, hit testing and scaling.
@@ -339,7 +324,7 @@ impl Indicator for ConfiguredStudy {
                 source.output_at(close, !self.wait_for_close && at + 1 == data.len())
             });
             self.aligned_bars.push(output);
-            let values: Vec<_> = (0..self.study.line_cnt())
+            let values: Vec<_> = (0..self.study.line_count())
                 .map(|line| {
                     output
                         .and_then(|at| self.study.values().value(line, at))
@@ -505,7 +490,7 @@ impl Indicator for ConfiguredStudy {
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
-        if settings.plots.len() != edited.line_cnt() {
+        if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
         }
         edited.set_colors(settings.plots.iter().map(|plot| plot.color).collect());
@@ -535,8 +520,8 @@ impl Indicator for ConfiguredStudy {
                     .flatten()
             })
     }
-    fn line_cnt(&self) -> usize {
-        self.study.line_cnt()
+    fn line_count(&self) -> usize {
+        self.study.line_count()
     }
     fn line_names(&self) -> Vec<String> {
         self.study.line_names()

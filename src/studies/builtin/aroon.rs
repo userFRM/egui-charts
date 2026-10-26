@@ -162,7 +162,7 @@ impl Indicator for Aroon {
         false // Aroon is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // Aroon Up and Aroon Down
     }
 

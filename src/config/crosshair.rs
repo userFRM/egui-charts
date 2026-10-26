@@ -3,6 +3,7 @@
 //! Controls the crosshair mode (free, or snapping to values), visual style
 //! (Full / Dot / Arrow / Hidden), the style of each line, and colors.
 
+use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use egui::Color32;
 
@@ -43,22 +44,6 @@ pub enum CrosshairStyle {
     Hidden,
 }
 
-/// Line style for crosshair rendering (Solid, Dashed, Dotted)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum CrosshairLineStyle {
-    /// Solid line
-    Solid,
-    /// Dashed line
-    Dashed,
-    /// Dotted line (default)
-    #[default]
-    Dotted,
-    /// Dashes twice as long as `Dashed`, with twice the gap
-    LargeDashed,
-    /// Dots with twice the spacing of `Dotted`
-    SparseDotted,
-}
-
 /// Crosshair options
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CrosshairOptions {
@@ -69,10 +54,10 @@ pub struct CrosshairOptions {
     pub style: CrosshairStyle,
 
     /// Vertical line style
-    pub vert_line_style: CrosshairLineStyle,
+    pub vert_line_style: LineStyle,
 
     /// Horizontal line style
-    pub horz_line_style: CrosshairLineStyle,
+    pub horz_line_style: LineStyle,
 
     /// Show vertical line
     pub vert_line_visible: bool,
@@ -112,8 +97,8 @@ impl Default for CrosshairOptions {
         Self {
             mode: CrosshairMode::Normal,
             style: CrosshairStyle::Full,
-            vert_line_style: CrosshairLineStyle::Dotted,
-            horz_line_style: CrosshairLineStyle::Dotted,
+            vert_line_style: LineStyle::Dotted,
+            horz_line_style: LineStyle::Dotted,
             vert_line_visible: true,
             horz_line_visible: true,
             vert_line_color: Color32::PLACEHOLDER,

@@ -7,7 +7,7 @@
 //! Both share the same underlying settings state.
 //!
 //! ## Module Organization
-//! - `types`: Core enums (ScaleMode, ChartType, SettingsTab, PrecisionMode)
+//! - `types`: Core enums (ChartType, SettingsTab, PrecisionMode)
 //! - `data`: Settings state structures
 //! - `config`: Configuration structures
 //! - `actions`: Action enum
@@ -28,14 +28,13 @@ pub use actions::SettingsAction;
 pub use config::{ChartSettings, SettingsDialogConfig};
 pub use data::{
     AlertsSettings, ButtonsSettings, CandleColorConfig, ChartBasicStylesSettings,
-    ChartSettingsState, CrosshairSettings, EventsSettings, GridLinesSettings, LineStyle,
-    MarginsSettings, ScalesAndLinesSettings, ScalesAppearanceSettings, StatusLineOptions,
-    TradingNotifications, TradingSettings, WatermarkSettings,
+    ChartSettingsState, CrosshairSettings, EventsSettings, GridLinesSettings, MarginsSettings,
+    ScalesAndLinesSettings, ScalesAppearanceSettings, StatusLineOptions, TradingNotifications,
+    TradingSettings, WatermarkSettings,
 };
 pub use dialog::SettingsDialog;
 pub use menu::SettingsMenu;
 pub use types::{
-    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, ScaleMode, SettingsTab,
-    WatermarkMode,
+    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, SettingsTab, WatermarkMode,
 };
 // ChartType is re-exported from chart_type_selector - use that as single source of truth

@@ -11,7 +11,7 @@ use crate::model::{
     PriceSource, SeriesScale, SeriesStyle,
 };
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
-use crate::studies::{Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyFormat};
+use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType, StudyFormat};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
@@ -185,7 +185,7 @@ impl SeriesLegend {
             style: PlotStyle {
                 color: item.options.color,
                 width: item.options.width,
-                pattern: PlotPattern::Solid,
+                pattern: LineStyle::Solid,
                 plot_type: PlotType::Line,
                 visible: true,
             },

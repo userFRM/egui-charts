@@ -27,9 +27,9 @@ mod tooltip;
 
 pub use chart::{
     BackgroundStyle, ChartConfig, NavigationButtons, PriceAxisOptions, RealtimeButtonPos,
-    SessionBreakStyle, SessionConfig, WatermarkPos,
+    SessionConfig, WatermarkPos,
 };
-pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,

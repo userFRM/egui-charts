@@ -48,7 +48,6 @@ mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
-mod symbol;
 mod time_scale_event;
 mod timeframe;
 mod timescale;
@@ -91,7 +90,7 @@ pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_col
 pub use price_source::PriceSource;
 pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
-    TradeConditions, TradeSide,
+    TradeConditions,
 };
 pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
@@ -103,10 +102,7 @@ pub use session::{
     find_session_breaks,
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
-pub use strategy::{
-    StrategyExit, StrategyPerformance, StrategyReport, StrategySide, StrategyTrade,
-};
-pub use symbol::Symbol;
+pub use strategy::{StrategyExit, StrategyPerformance, StrategyReport, StrategyTrade};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};

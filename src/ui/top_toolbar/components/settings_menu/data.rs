@@ -2,6 +2,7 @@
 
 use super::types::{BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode};
 use crate::chart::PnlUnit;
+use crate::model::LineStyle;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -18,6 +19,21 @@ pub struct CandleColorConfig {
     pub border_down: Color32,
     pub wick_up: Color32,
     pub wick_down: Color32,
+}
+
+impl CandleColorConfig {
+    /// Candle body, border and wick colours from `theme`.
+    pub fn from_theme(theme: &crate::theme::Theme) -> Self {
+        let chart = &theme.chart;
+        Self {
+            body_up: chart.candle_up,
+            body_down: chart.candle_down,
+            border_up: chart.candle_up,
+            border_down: chart.candle_down,
+            wick_up: chart.candle_up,
+            wick_down: chart.candle_down,
+        }
+    }
 }
 
 impl Default for CandleColorConfig {
@@ -123,39 +139,6 @@ impl Default for CrosshairSettings {
             color: DESIGN_TOKENS.semantic.extended.chart_text_secondary,
             line_width: 1.0,
             line_style: LineStyle::Dashed,
-        }
-    }
-}
-
-/// Line style for crosshair and other elements
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum LineStyle {
-    Solid,
-    #[default]
-    Dashed,
-    Dotted,
-    LargeDashed,
-    SparseDotted,
-}
-
-impl LineStyle {
-    pub fn all() -> &'static [LineStyle] {
-        &[
-            LineStyle::Solid,
-            LineStyle::Dashed,
-            LineStyle::Dotted,
-            LineStyle::LargeDashed,
-            LineStyle::SparseDotted,
-        ]
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            LineStyle::Solid => "Solid",
-            LineStyle::Dashed => "Dashed",
-            LineStyle::Dotted => "Dotted",
-            LineStyle::LargeDashed => "Large dashed",
-            LineStyle::SparseDotted => "Sparse dotted",
         }
     }
 }
@@ -294,7 +277,7 @@ pub struct TradingSettings {
     /// Which trading events raise a notification.
     pub notifications: TradingNotifications,
     /// Draw the open positions.
-    pub show_poss: bool,
+    pub show_positions: bool,
     /// Give each position's profit or loss on its label.
     pub position_pnl: bool,
     /// The unit of the positions' profit or loss.
@@ -321,7 +304,7 @@ impl Default for TradingSettings {
             play_execution_sound: false,
             execution_sound: String::new(),
             notifications: TradingNotifications::All,
-            show_poss: true,
+            show_positions: true,
             position_pnl: true,
             position_pnl_unit: PnlUnit::Money,
             reverse_button: true,

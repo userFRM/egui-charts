@@ -150,7 +150,7 @@ impl Indicator for KDJ {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
@@ -251,7 +251,7 @@ mod tests {
                 match (value, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Multiple(got), Some(want)) => {
-                        assert_eq!(got.len(), kdj.line_cnt(), "{case} bar {i}");
+                        assert_eq!(got.len(), kdj.line_count(), "{case} bar {i}");
                         for (g, w) in got.iter().zip(want) {
                             assert!(
                                 (g - w).abs() < 1e-12,

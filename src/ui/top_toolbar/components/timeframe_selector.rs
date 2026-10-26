@@ -3,6 +3,7 @@
 //! A dropdown menu for selecting chart timeframes with favorites support.
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
+use crate::model::Timeframe;
 use crate::styles::focus::focus_ring_color;
 use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
@@ -70,126 +71,119 @@ impl TimeframeUnit {
     }
 }
 
-/// Timeframe definition
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct Timeframe {
-    pub value: u32,
-    pub unit: TimeframeUnit,
+fn interval(value: u32, unit: TimeframeUnit) -> Timeframe {
+    let count = std::num::NonZeroU64::new(u64::from(value)).expect("validated interval");
+    match unit {
+        TimeframeUnit::Tick => Timeframe::Ticks(count),
+        TimeframeUnit::Volume => Timeframe::Volume(count),
+        TimeframeUnit::Range => Timeframe::Range(count),
+        TimeframeUnit::Delta => Timeframe::Delta(count),
+        _ => format!(
+            "{value}{}",
+            match unit {
+                TimeframeUnit::Minute => "min",
+                TimeframeUnit::Month => "month",
+                _ => unit.short_name(),
+            }
+        )
+        .parse()
+        .expect("valid interval unit"),
+    }
 }
 
-impl Timeframe {
-    pub const fn new(value: u32, unit: TimeframeUnit) -> Self {
-        Self { value, unit }
+fn parts(tf: Timeframe) -> (u64, TimeframeUnit) {
+    use TimeframeUnit as Unit;
+    let seconds = tf.duration_ms() / 1000;
+    match tf {
+        Timeframe::Ticks(n) => (n.get(), Unit::Tick),
+        Timeframe::Volume(n) => (n.get(), Unit::Volume),
+        Timeframe::Range(n) => (n.get(), Unit::Range),
+        Timeframe::Delta(n) => (n.get(), Unit::Delta),
+        Timeframe::Month1 => (1, Unit::Month),
+        Timeframe::Week1 => (1, Unit::Week),
+        _ if seconds >= 86_400 && seconds % 86_400 == 0 => (seconds as u64 / 86_400, Unit::Day),
+        _ if seconds >= 3_600 && seconds % 3_600 == 0 => (seconds as u64 / 3_600, Unit::Hour),
+        _ if seconds >= 60 && seconds % 60 == 0 => (seconds as u64 / 60, Unit::Minute),
+        _ => (seconds.max(0) as u64, Unit::Second),
     }
+}
 
-    /// Get display string like "1D", "4h", "15m"
-    pub fn display(&self) -> String {
-        format!("{}{}", self.value, self.unit.short_name())
+fn display(tf: Timeframe) -> String {
+    if tf.duration_ms() > 0 && tf.duration_ms() < 1000 {
+        return tf.to_string();
     }
+    let (value, unit) = parts(tf);
+    format!("{value}{}", unit.short_name())
+}
 
-    /// Get long display string like "1 day", "4 hours"
-    pub fn display_long(&self) -> String {
-        let unit_name = if self.value == 1 {
-            match self.unit {
-                TimeframeUnit::Tick => "tick",
-                TimeframeUnit::Volume => "volume unit",
-                TimeframeUnit::Range => "range tick",
-                TimeframeUnit::Delta => "delta unit",
-                TimeframeUnit::Second => "second",
-                TimeframeUnit::Minute => "minute",
-                TimeframeUnit::Hour => "hour",
-                TimeframeUnit::Day => "day",
-                TimeframeUnit::Week => "week",
-                TimeframeUnit::Month => "month",
-            }
-        } else {
-            self.unit.name()
-        };
-        format!("{} {}", self.value, unit_name)
+fn display_long(tf: Timeframe) -> String {
+    if tf.duration_ms() > 0 && tf.duration_ms() < 1000 {
+        return format!("{} milliseconds", tf.duration_ms());
     }
+    let (value, unit) = parts(tf);
+    let name = if value == 1 {
+        match unit {
+            TimeframeUnit::Tick => "tick",
+            TimeframeUnit::Volume => "volume unit",
+            TimeframeUnit::Range => "range tick",
+            TimeframeUnit::Delta => "delta unit",
+            TimeframeUnit::Second => "second",
+            TimeframeUnit::Minute => "minute",
+            TimeframeUnit::Hour => "hour",
+            TimeframeUnit::Day => "day",
+            TimeframeUnit::Week => "week",
+            TimeframeUnit::Month => "month",
+        }
+    } else {
+        unit.name()
+    };
+    format!("{value} {name}")
+}
 
-    /// The model timeframe this entry selects: the preset of the same length, else a custom
-    /// one. `None` only for a zero value.
-    pub(crate) fn to_model(self) -> Option<crate::model::Timeframe> {
-        let unit_seconds: u64 = match self.unit {
-            TimeframeUnit::Tick => {
-                return std::num::NonZeroU64::new(u64::from(self.value))
-                    .map(crate::model::Timeframe::Ticks);
-            }
-            TimeframeUnit::Volume | TimeframeUnit::Range | TimeframeUnit::Delta => {
-                let count = std::num::NonZeroU64::new(u64::from(self.value))?;
-                return Some(match self.unit {
-                    TimeframeUnit::Volume => crate::model::Timeframe::Volume(count),
-                    TimeframeUnit::Range => crate::model::Timeframe::Range(count),
-                    _ => crate::model::Timeframe::Delta(count),
-                });
-            }
-            TimeframeUnit::Second => 1,
-            TimeframeUnit::Minute => 60,
-            TimeframeUnit::Hour => 3_600,
-            TimeframeUnit::Day => 86_400,
-            TimeframeUnit::Week => 604_800,
-            // The model's month is 30 days.
-            TimeframeUnit::Month => 2_592_000,
-        };
-        // At most `u32::MAX` months, so neither product overflows a `u64`.
-        let seconds = u64::from(self.value) * unit_seconds;
-        let custom = crate::model::Timeframe::Custom(std::num::NonZeroU64::new(seconds)?);
-        Some(
-            crate::model::Timeframe::all()
-                .into_iter()
-                .find(|tf| tf.duration_ms() as u64 == seconds * 1000)
-                .unwrap_or(custom),
-        )
-    }
+fn all_presets() -> Vec<Timeframe> {
+    vec![
+        // Ticks
+        interval(1, TimeframeUnit::Tick),
+        interval(10, TimeframeUnit::Tick),
+        interval(100, TimeframeUnit::Tick),
+        interval(1000, TimeframeUnit::Tick),
+        interval(100, TimeframeUnit::Volume),
+        interval(1000, TimeframeUnit::Volume),
+        interval(10, TimeframeUnit::Range),
+        interval(100, TimeframeUnit::Delta),
+        // Seconds
+        interval(1, TimeframeUnit::Second),
+        interval(5, TimeframeUnit::Second),
+        interval(10, TimeframeUnit::Second),
+        interval(15, TimeframeUnit::Second),
+        interval(30, TimeframeUnit::Second),
+        interval(45, TimeframeUnit::Second),
+        // Minutes
+        interval(1, TimeframeUnit::Minute),
+        interval(2, TimeframeUnit::Minute),
+        interval(3, TimeframeUnit::Minute),
+        interval(5, TimeframeUnit::Minute),
+        interval(10, TimeframeUnit::Minute),
+        interval(15, TimeframeUnit::Minute),
+        interval(30, TimeframeUnit::Minute),
+        interval(45, TimeframeUnit::Minute),
+        // Hours
+        interval(1, TimeframeUnit::Hour),
+        interval(2, TimeframeUnit::Hour),
+        interval(3, TimeframeUnit::Hour),
+        interval(4, TimeframeUnit::Hour),
+        // Day/Week/Month
+        interval(1, TimeframeUnit::Day),
+        interval(1, TimeframeUnit::Week),
+        interval(1, TimeframeUnit::Month),
+    ]
+}
 
-    /// Get all predefined timeframes
-    pub fn all_presets() -> Vec<Timeframe> {
-        vec![
-            // Ticks
-            Timeframe::new(1, TimeframeUnit::Tick),
-            Timeframe::new(10, TimeframeUnit::Tick),
-            Timeframe::new(100, TimeframeUnit::Tick),
-            Timeframe::new(1000, TimeframeUnit::Tick),
-            Timeframe::new(100, TimeframeUnit::Volume),
-            Timeframe::new(1000, TimeframeUnit::Volume),
-            Timeframe::new(10, TimeframeUnit::Range),
-            Timeframe::new(100, TimeframeUnit::Delta),
-            // Seconds
-            Timeframe::new(1, TimeframeUnit::Second),
-            Timeframe::new(5, TimeframeUnit::Second),
-            Timeframe::new(10, TimeframeUnit::Second),
-            Timeframe::new(15, TimeframeUnit::Second),
-            Timeframe::new(30, TimeframeUnit::Second),
-            Timeframe::new(45, TimeframeUnit::Second),
-            // Minutes
-            Timeframe::new(1, TimeframeUnit::Minute),
-            Timeframe::new(2, TimeframeUnit::Minute),
-            Timeframe::new(3, TimeframeUnit::Minute),
-            Timeframe::new(5, TimeframeUnit::Minute),
-            Timeframe::new(10, TimeframeUnit::Minute),
-            Timeframe::new(15, TimeframeUnit::Minute),
-            Timeframe::new(30, TimeframeUnit::Minute),
-            Timeframe::new(45, TimeframeUnit::Minute),
-            // Hours
-            Timeframe::new(1, TimeframeUnit::Hour),
-            Timeframe::new(2, TimeframeUnit::Hour),
-            Timeframe::new(3, TimeframeUnit::Hour),
-            Timeframe::new(4, TimeframeUnit::Hour),
-            // Day/Week/Month
-            Timeframe::new(1, TimeframeUnit::Day),
-            Timeframe::new(1, TimeframeUnit::Week),
-            Timeframe::new(1, TimeframeUnit::Month),
-        ]
-    }
-
-    /// Get timeframes by unit
-    pub fn by_unit(unit: TimeframeUnit) -> Vec<Timeframe> {
-        Self::all_presets()
-            .into_iter()
-            .filter(|tf| tf.unit == unit)
-            .collect()
-    }
+fn by_unit(unit: TimeframeUnit) -> Vec<Timeframe> {
+    all_presets()
+        .into_iter()
+        .filter(|tf| parts(*tf).1 == unit)
+        .collect()
 }
 
 /// Configuration for timeframe selector
@@ -283,7 +277,7 @@ impl CustomTimeframeDialog {
             }
             Ok(v) => {
                 self.error = None;
-                Some(Timeframe::new(v, self.unit))
+                Some(interval(v, self.unit))
             }
             Err(_) => {
                 self.error = Some("Enter a valid number".to_string());
@@ -415,7 +409,7 @@ pub struct TimeframeSelector {
 
 impl Default for TimeframeSelector {
     fn default() -> Self {
-        Self::new(Timeframe::new(1, TimeframeUnit::Day))
+        Self::new(interval(1, TimeframeUnit::Day))
     }
 }
 
@@ -423,12 +417,12 @@ impl TimeframeSelector {
     pub fn new(initial: Timeframe) -> Self {
         let mut favorites = HashSet::new();
         // Default favorites
-        favorites.insert(Timeframe::new(1, TimeframeUnit::Minute));
-        favorites.insert(Timeframe::new(5, TimeframeUnit::Minute));
-        favorites.insert(Timeframe::new(15, TimeframeUnit::Minute));
-        favorites.insert(Timeframe::new(1, TimeframeUnit::Hour));
-        favorites.insert(Timeframe::new(4, TimeframeUnit::Hour));
-        favorites.insert(Timeframe::new(1, TimeframeUnit::Day));
+        favorites.insert(interval(1, TimeframeUnit::Minute));
+        favorites.insert(interval(5, TimeframeUnit::Minute));
+        favorites.insert(interval(15, TimeframeUnit::Minute));
+        favorites.insert(interval(1, TimeframeUnit::Hour));
+        favorites.insert(interval(4, TimeframeUnit::Hour));
+        favorites.insert(interval(1, TimeframeUnit::Day));
 
         Self {
             current: initial,
@@ -451,36 +445,27 @@ impl TimeframeSelector {
     }
 
     fn supports(&self, timeframe: Timeframe) -> bool {
-        timeframe.to_model().is_some_and(|tf| {
-            self.supported_timeframes
-                .as_ref()
-                .is_none_or(|supported| supported.contains(&tf))
-        })
+        self.supported_timeframes
+            .as_ref()
+            .is_none_or(|supported| supported.contains(&timeframe))
     }
 
     /// Export the interval lists for the host's persisted user settings.
     pub fn preferences(&self) -> TimeframePreferences {
         let mut favorites: Vec<_> = self.favorites.iter().copied().collect();
-        favorites.sort_by_key(|tf| (tf.unit as u8, tf.value));
+        favorites.sort_by_key(|tf| (parts(*tf).1 as u8, parts(*tf).0));
         TimeframePreferences {
             favorites,
             custom_timeframes: self.custom_timeframes.clone(),
         }
     }
 
-    /// Restore saved lists, discarding zero intervals and duplicate custom entries.
+    /// Restore saved lists, discarding duplicate custom entries.
     pub fn set_preferences(&mut self, preferences: TimeframePreferences) {
-        self.favorites = preferences
-            .favorites
-            .into_iter()
-            .filter(|tf| tf.value > 0)
-            .collect();
+        self.favorites = preferences.favorites.into_iter().collect();
         self.custom_timeframes.clear();
         for tf in preferences.custom_timeframes {
-            if tf.value > 0
-                && !self.custom_timeframes.contains(&tf)
-                && !Timeframe::all_presets().contains(&tf)
-            {
+            if !self.custom_timeframes.contains(&tf) && !all_presets().contains(&tf) {
                 self.custom_timeframes.push(tf);
             }
         }
@@ -513,10 +498,10 @@ impl TimeframeSelector {
 
     /// The button that opens the dropdown, showing the current timeframe.
     pub(crate) fn trigger(&self) -> Trigger<'static> {
-        let label = self.current.display();
+        let label = display(self.current);
         Trigger {
             icon: None,
-            name: self.current.display_long(),
+            name: display_long(self.current),
             label,
             min_width: self.config.btn_width.max(44.0),
             filled: false,
@@ -536,11 +521,11 @@ impl TimeframeSelector {
                 .size()
                 .x
         };
-        Timeframe::all_presets()
+        all_presets()
             .iter()
             .chain(&self.custom_timeframes)
             .filter(|tf| self.supports(**tf))
-            .map(|tf| width(tf.display_long()))
+            .map(|tf| width(display_long(*tf)))
             .fold(0.0, f32::max)
     }
 
@@ -605,7 +590,7 @@ impl TimeframeSelector {
                     (TimeframeUnit::Week, "Weeks"),
                     (TimeframeUnit::Month, "Months"),
                 ] {
-                    let available: Vec<_> = Timeframe::by_unit(unit)
+                    let available: Vec<_> = by_unit(unit)
                         .into_iter()
                         .filter(|tf| self.supports(*tf))
                         .collect();
@@ -647,9 +632,7 @@ impl TimeframeSelector {
                     && let Some(tf) = self.custom_dialog.show(ui)
                 {
                     if self.supports(tf) {
-                        if !Timeframe::all_presets().contains(&tf)
-                            && !self.custom_timeframes.contains(&tf)
-                        {
+                        if !all_presets().contains(&tf) && !self.custom_timeframes.contains(&tf) {
                             self.custom_timeframes.push(tf);
                         }
                         action = TimeframeAction::Select(tf);
@@ -742,7 +725,7 @@ impl ListItemContent for TimeframeRow<'_> {
         } else {
             theme.ui.text
         };
-        let translated_label = l10n::text(ui.ctx(), self.tf.display_long());
+        let translated_label = l10n::text(ui.ctx(), display_long(self.tf));
         context.response.widget_info(|| {
             WidgetInfo::selected(
                 Role::MenuItemRadio,
@@ -791,7 +774,7 @@ impl ListItemContent for TimeframeRow<'_> {
         ui.painter().text(
             pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            l10n::text(ui.ctx(), self.tf.display_long()),
+            l10n::text(ui.ctx(), display_long(self.tf)),
             egui::FontId::proportional(14.0),
             text,
         );
@@ -810,7 +793,7 @@ mod tests {
         let ctx = egui::Context::default();
         let theme = Theme::light();
         crate::theme::apply_to_egui(&ctx, &theme);
-        let custom = Timeframe::new(7, TimeframeUnit::Minute);
+        let custom = interval(7, TimeframeUnit::Minute);
         let mut selector = TimeframeSelector {
             show_custom_input: true,
             custom_dialog: CustomTimeframeDialog {
@@ -876,7 +859,7 @@ mod tests {
             let (_, labels, right) = frame(&mut selector, vec![]);
             let y = labels
                 .iter()
-                .find(|(label, _)| *label == custom.display_long())
+                .find(|(label, _)| *label == display_long(custom))
                 .unwrap()
                 .1
                 .y;
@@ -900,7 +883,7 @@ mod tests {
         assert!(
             !labels
                 .iter()
-                .any(|(label, _)| *label == custom.display_long())
+                .any(|(label, _)| *label == display_long(custom))
         );
         let add = labels.iter().find(|(label, _)| label == "Add").unwrap().1;
         assert_eq!(click(&mut restored, add), TimeframeAction::None);
@@ -911,7 +894,7 @@ mod tests {
         assert!(
             labels
                 .iter()
-                .any(|(label, _)| *label == custom.display_long())
+                .any(|(label, _)| *label == display_long(custom))
         );
     }
 
@@ -961,16 +944,15 @@ mod tests {
     fn interval_pick_updates_the_trigger_and_selection() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for selected in [
-                Timeframe::new(100, TimeframeUnit::Tick),
-                Timeframe::new(45, TimeframeUnit::Second),
-                Timeframe::new(5, TimeframeUnit::Minute),
-                Timeframe::new(1, TimeframeUnit::Hour),
+                interval(100, TimeframeUnit::Tick),
+                interval(45, TimeframeUnit::Second),
+                interval(5, TimeframeUnit::Minute),
+                interval(1, TimeframeUnit::Hour),
             ] {
-                for supported in [None, Some(vec![selected.to_model().unwrap()]), Some(vec![])] {
+                for supported in [None, Some(vec![selected]), Some(vec![])] {
                     let ctx = egui::Context::default();
                     crate::theme::apply_to_egui(&ctx, &theme);
-                    let mut selector =
-                        TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Minute));
+                    let mut selector = TimeframeSelector::new(interval(1, TimeframeUnit::Minute));
                     let available = supported.as_ref().is_none_or(|values| !values.is_empty());
                     selector.set_supported_timeframes(supported.clone());
                     let mut frame = |events| {
@@ -994,9 +976,9 @@ mod tests {
                                     _ => None,
                                 })
                                 .collect();
-                            for tf in Timeframe::all_presets() {
+                            for tf in all_presets() {
                                 assert_eq!(
-                                    labels.contains(&tf.display_long().as_str()),
+                                    labels.contains(&display_long(tf).as_str()),
                                     available && tf == selected,
                                     "{tf:?}, {supported:?}"
                                 );
@@ -1004,7 +986,7 @@ mod tests {
                         }
                         let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
                             egui::Shape::Text(text)
-                                if text.galley.text() == selected.display_long() =>
+                                if text.galley.text() == display_long(selected) =>
                             {
                                 Some(text.pos + text.galley.size() / 2.0)
                             }
@@ -1035,46 +1017,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn every_preset_maps_to_a_model_timeframe() {
-        let custom = |s| Model::Custom(std::num::NonZeroU64::new(s).unwrap());
-        let expected = vec![
-            "1t".parse().unwrap(),
-            "10t".parse().unwrap(),
-            "100t".parse().unwrap(),
-            "1000t".parse().unwrap(),
-            "100v".parse().unwrap(),
-            "1000v".parse().unwrap(),
-            "10r".parse().unwrap(),
-            "100delta".parse().unwrap(),
-            Model::Sec1,
-            Model::Sec5,
-            Model::Sec10,
-            custom(15),
-            Model::Sec30,
-            custom(45),
-            Model::Min1,
-            custom(120),
-            custom(180),
-            Model::Min5,
-            custom(600),
-            Model::Min15,
-            Model::Min30,
-            custom(2700),
-            Model::Hour1,
-            custom(7200),
-            custom(10800),
-            Model::Hour4,
-            Model::Day1,
-            Model::Week1,
-            Model::Month1,
-        ];
-        let mapped: Vec<_> = Timeframe::all_presets()
-            .iter()
-            .map(|tf| tf.to_model())
-            .collect();
-        assert_eq!(mapped, expected.into_iter().map(Some).collect::<Vec<_>>());
     }
 }

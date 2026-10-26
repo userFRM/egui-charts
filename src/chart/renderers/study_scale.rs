@@ -15,7 +15,7 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
     let end = coords.x_to_idx(coords.rect.right()).saturating_add(2);
     let mut low = f64::INFINITY;
     let mut high = f64::NEG_INFINITY;
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let plot = study.plot_style(line);
         if !plot.visible
             || matches!(
@@ -84,7 +84,7 @@ pub(crate) fn render_study_axis(
     let mut width = 0.0_f32;
     let mut labels = Vec::new();
     if show_values && let Some(bar) = study.values().len().checked_sub(1) {
-        for line in 0..study.line_cnt() {
+        for line in 0..study.line_count() {
             let plot = study.plot_style(line);
             if plot.visible
                 && !matches!(

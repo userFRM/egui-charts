@@ -605,7 +605,7 @@ impl Trading {
             let display = &self.display;
             let options = TradingLineOptions {
                 show_orders: display.show_orders,
-                show_positions: display.show_poss,
+                show_positions: display.show_positions,
                 submit: false,
                 modify: capabilities.modify,
                 close: capabilities.market,
@@ -1509,7 +1509,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let hidden = TradingSettings {
-            show_poss: false,
+            show_positions: false,
             show_orders: false,
             show_executions: false,
             ..TradingSettings::default()
@@ -1797,7 +1797,7 @@ mod tests {
                 });
                 let mut trading = Trading::default();
                 trading.set_service(broker);
-                trading.display.show_poss = show_positions;
+                trading.display.show_positions = show_positions;
                 trading.display.show_orders = show_orders;
                 let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                 chart.symbol = "SYM".into();

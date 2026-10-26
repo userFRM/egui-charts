@@ -1,12 +1,13 @@
 //! Style tab - color, line width, line style.
 
 use crate::localization as l10n;
+use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
 
 use crate::ext::UiExt;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::dialogs::drawing_properties::actions::{DrawingLineStyle, DrawingProps};
+use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::buttons::ButtonSize;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 
@@ -38,8 +39,8 @@ impl StyleTab {
                 ui.combo_select(
                     "line_style",
                     &mut props.line_style,
-                    DrawingLineStyle::all(),
-                    |v| v.label().to_string(),
+                    LineStyle::all().iter().copied(),
+                    |v| v.name().to_string(),
                 );
             });
             ui.end_row();

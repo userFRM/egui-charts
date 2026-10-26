@@ -151,7 +151,7 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
 
     #[test]
@@ -159,11 +159,11 @@ mod tests {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for (second, price, size, side) in [
-            (0, 99.0, 2.0, Some(TradeSide::Sell)),
-            (1, 100.0, 8.0, Some(TradeSide::Buy)),
+            (0, 99.0, 2.0, Some(OrderSide::Sell)),
+            (1, 100.0, 8.0, Some(OrderSide::Buy)),
             (2, 101.0, 1.0, None),
-            (3, 102.0, 5.0, Some(TradeSide::Sell)),
-            (60, 101.0, 10.0, Some(TradeSide::Buy)),
+            (3, 102.0, 5.0, Some(OrderSide::Sell)),
+            (60, 101.0, 10.0, Some(OrderSide::Buy)),
         ] {
             flow.push(&Tick::new(
                 start + TimeDelta::seconds(second),

@@ -116,7 +116,7 @@ impl Indicator for AccelerationBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
@@ -185,8 +185,8 @@ mod tests {
         ab.calculate(&data);
 
         let mut failures = Vec::new();
-        if ab.line_cnt() != 3 {
-            failures.push(format!("line_cnt {}, want 3", ab.line_cnt()));
+        if ab.line_count() != 3 {
+            failures.push(format!("line_count {}, want 3", ab.line_count()));
         }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(

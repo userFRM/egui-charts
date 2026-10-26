@@ -41,5 +41,5 @@ fuzz_target!(|input: Input| {
         study.update(&bars, index);
     }
     // Reading the result is part of the contract of a calculated study.
-    let _ = (study.values().len(), study.line_cnt(), study.line_names());
+    let _ = (study.values().len(), study.line_count(), study.line_names());
 });

@@ -547,7 +547,10 @@ fn dialogs_expose_titles_and_label_their_fields() {
             |ctx| {
                 let mut dialog = SymbolSearchDialog::new();
                 dialog.open();
-                let _ = dialog.show(ctx, &[crate::model::Symbol::new("TEST", "Example")]);
+                let _ = dialog.show(
+                    ctx,
+                    &[crate::model::Instrument::new("TEST").with_description("Example")],
+                );
             },
             &[
                 (Role::TextInput, "Search symbols"),
@@ -559,7 +562,10 @@ fn dialogs_expose_titles_and_label_their_fields() {
             |ctx| {
                 let mut dialog = CompareSymbolsDialog::new();
                 dialog.open();
-                dialog.show(ctx, &[crate::model::Symbol::new("TEST", "Example")]);
+                dialog.show(
+                    ctx,
+                    &[crate::model::Instrument::new("TEST").with_description("Example")],
+                );
             },
             &[
                 (Role::TextInput, "Search symbols"),

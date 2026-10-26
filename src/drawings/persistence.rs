@@ -700,6 +700,7 @@ pub fn stored_to_drawing(
 mod tests {
     use super::*;
     use crate::drawings::*;
+    use crate::model::LineStyle;
 
     const T0: i64 = 1_704_067_200_000;
 

@@ -185,7 +185,7 @@ impl Chart {
                     })
                     .map(|(_, study)| study)
                 {
-                    for line in (0..study.line_cnt()).filter(|line| {
+                    for line in (0..study.line_count()).filter(|line| {
                         let plot = study.plot_style(*line);
                         plot.visible
                             && !matches!(
@@ -358,7 +358,7 @@ mod tests {
                     })
                     .collect()
             })
-            .with_line_cnt(2)
+            .with_line_count(2)
             .with_overlay(kind != "pane")
             .with_offsets(vec![if kind == "displaced" { 1 } else { 0 }; 2])
             .with_plot_types(vec![

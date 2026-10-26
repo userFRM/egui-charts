@@ -45,22 +45,6 @@ pub enum NavigationButtons {
     Never,
 }
 
-/// Style for session break lines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum SessionBreakStyle {
-    /// Solid line
-    #[default]
-    Solid,
-    /// Dashed line
-    Dashed,
-    /// Dotted line
-    Dotted,
-    /// Dashes twice as long as `Dashed`, with twice the gap
-    LargeDashed,
-    /// Dots with twice the spacing of `Dotted`
-    SparseDotted,
-}
-
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; study panes draw their own axes.
 ///
@@ -342,7 +326,7 @@ pub struct ChartConfig {
     /// Color for session break lines
     pub session_break_color: Color32,
     /// Style for session break lines
-    pub session_break_style: SessionBreakStyle,
+    pub session_break_style: LineStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
     /// Shade bars identified as extended hours by the session metadata.
@@ -472,7 +456,7 @@ impl Default for ChartConfig {
             // Session breaks disabled by default
             show_session_breaks: false,
             session_break_color: chart.grid_line_major,
-            session_break_style: SessionBreakStyle::Dashed,
+            session_break_style: LineStyle::Dashed,
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,

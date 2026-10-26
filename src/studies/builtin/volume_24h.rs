@@ -97,7 +97,7 @@ impl Indicator for Volume24h {
         crate::studies::PlotStyle {
             color: self.color,
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }

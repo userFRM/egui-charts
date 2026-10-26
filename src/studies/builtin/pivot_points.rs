@@ -37,7 +37,7 @@
 //!     .with_pivots_back(5);
 //! pivots.set_timeframe(Timeframe::Hour1);
 //! pivots.calculate(&bars);
-//! assert_eq!(pivots.line_cnt(), 11);
+//! assert_eq!(pivots.line_count(), 11);
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};

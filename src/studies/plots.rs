@@ -225,13 +225,7 @@ pub(crate) fn mapped_drawings(
             let mut drawing = drawing.clone();
             drawing.color = style.color.to_srgba_unmultiplied();
             drawing.stroke_width = style.width;
-            drawing.line_style = match style.pattern {
-                super::PlotPattern::Solid => crate::drawings::LineStyle::Solid,
-                super::PlotPattern::Dashed => crate::drawings::LineStyle::Dashed,
-                super::PlotPattern::Dotted => crate::drawings::LineStyle::Dotted,
-                super::PlotPattern::LargeDashed => crate::drawings::LineStyle::LargeDashed,
-                super::PlotPattern::SparseDotted => crate::drawings::LineStyle::SparseDotted,
-            };
+            drawing.line_style = style.pattern;
             drawing.update_screen_coords(
                 |bar: f32| {
                     let index = bar as usize;

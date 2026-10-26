@@ -1304,7 +1304,7 @@ mod tests {
     #[test]
     fn executions_link_existing_tape_fills_without_counting_twice() {
         use crate::data::{OrderEvent, RestingOrder};
-        use crate::model::TradeSide::{Buy, Sell};
+        use crate::model::OrderSide::{Buy, Sell};
         for (timeframe, separate_frames) in [
             (Timeframe::Min1, false),
             (Timeframe::Min1, true),

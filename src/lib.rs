@@ -158,6 +158,7 @@ pub mod chart;
 #[warn(missing_docs)]
 pub mod drawings;
 pub mod model;
+pub mod prelude;
 pub mod scales;
 #[warn(missing_docs)]
 pub mod studies;
