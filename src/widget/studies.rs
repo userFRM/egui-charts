@@ -160,36 +160,17 @@ pub(super) fn refresh_values(
             pending_from[at] = None;
         }
     }
-    let due = order
-        .iter()
-        .copied()
-        .filter(|&at| {
-            let parent_ready = match studies[at].source() {
-                Some(crate::studies::StudySource::Study { id, .. }) => ids
-                    .iter()
-                    .position(|candidate| candidate.0 == id)
-                    .is_some_and(|parent| pending_from[parent].is_none()),
-                _ => true,
-            };
-            parent_ready
-                && pending_from[at].is_some_and(|from| {
-                    let len = studies[at].values().len();
-                    !(studies[at].is_incremental()
-                        && len > 0
-                        && from + 1 >= len
-                        && bars.len() >= len)
-                        && (from == 0 || now >= next_refresh[at])
-                })
-        })
-        .min_by(|&a, &b| next_refresh[a].total_cmp(&next_refresh[b]));
-    for at in order {
+    let mut recomputed = false;
+    for &at in &order {
         let parent = match studies[at].source() {
             Some(crate::studies::StudySource::Study { id, .. }) => {
                 ids.iter().position(|candidate| candidate.0 == id)
             }
             _ => None,
         };
-        if parent.is_some_and(|parent| pending_from[parent].is_some()) {
+        // Retained parent values can feed a waiting consumer while another tail update is pending.
+        // Replaced histories and edited sources must finish their full invalidation first.
+        if parent.is_some_and(|parent| pending_from[parent] == Some(0)) {
             continue;
         }
         let Some(from) = pending_from[at] else {
@@ -198,13 +179,41 @@ pub(super) fn refresh_values(
         let len = studies[at].values().len();
         let incremental =
             studies[at].is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len;
-        if !incremental && due != Some(at) {
-            continue;
+        if !incremental {
+            if recomputed {
+                continue;
+            }
+            let due = order
+                .iter()
+                .copied()
+                .filter(|&at| {
+                    let parent_ready = match studies[at].source() {
+                        Some(crate::studies::StudySource::Study { id, .. }) => ids
+                            .iter()
+                            .position(|candidate| candidate.0 == id)
+                            .is_some_and(|parent| pending_from[parent] != Some(0)),
+                        _ => true,
+                    };
+                    parent_ready
+                        && pending_from[at].is_some_and(|from| {
+                            let len = studies[at].values().len();
+                            !(studies[at].is_incremental()
+                                && len > 0
+                                && from + 1 >= len
+                                && bars.len() >= len)
+                                && (from == 0 || now >= next_refresh[at])
+                        })
+                })
+                .min_by(|&a, &b| next_refresh[a].total_cmp(&next_refresh[b]));
+            if due != Some(at) {
+                continue;
+            }
         }
         let started = Instant::now();
         super::studies::update(studies, ids, at, bars, from, sources);
         pending_from[at] = None;
         if !incremental {
+            recomputed = true;
             let cost = started.elapsed().as_secs_f64();
             next_refresh[at] = now + cost + REFRESH_INTERVAL.max(4.0 * cost);
         }
@@ -243,6 +252,96 @@ mod tests {
     use crate::studies::{InputValue, RSI, SMA, StudySource};
     use crate::widget::{Chart, SeriesId, test_frames::shapes};
     use chrono::{Duration, Utc};
+
+    /// One-bar means follow a continuous stream in dependency order, within one full refresh per pass.
+    #[test]
+    fn study_dependencies_refresh_during_continuous_ticks() {
+        for (reverse, count, incremental_source) in [
+            (false, 2, true),
+            (true, 2, true),
+            (false, 3, true),
+            (true, 3, false),
+        ] {
+            let ctx = egui::Context::default();
+            let bars: Vec<_> = (0..1_000)
+                .map(|i| {
+                    Bar::new(
+                        chrono::DateTime::<Utc>::UNIX_EPOCH + Duration::minutes(i),
+                        10.0,
+                        10.0,
+                        10.0,
+                        10.0,
+                        100.0,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let mut ids: Vec<_> = (0..count)
+                .map(|_| chart.add_indicator(Box::new(SMA::new(1))))
+                .collect();
+            if reverse {
+                ids.reverse();
+            }
+            if !incremental_source {
+                chart
+                    .set_indicator_source(ids[0], StudySource::Price(PriceSource::High))
+                    .unwrap();
+            }
+            for pair in ids.windows(2) {
+                chart
+                    .set_indicator_source(
+                        pair[1],
+                        StudySource::Study {
+                            id: pair[0].0,
+                            plot: 0,
+                        },
+                    )
+                    .unwrap();
+            }
+            for time in 0..6 {
+                shapes(&ctx, &mut chart, time as f64, Vec::new());
+            }
+            chart.next_refresh.fill(f64::NEG_INFINITY);
+            for tick in 1..=60 {
+                let close = 10.0 + tick as f64 * 0.01;
+                let mut bar = bars.last().unwrap().clone();
+                bar.close = close;
+                bar.high = close;
+                chart.update(SeriesId::MAIN, bar);
+                let refresh = chart.next_refresh.clone();
+                let pass = ctx.cumulative_pass_nr();
+                let now = 6.0 + tick as f64;
+                shapes(&ctx, &mut chart, now, Vec::new());
+                assert!(
+                    chart
+                        .next_refresh
+                        .iter()
+                        .zip(&refresh)
+                        .filter(|(a, b)| **a != **b)
+                        .count()
+                        <= (ctx.cumulative_pass_nr() - pass) as usize,
+                    "at most one full recompute per pass"
+                );
+                // Model equal costs so refresh ordering does not depend on runner preemption.
+                for (next, before) in chart.next_refresh.iter_mut().zip(refresh) {
+                    if *next != before {
+                        *next = now + super::REFRESH_INTERVAL;
+                    }
+                }
+                for (id, study) in chart.indicators().filter(|(id, _)| ids.contains(id)) {
+                    let value = study.values().value(0, 999).unwrap();
+                    // SMA(1) equals its input. Each full stage can wait for the other full
+                    // studies before its latest input reaches the next stage.
+                    let full = count - usize::from(incremental_source);
+                    let lag = full * (full - 1);
+                    assert!(
+                        value <= close + 1e-12 && value >= close - lag as f64 * 0.01 - 1e-12,
+                        "{id:?}, tick {tick}: {value}, expected {close} within {lag} ticks"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn price_sources_and_study_dependencies_follow_edits_and_live_bars() {

@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Studies sourced from another study continue refreshing during continuous ticks. Incremental parents update before full refresh selection, and consumers can use retained parent results while tail changes wait, preserving the one-study full-recompute budget and refresh order. Full history and source invalidations still wait for their parent. ([#911](https://github.com/userFRM/egui-charts/issues/911))
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 
