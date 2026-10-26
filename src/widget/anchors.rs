@@ -186,7 +186,7 @@ mod tests {
 
     /// Millisecond JSON fields must not collapse execution bars one nanosecond apart.
     #[test]
-    fn drawing_storage_preserves_submillisecond_anchors_and_legacy_milliseconds() {
+    fn drawing_storage_preserves_submillisecond_anchors() {
         for start in [
             Utc.timestamp_opt(1_704_067_200, 0).unwrap(),
             Utc.timestamp_opt(-1, 999_999_999).unwrap(),
@@ -247,14 +247,6 @@ mod tests {
                     .collect::<Vec<_>>(),
                 [1.0, 2.0]
             );
-            let mut legacy: serde_json::Value = serde_json::from_str(&saved).unwrap();
-            for point in legacy["drawings"][0]["points"].as_array_mut().unwrap() {
-                point.as_object_mut().unwrap().remove("subms_ns");
-            }
-            assert!(chart.load_drawings(&legacy.to_string()).unwrap().is_empty());
-            let mut invalid = legacy;
-            invalid["drawings"][0]["points"][0]["subms_ns"] = 1_000_000.into();
-            assert_eq!(chart.load_drawings(&invalid.to_string()).unwrap().len(), 1);
         }
     }
 

@@ -447,14 +447,23 @@ impl DrawingStorage {
                                 drawing.points.push(a.clone());
                             }
                             (T::RotatedRect, [a, b]) => {
-                                drawing.points =
-                                    vec![a.clone(), StoredCoord::new(b.ts_ms, a.price), b.clone()];
+                                drawing.points = vec![
+                                    a.clone(),
+                                    StoredCoord {
+                                        price: a.price,
+                                        ..b.clone()
+                                    },
+                                    b.clone(),
+                                ];
                             }
                             (T::DoubleCurve, [a, b]) => {
                                 drawing.points = vec![a.clone(), a.clone(), b.clone(), b.clone()];
                             }
                             (T::FibonacciWedge | T::Pitchfan, [a, b]) => {
-                                drawing.points.push(StoredCoord::new(b.ts_ms, a.price));
+                                drawing.points.push(StoredCoord {
+                                    price: a.price,
+                                    ..b.clone()
+                                });
                             }
                             _ => {}
                         }
@@ -995,14 +1004,14 @@ mod tests {
         }
 
         // Settings from a file saved before the new fields and placement counts.
-        for (tool, count, restored_count) in [
-            (DrawingToolType::PriceNote, 1, 2),
-            (DrawingToolType::ArrowMarker, 1, 2),
-            (DrawingToolType::RotatedRect, 2, 3),
-            (DrawingToolType::DoubleCurve, 2, 4),
-            (DrawingToolType::FibonacciWedge, 2, 3),
-            (DrawingToolType::Pitchfan, 2, 3),
-            (DrawingToolType::BarsPattern, 2, 2),
+        for (tool, count, origins) in [
+            (DrawingToolType::PriceNote, 1, &[0, 0][..]),
+            (DrawingToolType::ArrowMarker, 1, &[0, 0][..]),
+            (DrawingToolType::RotatedRect, 2, &[0, 1, 1][..]),
+            (DrawingToolType::DoubleCurve, 2, &[0, 0, 1, 1][..]),
+            (DrawingToolType::FibonacciWedge, 2, &[0, 1, 1][..]),
+            (DrawingToolType::Pitchfan, 2, &[0, 1, 1][..]),
+            (DrawingToolType::BarsPattern, 2, &[0, 1][..]),
         ] {
             let mut saved: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -1010,18 +1019,38 @@ mod tests {
             records.truncate(1);
             records[0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
             records[0]["points"].as_array_mut().unwrap().truncate(count);
+            for (at, point) in records[0]["points"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                point["subms_ns"] = (at + 1).into();
+            }
             let original = records[0]["points"].as_array().unwrap().clone();
             let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
             let points = &loaded.drawings[0].points;
-            assert_eq!(points.len(), restored_count, "{tool:?}");
+            assert_eq!(points.len(), origins.len(), "{tool:?}");
+            for (point, &origin) in points.iter().zip(origins) {
+                assert_eq!(
+                    point.ts_ms,
+                    original[origin]["ts_ms"].as_i64().unwrap(),
+                    "{tool:?}"
+                );
+                assert_eq!(
+                    u64::from(point.subms_ns),
+                    original[origin]["subms_ns"].as_u64().unwrap(),
+                    "{tool:?}"
+                );
+            }
             let points = serde_json::to_value(points).unwrap();
             for anchor in original {
                 assert!(points.as_array().unwrap().contains(&anchor), "{tool:?}");
             }
             let (again, skipped) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
             assert!(skipped.is_empty());
-            assert_eq!(again.drawings[0].points.len(), restored_count);
+            assert_eq!(again.drawings[0].points.len(), origins.len());
         }
 
         let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
@@ -1042,6 +1071,12 @@ mod tests {
             serde_json::to_string_pretty(&storage).unwrap()
         };
         let unreadable = [
+            (
+                current.replacen("\"ts_ms\":", "\"subms_ns\": 1000000, \"ts_ms\":", 1),
+                "anchor timestamp is outside the supported range",
+                &["2"][..],
+                0,
+            ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
                 "invalid type: null",
@@ -1154,13 +1189,17 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 13] = [
+        let cases: [(Spoil, &str); 14] = [
             (
                 |s| first(s).drawing.screen_anchor = Some([f32::NAN, 0.5]),
                 "non-finite screen_anchor",
             ),
             (
                 |s| first(s).points[0].ts_ms = i64::MAX,
+                "anchor 0 has no time mapping",
+            ),
+            (
+                |s| first(s).points[0].subms_ns = 1_000_000,
                 "anchor 0 has no time mapping",
             ),
             (
