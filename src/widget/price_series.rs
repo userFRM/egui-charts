@@ -589,7 +589,7 @@ impl Chart {
     }
 
     /// The visible host series drawn on the price pane.
-    pub(super) fn main_pane_series(&self) -> impl Iterator<Item = &PriceSeries> {
+    pub(super) fn main_pane_series(&self) -> impl DoubleEndedIterator<Item = &PriceSeries> {
         self.price_series
             .iter()
             .filter(|item| item.visible && !self.in_pane(item.id))
@@ -761,9 +761,95 @@ impl Chart {
         keys
     }
 
-    pub(super) fn paint_secondary_series(&self, painter: &egui::Painter, rect: Rect) {
+    pub(super) fn hit_price_series(
+        &self,
+        item: &PriceSeries,
+        pos: Pos2,
+        rect: Rect,
+        map: PriceMap,
+    ) -> Option<usize> {
+        if !rect.contains(pos) {
+            return None;
+        }
+        let main = self.state.shown();
+        let logical = self
+            .state
+            .time_scale()
+            .coord_to_idx(pos.x, rect.left(), rect.width());
+        let time = super::sync::time_at(main, f64::from(logical))?;
+        let at = item.bars.partition_point(|bar| bar.time < time);
+        let x = |bar: &Bar| {
+            super::sync::index_at(main, bar.time).map(|index| {
+                self.state.time_scale().idx_to_coord_precise(
+                    index as f32,
+                    rect.left(),
+                    rect.width(),
+                )
+            })
+        };
+        let tolerance = item.options.style.hit_tolerance;
+        for index in at.saturating_sub(1)..(at + 2).min(item.bars.len()) {
+            let bar = &item.bars[index];
+            if bar.is_whitespace() {
+                continue;
+            }
+            let px = x(bar)?;
+            let close = Pos2::new(px, map.price_to_y(bar.close));
+            let hit = if item.options.chart_type.uses_ohlc() {
+                let half_width = self.state.time_scale().bar_spacing() * 0.35;
+                let body = Rect::from_two_pos(
+                    Pos2::new(px - half_width, map.price_to_y(bar.open)),
+                    Pos2::new(px + half_width, close.y),
+                );
+                body.expand(1.0).contains(pos)
+                    || ((pos.x - px).abs() <= tolerance
+                        && (map.price_to_y(bar.low).min(map.price_to_y(bar.high))
+                            ..=map.price_to_y(bar.low).max(map.price_to_y(bar.high)))
+                            .contains(&pos.y))
+            } else if item.options.chart_type == ChartType::Columns {
+                let base = item
+                    .options
+                    .columns_base
+                    .map_or(rect.bottom(), |base| map.price_to_y(base));
+                Rect::from_two_pos(
+                    Pos2::new(px - self.state.time_scale().bar_spacing() * 0.4, base),
+                    Pos2::new(px + self.state.time_scale().bar_spacing() * 0.4, close.y),
+                )
+                .contains(pos)
+            } else if pos.distance(close) <= tolerance {
+                true
+            } else if let Some(next) = item.bars.get(index + 1).filter(|bar| !bar.is_whitespace()) {
+                let next = Pos2::new(x(next)?, map.price_to_y(next.close));
+                if item.options.chart_type == ChartType::StepLine {
+                    let corner = Pos2::new(next.x, close.y);
+                    crate::chart::hit_test::point_to_segment_distance(pos, close, corner).min(
+                        crate::chart::hit_test::point_to_segment_distance(pos, corner, next),
+                    ) <= tolerance
+                } else {
+                    crate::chart::hit_test::point_to_segment_distance(pos, close, next) <= tolerance
+                }
+            } else {
+                false
+            };
+            if hit {
+                return super::sync::index_at(main, bar.time)
+                    .map(|index| index.round().max(0.0) as usize);
+            }
+        }
+        None
+    }
+
+    pub(super) fn paint_secondary_series(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        on_top: Option<SeriesId>,
+    ) {
         let plot = painter.with_clip_rect(painter.clip_rect().intersect(rect));
-        for item in self.main_pane_series() {
+        for item in self
+            .main_pane_series()
+            .filter(|item| Some(item.id) != on_top)
+        {
             self.paint_series(&plot, rect, item, self.series_map(item, rect));
         }
     }

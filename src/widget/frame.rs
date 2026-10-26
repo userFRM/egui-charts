@@ -1485,6 +1485,12 @@ impl Chart {
             .filter(|id| self.has_renderer(*id))
             .collect();
         let last_bar = self.state.shown().len().saturating_sub(1);
+        let secondary_hits = [pointer, response.interact_pointer_pos()].map(|pos| {
+            pos.map(|pos| (pos, self.main_pane_series().rev().find_map(|item| {
+                self.hit_price_series(item, pos, price_rect, self.series_map(item, price_rect))
+                    .map(|bar| (super::ChartElementId::Series(item.id), bar))
+            })))
+        });
         let element_at = |pos: Pos2| {
             if let Some(super::PointerTarget::Element(id)) = renderer_hit
                 .filter(|_| Some(pos) == pointer)
@@ -1492,7 +1498,7 @@ impl Chart {
             {
                 return Some((id, coords.x_to_idx(pos.x).min(last_bar)));
             }
-            hit_test_main_chart(
+            let hit = hit_test_main_chart(
                 pos,
                 studies,
                 &self.study_ids,
@@ -1509,7 +1515,12 @@ impl Chart {
                 // A renderer hit tests its custom series in place of the study's plots.
                 crate::widget::ChartElementId::Indicator(study) => !rendered.contains(study),
                 _ => self.main_series_visible,
-            })
+            });
+            if matches!(hit, Some((super::ChartElementId::Indicator(id), _)) if !behind.contains(&id))
+            {
+                return hit;
+            }
+            secondary_hits.iter().flatten().find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten()).or(hit)
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
@@ -1649,7 +1660,14 @@ impl Chart {
         }
 
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Normal);
-        self.paint_secondary_series(&painter, price_rect);
+        self.paint_secondary_series(
+            &painter,
+            price_rect,
+            on_top.and_then(|id| match id {
+                super::ChartElementId::Series(id) => Some(id),
+                _ => None,
+            }),
+        );
 
         if let Some(bubbles) = self
             .feed_link
@@ -1667,6 +1685,16 @@ impl Chart {
         match on_top {
             Some(super::ChartElementId::Indicator(id)) => paint_overlay(&id),
             _ if main_on_top => paint_main_series(),
+            Some(super::ChartElementId::Series(id)) => {
+                if let Some(item) = self.main_pane_series().find(|item| item.id == id) {
+                    self.paint_series(
+                        &clipped_painter,
+                        price_rect,
+                        item,
+                        self.series_map(item, price_rect),
+                    );
+                }
+            }
             _ => {}
         }
         self.paint_signals(ui, &coords);
@@ -3785,14 +3813,26 @@ mod tests {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[200.0]);
         chart.chart_options.tooltip.enabled = false;
+        let mut study_ids = Vec::new();
         for (level, color) in levels {
-            chart.add_indicator(Box::new(
+            study_ids.push(chart.add_indicator(Box::new(
                 CustomIndicator::new("Level", move |bars| {
                     vec![IndicatorValue::Single(level); bars.len()]
                 })
                 .with_color(color),
-            ));
+            )));
         }
+        let added_color = Color32::from_rgb(1, 1, 201);
+        let added = chart.add_series(super::super::SeriesOptions {
+            color: added_color,
+            ..Default::default()
+        });
+        let bars = chart
+            .bars(super::super::SeriesId::MAIN)
+            .iter()
+            .map(|bar| crate::model::Bar::from_value(bar.time, 130.0))
+            .collect();
+        chart.set_data(added, bars);
         frame(&ctx, &mut chart, 0.0, Vec::new());
         let map = chart.get_chart_mapping();
         let candle = chart.config().bullish_color;
@@ -3807,9 +3847,14 @@ mod tests {
         };
         // (enabled, hovered price, colours from the bottom up)
         for (t, (enabled, price, order)) in [
-            (false, 120.0, [candle, levels[0].1, levels[1].1]),
-            (true, 120.0, [levels[0].1, levels[1].1, candle]),
-            (true, 150.0, [candle, levels[1].1, levels[0].1]),
+            (
+                false,
+                120.0,
+                [candle, added_color, levels[0].1, levels[1].1],
+            ),
+            (true, 120.0, [added_color, levels[0].1, levels[1].1, candle]),
+            (true, 150.0, [candle, added_color, levels[1].1, levels[0].1]),
+            (true, 130.0, [candle, levels[0].1, levels[1].1, added_color]),
         ]
         .into_iter()
         .enumerate()
@@ -3827,6 +3872,24 @@ mod tests {
             let positions = order.map(|color| first(&painted, color).unwrap());
             assert!(positions.is_sorted(), "{enabled} {price}: {positions:?}");
         }
+        let pane = chart.add_pane();
+        for id in study_ids.iter().copied().chain([added]) {
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        for (step, (enabled, price, order)) in [
+            (false, 150.0, [levels[0].1, levels[1].1, added_color]),
+            (true, 150.0, [levels[1].1, added_color, levels[0].1]),
+            (true, 130.0, [levels[0].1, levels[1].1, added_color]),
+        ].into_iter().enumerate() {
+            chart.chart_options.hovered_series_on_top = enabled;
+            frame(&ctx, &mut chart, 5.0 + step as f64, vec![]);
+            let map = chart.series_price_map(added).unwrap();
+            let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(90), map.price_to_y(price));
+            let painted = shapes(&ctx, &mut chart, 5.1 + step as f64, vec![Event::PointerMoved(pos)]);
+            let positions = order.map(|color| first(&painted, color).unwrap());
+            assert!(positions.is_sorted(), "pane {enabled} {price}: {positions:?}");
+        }
+
     }
 
     #[test]
@@ -3844,14 +3907,35 @@ mod tests {
                 Bar::new(t, 100.0, high, low, 101.0, 1.0)
             })
             .collect();
+        struct MergeProbe(std::sync::Arc<std::sync::Mutex<Vec<std::ops::Range<usize>>>>);
+        impl super::super::Primitive for MergeProbe {
+            fn draw_merged(&self, _: &egui::Painter, view: &super::super::PrimitiveView<'_>, pass: super::super::PrimitivePass, factor: usize) {
+                if pass == super::super::PrimitivePass::Series {
+                    *self.0.lock().unwrap() = view.point_groups(factor).collect();
+                }
+            }
+        }
+        let groups = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.attach_primitive(super::super::SeriesId::MAIN, MergeProbe(groups.clone())).unwrap();
         let mut options = chart.chart_options().clone();
         options.time_scale.min_bar_spacing = 0.0;
         chart.set_chart_options(options);
         frame(&ctx, &mut chart, 0.0, Vec::new());
         chart.apply_synced_time_scale(chart.get_rendered_price_rect().width() / 65_536.0, 0.0);
         frame(&ctx, &mut chart, 0.1, Vec::new());
+        {
+            let groups = groups.lock().unwrap();
+            assert!(!groups.is_empty() && groups.len() < 1000, "custom renderer receives pixel groups");
+            assert_eq!(groups.first().unwrap().start, 0);
+            assert_eq!(groups.last().unwrap().end, 65_536);
+            assert!(groups.windows(2).all(|pair| pair[0].end == pair[1].start));
+            let view = chart.primitive_view(super::super::SeriesId::MAIN, chart.get_chart_mapping());
+            let mut edge = view.clone();
+            edge.visible = 1..7;
+            assert_eq!(edge.point_groups(4).collect::<Vec<_>>(), [0..4, 4..8]);
+        }
         let color = chart.config().bullish_color;
         let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
             shapes(&ctx, chart, t, Vec::new())

@@ -40,6 +40,12 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 }
 
 impl Attached {
+    pub(super) fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        let factor =
+            super::merge::factor(view.mapping.bar_spacing, painter.ctx().pixels_per_point());
+        self.get().draw_merged(painter, view, pass, factor);
+    }
+
     pub(super) fn get(&self) -> MutexGuard<'_, dyn Primitive + 'static> {
         // A primitive that panicked in a hook keeps the state it had.
         self.primitive
@@ -236,7 +242,7 @@ impl Chart {
     }
 
     /// The primitives attached to `series`.
-    pub(super) fn primitives_of(&self, series: SeriesId) -> impl Iterator<Item = &Attached> {
+    pub(super) fn primitives_of(&self, series: SeriesId) -> impl DoubleEndedIterator<Item = &Attached> {
         self.primitives
             .iter()
             .filter(move |item| item.series == series)
@@ -285,7 +291,7 @@ impl Chart {
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
         for (item, view) in self.main_primitives(coords) {
-            item.get().draw(&painter, &view, pass);
+            item.draw(&painter, &view, pass);
         }
     }
 }

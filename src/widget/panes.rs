@@ -421,6 +421,47 @@ impl Chart {
                     )
                 })
                 .collect();
+            let pane_plot = Rect::from_x_y_ranges(plot.x_range(), panel_rect.y_range());
+            let mut pane_mapping = coords.to_mapping(pane_plot, 0.0, 1.0);
+            pane_mapping.price = map;
+            let on_top = ui
+                .input(|input| input.pointer.hover_pos())
+                .filter(|pos| {
+                    self.chart_options.hovered_series_on_top
+                        && !collapsed
+                        && pane_plot.contains(*pos)
+                })
+                .and_then(|pos| {
+                    members.iter().rev().find_map(|id| {
+                        if let Some(item) = self
+                            .price_series
+                            .iter()
+                            .find(|item| item.id == *id && item.visible)
+                        {
+                            self.hit_price_series(item, pos, pane_plot, map)
+                                .map(|_| *id)
+                        } else {
+                            let idx = self.study_ids.iter().position(|study| study == id)?;
+                            let study = studies.indicators()[idx].as_ref();
+                            let hit = super::primitives::primitive_at(
+                                self.primitives_of(*id)
+                                    .map(|item| (item, self.primitive_view(*id, pane_mapping))),
+                                pos,
+                            )
+                            .is_some();
+                            (hit || hit_test_pane_indicator(
+                                pos,
+                                study,
+                                idx,
+                                visible_range.clone(),
+                                pane_plot,
+                                &pane_mapping,
+                            )
+                            .is_some())
+                            .then_some(*id)
+                        }
+                    })
+                });
             // Each visible study and host series draws its legend in turn, with the study index
             // of a study; the frame draws a pane with neither.
             let mut entries: Vec<_> = members
@@ -443,7 +484,13 @@ impl Chart {
             }
             // The crosshair lines of a pane with host series are drawn above their bars.
             let mut series_crosshair = None;
-            for (member_row, entry) in entries.into_iter().enumerate() {
+            let legend_order = entries.clone();
+            entries.sort_by_key(|entry| entry.is_some_and(|(id, _)| Some(id) == on_top));
+            for (paint_row, entry) in entries.into_iter().enumerate() {
+                let member_row = legend_order
+                    .iter()
+                    .position(|original| *original == entry)
+                    .unwrap_or(0);
                 let id = entry.map(|(id, _)| id);
                 let study = entry.and_then(|(_, idx)| idx);
                 let indicator: &dyn Indicator = match (study, id) {
@@ -475,7 +522,7 @@ impl Chart {
                 config.show_legend = entry.is_some()
                     && (config.show_name || config.show_values || !config.inputs.is_empty());
                 config.height = height;
-                config.show_grid &= member_row == 0;
+                config.show_grid &= paint_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.price_map = Some(map);
                 if study.is_none() && id.is_some() {
@@ -483,7 +530,7 @@ impl Chart {
                         id.and_then(|id| self.series_label_formatter(id, map.transform().mode));
                 }
                 panel.axis_tags = axis_tags.clone();
-                panel.overlay = member_row > 0;
+                panel.overlay = paint_row > 0;
 
                 panel.legend_offset = member_row as f32 * 24.0;
                 panel.pane_controls = true;
@@ -588,6 +635,19 @@ impl Chart {
                         .collect::<Vec<_>>(),
                     study.is_none() && id.is_some(),
                 ) {
+                    if !collapsed
+                        && let Some(item) =
+                            id.and_then(|id| self.price_series.iter().find(|item| item.id == id))
+                    {
+                        let painter = ui
+                            .painter()
+                            .with_clip_rect(interaction.chart_rect.intersect(ui.clip_rect()));
+                        self.paint_series(&painter, interaction.chart_rect, item, map);
+                        let view = self.primitive_view(item.id, pane_mapping);
+                        for primitive in self.primitives_of(item.id) {
+                            primitive.draw(&painter, &view, super::PrimitivePass::Series);
+                        }
+                    }
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
                     axis_tags = panel.axis_tags.clone();
@@ -727,6 +787,15 @@ impl Chart {
                             .rev()
                             .filter(|id| !rendered.contains(id))
                             .find_map(|id| {
+                                if let Some(item) = self
+                                    .price_series
+                                    .iter()
+                                    .find(|item| item.id == *id && item.visible)
+                                {
+                                    return self
+                                        .hit_price_series(item, pos, chart_rect, map)
+                                        .map(|_| ChartElementId::Series(*id));
+                                }
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
                                 hit_test_pane_indicator(
                                     pos,
@@ -736,8 +805,10 @@ impl Chart {
                                     chart_rect,
                                     &pane_coords,
                                 )
+                                .map(|hit| {
+                                    ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
+                                })
                             })
-                            .map(|hit| ChartElementId::Indicator(self.study_ids[hit.indicator_idx]))
                     };
                     if !collapsed
                         && !toggle.clicked()
@@ -812,7 +883,7 @@ impl Chart {
                     }
                 }
             }
-            if let Some((_, chart_rect, pane_coords, _)) = &drawing_response {
+            if let Some((_, chart_rect, _, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
                 let painter = ui
                     .painter()
@@ -826,19 +897,6 @@ impl Chart {
                     None
                 };
                 if !collapsed {
-                    let plot_painter =
-                        painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
-                    for item in &items {
-                        self.paint_series(&plot_painter, chart_rect, item, map);
-                        let view = self.primitive_view(item.id, *pane_coords);
-                        for primitive in self.primitives_of(item.id) {
-                            primitive.get().draw(
-                                &plot_painter,
-                                &view,
-                                super::PrimitivePass::Series,
-                            );
-                        }
-                    }
                     if let Some((mut pos, options)) = series_crosshair {
                         if let Some(index) = hovered {
                             pos.x = horizontal.idx_to_x(index);
@@ -965,8 +1023,7 @@ impl Chart {
                         && self.is_series_visible(item.series)
                 }) {
                     let view = self.primitive_view(item.series, pane_coords);
-                    item.get()
-                        .draw(&painter, &view, super::PrimitivePass::Above);
+                    item.draw(&painter, &view, super::PrimitivePass::Above);
                 }
             }
             if !collapsed {

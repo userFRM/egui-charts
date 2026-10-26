@@ -631,7 +631,7 @@ impl IndicatorPane {
         let draw = |painter: &egui::Painter, pass| {
             if let Some(view) = &view {
                 for item in primitives {
-                    item.get().draw(painter, view, pass);
+                    item.draw(painter, view, pass);
                 }
             }
         };
