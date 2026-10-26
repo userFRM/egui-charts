@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The demo gives overlay volume 25% of the price pane instead of 12%, about 198 points at a 1440 by 900 point window, with the columns still standing on the plot bottom. `ChartConfig::volume_height_fraction` continues to set the band. ([#987](https://github.com/userFRM/egui-charts/issues/987))
+
 - The light preset's crosshair tags are black with white text instead of #EBEBEB with #1A1A1A text, and its dashed crosshair lines read #9C9C9C on the white plot instead of #909090, so the hovered price and time stand out from the axis labels at every display density. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
 
 - The light preset draws grid lines in #D1D1D1 instead of #DCDCDC, so the dotted grid stays visible on the white plot. Horizontal and vertical grid lines keep their separate visibility settings. ([#1010](https://github.com/userFRM/egui-charts/issues/1010))
