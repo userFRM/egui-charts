@@ -160,8 +160,8 @@ impl Chart {
 
     /// Handles pinch-to-zoom for touch/trackpad gestures
     ///
-    /// This uses egui's multi-touch zoom_delta which is provided by trackpad
-    /// pinch gestures and mobile two-finger pinch.
+    /// Native zoom events and contact-based pinches share the pointer anchor.
+    /// Contact gestures take precedence when a backend reports both.
     pub fn handle_pinch_zoom(
         &mut self,
         ui: &Ui,
@@ -177,6 +177,21 @@ impl Chart {
         let zoom_info = ui.input(|i| {
             i.multi_touch()
                 .map(|mt| (mt.zoom_delta, mt.translation_delta, i.pointer.hover_pos()))
+                .or_else(|| {
+                    // Wheel zoom is handled separately, including its Ctrl/Cmd variant.
+                    let native_zoom: f32 = i
+                        .events
+                        .iter()
+                        .filter_map(|event| {
+                            if let Event::Zoom(delta) = event {
+                                Some(*delta)
+                            } else {
+                                None
+                            }
+                        })
+                        .product();
+                    (native_zoom != 1.0).then_some((native_zoom, Vec2::ZERO, i.pointer.hover_pos()))
+                })
         });
 
         if let Some((zoom_delta, translation_delta, hover_pos)) = zoom_info {
@@ -652,6 +667,65 @@ mod tests {
     use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+
+    /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
+    #[test]
+    fn native_and_contact_pinch_keep_the_zoom_anchor() {
+        for (contacts, native, enabled) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+            (false, true, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            chart.chart_options.handle_scale.pinch = enabled;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let rect = chart.last_rendered_price_rect;
+            let pointer = Pos2::new(rect.left() + rect.width() * 0.25, rect.center().y);
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
+            let touch = |id, phase, x| Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(id),
+                phase,
+                pos: Pos2::new(x, pointer.y),
+                force: None,
+            };
+            if contacts {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.04,
+                    vec![
+                        touch(1, egui::TouchPhase::Start, pointer.x - 50.0),
+                        touch(2, egui::TouchPhase::Start, pointer.x + 50.0),
+                    ],
+                );
+            }
+            let (spacing, offset) = chart.get_time_scale_state();
+            let mut events = Vec::new();
+            if contacts {
+                events.extend([
+                    touch(1, egui::TouchPhase::Move, pointer.x - 75.0),
+                    touch(2, egui::TouchPhase::Move, pointer.x + 75.0),
+                ]);
+            }
+            if native {
+                events.push(Event::Zoom(1.5));
+            }
+            frame(&ctx, &mut chart, 0.06, events);
+            let (zoomed, moved) = chart.get_time_scale_state();
+            // The existing pinch sensitivity maps a 1.5 gesture to a 10% spacing increase.
+            let expected_spacing = if enabled { spacing * 1.1 } else { spacing };
+            assert!(
+                (zoomed - expected_spacing).abs() < 1e-5,
+                "contacts={contacts}, native={native}, enabled={enabled}: {zoomed}"
+            );
+            let expected_offset =
+                offset + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
+            assert!((moved - expected_offset).abs() < 1e-4);
+        }
+    }
 
     /// Startup and suspended layouts must not consume the requested zoom or move the right edge.
     #[test]
