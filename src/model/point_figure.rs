@@ -110,9 +110,10 @@ impl PnfColumn {
     /// Returns an error for non-finite endpoints, an invalid box size, more than two million
     /// boxes, or an allocation failure. The column endpoints remain available without expansion.
     pub fn boxes(&self) -> Result<Vec<f64>, String> {
-        if !self.start_price.is_finite()
-            || !self.end_price.is_finite()
-            || !(self.box_size > 0.0 && self.box_size.is_finite())
+        if !(self.start_price.is_finite()
+            && self.end_price.is_finite()
+            && self.box_size > 0.0
+            && self.box_size.is_finite())
         {
             return Err(
                 "Box prices require finite endpoints and a positive finite box size".into(),
