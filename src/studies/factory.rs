@@ -558,6 +558,7 @@ mod tests {
                 0,
                 &[StudyData {
                     request: StudyDataRequest {
+                        metric: None,
                         symbol: String::new(),
                         timeframe: Some(timeframe),
                     },

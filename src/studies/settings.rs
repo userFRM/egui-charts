@@ -289,6 +289,7 @@ impl Indicator for ConfiguredStudy {
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
             vec![super::StudyDataRequest {
+                metric: None,
                 symbol: self.calculation_symbol.clone(),
                 timeframe: self.calculation_timeframe,
             }]

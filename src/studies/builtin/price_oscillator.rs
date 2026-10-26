@@ -63,28 +63,6 @@ impl PriceOscillator {
     }
 }
 
-/// An EMA of `period` over `values` that skips `None`: it is seeded with the mean of the first
-/// `period` values and carries over a missing one, which has no EMA.
-fn ema_of(values: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
-    let (mut seed, mut ema) = (Vec::new(), None);
-    values
-        .iter()
-        .map(|&v| {
-            let v = v?;
-            match ema {
-                Some(prev) => ema = Some(prev + (v - prev) * 2.0 / (period as f64 + 1.0)),
-                None => {
-                    seed.push(v);
-                    if seed.len() == period {
-                        ema = Some(seed.iter().sum::<f64>() / period as f64);
-                    }
-                }
-            }
-            ema
-        })
-        .collect()
-}
-
 /// The percentage oscillator of `values` as MACD defines it, taken as a percentage of the long
 /// average: `100 * (EMA(short) - EMA(long)) / EMA(long)`, its signal `EMA(signal)` over the bars
 /// where it is defined, and the histogram. A bar has no value until the oscillator is defined,
@@ -95,23 +73,30 @@ pub(super) fn percentage_oscillator(
     long: usize,
     signal: usize,
 ) -> IndicatorValues {
-    let values: Vec<Option<f64>> = values.iter().map(|&v| Some(v)).collect();
-    let (short, long) = (ema_of(&values, short), ema_of(&values, long));
-    let line: Vec<Option<f64>> = short
+    let (short, long) = (
+        crate::studies::helpers::ema_sma(values, short),
+        crate::studies::helpers::ema_sma(values, long),
+    );
+    let line: Vec<_> = short
         .iter()
         .zip(&long)
-        .map(|(s, l)| match (s, l) {
-            (Some(s), Some(l)) if *l != 0.0 => Some((s - l) / l * 100.0),
-            _ => None,
+        .map(|(s, l)| {
+            if *l == 0.0 {
+                f64::NAN
+            } else {
+                (s - l) / l * 100.0
+            }
         })
         .collect();
-    let signal = ema_of(&line, signal);
+    let signal = crate::studies::helpers::ema_sma(&line, signal);
     line.iter()
         .zip(&signal)
-        .map(|(line, signal)| match (line, signal) {
-            (Some(l), Some(s)) => IndicatorValue::Multiple(vec![*l, *s, l - s]),
-            (Some(l), None) => IndicatorValue::Multiple(vec![*l, f64::NAN, f64::NAN]),
-            _ => IndicatorValue::None,
+        .map(|(&line, &signal)| {
+            if line.is_finite() {
+                IndicatorValue::Multiple(vec![line, signal, line - signal])
+            } else {
+                IndicatorValue::None
+            }
         })
         .collect()
 }

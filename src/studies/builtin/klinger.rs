@@ -1,5 +1,6 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -52,49 +53,6 @@ impl KlingerOscillator {
         self
     }
 
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // Find first valid value
-        let mut first_sum = 0.0;
-        let mut count = 0;
-        let mut first_valid_idx = 0;
-
-        for (i, &value) in data.iter().enumerate() {
-            if !value.is_nan() {
-                first_sum += value;
-                count += 1;
-                if count == period {
-                    first_valid_idx = i;
-                    break;
-                }
-            }
-        }
-        if count < period {
-            return vec![f64::NAN; data.len()];
-        }
-
-        // A NaN input has no value but does not end the average.
-        let mut prev = first_sum / period as f64;
-        for i in 0..data.len() {
-            if i < first_valid_idx || data[i].is_nan() {
-                ema.push(f64::NAN);
-            } else {
-                if i > first_valid_idx {
-                    prev += (data[i] - prev) * multiplier;
-                }
-                ema.push(prev);
-            }
-        }
-
-        ema
-    }
-
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut volume_force = vec![f64::NAN; data.len()];
@@ -134,14 +92,14 @@ impl KlingerOscillator {
             };
         }
 
-        let short_ema = Self::calculate_ema(&volume_force, self.short_period);
-        let long_ema = Self::calculate_ema(&volume_force, self.long_period);
+        let short_ema = helpers::ema_sma(&volume_force, self.short_period);
+        let long_ema = helpers::ema_sma(&volume_force, self.long_period);
         let klinger: Vec<f64> = short_ema
             .iter()
             .zip(&long_ema)
             .map(|(s, l)| s - l)
             .collect();
-        let signal = Self::calculate_ema(&klinger, self.signal_period);
+        let signal = helpers::ema_sma(&klinger, self.signal_period);
 
         klinger
             .iter()

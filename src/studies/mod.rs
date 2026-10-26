@@ -61,12 +61,15 @@ pub use data::{StudyData, StudyDataRequest};
 #[cfg(feature = "studies")]
 pub mod factory;
 mod format;
+pub mod helpers;
 mod indicator_trait;
 mod order_flow;
 pub use format::{StudyFormat, StudyScale};
 pub use order_flow::{OrderFlowInput, OrderFlowKind};
 mod inputs;
+mod metric;
 pub use inputs::{InputKind, InputValue, StudyInput, StudySource};
+pub use metric::MetricStudy;
 pub(crate) mod plots;
 pub(crate) mod projection;
 mod settings;
@@ -83,8 +86,8 @@ pub use values::IndicatorValues;
 pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
-#[cfg(feature = "studies")]
 mod stepper;
+pub use stepper::Stepper;
 
 #[cfg(feature = "studies")]
 pub use builtin::*;

@@ -88,6 +88,7 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -612,20 +613,6 @@ impl Default for CandlestickPatterns {
     }
 }
 
-/// SMA of `xs` over `n` values, NaN before the window fills.
-fn sma(xs: &[f64], n: usize) -> Vec<f64> {
-    let mut sum = 0.0;
-    (0..xs.len())
-        .map(|i| {
-            sum += xs[i];
-            if i >= n {
-                sum -= xs[i - n];
-            }
-            if i + 1 >= n { sum / n as f64 } else { f64::NAN }
-        })
-        .collect()
-}
-
 impl Indicator for CandlestickPatterns {
     crate::studies::inputs::study_inputs!(self;
         trend: choice("Detect trend based on", [PatternTrend::Sma50, PatternTrend::Sma50Sma200, PatternTrend::NoDetection]),
@@ -729,8 +716,8 @@ impl Indicator for CandlestickPatterns {
             .iter()
             .map(|&i| (data[i].close - data[i].open).abs())
             .collect();
-        let (sma50, sma200) = (sma(&close, 50), sma(&close, 200));
-        let mut average = sma(&body, BODY_AVERAGE);
+        let (sma50, sma200) = (helpers::sma(&close, 50), helpers::sma(&close, 200));
+        let mut average = helpers::sma(&body, BODY_AVERAGE);
         let alpha = 2.0 / (BODY_AVERAGE + 1) as f64;
         for i in BODY_AVERAGE..average.len() {
             average[i] = average[i - 1] + alpha * (body[i] - average[i - 1]);

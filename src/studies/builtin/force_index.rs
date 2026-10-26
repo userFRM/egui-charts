@@ -31,51 +31,6 @@ impl ForceIndex {
         self
     }
 
-    /// Calculate EMA
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // Find first non-NaN value to start SMA
-        let mut first_valid_idx = 0;
-        let mut sum = 0.0;
-        let mut count = 0;
-
-        for (i, &value) in data.iter().enumerate() {
-            if !value.is_nan() {
-                if count < period {
-                    sum += value;
-                    count += 1;
-                }
-                if count == period {
-                    first_valid_idx = i;
-                    break;
-                }
-            }
-        }
-
-        for i in 0..data.len() {
-            if i < first_valid_idx {
-                ema.push(f64::NAN);
-            } else if i == first_valid_idx {
-                ema.push(sum / period as f64);
-            } else {
-                let prev = ema[i - 1];
-                if prev.is_nan() || data[i].is_nan() {
-                    ema.push(f64::NAN);
-                } else {
-                    ema.push((data[i] - prev) * multiplier + prev);
-                }
-            }
-        }
-
-        ema
-    }
-
     /// The values over `data`, every bar of which has a finite close and volume.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
@@ -97,7 +52,7 @@ impl ForceIndex {
         }
 
         // Apply EMA smoothing
-        let smoothed = Self::calculate_ema(&raw_force, self.period);
+        let smoothed = crate::studies::helpers::ema_sma(&raw_force, self.period);
 
         // Store results
         for value in smoothed {

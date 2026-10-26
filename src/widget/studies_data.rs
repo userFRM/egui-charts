@@ -3,7 +3,10 @@
 use super::Chart;
 use crate::data::inbox::Inbox;
 use crate::data::merge::{Origin, merge};
-use crate::data::{Datafeed, FeedError, HistoryPage, HistoryRequest, Subscription, SubscriptionId};
+use crate::data::{
+    Datafeed, FeedError, HistoryPage, HistoryRequest, MetricPage, MetricRequest,
+    MetricSubscription, Subscription, SubscriptionId,
+};
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use crate::studies::{StudyData, StudyDataRequest};
 use std::collections::BTreeSet;
@@ -49,6 +52,7 @@ fn resolved(
     timeframe: Option<Timeframe>,
 ) -> StudyDataRequest {
     StudyDataRequest {
+        metric: request.metric.clone(),
         symbol: if request.symbol.is_empty() {
             symbol.to_owned()
         } else {
@@ -58,7 +62,11 @@ fn resolved(
     }
 }
 
-fn clock(timeframe: Timeframe, instrument: Option<&Instrument>, extended: bool) -> BarClock {
+fn clock(request: &StudyDataRequest, instrument: Option<&Instrument>, extended: bool) -> BarClock {
+    if request.metric.is_some() {
+        return BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::MIN));
+    }
+    let timeframe = request.timeframe.unwrap_or_default();
     let mut clock = BarClock::new(timeframe);
     if let Some(instrument) = instrument {
         let zone = instrument
@@ -157,11 +165,7 @@ impl Chart {
         instrument: Option<Instrument>,
     ) {
         let request = resolved(&request, self.symbol(), self.timeframe());
-        let clock = clock(
-            request.timeframe.unwrap(),
-            instrument.as_ref(),
-            self.extended_hours(),
-        );
+        let clock = clock(&request, instrument.as_ref(), self.extended_hours());
         let (bars, _) = super::series::clean(bars, &clock);
         self.study_data
             .series
@@ -238,7 +242,7 @@ impl Chart {
                     request: request.clone(),
                     bars: Vec::new(),
                     instrument: None,
-                    clock: BarClock::new(request.timeframe.unwrap()),
+                    clock: clock(request, None, self.extended_hours()),
                     error: None,
                     from_ticks: BTreeSet::new(),
                     stream: Some(Stream {
@@ -258,11 +262,7 @@ impl Chart {
         let mut changed = removed || self.study_data.series.len() != previous;
         for series in &mut self.study_data.series {
             let Some(stream) = &mut series.stream else {
-                let clock = clock(
-                    series.request.timeframe.unwrap(),
-                    series.instrument.as_ref(),
-                    extended,
-                );
+                let clock = clock(&series.request, series.instrument.as_ref(), extended);
                 if clock != series.clock {
                     series.clock = clock;
                     changed = true;
@@ -284,24 +284,37 @@ impl Chart {
                     match result {
                         Ok(instrument) => {
                             let tf = series.request.timeframe.unwrap();
-                            if instrument
-                                .supported_timeframes
-                                .as_ref()
-                                .is_some_and(|intervals| !intervals.contains(&tf))
+                            if series.request.metric.is_none()
+                                && instrument
+                                    .supported_timeframes
+                                    .as_ref()
+                                    .is_some_and(|intervals| !intervals.contains(&tf))
                             {
                                 series.error = Some(FeedError::NotSupported);
                                 continue;
                             }
-                            series.clock = clock(tf, Some(&instrument), extended);
+                            series.clock = clock(&series.request, Some(&instrument), extended);
                             series.instrument = Some(instrument);
                         }
                         Err(error) => series.error = Some(error),
                     }
                 } else {
-                    let result = answer
-                        .downcast::<Result<HistoryPage, FeedError>>()
-                        .map(|result| *result)
-                        .unwrap_or(Err(FeedError::NotSupported));
+                    let result = if series.request.metric.is_some() {
+                        answer
+                            .downcast::<Result<MetricPage, FeedError>>()
+                            .map(|result| {
+                                result.map(|page| HistoryPage {
+                                    bars: page.points.into_iter().map(Bar::from).collect(),
+                                    end_of_history: page.end_of_history,
+                                })
+                            })
+                            .unwrap_or(Err(FeedError::NotSupported))
+                    } else {
+                        answer
+                            .downcast::<Result<HistoryPage, FeedError>>()
+                            .map(|result| *result)
+                            .unwrap_or(Err(FeedError::NotSupported))
+                    };
                     match result {
                         Ok(page) => {
                             let previous = series.bars.first().map(|bar| bar.time);
@@ -354,14 +367,23 @@ impl Chart {
                     series.instrument.as_ref().and_then(|i| i.tick_size),
                 );
                 stream.subscription = Some(sink.id);
-                stream.feed.subscribe(Subscription {
-                    id: sink.id,
-                    symbol: series.request.symbol.clone(),
-                    timeframe: tf,
-                    clock: series.clock.clone(),
-                    extended_hours: extended,
-                    sink,
-                });
+                if let Some(metric) = &series.request.metric {
+                    stream.feed.subscribe_metric(MetricSubscription {
+                        id: sink.id,
+                        symbol: series.request.symbol.clone(),
+                        metric: metric.clone(),
+                        sink,
+                    });
+                } else {
+                    stream.feed.subscribe(Subscription {
+                        id: sink.id,
+                        symbol: series.request.symbol.clone(),
+                        timeframe: tf,
+                        clock: series.clock.clone(),
+                        extended_hours: extended,
+                        sink,
+                    });
+                }
             }
             if !stream.pending
                 && !stream.end
@@ -373,17 +395,29 @@ impl Chart {
                         .is_some_and(|(first, bar)| first < bar.time))
             {
                 stream.pending = true;
-                stream.feed.history(
-                    HistoryRequest {
-                        symbol: series.request.symbol.clone(),
-                        timeframe: series.request.timeframe.unwrap(),
-                        clock: series.clock.clone(),
-                        before: series.bars.first().map(|bar| bar.time),
-                        count,
-                        extended_hours: extended,
-                    },
-                    stream.inbox.reply(1),
-                );
+                if let Some(metric) = &series.request.metric {
+                    stream.feed.metric_history(
+                        MetricRequest {
+                            symbol: series.request.symbol.clone(),
+                            metric: metric.clone(),
+                            before: series.bars.first().map(|bar| bar.time),
+                            count,
+                        },
+                        stream.inbox.reply(1),
+                    );
+                } else {
+                    stream.feed.history(
+                        HistoryRequest {
+                            symbol: series.request.symbol.clone(),
+                            timeframe: series.request.timeframe.unwrap(),
+                            clock: series.clock.clone(),
+                            before: series.bars.first().map(|bar| bar.time),
+                            count,
+                            extended_hours: extended,
+                        },
+                        stream.inbox.reply(1),
+                    );
+                }
             }
         }
         if changed {
@@ -404,6 +438,7 @@ mod tests {
     struct Feed {
         sinks: Mutex<Vec<(String, Sink)>>,
         correction: Mutex<f64>,
+        metrics: Mutex<Vec<MetricSubscription>>,
     }
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -419,6 +454,21 @@ mod tests {
                 bars: bars(&prices, minutes),
                 end_of_history: true,
             }));
+        }
+        fn metric_history(&self, _: MetricRequest, reply: Reply<MetricPage>) {
+            reply.send(Ok(MetricPage {
+                points: [(15, 10.0), (75, 20.0)]
+                    .into_iter()
+                    .map(|(minute, value)| crate::data::MetricPoint {
+                        time: DateTime::UNIX_EPOCH + Duration::minutes(minute),
+                        value,
+                    })
+                    .collect(),
+                end_of_history: true,
+            }));
+        }
+        fn subscribe_metric(&self, subscription: MetricSubscription) {
+            self.metrics.lock().unwrap().push(subscription);
         }
         fn subscribe(&self, subscription: Subscription) {
             self.sinks
@@ -442,6 +492,90 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Metric streams keep exact publication times, refresh dependent studies, and use
+    /// the normal subscription lifetime when the chart's instrument changes.
+    #[test]
+    fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
+        use crate::data::{MetricPoint, MetricSeries};
+        use crate::studies::{MetricStudy, StudyFormat, StudySource};
+        let feed = Arc::new(Feed::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("MAIN")
+            .with_timeframe(Timeframe::Min30)
+            .build();
+        let metric = chart.add_indicator(Box::new(MetricStudy::new(MetricSeries {
+            id: "oi".into(),
+            name: "Open interest".into(),
+            unit: "contracts".into(),
+            format: StudyFormat::Volume,
+        })));
+        let average = chart.add_indicator(Box::new(SMA::new(2)));
+        chart
+            .set_indicator_source(
+                average,
+                StudySource::Study {
+                    id: metric.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        let ctx = egui::Context::default();
+        let settle = |chart: &mut Chart| {
+            for frame in 0..12 {
+                shapes(&ctx, chart, frame as f64, Vec::new());
+            }
+        };
+        let output = |chart: &Chart, id| {
+            let study = chart.indicators().find(|(key, _)| *key == id).unwrap().1;
+            (0..5)
+                .map(|at| study.values().value(0, at))
+                .collect::<Vec<_>>()
+        };
+        settle(&mut chart);
+        assert_eq!(
+            output(&chart, metric),
+            [None, Some(10.0), Some(10.0), Some(20.0), Some(20.0)]
+        );
+        assert_eq!(
+            output(&chart, average),
+            [None, None, Some(10.0), Some(15.0), Some(20.0)]
+        );
+        let sink = feed.metrics.lock().unwrap()[0].sink.clone();
+        for (minutes, value) in [(15, 14.0), (110, 30.0)] {
+            sink.push_metric(MetricPoint {
+                time: DateTime::UNIX_EPOCH + Duration::minutes(minutes),
+                value,
+            });
+        }
+        for frame in 0..60 {
+            let mut last = bars(&[1.0; 5], 30).pop().unwrap();
+            last.close = 1.0 + frame as f64 * 0.001;
+            last.high = last.close;
+            chart.update(super::super::SeriesId::MAIN, last);
+            shapes(&ctx, &mut chart, 12.0 + frame as f64 / 60.0, Vec::new());
+        }
+        assert_eq!(
+            output(&chart, metric),
+            [None, Some(14.0), Some(14.0), Some(20.0), Some(30.0)]
+        );
+        assert_eq!(
+            output(&chart, average),
+            [None, None, Some(14.0), Some(17.0), Some(25.0)]
+        );
+        chart.set_symbol("OTHER");
+        settle(&mut chart);
+        assert!(!sink.is_active());
+        drop(chart);
+        assert!(
+            feed.metrics
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|sub| !sub.sink.is_active())
+        );
     }
 
     #[test]

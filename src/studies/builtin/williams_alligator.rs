@@ -25,8 +25,9 @@
 //! assert_eq!(alligator.plot_offset(0), 8);
 //! ```
 
-use super::{over_finite_bars, seeded_average};
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -76,7 +77,7 @@ impl WilliamsAlligator {
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let median: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
         let lines = [self.jaw_length, self.teeth_length, self.lips_length]
-            .map(|n| seeded_average(&median, n, 1.0 / n as f64));
+            .map(|n| helpers::rma(&median, n));
         (0..data.len())
             .map(|i| IndicatorValue::Multiple(lines.iter().map(|line| line[i]).collect()))
             .collect()

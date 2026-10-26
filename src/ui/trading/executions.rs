@@ -37,9 +37,20 @@ pub(super) fn show(
     decimals: usize,
 ) {
     // A bar spans from its time to the next bar's, so a fill belongs to the bar at or before it.
+    let bars = chart.state.shown();
     let mut marks: Vec<(f64, OrderSide, Vec<&Execution>)> = Vec::new();
     for fill in fills {
-        let Some(index) = chart.time_to_index(fill.time).map(f64::floor) else {
+        let index = if let Some(cutoff) = chart.replay_time() {
+            if fill.time >= cutoff {
+                continue;
+            }
+            bars.partition_point(|bar| bar.time <= fill.time)
+                .checked_sub(1)
+                .map(|index| index as f64)
+        } else {
+            chart.time_to_index(fill.time).map(f64::floor)
+        };
+        let Some(index) = index else {
             continue;
         };
         match marks
@@ -54,7 +65,6 @@ pub(super) fn show(
     let mapping = chart.get_chart_mapping();
     let theme = ui.ctx().active_theme();
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let bars = chart.state.shown();
     // Coalesce neighbouring runs whose labels would overlap horizontally. Use the newest
     // bar as the anchor and retain every fill for the weighted label and hover details.
     if labels {

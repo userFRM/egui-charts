@@ -17,6 +17,7 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -50,27 +51,6 @@ impl DEMA {
         self
     }
 
-    /// EMA of the values that exist in `data` (NaN lead-in), seeded with the mean of the first
-    /// `period` of them.
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        let mut ema = vec![f64::NAN; data.len()];
-        let Some(first) = data.iter().position(|v| !v.is_nan()) else {
-            return ema;
-        };
-        if data.len() - first < period {
-            return ema;
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let seed = first + period - 1;
-        ema[seed] = data[first..=seed].iter().sum::<f64>() / period as f64;
-        for i in seed + 1..data.len() {
-            ema[i] = (data[i] - ema[i - 1]) * multiplier + ema[i - 1];
-        }
-
-        ema
-    }
-
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
@@ -83,10 +63,10 @@ impl DEMA {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate first EMA
-        let ema1 = Self::calculate_ema(&closes, self.period);
+        let ema1 = helpers::ema_sma(&closes, self.period);
 
         // EMA of EMA, seeded from the first `period` values of EMA1
-        let ema2 = Self::calculate_ema(&ema1, self.period);
+        let ema2 = helpers::ema_sma(&ema1, self.period);
 
         // Calculate DEMA = 2 * EMA1 - EMA2
         for i in 0..data.len() {

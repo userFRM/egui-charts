@@ -22,8 +22,9 @@
 //! median.calculate(&bars);
 //! ```
 
-use super::{clamp_param, over_finite_bars, seeded_average};
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -78,7 +79,7 @@ impl Median {
                 *window.select_nth_unstable_by(rank, f64::total_cmp).1
             })
             .collect();
-        let ema = seeded_average(&median, n, 2.0 / (n as f64 + 1.0));
+        let ema = helpers::ema_sma(&median, n);
         let mut atr = ATR::new(self.atr_length);
         atr.calculate(data);
         (0..data.len())

@@ -35,8 +35,9 @@
 //! assert!(zone.plot_color(0, 59).is_some());
 //! ```
 
-use super::{over_finite_bars, seeded_average};
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
@@ -81,7 +82,7 @@ impl ChopZone {
     /// The angles over `data`, every bar of which has a finite high, low and close.
     fn compute(data: &[Bar]) -> IndicatorValues {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-        let ema = seeded_average(&closes, EMA_LENGTH, 2.0 / (EMA_LENGTH as f64 + 1.0));
+        let ema = helpers::ema_sma(&closes, EMA_LENGTH);
         let highest = rolling_max(data.iter().map(|b| b.high), RANGE_LENGTH);
         let lowest = rolling_min(data.iter().map(|b| b.low), RANGE_LENGTH);
         (0..data.len())

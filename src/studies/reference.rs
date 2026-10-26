@@ -266,6 +266,22 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 
 #[test]
 fn staple_studies_match_published_definitions() {
+    // Force Index needs three price changes to seed a period-three average.
+    let short: Vec<_> = [1.0, 2.0, 4.0, 8.0]
+        .into_iter()
+        .map(|p| Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0))
+        .collect();
+    for len in 0..=short.len() {
+        let mut force = ForceIndex::new(3);
+        force.calculate(&short[..len]);
+        for i in 0..len {
+            assert_eq!(
+                force.values().value(0, i),
+                if i < 3 { None } else { Some(7.0 / 3.0) },
+                "Force Index seed, history length {len}, bar {i}"
+            );
+        }
+    }
     let bars = fixture();
     let studies: Vec<(&str, Box<dyn Indicator>)> = vec![
         ("ZeroTrend(1)", Box::new(ZeroTrendVol::new(1))),

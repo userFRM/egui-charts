@@ -1,4 +1,5 @@
 use crate::model::Bar;
+use crate::studies::helpers;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -36,21 +37,6 @@ impl RainbowOscillator {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
     }
 }
 
@@ -92,14 +78,14 @@ impl Indicator for RainbowOscillator {
 
         // Sum the recursive SMAs (each applied to the previous) bar by bar, keeping only
         // the latest level, so memory stays a few series whatever the level count.
-        let mut level = Self::calculate_sma(&closes, self.base_period);
+        let mut level = helpers::sma(&closes, self.base_period);
         let mut sums = level.clone();
         let mut missing: Vec<bool> = level.iter().map(|v| v.is_nan()).collect();
         let mut level_cnt = 1;
         // With a base period of 1 every level equals the closes, and once every bar misses a
         // level no deeper level can add a value: either way deeper levels change nothing.
         while level_cnt < self.levels && self.base_period > 1 && missing.contains(&false) {
-            level = Self::calculate_sma(&level, self.base_period);
+            level = helpers::sma(&level, self.base_period);
             for ((sum, m), v) in sums.iter_mut().zip(missing.iter_mut()).zip(&level) {
                 *sum += v;
                 *m |= v.is_nan();

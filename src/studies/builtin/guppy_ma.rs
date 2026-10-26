@@ -42,6 +42,7 @@ impl GuppyMA {
 
     /// The values over `data`, every bar of which has a finite close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let closes: Vec<_> = data.iter().map(|bar| bar.close).collect();
         let mut values = IndicatorValues::new();
 
         if data.is_empty() {
@@ -51,11 +52,11 @@ impl GuppyMA {
         // Calculate all 12 EMA series
         let short_emas: Vec<Vec<f64>> = SHORT_PERIODS
             .iter()
-            .map(|&p| calc_ema_series(data, p))
+            .map(|&p| crate::studies::helpers::ema(&closes, p))
             .collect();
         let long_emas: Vec<Vec<f64>> = LONG_PERIODS
             .iter()
-            .map(|&p| calc_ema_series(data, p))
+            .map(|&p| crate::studies::helpers::ema(&closes, p))
             .collect();
 
         for i in 0..data.len() {
@@ -77,22 +78,6 @@ impl Default for GuppyMA {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn calc_ema_series(data: &[Bar], period: usize) -> Vec<f64> {
-    let mut result = Vec::with_capacity(data.len());
-    if data.is_empty() {
-        return result;
-    }
-
-    let multiplier = 2.0 / (period as f64 + 1.0);
-    let mut ema = data[0].close;
-
-    for bar in data {
-        ema = (bar.close - ema) * multiplier + ema;
-        result.push(ema);
-    }
-    result
 }
 
 impl Indicator for GuppyMA {

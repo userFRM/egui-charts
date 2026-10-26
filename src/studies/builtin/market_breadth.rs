@@ -129,6 +129,7 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
         [&self.advancing_symbol, &self.declining_symbol]
             .into_iter()
             .map(|symbol| StudyDataRequest {
+                metric: None,
                 symbol: symbol.clone(),
                 timeframe: self.timeframe,
             })
