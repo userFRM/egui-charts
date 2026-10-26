@@ -314,59 +314,85 @@ impl SettingsDialog {
                     "Analyst price targets",
                     theme.ui.text,
                 );
-                // CANDLE COLORS
-                self.draw_section_header(ui, "CANDLE COLORS", theme);
+                let kind = self.settings.chart_type;
+                if kind.is_time_independent()
+                    || !kind.uses_ohlc()
+                    || kind == crate::model::ChartType::TimePriceOpportunity
+                {
+                    let mut series = crate::chart::series::SeriesSettings {
+                        chart_type: kind,
+                        chart_type_params: self
+                            .settings
+                            .chart_type_params
+                            .clone()
+                            .unwrap_or_default(),
+                        price_source: self.settings.price_source.unwrap_or_default(),
+                        bullish_color: self.settings.candle_colors.body_up,
+                        bearish_color: self.settings.candle_colors.body_down,
+                        ..Default::default()
+                    };
+                    crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                    self.settings.chart_type_params = Some(series.chart_type_params);
+                    self.settings.price_source = Some(series.price_source);
+                    self.settings.candle_colors.body_up = series.bullish_color;
+                    self.settings.candle_colors.body_down = series.bearish_color;
+                } else {
+                    // CANDLE COLORS
+                    self.draw_section_header(ui, "CANDLE COLORS", theme);
 
-                self.draw_setting_row_with_controls(ui, "Body", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Body", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.body_up = color;
+                        }
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.body_down = color;
+                        }
+                    });
 
-                self.draw_setting_row_with_controls(ui, "Border", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_down, "border_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Border", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.border_up = color;
+                        }
+                        if let Some(color) = ColorPicker::new(
+                            &mut dialog.color_picker_states.border_down,
+                            "border_down",
+                        )
+                        .show(ui)
+                        .inner
+                        {
+                            dialog.settings.candle_colors.border_down = color;
+                        }
+                    });
 
-                self.draw_setting_row_with_controls(ui, "Wick", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Wick", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.wick_up = color;
+                        }
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.wick_down = color;
+                        }
+                    });
+                }
 
                 ui.add_space(ui.active_theme().spacing.xxl);
 

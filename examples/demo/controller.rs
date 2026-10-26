@@ -49,8 +49,7 @@ use egui_charts::ui::context_menu::{
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
-    StudyContextMenuAction,
+    KeyboardShortcutsDialog, SeriesContextMenuAction, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
@@ -319,7 +318,6 @@ pub struct DemoApp {
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
-    series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     interval_entry: Option<String>,
@@ -548,7 +546,6 @@ impl DemoApp {
                 commands::quick_search_commands(),
             ),
             alert_dialog: AlertDialog::new(),
-            series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             interval_entry: None,
@@ -896,11 +893,6 @@ impl DemoApp {
         self.settings_dialog.open(self.settings_state.clone());
     }
 
-    fn open_series_settings_dialog(&mut self) {
-        self.series_settings
-            .open(SeriesId::MAIN, self.chart.series_settings());
-    }
-
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
         self.drawing_props
             .open_for_chart(&self.chart, DrawingId(drawing_id));
@@ -956,7 +948,7 @@ impl DemoApp {
 
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
-            SettingsAction::Apply(state) => self.apply_chart_settings(state),
+            SettingsAction::Apply(state) => self.apply_chart_settings(*state),
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -978,16 +970,6 @@ impl DemoApp {
         match self.alert_dialog.show(ctx) {
             AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
-            _ => {}
-        }
-
-        // Series settings.
-        match self.series_settings.show(ctx) {
-            SeriesSettingsAction::Apply(_id, settings) => {
-                self.chart
-                    .user_action(|chart| chart.apply_series_settings(&settings));
-            }
-            SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
             _ => {}
         }
 
@@ -2049,7 +2031,7 @@ impl DemoApp {
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
                 if id == MAIN_SERIES_ID {
-                    self.open_series_settings_dialog();
+                    self.open_chart_settings_dialog();
                 } else if let Some(study) = indicator_from_tree_id(id) {
                     self.open_indicator_settings(study);
                 } else {
@@ -2467,28 +2449,60 @@ impl DemoApp {
                     self.chart.show_footprint(ui, flow, &config);
                     if let Some(ranges) = &self.profile_ranges {
                         let profiles = egui_charts::studies::trade_profiles(flow, ranges);
-                        egui_charts::chart::overlays::render_trade_profiles(ui.painter(), &self.chart.get_chart_mapping(), self.chart.bars(SeriesId::MAIN), &profiles, flow.price_step(), &config);
+                        egui_charts::chart::overlays::render_trade_profiles(
+                            ui.painter(),
+                            &self.chart.get_chart_mapping(),
+                            self.chart.bars(SeriesId::MAIN),
+                            &profiles,
+                            flow.price_step(),
+                            &config,
+                        );
                     }
                     if self.chart.chart_type().is_time_independent() {
-                        ui.painter().text(self.chart.get_rendered_price_rect().center(), egui::Align2::CENTER_CENTER,
-                            "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
+                        ui.painter().text(
+                            self.chart.get_rendered_price_rect().center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Footprint requires a time-based chart",
+                            egui::FontId::proportional(14.0),
+                            self.theme.ui.text,
+                        );
                     }
                 } else {
-                    let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    let mut charts: Vec<_> =
+                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
                 self.highlight_strategy_trade(ui);
-                if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
+                if self.replay.is_none() {
+                    self.alert_host.evaluate(&self.chart, chrono::Utc::now());
+                }
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts {
-                    let decimals = self.chart.instrument().and_then(egui_charts::scales::instrument_price_precision).map(usize::from).unwrap_or(2);
-                    let currency = self.chart.instrument().and_then(|i| i.currency.as_deref()).unwrap_or("");
+                    let decimals = self
+                        .chart
+                        .instrument()
+                        .and_then(egui_charts::scales::instrument_price_precision)
+                        .map(usize::from)
+                        .unwrap_or(2);
+                    let currency = self
+                        .chart
+                        .instrument()
+                        .and_then(|i| i.currency.as_deref())
+                        .unwrap_or("");
                     if let Some(alert) = egui_charts::chart::render_alert_levels(
-                        ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
-                        self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        ui,
+                        &mapping,
+                        self.alerts
+                            .alerts()
+                            .iter()
+                            .filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
+                        self.settings_state.alerts.alert_color,
+                        self.settings_state.alerts.show_alert_labels,
                         |price| format!("{price:.decimals$} {currency}"),
-                    ) { self.alerts.save(alert); }
+                    ) {
+                        self.alerts.save(alert);
+                    }
                 }
                 if !self.keyboard_dialog_open() {
                     self.handle_keyboard(ui.ctx());
@@ -2497,13 +2511,17 @@ impl DemoApp {
                     self.open_indicator_settings(id);
                 }
                 if self.chart.take_scale_settings_request() {
-                    self.open_series_settings_dialog();
-                    self.series_settings.active_tab = egui_charts::ui::dialogs::series_settings::SeriesSettingsTab::ScalesAndLines;
+                    self.open_chart_settings_dialog();
                 }
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self.chart.bars(SeriesId::MAIN).iter().rfind(|bar| !bar.is_whitespace()) {
+                if let Some(bar) = self
+                    .chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .rfind(|bar| !bar.is_whitespace())
+                {
                     self.paper.set_price(self.chart.symbol(), bar.close);
                     if self.replay.is_some() {
                         // Replay has no historical spread; its close prices both broker and ticket.
@@ -2517,13 +2535,21 @@ impl DemoApp {
                     if !self.trading.is_connected() {
                         self.broker_picker.open();
                     } else if side == egui_charts::widget::QuoteSide::Ticket {
-                        self.trading.open_ticket(egui_charts::model::OrderRequest::new(
-                            self.chart.symbol(), egui_charts::model::OrderSide::Buy,
-                            self.trading.quantity, egui_charts::model::OrderType::Market));
+                        self.trading
+                            .open_ticket(egui_charts::model::OrderRequest::new(
+                                self.chart.symbol(),
+                                egui_charts::model::OrderSide::Buy,
+                                self.trading.quantity,
+                                egui_charts::model::OrderType::Market,
+                            ));
                     } else {
                         let side = match side {
-                            egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
-                            egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                            egui_charts::widget::QuoteSide::Buy => {
+                                egui_charts::model::OrderSide::Buy
+                            }
+                            egui_charts::widget::QuoteSide::Sell => {
+                                egui_charts::model::OrderSide::Sell
+                            }
                             egui_charts::widget::QuoteSide::Ticket => unreachable!(),
                         };
                         self.trading.trade(self.chart.symbol().to_owned(), side);
@@ -2545,6 +2571,7 @@ impl DemoApp {
 
     fn drain_chart_events(&mut self, ctx: &egui::Context) {
         let mut replay_click = None;
+        let mut open_settings = false;
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
@@ -2561,6 +2588,16 @@ impl DemoApp {
                     }
                     self.last_chart_click = Some(position);
                 }
+                egui_charts::widget::ChartEvent::DoubleClick { position }
+                    if matches!(
+                        position.target,
+                        Some(egui_charts::widget::PointerTarget::Element(
+                            egui_charts::widget::ChartElementId::Series(SeriesId::MAIN)
+                        ))
+                    ) =>
+                {
+                    open_settings = true;
+                }
                 egui_charts::widget::ChartEvent::SymbolChanged(_)
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
                     self.last_chart_click = None;
@@ -2571,6 +2608,9 @@ impl DemoApp {
         }
         if let Some(time) = replay_click {
             self.handle_replay_bar_click(ctx, time);
+        }
+        if open_settings && !self.replay_selecting {
+            self.open_chart_settings_dialog();
         }
     }
 
@@ -2690,7 +2730,7 @@ impl DemoApp {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
+            ContextMenuAction::OpenSeriesSettings => self.open_chart_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
@@ -2703,7 +2743,7 @@ impl DemoApp {
 
     fn handle_series_context(&mut self, action: SeriesContextMenuAction) {
         match action {
-            SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
+            SeriesContextMenuAction::OpenSettings => self.open_chart_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
@@ -2803,7 +2843,6 @@ impl DemoApp {
             || self.drawing_props.is_open
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
-            || self.series_settings.is_open
             || self.study_templates.is_open
             || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
@@ -6119,6 +6158,74 @@ mod tests {
                 commands.iter().any(|command| matches!(command,
                 egui::OutputCommand::CopyText(text) if text == expected)),
                 "{symbol}: {commands:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_entry_points_open_the_same_chart_dialog() {
+        for entry in ["top", "axis", "double-click", "series"] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.chart.set_feed_paused(true);
+            let frame = |app: &mut DemoApp, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show_chart(ui, app.theme.chart.bg),
+                )
+                .drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            match entry {
+                "top" => app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings),
+                "series" => app.handle_series_context(SeriesContextMenuAction::OpenSettings),
+                _ => {
+                    let map = app.chart.get_chart_mapping();
+                    let index = app.chart.state().shown().len() - 5;
+                    let pos = if entry == "axis" {
+                        egui::pos2(
+                            map.rect.right() + app.chart.config().right_axis_width / 2.0,
+                            map.rect.bottom() + 14.0,
+                        )
+                    } else {
+                        egui::pos2(
+                            map.idx_to_x(index),
+                            map.price_to_y(app.chart.state().shown()[index].close),
+                        )
+                    };
+                    frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+                    for _ in 0..if entry == "axis" { 1 } else { 2 } {
+                        for pressed in [true, false] {
+                            frame(
+                                &mut app,
+                                vec![egui::Event::PointerButton {
+                                    pos,
+                                    pressed,
+                                    button: egui::PointerButton::Primary,
+                                    modifiers: Default::default(),
+                                }],
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(
+                app.settings_dialog.is_open,
+                "{entry} must open chart settings"
+            );
+            assert_eq!(
+                app.settings_dialog.settings(),
+                &ChartSettingsState::from_chart(&app.chart)
             );
         }
     }

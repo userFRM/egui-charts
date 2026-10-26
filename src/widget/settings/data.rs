@@ -396,6 +396,15 @@ impl Default for AlertsSettings {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
     // Symbol tab
+    /// Active representation used to select the Symbol controls. Applying settings keeps the chart type.
+    #[serde(default)]
+    pub chart_type: crate::model::ChartType,
+    /// Styles and construction inputs; absent in settings saved before these controls existed.
+    #[serde(default)]
+    pub chart_type_params: Option<crate::model::ChartTypeParams>,
+    /// Source for line and area representations; absent in older saved settings.
+    #[serde(default)]
+    pub price_source: Option<crate::model::PriceSource>,
     /// Candle body, border and wick colors.
     pub candle_colors: CandleColorConfig,
     /// Price display precision.
@@ -449,6 +458,9 @@ impl Default for ChartSettingsState {
         let grid_lines = GridLinesSettings::default();
 
         Self {
+            chart_type: crate::model::ChartType::default(),
+            chart_type_params: None,
+            price_source: None,
             candle_colors: CandleColorConfig::default(),
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),

@@ -364,7 +364,7 @@ impl SettingsDialog {
                 }
             });
         if ok {
-            action = SettingsAction::Apply(self.settings.clone());
+            action = SettingsAction::Apply(Box::new(self.settings.clone()));
             self.is_open = false;
         } else if cancel {
             action = SettingsAction::Cancel;
@@ -588,7 +588,16 @@ impl SettingsDialog {
             .clicked()
         {
             if let Some(template) = self.templates.entries().get(&name) {
+                let kind = self.settings.chart_type;
+                let params = template
+                    .chart_type_params
+                    .clone()
+                    .or_else(|| self.settings.chart_type_params.clone());
+                let source = template.price_source.or(self.settings.price_source);
                 self.settings = template.clone();
+                self.settings.chart_type = kind;
+                self.settings.chart_type_params = params;
+                self.settings.price_source = source;
                 self.template_name = name.clone();
                 self.update_color_pickers_from_settings();
                 action = SettingsAction::LoadTemplate(name.clone());
@@ -627,7 +636,12 @@ impl SettingsDialog {
             )
             .clicked()
         {
-            self.settings = ChartSettingsState::default();
+            self.settings = ChartSettingsState {
+                chart_type: self.settings.chart_type,
+                chart_type_params: Some(Default::default()),
+                price_source: Some(Default::default()),
+                ..Default::default()
+            };
             self.template_name.clear();
             self.update_color_pickers_from_settings();
             self.template_menu_open = false;
@@ -649,6 +663,51 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn symbol_controls_follow_the_chart_type_and_retain_its_parameters() {
+        use crate::{
+            Chart,
+            model::{BarData, ChartType, PriceSource},
+        };
+        for (kind, label) in [
+            (ChartType::Line, "Line width"),
+            (ChartType::Baseline, "Base level"),
+            (ChartType::Renko, "Size method"),
+            (ChartType::Range, "Size method"),
+        ] {
+            let mut chart = Chart::new(BarData::new());
+            chart.set_chart_type(kind);
+            let mut params = chart.chart_type_params().clone();
+            params.styles.line.width = 4.5;
+            params.renko_brick_size = 7.0;
+            chart.set_chart_type_params(params.clone());
+            chart.config_mut().price_source = PriceSource::HL2;
+            let settings = ChartSettingsState::from_chart(&chart);
+            let mut dialog = SettingsDialog::new();
+            dialog.open(settings.clone());
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_symbol_tab(ui, &Theme::light())
+            });
+            let has_label = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label)
+            });
+            let candle_colors = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == "CANDLE COLORS")
+            });
+            output.drop_without_applying_deltas();
+            assert!(has_label, "{kind:?} must offer {label}");
+            assert!(!candle_colors);
+            let mut restored = Chart::new(BarData::new());
+            restored.set_chart_type(kind);
+            settings.apply_to_chart(&mut restored).unwrap();
+            assert_eq!(restored.chart_type_params(), &params);
+            assert_eq!(restored.config().price_source, PriceSource::HL2);
+        }
+    }
 
     #[test]
     fn offered_time_zones_and_session_presets_are_available() {
