@@ -342,10 +342,7 @@ impl super::Chart {
                     .time_scale_mut()
                     .zoom(delta, anchor, rect.left(), rect.width());
             }
-            A::ScrollToRealTime => {
-                self.pending_scroll_time = None;
-                self.state.time_scale_mut().scroll_to_realtime();
-            }
+            A::ScrollToRealTime => self.scroll_to_real_time(true),
             A::FitContent => {
                 self.pending_scroll_time = None;
                 self.state.time_scale_mut().fit_content();

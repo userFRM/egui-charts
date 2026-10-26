@@ -21,4 +21,6 @@ pub use candles::{
 pub(crate) use dashed_line::finite_clip;
 pub(crate) use dashed_line::{draw_dashed_line, draw_dashed_polyline};
 pub use grid::{render_grid, render_vertical_grid};
-pub use overlays::{render_box_zoom, render_crosshair_with_options, render_realtime_btn};
+pub use overlays::{render_box_zoom, render_crosshair_with_options};
+
+pub(crate) use overlays::{realtime_button, realtime_button_rect};

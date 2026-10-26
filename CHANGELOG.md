@@ -297,6 +297,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The scroll-to-latest button sits at the bottom right of the main pane, above the time axis and clear of navigation controls, with matching paint and hit rectangles. Its default is a theme-aware 28-point double chevron with a pointer cursor and “Scroll to the most recent bar” tooltip; custom position, size, text and colours remain available. Clicking or using the return-to-latest shortcut animates to the configured right margin without changing zoom, and the button disappears at the live edge. `realtime_button_text: None` now selects the icon, and `Color32::PLACEHOLDER` button colours follow the active theme. ([#930](https://github.com/userFRM/egui-charts/issues/930))
+
 - Studies sourced from another study continue refreshing during continuous ticks, within the existing full-recompute budget. ([#911](https://github.com/userFRM/egui-charts/issues/911))
 
 - Native trackpad pinches zoom around the pointer and stop tracking and kinetic scrolling. Contact input takes precedence when both are reported, and wheel zoom remains applied once. ([#918](https://github.com/userFRM/egui-charts/issues/918))
