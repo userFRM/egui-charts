@@ -49,7 +49,7 @@ pub(super) struct Fills {
     pub(super) executions: Vec<Execution>,
     working: HashSet<OrderId>,
     filled: HashMap<OrderId, f64>,
-    /// Latest fills for at most 1,000 symbols, independent of execution-history eviction.
+    /// Latest fill for each symbol, independent of execution-history eviction.
     latest: HashMap<String, Execution>,
 }
 
@@ -99,15 +99,6 @@ impl Fills {
             .is_none_or(|old| old.time <= fill.time)
         {
             self.latest.insert(symbol.to_owned(), fill.clone());
-            if self.latest.len() > HISTORY_LIMIT {
-                let oldest = self
-                    .latest
-                    .iter()
-                    .min_by_key(|(_, fill)| fill.time)
-                    .map(|(symbol, _)| symbol.clone())
-                    .unwrap();
-                self.latest.remove(&oldest);
-            }
         }
     }
 

@@ -1299,9 +1299,9 @@ mod tests {
             1.0,
         )));
         order.status = OrderStatus::Filled;
-        order.request.symbol = "NEW".into();
         for i in 0..2_005 {
             order.id = crate::model::OrderId::new(i.to_string());
+            order.request.symbol = format!("NEW-{i}");
             let time = time + chrono::Duration::seconds(i);
             panel.record(&AccountEvent::Order(order.clone()));
             panel.record(&AccountEvent::Execution(Execution::new(
@@ -1336,7 +1336,8 @@ mod tests {
                 .contains_key(&crate::model::OrderId::new("active"))
         );
         assert_eq!(panel.fills.price("OLD"), Some(99.0));
-        assert_eq!(panel.fills.price("NEW"), Some(100.0));
+        assert_eq!(panel.fills.price("NEW-0"), Some(100.0));
+        assert_eq!(panel.fills.price("NEW-2004"), Some(100.0));
         // Orders without fills must not accumulate metadata either.
         order.status = OrderStatus::Cancelled;
         for i in 2_005..4_010 {
