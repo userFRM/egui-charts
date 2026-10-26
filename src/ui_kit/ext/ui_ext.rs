@@ -149,7 +149,7 @@ pub trait UiExt {
     /// Returns `true` if the value changed.
     ///
     /// ```
-    /// # use egui_charts::ext::UiExt;
+    /// # use egui_charts::ui_kit::ext::UiExt;
     /// # egui::__run_test_ui(|ui| {
     /// let mut theme = "dark";
     /// let names = egui_charts::theme::presets().map(|(name, _)| name);
@@ -177,7 +177,7 @@ pub trait UiExt {
     /// Combo box for selecting a `String` value from `&str` options.
     ///
     /// ```
-    /// # use egui_charts::ext::UiExt;
+    /// # use egui_charts::ui_kit::ext::UiExt;
     /// # egui::__run_test_ui(|ui| {
     /// # let mut condition = String::from("Crossing");
     /// let changed = ui.combo_str_select("condition", &mut condition, &["Crossing", "Greater Than", "Less Than"]);

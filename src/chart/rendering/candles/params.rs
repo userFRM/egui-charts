@@ -23,8 +23,10 @@ pub struct CandleDataContext<'a> {
     /// Heikin-Ashi, a cumulative recurrence) compute over `full_data` and slice
     /// the window out, so their output is invariant under panning and zooming.
     pub full_data: &'a [Bar],
-    /// [`ChartState::revision`](crate::model::ChartState::revision) of `full_data`.
+    /// [`ChartState::revision`](crate::studies::ChartState::revision) of `full_data`.
     pub revision: u64,
+    /// Transform retained by the owner of this series, shared by its price fit and rendering.
+    pub heikin_ashi: &'a super::HeikinAshiCache,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
     /// Interval and calendar of the bars, whose sessions the TPO profiles follow.

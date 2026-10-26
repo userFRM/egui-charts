@@ -7,6 +7,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
+use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::ListItem;
@@ -19,7 +20,7 @@ use super::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
-        timeframe_selector::{Timeframe, TimeframeAction, TimeframeSelector, TimeframeUnit},
+        timeframe_selector::{TimeframeAction, TimeframeSelector},
     },
     config::TopToolbarConfig,
     state::TopToolbarState,
@@ -195,7 +196,7 @@ impl Default for TopToolbar {
         Self {
             config: TopToolbarConfig::default(),
             state: TopToolbarState::default(),
-            timeframe_selector: TimeframeSelector::new(Timeframe::new(1, TimeframeUnit::Day)),
+            timeframe_selector: TimeframeSelector::new(Timeframe::Day1),
             chart_type_selector: ChartTypeSelector::new(ChartType::Candles),
             layout_menu: LayoutMenu::new(),
             chart_grid_selector: ChartGridSelector::default(),
@@ -485,9 +486,7 @@ impl TopToolbar {
                 return;
             }
             S::Interval => {
-                if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui)
-                    && let Some(tf) = tf.to_model()
-                {
+                if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
                     *action = TopToolbarAction::IntervalSelected(tf);
                 }
                 return;
@@ -745,7 +744,7 @@ mod tests {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut toolbar = TopToolbar::new();
-                toolbar.timeframe_selector.current = Timeframe::new(1, TimeframeUnit::Hour);
+                toolbar.timeframe_selector.current = Timeframe::Hour1;
                 toolbar.state.can_undo = true;
                 toolbar.state.can_redo = true;
                 ctx.global_style_mut(|style| {

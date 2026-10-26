@@ -1,7 +1,7 @@
 //! Price and time axis rendering
 
-use crate::chart::rendering::draw_dashed_line;
 use crate::model::PriceLine;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
@@ -138,7 +138,7 @@ pub(crate) fn render_study_tags(
         return;
     };
     let transform = map.transform();
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let plot_style = study.plot_style(line);
         let Some(value) = study.plot_value(line, bar) else {
             continue;
@@ -153,7 +153,7 @@ pub(crate) fn render_study_tags(
         {
             continue;
         }
-        let label = if study.value_format() == crate::studies::StudyFormat::Price {
+        let label = if study.value_format() == crate::scales::StudyFormat::Price {
             transform.label(
                 transform.to_scale(value),
                 study

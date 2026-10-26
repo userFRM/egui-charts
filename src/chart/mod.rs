@@ -29,7 +29,7 @@
 pub mod coords;
 pub mod overlays;
 pub mod primitives;
-pub mod selection;
+pub(crate) mod selection;
 pub mod series;
 
 // Internal engine modules: used within the crate but not part of the public API.

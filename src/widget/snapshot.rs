@@ -4,8 +4,8 @@
 use super::{Chart, ChartLayoutMode, PaneId};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{ChartType, ChartTypeParams, Timeframe};
-use crate::ui::dialogs::templates::StudyTemplate;
-use crate::ui::top_toolbar::components::settings_menu::ChartSettingsState;
+use crate::studies::StudyTemplate;
+use crate::widget::settings::ChartSettingsState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -455,9 +455,8 @@ mod tests {
         chart.config_mut().grid_line_style = crate::model::LineStyle::LargeDashed;
         chart.config_mut().vertical_grid_line_style = Some(crate::model::LineStyle::SparseDotted);
         chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
-        chart.chart_options.crosshair.vert_line_style = crate::config::CrosshairLineStyle::Dashed;
-        chart.chart_options.crosshair.horz_line_style =
-            crate::config::CrosshairLineStyle::SparseDotted;
+        chart.chart_options.crosshair.vert_line_style = crate::model::LineStyle::Dashed;
+        chart.chart_options.crosshair.horz_line_style = crate::model::LineStyle::SparseDotted;
         chart.chart_options.crosshair.vert_label_background_color = egui::Color32::RED;
         chart.chart_options.crosshair.horz_label_background_color = egui::Color32::BLUE;
         chart.chart_options.time_scale.timezone =

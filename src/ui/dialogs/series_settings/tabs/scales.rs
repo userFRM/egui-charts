@@ -1,10 +1,10 @@
 //! Scales and lines tab - price scale and line visibility settings.
 
 use crate::chart::series::SeriesSettings;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::scales::PriceScaleMode;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Scales and lines tab renderer

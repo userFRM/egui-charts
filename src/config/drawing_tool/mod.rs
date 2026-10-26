@@ -60,6 +60,7 @@ pub use interaction_mode::DrawingInteractionMode;
 /// Serde writes and reads the variant name (`"FibonacciRetracement"`), which
 /// stays stable when display names change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DrawingToolType {
     // ============ CURSORS (4 tools) ============
     /// Crosshair cursor overlay -- not a drawing, provides precision targeting.

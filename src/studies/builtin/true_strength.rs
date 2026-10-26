@@ -162,7 +162,7 @@ impl Indicator for TrueStrengthIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -256,7 +256,7 @@ mod tests {
                     tsi.values.to_rows()[bar]
                 );
             };
-            assert_eq!(got.len(), tsi.line_cnt());
+            assert_eq!(got.len(), tsi.line_count());
             assert!(
                 (got[0] - main).abs() < 1e-12,
                 "bar {bar}: TSI {} vs {main}",

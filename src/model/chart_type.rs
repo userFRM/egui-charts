@@ -28,6 +28,7 @@ use std::fmt;
 /// Each variant represents a distinct way to visualize OHLCV data.
 /// The default is `Candles` (Japanese candlesticks).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ChartType {
     // === Standard OHLC Types ===
     /// Traditional OHLC bars with tick marks
@@ -84,6 +85,7 @@ pub enum ChartType {
 
 /// Categories for grouping chart types in the UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ChartTypeCategory {
     /// Standard OHLC visualizations
     Standard,

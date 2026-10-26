@@ -1,10 +1,8 @@
-//! Series hit-test result types.
+//! Hit-test results for chart series.
 //!
-//! Series selection itself is tracked by the chart-wide
-//! [`SelectionState<ChartElementId>`](crate::chart::selection::SelectionState),
-//! so this module only carries the result of a hit test on chart series. The
-//! [`SeriesId`] identity lives in [`crate::chart::selection`] and is re-exported
-//! here for the series API surface.
+//! The chart owns selection; hosts read it with
+//! [`Chart::selected_element`](crate::Chart::selected_element).
+//! [`SeriesId`] identifies a price or volume series.
 
 pub use crate::chart::selection::SeriesId;
 

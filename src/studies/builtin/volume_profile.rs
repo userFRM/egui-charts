@@ -2,11 +2,9 @@
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
+use crate::data::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 use crate::model::{Bar, Instrument, Timeframe};
-use crate::studies::{
-    Indicator, IndicatorValues, InputKind, InputValue, ProfileDisplay, StudyInput, StudyProfile,
-    VolumeProfile, VolumeProfileConfig,
-};
+use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
 use egui::Color32;
 use std::cell::RefCell;
 use std::ops::Range;

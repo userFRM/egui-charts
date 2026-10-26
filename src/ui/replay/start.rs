@@ -6,6 +6,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 /// A replay start requested by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ReplayStartAction {
     /// No selection, including cancellation.
     #[default]

@@ -89,15 +89,15 @@ impl Indicator for Volume24h {
         "24-hour Volume - Volume traded over the last 24 hours, on any interval"
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
             color: self.color,
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }

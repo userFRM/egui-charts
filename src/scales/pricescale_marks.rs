@@ -178,8 +178,17 @@ impl PriceMarkGenerator {
                         decimals
                     }
                 });
-                let label = if prices {
-                    self.format_price(curr_price, precision)
+                let label = if map.price_precision().is_none() && precision > 8 {
+                    let mut label = self.format_price(curr_price, precision, true);
+                    if map.transform().mode == PriceScaleMode::Percentage {
+                        if !curr_price.is_sign_negative() {
+                            label.insert(0, '+');
+                        }
+                        label.push('%');
+                    }
+                    label
+                } else if prices {
+                    self.format_price(curr_price, precision, false)
                 } else {
                     map.transform().label(curr_price, precision, None)
                 };
@@ -256,7 +265,8 @@ impl PriceMarkGenerator {
                     let precision = map
                         .price_precision()
                         .unwrap_or_else(|| self.calculate_precision(base).max(2));
-                    let label = self.format_price(price, precision);
+                    let label =
+                        self.format_price(price, precision, map.price_precision().is_none());
 
                     let weight = if multiplier == 1.0 {
                         100
@@ -322,7 +332,7 @@ impl PriceMarkGenerator {
     fn calculate_precision(&self, step: f64) -> usize {
         // For very small steps, we need more precision
         if step <= 0.0001 {
-            8
+            (1.0 - step.log10().floor()).max(8.0) as usize
         } else if step <= 0.001 {
             6
         } else if step <= 0.01 {
@@ -339,8 +349,13 @@ impl PriceMarkGenerator {
     }
 
     /// Format price with given precision
-    fn format_price(&self, price: f64, precision: usize) -> String {
-        format!("{price:.precision$}")
+    fn format_price(&self, price: f64, precision: usize, automatic: bool) -> String {
+        if automatic && precision > 8 {
+            let digits = (price.abs().log10().floor() + precision as f64).clamp(0.0, 17.0) as usize;
+            format!("{price:.digits$e}")
+        } else {
+            format!("{price:.precision$}")
+        }
     }
 
     /// Calculate weight for a price mark (higher for rounder numbers)
@@ -538,6 +553,35 @@ mod tests {
                 .windows(2)
                 .all(|pair| (pair[0].y_coord - pair[1].y_coord).abs() >= 40.0)
         );
+        for (mode, min, max) in [
+            (PriceScaleMode::Normal, 1e-10, 2e-10),
+            (PriceScaleMode::Normal, -2e-18, 2e-18),
+            (PriceScaleMode::Normal, 1e-100, 2e-100),
+            (PriceScaleMode::Logarithmic, 1e-12_f64.ln(), 1e-9_f64.ln()),
+            (
+                PriceScaleMode::Logarithmic,
+                1e-10_f64.ln(),
+                1.1e-10_f64.ln(),
+            ),
+        ] {
+            let marks = generator.generate_marks(&map(mode, min, max));
+            assert!(marks.len() >= 3, "{mode:?}, {min}..{max}: {marks:?}");
+            assert!(marks.windows(2).all(|pair| pair[0].label != pair[1].label));
+            for mark in marks {
+                let labelled = mark.label.parse::<f64>().unwrap();
+                let tolerance = if mode == PriceScaleMode::Logarithmic {
+                    mark.price.abs() * 1e-9
+                } else {
+                    (max - min) * 1e-9
+                };
+                assert!(
+                    (labelled - mark.price).abs() <= tolerance,
+                    "{mode:?}: {} labelled {}",
+                    mark.price,
+                    mark.label
+                );
+            }
+        }
     }
 
     /// The scale's target density sets the number of labels: on 500 pixels showing 0 to 100,

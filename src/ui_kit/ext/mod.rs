@@ -1,8 +1,7 @@
 //! Extension traits for egui types -- the ergonomic API layer.
 //!
 //! This module provides convenience extension traits that add domain-specific
-//! methods to egui's core types, following the patterns established by the
-//! rerun viewer. These traits are the recommended way to render common UI
+//! methods to egui's core types. These traits render common UI
 //! patterns and handle interactions. Theme colours come from `ui.visuals()` and
 //! [`ThemeExt::active_theme`](crate::theme::ThemeExt::active_theme).
 //!
@@ -19,7 +18,7 @@
 //! # Usage
 //!
 //! ```rust
-//! use egui_charts::ext::{UiExt, ResponseExt};
+//! use egui_charts::ui_kit::ext::{UiExt, ResponseExt};
 //!
 //! fn my_widget(ui: &mut egui::Ui) {
 //!     // UiExt: convenience UI elements

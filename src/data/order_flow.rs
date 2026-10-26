@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Fixed stream aggregation performed before a feed coalesces its updates for painting.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum OrderFlowKind {
     /// Last, arithmetic mean and maximum quoted spread, in instrument ticks, per bar.
     Spread,

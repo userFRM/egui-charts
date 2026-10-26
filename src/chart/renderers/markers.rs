@@ -24,7 +24,7 @@ pub fn render_markers(
         if !marker.size.is_finite() || marker.size <= 0.0 {
             continue;
         }
-        if let Some(index) = crate::widget::sync::index_at(visible_data, marker.time) {
+        if let Some(index) = crate::model::index_at(visible_data, marker.time) {
             let bar_idx = index.round().clamp(0.0, (visible_data.len() - 1) as f64) as usize;
             let bar = &visible_data[bar_idx];
             let x = coords.idx_to_x(coords.start_idx) + index as f32 * coords.bar_spacing;
@@ -151,7 +151,7 @@ pub fn render_event_band(
     visible_data.first()?;
     let mut placed = Vec::<Rect>::new();
     for (index, event) in events.iter().enumerate() {
-        let at = crate::widget::sync::index_at(visible_data, event.time)?.ceil();
+        let at = crate::model::index_at(visible_data, event.time)?.ceil();
         let x = coords.idx_to_x(coords.start_idx) + at as f32 * coords.bar_spacing;
         let mut rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
         while placed.iter().any(|other| other.intersects(rect)) {

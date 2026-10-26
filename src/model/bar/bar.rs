@@ -301,7 +301,7 @@ impl Bar {
 ///
 /// It captures the index of the span's first bar, its length, the timestamps
 /// of its first and last bars, the first close, every value of the last bar,
-/// and the series' [`ChartState::revision`](crate::model::ChartState::revision),
+/// and the series' [`ChartState::revision`](crate::studies::ChartState::revision),
 /// which changes when any bar before the series' last one changes. So it
 /// changes when bars are appended or removed, the endpoints move, the forming
 /// last bar updates, or a bar inside the span is corrected.
@@ -531,7 +531,8 @@ mod tests {
     #[cfg(feature = "widget")]
     #[test]
     fn span_cache_recomputes_when_bars_change() {
-        use crate::model::{BarData, ChartState};
+        use crate::model::BarData;
+        use crate::studies::ChartState;
         let mut cache = SpanCache::new(4);
         let total_volume = |bars: &[Bar]| bars.iter().map(|bar| bar.volume).sum::<f64>();
         let mut get = |state: &ChartState, first: usize| {

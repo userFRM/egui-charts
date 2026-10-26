@@ -6,9 +6,9 @@
 //! - Magnifier: Circular zoom lens for detailed data inspection
 
 use super::context::{ChartMapping, RenderContext, StyleColors};
-use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, Instrument, percent_change};
+use crate::scales::price_decimals;
 use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
@@ -30,7 +30,7 @@ pub struct StudyValue {
     /// Number of decimal places used by the study's legend.
     pub precision: usize,
     /// Value units used by this study.
-    pub format: crate::studies::StudyFormat,
+    pub format: crate::scales::StudyFormat,
     /// Plot colour.
     pub color: egui::Color32,
 }
@@ -479,7 +479,7 @@ pub fn render_magnifier_tooltip(
         1.0 / coords.bar_spacing
     };
     let center_bars_from_right =
-        (context.rect.max.x - hover_pos.x) * bars_per_pixel - 0.5 - coords.right_offset;
+        f64::from((context.rect.max.x - hover_pos.x) * bars_per_pixel) - 0.5 - coords.right_offset;
     let src_bars = (src_width * bars_per_pixel) as isize;
     let half_bars = src_bars / 2;
 
@@ -492,14 +492,14 @@ pub fn render_magnifier_tooltip(
     let candle_width = zoomed_bar_spacing * 0.7;
 
     // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
-    let last = (coords.base_idx as f32 - center_bars_from_right - coords.start_idx as f32).floor()
+    let last = (coords.base_idx as f64 - center_bars_from_right - coords.start_idx as f64).floor()
         as isize;
     let first = last
         .saturating_add(1)
         .saturating_sub(visible_data.len() as isize);
     for i in (-half_bars).max(first)..=half_bars.min(last) {
-        let bar_offset = center_bars_from_right + i as f32;
-        let global_idx = (coords.base_idx as f32 - bar_offset).floor() as isize;
+        let bar_offset = center_bars_from_right + i as f64;
+        let global_idx = (coords.base_idx as f64 - bar_offset).floor() as isize;
 
         if global_idx < coords.start_idx as isize {
             continue;
@@ -613,7 +613,7 @@ mod tests {
                     let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
                     let studies = vec![
                         StudyValue {
-                            format: crate::studies::StudyFormat::Fixed(2),
+                            format: crate::scales::StudyFormat::Fixed(2),
                             study: "A very long study caption with several input parameters".into(),
                             plot: "Signal".into(),
                             value: Some(1234.567),

@@ -699,7 +699,9 @@ pub fn stored_to_drawing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::VolumeProfileConfig;
     use crate::drawings::*;
+    use crate::model::LineStyle;
 
     const T0: i64 = 1_704_067_200_000;
 
@@ -784,7 +786,7 @@ mod tests {
 
     #[test]
     fn every_tool_round_trips_with_all_settings() {
-        use crate::drawings::ProfileDisplay::{Delta, Total, UpDown};
+        use crate::data::ProfileDisplay::{Delta, Total, UpDown};
         for (tool, custom_anchors) in DrawingToolType::all()
             .iter()
             .copied()

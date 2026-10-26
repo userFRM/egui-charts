@@ -136,7 +136,7 @@ impl Indicator for RciRibbon {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

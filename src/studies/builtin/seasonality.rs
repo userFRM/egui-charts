@@ -45,9 +45,9 @@
 //! ```
 
 use crate::model::Bar;
+use crate::model::LineStyle;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyCell, StudyProjection,
-    StudyTable,
+    Indicator, IndicatorValues, PlotStyle, PlotType, StudyCell, StudyProjection, StudyTable,
 };
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, Months};
@@ -291,9 +291,9 @@ impl Indicator for Seasonality {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: if line == 1 {
-                PlotPattern::Dashed
+                LineStyle::Dashed
             } else {
-                PlotPattern::Solid
+                LineStyle::Solid
             },
             plot_type: PlotType::StepLine,
             visible: line < 2,

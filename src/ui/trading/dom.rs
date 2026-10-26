@@ -16,7 +16,6 @@ use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
 use crate::model::{
     Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Tick, TimeInForce,
-    TradeSide,
 };
 use crate::theme::ThemeExt;
 
@@ -123,8 +122,8 @@ fn traded(trades: &[&Tick], tick: f64, top: i64, rows: usize) -> Vec<[f64; 3]> {
             && let Some(volume) = volumes.get_mut(row)
         {
             let side = match trade.side {
-                Some(TradeSide::Sell) => 0,
-                Some(TradeSide::Buy) => 1,
+                Some(OrderSide::Sell) => 0,
+                Some(OrderSide::Buy) => 1,
                 None => 2,
             };
             volume[side] += trade.size;
@@ -1144,12 +1143,12 @@ mod tests {
     fn profile_keeps_bid_ask_and_unknown_volume_at_their_ticks() {
         let now = chrono::Utc::now();
         let trades = [
-            Tick::new(now, 100.0, 2.0, Some(TradeSide::Sell)),
-            Tick::new(now, 100.0 + 1e-12, 3.0, Some(TradeSide::Sell)),
-            Tick::new(now, 100.0, 7.0, Some(TradeSide::Buy)),
+            Tick::new(now, 100.0, 2.0, Some(OrderSide::Sell)),
+            Tick::new(now, 100.0 + 1e-12, 3.0, Some(OrderSide::Sell)),
+            Tick::new(now, 100.0, 7.0, Some(OrderSide::Buy)),
             Tick::new(now, 100.0, 11.0, None),
-            Tick::new(now, 100.25, 13.0, Some(TradeSide::Buy)),
-            Tick::new(now, 99.5, 17.0, Some(TradeSide::Sell)),
+            Tick::new(now, 100.25, 13.0, Some(OrderSide::Buy)),
+            Tick::new(now, 99.5, 17.0, Some(OrderSide::Sell)),
         ];
         // Rows descend by 0.25: 100.25, 100, 99.75. At 100 the bid has 2 + 3,
         // the ask 7 and unknown 11, so the profile is 23; 99.5 is outside the view.

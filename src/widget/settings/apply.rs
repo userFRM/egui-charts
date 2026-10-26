@@ -1,13 +1,12 @@
 //! Apply and read the chart settings exposed by the shared dialog.
 
-use super::data::LineStyle;
 use super::{
     BackgroundType, ButtonVisibility, ChartSettingsState, GridLinesMode, PrecisionMode,
     WatermarkMode,
 };
 use crate::{
     Chart,
-    config::{BackgroundStyle, CrosshairLineStyle, NavigationButtons},
+    config::{BackgroundStyle, NavigationButtons},
     scales::{PriceScaleMode, TimezoneMode},
 };
 use egui::Color32;
@@ -110,13 +109,7 @@ impl ChartSettingsState {
         let crosshair = &chart.chart_options().crosshair;
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
-        settings.crosshair.line_style = match crosshair.horz_line_style {
-            CrosshairLineStyle::Solid => LineStyle::Solid,
-            CrosshairLineStyle::Dashed => LineStyle::Dashed,
-            CrosshairLineStyle::Dotted => LineStyle::Dotted,
-            CrosshairLineStyle::LargeDashed => LineStyle::LargeDashed,
-            CrosshairLineStyle::SparseDotted => LineStyle::SparseDotted,
-        };
+        settings.crosshair.line_style = crosshair.horz_line_style;
         let decimals = chart
             .state()
             .price_scale()
@@ -145,7 +138,7 @@ impl ChartSettingsState {
         };
         settings.watermark.color = config.watermark_color;
         settings.scales_appearance.text_color = config.text_color;
-        settings.sync_legacy_fields();
+
         settings
     }
 
@@ -203,13 +196,7 @@ impl ChartSettingsState {
         crosshair.vert_line_color = self.crosshair.color;
         crosshair.horz_line_width = self.crosshair.line_width;
         crosshair.vert_line_width = self.crosshair.line_width;
-        crosshair.horz_line_style = match self.crosshair.line_style {
-            LineStyle::Solid => CrosshairLineStyle::Solid,
-            LineStyle::Dashed => CrosshairLineStyle::Dashed,
-            LineStyle::Dotted => CrosshairLineStyle::Dotted,
-            LineStyle::LargeDashed => CrosshairLineStyle::LargeDashed,
-            LineStyle::SparseDotted => CrosshairLineStyle::SparseDotted,
-        };
+        crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
         let config = chart.config_mut();
         config.bullish_color = self.candle_colors.body_up;

@@ -24,10 +24,10 @@ use crate::model::{
 };
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::theme::ThemeExt;
-use crate::ui::top_toolbar::components::settings_menu::{TradingNotifications, TradingSettings};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::Chart;
+use crate::widget::settings::{TradingNotifications, TradingSettings};
 use ticket::{Action, Market, OrderTicket, order_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
@@ -94,7 +94,7 @@ pub struct Trading {
     pub account_panel: AccountPanel,
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
-    /// Copy the chart settings' [`trading`](crate::ui::top_toolbar::ChartSettingsState::trading)
+    /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
     /// options here when the user applies them.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
@@ -629,7 +629,7 @@ impl Trading {
             let display = &self.display;
             let options = TradingLineOptions {
                 show_orders: display.show_orders,
-                show_positions: display.show_poss,
+                show_positions: display.show_positions,
                 submit: false,
                 modify: capabilities.modify,
                 close: capabilities.market,
@@ -1616,7 +1616,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let hidden = TradingSettings {
-            show_poss: false,
+            show_positions: false,
             show_orders: false,
             show_executions: false,
             ..TradingSettings::default()
@@ -1904,7 +1904,7 @@ mod tests {
                 });
                 let mut trading = Trading::default();
                 trading.set_service(broker);
-                trading.display.show_poss = show_positions;
+                trading.display.show_positions = show_positions;
                 trading.display.show_orders = show_orders;
                 let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                 chart.symbol = "SYM".into();

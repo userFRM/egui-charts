@@ -1,6 +1,7 @@
 //! How a bar series shows its last value and base line, fits its scale and takes clicks.
 
-use super::{Bar, LineStyle};
+use super::Bar;
+use crate::model::LineStyle;
 use egui::Color32;
 use std::sync::Arc;
 

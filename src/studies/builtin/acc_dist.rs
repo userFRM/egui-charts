@@ -92,8 +92,8 @@ impl Default for AccumulationDistribution {
 }
 
 impl Indicator for AccumulationDistribution {
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn name(&self) -> &str {
@@ -135,7 +135,7 @@ impl Indicator for AccumulationDistribution {
         false // A/D is a separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 
