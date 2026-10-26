@@ -288,6 +288,8 @@ pub struct DemoApp {
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
     /// The latest crosshair payload of the active chart, from which the data window reads.
     crosshair: Option<egui_charts::widget::ChartPointer>,
+    /// The last pointer event stays readable while the pointer is over the host legend.
+    pointer_readout: Option<egui_charts::widget::ChartPointer>,
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
@@ -514,6 +516,7 @@ impl DemoApp {
             menus,
             last_chart_click: None,
             crosshair: None,
+            pointer_readout: None,
             state: DemoAppState {
                 symbol: symbol.into(),
                 timeframe,
@@ -2436,7 +2439,7 @@ impl DemoApp {
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
                 if self.api_samples
-                    && let Some(pointer) = &self.crosshair
+                    && let Some(pointer) = &self.pointer_readout
                 {
                     Self::show_pointer_readout(ui, pointer);
                 }
@@ -2531,6 +2534,9 @@ impl DemoApp {
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
+                    if pointer.is_some() {
+                        self.pointer_readout = pointer.clone();
+                    }
                     self.crosshair = pointer;
                     // The data window was drawn before the chart; show the new values now.
                     ctx.request_repaint();
@@ -2544,6 +2550,7 @@ impl DemoApp {
                 egui_charts::widget::ChartEvent::SymbolChanged(_)
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
                     self.last_chart_click = None;
+                    self.pointer_readout = None;
                 }
                 _ => {}
             }
@@ -5576,6 +5583,7 @@ mod tests {
             let latest = bars.last().unwrap().close;
             frame(&mut app, vec![egui::Event::PointerGone]);
             assert_eq!(app.build_data_window().close, latest);
+            assert_eq!(app.pointer_readout, Some(pointer.clone()));
             app.open_chart_settings_dialog();
             let mut settings = app.settings_state.clone();
             settings.timezone = "Europe/Paris".to_owned();
@@ -5600,7 +5608,6 @@ mod tests {
                     let mut labels = Vec::new();
                     let mut hover = egui::pos2(40.0, 15.0);
                     for step in 0..4 {
-                        app.crosshair = Some(pointer.clone());
                         let output = ctx.run_ui(
                             egui::RawInput {
                                 time: Some(100.0 + ctx.cumulative_frame_nr() as f64),
