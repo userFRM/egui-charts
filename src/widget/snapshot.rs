@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// One study of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedStudy {
-    /// The study's id when it was saved, which drawings in its pane refer to.
+    /// The study's id when saved, used by study sources and drawings in its pane.
     pub id: usize,
     /// Its name, inputs, styles and visibility.
     pub study: StudyTemplate,
@@ -287,6 +287,30 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
+        for saved in &snapshot.studies {
+            let id = super::SeriesId(self.restored_studies[&saved.id]);
+            for (input, value) in &saved.study.inputs {
+                if let crate::studies::InputValue::Source(crate::studies::StudySource::Study {
+                    id: parent,
+                    plot,
+                }) = value
+                {
+                    let source = crate::studies::StudySource::Study {
+                        id: self
+                            .restored_studies
+                            .get(parent)
+                            .copied()
+                            .unwrap_or(usize::MAX),
+                        plot: *plot,
+                    };
+                    self.indicator_mut(id)
+                        .expect("restored study")
+                        .set_input(input, crate::studies::InputValue::Source(source))
+                        .expect("validated study source");
+                }
+            }
+        }
+        self.recalculate_studies();
         for (at, saved) in snapshot.panes.iter().enumerate() {
             let id = panes[&at];
             self.move_pane(id, at);
@@ -403,6 +427,13 @@ mod tests {
         chart.set_indicator_autoscale(sma, false);
         let rsi = chart.add_indicator(Box::new(RSI::new(9)));
         let macd = chart.add_indicator(Box::new(MACD::new(5, 13, 4)));
+        chart
+            .set_indicator_source(
+                rsi,
+                crate::studies::StudySource::Study { id: sma.0, plot: 0 },
+            )
+            .unwrap();
+        chart.recalculate_studies();
         chart.move_indicator_to_pane(macd, rsi);
         let pane = chart.series_pane(rsi).unwrap();
         chart.move_pane(pane, 0);
@@ -465,6 +496,16 @@ mod tests {
         };
         assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
         assert!(!restored.study_autoscale[0]);
+        assert_eq!(
+            restored.indicator_mut(*rsi).unwrap().source(),
+            Some(crate::studies::StudySource::Study { id: sma.0, plot: 0 })
+        );
+        let original = chart.indicators().nth(1).unwrap().1.values();
+        let output = restored.indicators().nth(1).unwrap().1.values();
+        assert!(!output.is_empty());
+        for at in 0..original.len() {
+            assert_eq!(output.value(0, at), original.value(0, at));
+        }
         let panes = restored.panes();
         assert_eq!(panes.len(), 3);
         assert_eq!(panes[1], PaneId::MAIN);

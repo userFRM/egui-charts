@@ -524,14 +524,28 @@ fn dialogs_expose_titles_and_label_their_fields() {
             "SMA settings",
             |ctx| {
                 let mut dialog = IndicatorSettingsDialog::default();
-                dialog.open(
-                    crate::widget::SeriesId::MAIN,
-                    &crate::studies::SMA::new(2),
-                    None,
-                );
+                let mut study =
+                    crate::studies::ConfiguredStudy::new(Box::new(crate::studies::SMA::new(2)));
+                crate::studies::Indicator::set_input(
+                    &mut study,
+                    "calculation_timeframe",
+                    crate::studies::InputValue::Timeframe(Some(crate::model::Timeframe::Custom(
+                        std::num::NonZeroU64::new(60).unwrap(),
+                    ))),
+                )
+                .unwrap();
+                dialog.open(crate::widget::SeriesId::MAIN, &study, None);
                 dialog.show(ctx, &ctx.active_theme());
             },
-            &[(Role::SpinButton, "Period"), (Role::Tab, "Inputs")],
+            &[
+                (Role::SpinButton, "Period"),
+                (Role::Tab, "Inputs"),
+                (Role::ComboBox, "Source"),
+                (Role::TextInput, "Symbol"),
+                (Role::ComboBox, "Interval"),
+                (Role::SpinButton, "Interval"),
+                (Role::CheckBox, "Wait for interval close"),
+            ],
         ),
         (
             "Chart settings",

@@ -351,6 +351,7 @@ impl Chart {
                     series.request.symbol.clone(),
                     series.clock.clone(),
                     super::feed::TRADE_CAPACITY,
+                    series.instrument.as_ref().and_then(|i| i.tick_size),
                 );
                 stream.subscription = Some(sink.id);
                 stream.feed.subscribe(Subscription {

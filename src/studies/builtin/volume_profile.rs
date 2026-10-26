@@ -423,7 +423,12 @@ macro_rules! profile_study {
                 $doc
             }
             fn inputs(&self) -> Vec<StudyInput> {
-                self.profile.inputs()
+                self.profile
+                    .inputs()
+                    .into_iter()
+                    .zip(Self::default().profile.inputs())
+                    .map(|(input, default)| input.with_default(default.value))
+                    .collect()
             }
             fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
                 self.profile.set_input(id, value)
@@ -583,6 +588,25 @@ mod tests {
             (Box::new(VolProfileAutoAnchored::new(2)), vec![(3..4, 40.0)]),
         ];
         for (mut study, expected) in cases {
+            let defaults = crate::studies::IndicatorFactory::new()
+                .create(study.name())
+                .unwrap()
+                .inputs();
+            study
+                .set_input("value_area", InputValue::Number(90.0))
+                .unwrap();
+            for (input, default) in study.inputs().iter().zip(&defaults) {
+                assert_eq!(
+                    input.default,
+                    default.value,
+                    "{}: {}",
+                    study.name(),
+                    input.id
+                );
+            }
+            study
+                .set_input("value_area", InputValue::Number(70.0))
+                .unwrap();
             study.calculate(&bars);
             let got = study.volume_profiles(1..4);
             assert_eq!(got.len(), expected.len(), "{}", study.name());
