@@ -61,6 +61,7 @@ pub struct IndicatorDialog {
     metric_error: Option<FeedError>,
     source: Option<StudySource>,
     sources: Vec<(StudySource, String)>,
+    source_error: Option<&'static str>,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
@@ -110,6 +111,7 @@ impl IndicatorDialog {
             metric_error: None,
             source: None,
             sources: Vec::new(),
+            source_error: None,
             config: IndicatorDialogConfig::default(),
             params: IndicatorParams::default(),
             show_config: false,
@@ -238,6 +240,7 @@ impl IndicatorDialog {
     pub fn open_tab(&mut self, tab: IndicatorTab) {
         self.source = None;
         self.sources.clear();
+        self.source_error = None;
         self.active_tab = tab;
         self.is_open = true;
         self.search.clear();
@@ -680,6 +683,7 @@ impl IndicatorDialog {
 
     /// Select `indicator` and open its configuration panel with the study's own parameters.
     fn select(&mut self, indicator: &IndicatorInfo) {
+        self.source_error = None;
         self.params = Self::defaults(self.edited(&indicator.id));
         self.sel_indicator = Some(indicator.clone());
         self.show_config = true;
@@ -708,8 +712,17 @@ impl IndicatorDialog {
     fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
         let mut study = self.create(&self.sel_indicator.as_ref()?.id)?;
         if let Some(source) = self.source {
-            study = Box::new(ConfiguredStudy::new(study));
-            study.set_input("source", InputValue::Source(source)).ok()?;
+            if !study
+                .inputs()
+                .iter()
+                .any(|input| input.id == "source" && matches!(input.kind, InputKind::Source))
+            {
+                study = Box::new(ConfiguredStudy::new(study));
+            }
+            if let Err(error) = study.set_input("source", InputValue::Source(source)) {
+                self.source_error = Some(error);
+                return None;
+            }
         }
         self.close();
         Some(IndicatorDialogAction::AddIndicator(study))
@@ -762,6 +775,7 @@ impl IndicatorDialog {
                 response.labelled_by(label.id);
                 if value != self.source.unwrap_or(default) {
                     self.source = Some(value);
+                    self.source_error = None;
                 }
                 ui.end_row();
             }
@@ -776,6 +790,9 @@ impl IndicatorDialog {
                 ui.ctx(),
                 "This indicator does not accept a source.",
             ));
+        }
+        if let Some(error) = self.source_error {
+            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error));
         }
         let (add, back) = DialogFooter::new("Add")
             .primary_enabled(accepts_source)
@@ -1161,6 +1178,48 @@ mod tests {
         ));
         assert!(!dialog.open_for_chart(&chart, Some(StudySource::Study { id: id.0, plot: 99 })));
         assert!(!dialog.is_open());
+
+        let mut factory = IndicatorFactory::new();
+        factory.register("Host source", || {
+            let mut study = ConfiguredStudy::new(Box::new(SMA::new(3)));
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Hour1)),
+                )
+                .unwrap();
+            Box::new(study)
+        });
+        let mut dialog = IndicatorDialog::new().with_factory(factory);
+        let info = dialog
+            .indicators
+            .iter()
+            .find(|info| info.id == "Host source")
+            .unwrap()
+            .clone();
+        assert!(dialog.open_for_chart(&chart, Some(StudySource::Study { id: id.0, plot: 0 })));
+        dialog.select(&info);
+        assert!(
+            dialog.add_selected().is_none(),
+            "the host's source validation must be retained"
+        );
+        assert!(dialog.source_error.is_some());
+        assert!(dialog.is_open());
+        assert!(dialog.open_for_chart(&chart, Some(StudySource::Price(PriceSource::Open))));
+        dialog.select(&info);
+        let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add_selected() else {
+            panic!("a compatible price source is accepted");
+        };
+        assert!(dialog.source_error.is_none());
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "calculation_timeframe")
+                .unwrap()
+                .value,
+            InputValue::Timeframe(Some(crate::model::Timeframe::Hour1))
+        );
     }
 
     #[test]
