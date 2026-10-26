@@ -153,6 +153,7 @@ pub(crate) mod interaction;
 pub mod keyboard;
 pub mod layout;
 mod navigation;
+mod palette;
 pub(crate) mod pan_zoom;
 mod pane_layout;
 pub use pane_layout::{PaneId, PaneOptions};
@@ -390,6 +391,7 @@ pub struct Chart {
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     pub(crate) theme_override: Option<crate::theme::Theme>,
+    inherited_theme: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
     pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
     events: Vec<crate::model::Marker>,
@@ -913,10 +915,12 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context keep their configured series colours until updated.
+    /// Other charts sharing the context follow the active theme on their next frame, keeping
+    /// colours the host has edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = theme.apply_to_config(self.config.clone());
         self.theme_override = None;
+        self.inherited_theme = Some(theme.clone());
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
@@ -925,10 +929,11 @@ impl Chart {
     ///
     /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
     /// configuration edits made afterwards are kept. `None` follows the host's palette again,
-    /// retaining configured series colours. `set_theme` clears this override and themes egui.
+    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = theme.apply_to_config(self.config.clone());
+            self.inherited_theme = Some(theme.clone());
         }
         self.theme_override = theme;
     }

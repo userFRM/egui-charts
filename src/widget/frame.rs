@@ -479,6 +479,7 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
         self.host_events.target = None;
         self.apply_config_scale_mode();
