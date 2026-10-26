@@ -59,6 +59,71 @@ pub(crate) fn draw_dashed_segment(
     gap_len: f32,
     phase: f64,
 ) {
+    draw_dashed_segments(
+        painter,
+        std::iter::once((start, end, phase)),
+        stroke,
+        dash_len,
+        gap_len,
+    );
+}
+
+/// Batch square dots into one mesh so tessellation does not repeatedly grow its output mesh.
+pub(crate) fn draw_dashed_segments(
+    painter: &egui::Painter,
+    segments: impl IntoIterator<Item = (Pos2, Pos2, f64), IntoIter: Clone>,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    let segments = segments.into_iter();
+    let mut dots = Mesh::default();
+    if dash_len == 1.0
+        && stroke.width == 1.0
+        && gap_len.is_finite()
+        && gap_len >= 0.0
+        && let Some(clip) = finite_clip(painter)
+    {
+        // Bound each clipped span before painting so batching never copies a growing mesh.
+        let count: usize = segments
+            .clone()
+            .filter_map(|(start, end, _)| {
+                if !start.is_finite() || !end.is_finite() || (start.x != end.x && start.y != end.y)
+                {
+                    return None;
+                }
+                let bounds = Rect::from_two_pos(start, end).intersect(clip);
+                if bounds.is_negative() {
+                    return None;
+                }
+                let length = (f64::from(bounds.right()) - f64::from(bounds.left()))
+                    .max(f64::from(bounds.bottom()) - f64::from(bounds.top()));
+                Some((length / (1.0 + f64::from(gap_len))).ceil() as usize + 2)
+            })
+            .sum();
+        dots.reserve_vertices(count * 4);
+        dots.reserve_triangles(count * 2);
+    }
+    for (start, end, phase) in segments {
+        append_dashed_segment(
+            painter, &mut dots, start, end, stroke, dash_len, gap_len, phase,
+        );
+    }
+    if !dots.is_empty() {
+        painter.add(dots);
+    }
+}
+
+fn append_dashed_segment(
+    painter: &egui::Painter,
+    dots: &mut Mesh,
+    start: Pos2,
+    end: Pos2,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+    phase: f64,
+) {
     let Some(clip) = finite_clip(painter) else {
         return;
     };
@@ -105,7 +170,7 @@ pub(crate) fn draw_dashed_segment(
     // Integer dash indices covering [from, to]: at most visible_len / period + 2 steps.
     let first = ((from + phase) / period).floor() as i64;
     let last = ((to + phase) / period).ceil() as i64;
-    let mut dots = Mesh::default();
+    let pixels_per_point = painter.pixels_per_point();
     let square_dots = dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0);
     if square_dots {
         // Reserve the clipped span once so adding dots never copies growing mesh buffers.
@@ -126,18 +191,13 @@ pub(crate) fn draw_dashed_segment(
                     egui::vec2(0.0, stroke.width / 2.0)
                 };
                 let rect = Rect::from_two_pos(start, end).expand2(half_width);
-                let rect = Rect::from_min_size(
-                    rect.min.round_to_pixels(painter.pixels_per_point()),
-                    rect.size(),
-                );
+                let rect =
+                    Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
                 dots.add_colored_rect(rect, stroke.color);
             } else {
                 painter.line_segment([start, end], stroke);
             }
         }
-    }
-    if !dots.is_empty() {
-        painter.add(dots);
     }
 }
 
@@ -145,6 +205,62 @@ pub(crate) fn draw_dashed_segment(
 mod tests {
     use super::*;
     use egui::{Color32, Context, LayerId, Painter, RawInput, emath::TSTransform};
+
+    #[test]
+    fn batched_dots_preserve_individual_mesh_geometry() {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 80.0));
+        let segments = [
+            (Pos2::new(-50.0, 10.25), Pos2::new(150.0, 10.25), 0.0),
+            (Pos2::new(f32::NAN, 0.0), Pos2::new(0.0, 0.0), 0.0),
+            (Pos2::new(30.25, -10.0), Pos2::new(30.25, 100.0), 2.5),
+            (Pos2::new(1e14, 40.0), Pos2::new(-1e14, 40.0), 1.0),
+            (Pos2::new(0.0, 90.0), Pos2::new(100.0, 90.0), 0.0),
+        ];
+        for scale in [1.0, 1.25, 2.0] {
+            for gap in [0.0, 3.0, 7.0] {
+                let render = |batch| {
+                    let ctx = Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |_| {
+                            let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                            let stroke = Stroke::new(1.0, Color32::from_white_alpha(80));
+                            if batch {
+                                draw_dashed_segments(&painter, segments, stroke, 1.0, gap);
+                            } else {
+                                for (start, end, phase) in segments {
+                                    draw_dashed_segment(
+                                        &painter, start, end, stroke, 1.0, gap, phase,
+                                    );
+                                }
+                            }
+                        },
+                    );
+                    let mut merged = Mesh::default();
+                    let mut count = 0;
+                    for shape in &output.shapes {
+                        if let egui::Shape::Mesh(mesh) = &shape.shape {
+                            assert_eq!(shape.clip_rect, rect);
+                            merged.append_ref(mesh);
+                            count += 1;
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                    (merged, count)
+                };
+                let (batched, count) = render(true);
+                let (individual, individual_count) = render(false);
+                assert_eq!(count, 1);
+                assert_eq!(individual_count, 3);
+                assert_eq!(batched.vertices, individual.vertices);
+                assert_eq!(batched.indices, individual.indices);
+            }
+        }
+    }
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed
     /// price range) must not make the dash loop walk its full length, even

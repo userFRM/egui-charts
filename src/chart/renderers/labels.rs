@@ -326,22 +326,18 @@ pub(crate) fn render_time_grid(
     color: Color32,
     style: crate::model::LineStyle,
 ) {
-    for mark in marks {
+    let lines = marks.iter().filter_map(|mark| {
         let index = time_to_idx(mark.time, points);
         let delta = (coords.base_idx as f64 - index) + coords.right_offset;
         let x = (f64::from(context.rect.right())
             - (delta + 0.5) * f64::from(coords.bar_spacing)
             - 1.0) as f32;
-        if x >= context.rect.left() && x <= context.rect.right() {
-            crate::chart::rendering::grid::render_grid_line(
-                context.painter,
-                Pos2::new(x, context.rect.top()),
-                Pos2::new(x, context.rect.bottom()),
-                egui::Stroke::new(0.5, color),
-                style,
-            );
-        }
-    }
+        (x >= context.rect.left() && x <= context.rect.right()).then_some([
+            Pos2::new(x, context.rect.top()),
+            Pos2::new(x, context.rect.bottom()),
+        ])
+    });
+    crate::chart::rendering::grid::render_grid_lines(context.painter, lines, color, style);
 }
 
 /// Paints the time labels of `marks`, placed by the keys of `points` as [`time_axis_marks`]
