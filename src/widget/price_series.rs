@@ -1249,7 +1249,7 @@ mod tests {
             let ctx = egui::Context::default();
             frame(&ctx, &mut chart, 0.0, vec![]);
             chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, 8.0));
-            frame(&ctx, &mut chart, 0.1, vec![]);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
             let map = chart.series_price_map(id).unwrap();
             assert!(
                 (map.range().min - (9.0 - 91.0 / 8.0)).abs() < 1e-8,
@@ -1261,6 +1261,16 @@ mod tests {
                 let (top, bottom) = map.extent();
                 assert!((top..=bottom).contains(&map.price_to_y(price)));
             }
+            let x = chart.index_to_x(1.0).unwrap();
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Rect(body)
+                        if (body.rect.center().x - x).abs() < 1e-3
+                            && (body.rect.top() - map.price_to_y(100.0)).abs() < 1e-3
+                            && (body.rect.bottom() - map.price_to_y(10.0)).abs() < 1e-3
+                )),
+                "secondary={secondary}: the first visible body must span 10..100"
+            );
         }
     }
 

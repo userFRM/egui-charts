@@ -13,7 +13,6 @@
 mod area;
 mod candlestick;
 mod heikin_ashi;
-pub use heikin_ashi::HeikinAshiCache;
 mod helpers;
 mod japanese;
 mod line;
@@ -23,6 +22,7 @@ mod range;
 pub mod tpo;
 pub(crate) mod volume;
 
+pub use heikin_ashi::HeikinAshiCache;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,

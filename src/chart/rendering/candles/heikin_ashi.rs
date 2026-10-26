@@ -19,17 +19,6 @@ use std::cell::{Ref, RefCell};
 
 use crate::model::Bar;
 
-/// Transform a full OHLC series into its Heikin-Ashi representation.
-///
-/// The input must be the complete dataset (not a visible sub-window) so that
-/// the recurrence is seeded deterministically from the first bar.
-#[cfg(test)]
-fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
-    let mut ha_bars = Vec::with_capacity(bars.len());
-    extend(&mut ha_bars, bars);
-    ha_bars
-}
-
 /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
 /// value.
 fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
@@ -119,11 +108,14 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    fn window(full: &[Bar], revision: u64, start: usize, len: usize) -> Vec<Bar> {
-        let cache = HeikinAshiCache::default();
-        let bars = cache.bars(full, revision);
-        let start = start.min(bars.len());
-        bars[start..start.saturating_add(len).min(bars.len())].to_vec()
+    /// Transform a full OHLC series into its Heikin-Ashi representation.
+    ///
+    /// The input must be the complete dataset (not a visible sub-window) so that
+    /// the recurrence is seeded deterministically from the first bar.
+    fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
+        let mut ha_bars = Vec::with_capacity(bars.len());
+        extend(&mut ha_bars, bars);
+        ha_bars
     }
 
     fn bar(i: i64, open: f64, high: f64, low: f64, close: f64) -> Bar {
@@ -157,23 +149,6 @@ mod tests {
         assert_eq!(a.close.to_bits(), b.close.to_bits(), "{ctx}: close");
     }
 
-    /// A bar's Heikin-Ashi value must not depend on where the visible window
-    /// begins: the windowed result must equal the tail of the full transform.
-    #[test]
-    fn ha_window_is_independent_of_start() {
-        let full = sample_series();
-        let ha_full = transform_to_heikin_ashi(&full);
-
-        for start in 0..full.len() {
-            let len = full.len() - start;
-            let win = window(&full, 0, start, len);
-            assert_eq!(win.len(), len, "start={start}");
-            for (i, w) in win.iter().enumerate() {
-                assert_bars_eq(w, &ha_full[start + i], &format!("start={start}, i={i}"));
-            }
-        }
-    }
-
     /// Seeding from a later bar (the old visible-window behavior) produces a
     /// different early value, confirming the defect the cache fixes.
     #[test]
@@ -198,15 +173,13 @@ mod tests {
             let full = &state.data().bars;
             let fresh = transform_to_heikin_ashi(full);
             let cached = cache.bars(full, state.revision());
-            {
-                assert_eq!(cached.len(), fresh.len());
-                for (a, b) in cached.iter().zip(&fresh) {
-                    assert_bars_eq(a, b, "stream");
-                    assert_eq!(a.time, b.time);
-                    assert_eq!(a.volume.to_bits(), b.volume.to_bits());
-                }
-                cached.as_ptr()
+            assert_eq!(cached.len(), fresh.len());
+            for (a, b) in cached.iter().zip(&fresh) {
+                assert_bars_eq(a, b, "stream");
+                assert_eq!(a.time, b.time);
+                assert_eq!(a.volume.to_bits(), b.volume.to_bits());
             }
+            cached.as_ptr()
         };
         for next in sample_series() {
             state.edit_bars(|bars| {
@@ -286,20 +259,5 @@ mod tests {
                 assert_eq!(transformed[1].open, 10.5 + i as f64 / 2.0);
             }
         }
-    }
-
-    /// Out-of-range indices clamp to the available data instead of panicking.
-    #[test]
-    fn window_clamps_out_of_range() {
-        let full = sample_series();
-        assert!(window(&full, 0, 100, 10).is_empty());
-        let tail = window(&full, 0, full.len() - 1, 50);
-        assert_eq!(tail.len(), 1);
-    }
-
-    /// An empty dataset yields an empty window without panicking.
-    #[test]
-    fn empty_series_is_empty() {
-        assert!(window(&[], 0, 0, 10).is_empty());
     }
 }
