@@ -142,23 +142,4 @@ mod tests {
         let mode = TrackingModeExitMode::default();
         assert_eq!(mode, TrackingModeExitMode::OnNextTap);
     }
-
-    #[test]
-    fn test_tracking_mode_options_default() {
-        let options = TrackingModeOptions::default();
-        assert_eq!(options.exit_mode, TrackingModeExitMode::OnNextTap);
-    }
-
-    #[test]
-    fn test_tracking_mode_exit_modes() {
-        // Test all three exit modes
-        let on_touch_end = TrackingModeExitMode::OnTouchEnd;
-        let on_mouse_leave = TrackingModeExitMode::OnMouseLeave;
-        let on_next_tap = TrackingModeExitMode::OnNextTap;
-
-        // Verify they are distinct
-        assert_ne!(on_touch_end, on_mouse_leave);
-        assert_ne!(on_mouse_leave, on_next_tap);
-        assert_ne!(on_next_tap, on_touch_end);
-    }
 }

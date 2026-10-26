@@ -288,7 +288,7 @@ impl Chart {
         self.kinetic_scroll.is_active = false;
 
         if self.scroll_start_pos.is_none() {
-            self.scroll_start_pos = response.interact_pointer_pos();
+            self.scroll_start_pos = ui.input(|i| i.pointer.press_origin());
             self.scroll_start_offset = Some(self.state.time_scale().right_offset());
         }
 
@@ -811,20 +811,22 @@ mod tests {
     /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or
     /// Cmd on macOS) held, which egui leaves out of its smoothed scroll delta.
     /// While the right bar stays on scroll, the zoom keeps the right offset.
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn wheel_zooms_the_time_axis_with_and_without_the_zoom_modifier() {
-        for (modifiers, right_bar_stays) in [
-            (Modifiers::NONE, false),
-            (Modifiers::COMMAND, false),
-            (Modifiers::NONE, true),
+        for (modifiers, right_bar_stays, fraction) in [
+            (Modifiers::NONE, false, 0.25),
+            (Modifiers::COMMAND, false, 0.75),
+            (Modifiers::NONE, true, 0.25),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
             chart.chart_options.time_scale.right_bar_stays_on_scroll = right_bar_stays;
             frame(&ctx, &mut chart, 0.0, Vec::new());
             let (spacing, offset) = chart.get_time_scale_state();
-            let center = chart.last_rendered_price_rect.center();
-            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(center)]);
+            let rect = chart.last_rendered_price_rect;
+            let pointer = Pos2::new(rect.left() + rect.width() * fraction, rect.center().y);
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
             let wheel = Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, -1.0),
@@ -846,6 +848,16 @@ mod tests {
                 moved == offset,
                 right_bar_stays,
                 "offset {offset} -> {moved}"
+            );
+            let anchor = if right_bar_stays {
+                rect.right() - 1.0
+            } else {
+                pointer.x
+            };
+            let expected = offset + (rect.right() - anchor - 1.0) * (1.0 / zoomed - 1.0 / spacing);
+            assert!(
+                (moved - expected).abs() < 1e-4,
+                "the logical bar at the zoom anchor must stay at the same pixel"
             );
         }
     }
@@ -884,6 +896,48 @@ mod tests {
                     && (range.max - (110.0 + shift)).abs() < 1e-4,
                 "inverted {invert_scale}: {range:?}, expected a shift of {shift}"
             );
+        }
+    }
+
+    /// A grabbed bar follows the entire horizontal drag, including its first movement frame.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn chart_drag_keeps_the_grabbed_bar_under_the_pointer() {
+        for steps in [1, 10] {
+            for distance in [-60.0, 60.0] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let start = chart.last_rendered_price_rect.center();
+                let (spacing, offset) = chart.get_time_scale_state();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                let mut end = start;
+                for i in 1..=steps {
+                    end.x = start.x + distance * i as f32 / steps as f32;
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.04 + i as f64 * 0.02,
+                        vec![Event::PointerMoved(end)],
+                    );
+                }
+                frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
+                // Moving 60 pixels at six pixels per bar moves the right offset by ten bars.
+                let expected = offset - distance / spacing;
+                let (after_spacing, after_offset) = chart.get_time_scale_state();
+                assert_eq!(after_spacing, spacing);
+                assert!(
+                    (after_offset - expected).abs() < 1e-4,
+                    "{steps} steps, {distance} pixels: {after_offset}, expected {expected}"
+                );
+            }
         }
     }
 

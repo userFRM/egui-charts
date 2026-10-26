@@ -60,10 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable]
-        include:
-          - os: ubuntu-latest
-            rust: 1.95.0
+        rust: [stable, 1.95.0]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -74,12 +71,35 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (all features)
         run: cargo test --all-features --lib
+      - name: Run library tests (default features)
+        run: cargo test --lib
       - name: Run library tests (no default features)
         run: cargo test --no-default-features --lib
       - name: Run library tests (UI without named time zones)
         run: cargo test --no-default-features --features ui --lib
       - name: Run doc tests (all features)
         run: cargo test --doc --all-features
+
+  wasm-test:
+    name: Test (headless Chrome, ${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [all, widget]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Run browser widget tests
+        run: >-
+          wasm-pack test --headless --chrome --lib
+          ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
 
   bare-chart:
     name: Bare chart size and frame cost
@@ -142,6 +162,41 @@ jobs:
             echo "    frame_instructions=$instr"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
+
+  performance:
+    name: Chart performance regressions
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: performance-base
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            performance-base -> target
+      - name: Install Valgrind
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+      - name: Build the same workloads against both libraries
+        run: |
+          cp -r benches/frame benches/regression performance-base/benches/
+          cp benches/frame_time.rs performance-base/benches/frame_time.rs
+          cp examples/bare_chart.rs performance-base/examples/bare_chart.rs
+          cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
+          cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
+      - name: Reject instruction growth over five percent
+        run: |
+          base=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance-base.json)
+          head=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance-head.json)
+          set -o pipefail
+          bash benches/check-regressions.sh "$base" "$head" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   native-demo:
     name: Native demo (${{ matrix.os }})

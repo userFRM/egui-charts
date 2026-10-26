@@ -64,6 +64,8 @@
 use crate::model::Bar;
 mod footprint_studies;
 pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+mod options_volume_profile;
+pub use options_volume_profile::OptionsVolumeProfile;
 mod trade_delta;
 pub use trade_delta::{TradeDeltaValue, trade_delta};
 

@@ -238,9 +238,9 @@ Implement `Datafeed` to connect any market data provider, as in the [terminal ex
 | Target | Status |
 |---|---|
 | Linux x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| WebAssembly (wasm32-unknown-unknown) | The demo is built for it in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
+| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| WebAssembly (wasm32-unknown-unknown) | Widget tests run in headless Chrome; the demo is built in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
 
 Other targets are expected to work but are not built in CI. The chart is an egui widget, so it runs wherever egui runs: in an eframe window on Linux, macOS and Windows, or in the browser through eframe's web runner.
 

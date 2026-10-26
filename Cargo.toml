@@ -158,6 +158,7 @@ rand = "0.10.0"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # `examples/bare_chart.rs` starts its web runner from the page.
 wasm-bindgen-futures = "0.4.79"
+wasm-bindgen-test = "0.3.79"
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.

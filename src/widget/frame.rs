@@ -4317,22 +4317,48 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown() {
         // A host that repaints only on input or new data shows this frame until the next event.
+        use crate::model::{Bar, BarData, ChartType};
         use std::time::Duration;
-        for (server_time, axis, delay) in [
-            (false, true, Duration::MAX),
-            (true, true, Duration::from_secs(1)),
-            (true, false, Duration::MAX),
-        ] {
+        let cases = [
+            (false, true, Duration::MAX, None, ChartType::Candles),
+            (true, true, Duration::from_secs(1), None, ChartType::Candles),
+            (true, false, Duration::MAX, None, ChartType::Candles),
+        ]
+        .into_iter()
+        .chain([0, 1, 128].into_iter().flat_map(|count| {
+            [
+                ChartType::Candles,
+                ChartType::Line,
+                ChartType::Area,
+                ChartType::Heikin,
+            ]
+            .map(move |kind| (false, true, Duration::MAX, Some(count), kind))
+        }));
+        for (server_time, axis, delay, flat_count, kind) in cases {
             let ctx = egui::Context::default();
-            let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+            let mut chart = if let Some(count) = flat_count {
+                let bars = (0..count)
+                    .map(|i| {
+                        let time =
+                            chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap();
+                        Bar::new(time, 100.0, 100.0, 100.0, 100.0, 0.0)
+                    })
+                    .collect();
+                crate::widget::Chart::new(BarData::from_bars(bars))
+            } else {
+                chart(&[100.0, 104.0], &[110.0, 108.0])
+            };
+            chart.set_chart_type(kind);
             chart.set_visible_bars(50);
             chart.set_timeframe(crate::model::Timeframe::Min1);
             chart.config.show_right_axis = axis;
-            let last = chart.state.data().bars.last().unwrap().time;
-            chart.set_server_time(server_time.then(|| last + chrono::Duration::seconds(30)));
+            chart.set_server_time(server_time.then(|| {
+                chart.state.data().bars.last().unwrap().time + chrono::Duration::seconds(30)
+            }));
             let mut run = || {
                 let input = egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
@@ -4342,6 +4368,29 @@ mod tests {
                     chart.show(ui);
                 });
                 let shapes = std::mem::take(&mut output.shapes);
+                assert!(
+                    !shapes.is_empty() && shapes.len() < 2_000,
+                    "{flat_count:?} bars, {kind:?}"
+                );
+                let meshes = ctx.tessellate(shapes.clone(), output.pixels_per_point);
+                let mut vertices = 0;
+                for primitive in meshes {
+                    assert!(primitive.clip_rect.is_finite());
+                    if let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive {
+                        assert!(mesh.is_valid());
+                        vertices += mesh.vertices.len();
+                        assert!(
+                            mesh.vertices.iter().all(|v| v.pos.is_finite()
+                                && v.pos.x.abs() < 1_600.0
+                                && v.pos.y.abs() < 1_200.0),
+                            "{flat_count:?} bars, {kind:?}: geometry exceeds two screen dimensions"
+                        );
+                    }
+                }
+                assert!(
+                    vertices > 0 && vertices < 100_000,
+                    "{flat_count:?} bars, {kind:?}: {vertices} vertices"
+                );
                 let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
                 output.drop_without_applying_deltas();
                 (shapes, delay)
@@ -4349,14 +4398,16 @@ mod tests {
             let (first, _) = run();
             for _ in 0..3 {
                 let (shapes, actual) = run();
-                // A drawn countdown changes its text as the clock runs.
-                if delay == Duration::MAX {
-                    assert!(
-                        shapes == first,
-                        "the first frame must draw the settled chart"
-                    );
+                if flat_count.is_none() {
+                    // A drawn countdown changes its text as the clock runs.
+                    if delay == Duration::MAX {
+                        assert!(
+                            shapes == first,
+                            "the first frame must draw the settled chart"
+                        );
+                    }
+                    assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
                 }
-                assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
             }
         }
     }

@@ -1033,6 +1033,9 @@ impl Chart {
 /// Headless frames for widget tests: a fixed 800x600 screen and explicit input events.
 #[cfg(test)]
 pub(crate) mod test_frames {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     use super::Chart;
     use crate::model::{Bar, BarData};
     use chrono::{TimeZone, Utc};
