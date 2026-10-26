@@ -44,11 +44,14 @@ placement, data loading and CSV storage. Chart entry/exit markers use the signal
 The assembled terminal and its demo mounting remain separate integration work.
 
 The Summary tab shows all performance metrics, equity and drawdown in account units,
-and an optional fee-free buy-and-hold comparison on the same equity scale. Hover a curve
+and an optional fee-free buy-and-hold comparison on the same equity scale. Curve positions
+and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, and shows fill prices, net profit, fees, labels and excursions.
+Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
-counted visibly. An undefined or non-finite metric displays as `—`, not zero or infinity.
+counted visibly. An undefined or non-finite metric displays as `N/A`, including when
+converting a fraction to a displayed percentage overflows.
 CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its existing
 columns, quoting and UTC timestamps. The recomputable summary is not exported.
 

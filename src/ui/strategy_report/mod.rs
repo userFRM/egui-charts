@@ -212,7 +212,7 @@ impl StrategyReportPanel {
                                 property(
                                     ui,
                                     "Currency",
-                                    data.report.currency.as_deref().unwrap_or("—"),
+                                    data.report.currency.as_deref().unwrap_or("N/A"),
                                 );
                                 property(
                                     ui,
@@ -233,19 +233,20 @@ impl StrategyReportPanel {
 fn number(value: Option<f64>) -> String {
     value
         .filter(|v| v.is_finite())
-        .map_or_else(|| "—".into(), |v| format!("{v:.2}"))
+        .map_or_else(|| "N/A".into(), |v| format!("{v:.2}"))
 }
 
 fn percent(value: Option<f64>) -> String {
     value
+        .map(|v| v * 100.0)
         .filter(|v| v.is_finite())
-        .map_or_else(|| "—".into(), |v| format!("{:.2}%", v * 100.0))
+        .map_or_else(|| "N/A".into(), |v| format!("{v:.2}%"))
 }
 
 fn money(value: Option<f64>, report: &StrategyReport) -> String {
     let text = number(value);
     match &report.currency {
-        Some(currency) if text != "—" => format!("{text} {currency}"),
+        Some(currency) if text != "N/A" => format!("{text} {currency}"),
         _ => text,
     }
 }
@@ -308,7 +309,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     ui.label(
         RichText::new(l10n::text(
             ui.ctx(),
-            "— means unavailable. Ratios require at least 13 weeks of equity.",
+            "N/A means unavailable. Ratios require at least 13 weeks of equity.",
         ))
         .color(theme.ui.text_muted)
         .size(theme.text.small),
@@ -403,7 +404,7 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 clicked = Some(index);
                             }
                         });
-                        let time = |t: DateTime<Utc>| t.format("%Y-%m-%d %H:%M:%S").to_string();
+                        let time = |t: DateTime<Utc>| t.format("%Y-%m-%d %H:%M:%S%.f").to_string();
                         for value in [
                             l10n::text(
                                 &ctx,
@@ -415,12 +416,14 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                             .to_string(),
                             t.quantity.to_string(),
                             time(t.entry_time),
-                            number(Some(t.entry_price)),
+                            t.entry_price.to_string(),
                             t.exit.as_ref().map_or_else(
                                 || l10n::text(&ctx, "Open").to_string(),
                                 |e| time(e.time),
                             ),
-                            number(t.exit.as_ref().map(|e| e.price)),
+                            t.exit
+                                .as_ref()
+                                .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
                             money(Some(t.fees), &data.report),
                             number(excursion.map(|e| e.adverse)),

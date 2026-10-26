@@ -31,10 +31,10 @@ pub(super) fn show(
     let lower = low / scale;
     let range = (high / scale - lower).max(f64::EPSILON);
     let flat = low == high;
-    let span = (last - first).num_milliseconds().max(1) as f64;
+    let span = (last - first).as_seconds_f64().max(f64::EPSILON);
     let point = |t: DateTime<Utc>, value: f64| {
         Pos2::new(
-            plot.left() + (((t - first).num_milliseconds() as f64 / span) as f32) * plot.width(),
+            plot.left() + (((t - first).as_seconds_f64() / span) as f32) * plot.width(),
             plot.bottom()
                 - (if flat {
                     0.5
@@ -102,13 +102,16 @@ pub(super) fn show(
     }
     if let Some(pointer) = response.hover_pos().filter(|p| plot.contains(*p)) {
         let fraction = ((pointer.x - plot.left()) / plot.width()) as f64;
-        let at = first + chrono::TimeDelta::milliseconds((fraction * span) as i64);
+        let offset =
+            chrono::TimeDelta::from_std(std::time::Duration::from_secs_f64(fraction * span))
+                .expect("span between equity points");
+        let at = first.checked_add_signed(offset).unwrap_or(last);
         let nearest = |curve: &[(DateTime<Utc>, f64)]| {
             let i = curve.partition_point(|p| p.0 < at);
             [i.checked_sub(1).and_then(|i| curve.get(i)), curve.get(i)]
                 .into_iter()
                 .flatten()
-                .min_by_key(|p| (p.0 - at).num_milliseconds().unsigned_abs())
+                .min_by_key(|p| (p.0 - at).abs())
                 .copied()
         };
         painter.vline(
@@ -122,7 +125,7 @@ pub(super) fn show(
                     ui.label(format!(
                         "{}: {v:.2} · {} UTC",
                         l10n::text(ui.ctx(), label),
-                        t.format("%Y-%m-%d %H:%M:%S")
+                        t.format("%Y-%m-%d %H:%M:%S%.f")
                     ));
                 }
             }
