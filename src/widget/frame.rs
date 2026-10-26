@@ -1140,7 +1140,7 @@ impl Chart {
             bar_spacing,
             start_idx,
             self.state.time_scale().base_idx(),
-            self.state.time_scale().right_offset(),
+            self.state.time_scale().right_offset_precise(),
             price_map,
         );
         let (time_data, time_coords) = match (&time_bars, groups) {

@@ -140,7 +140,8 @@ impl Chart {
                     // CRITICAL: Reset drag state after zoom to prevent jump
                     // If user was dragging while zooming, the old start_offset is now invalid
                     if self.scroll_start_offset.is_some() {
-                        self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+                        self.scroll_start_offset =
+                            Some(self.state.time_scale().right_offset_precise());
                         self.scroll_start_pos = response.interact_pointer_pos();
                     }
                 }
@@ -207,7 +208,7 @@ impl Chart {
 
                 // Reset drag state to prevent jump after pinch
                 if self.scroll_start_offset.is_some() {
-                    self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+                    self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
                     self.scroll_start_pos = response.interact_pointer_pos();
                 }
             }
@@ -289,7 +290,7 @@ impl Chart {
 
         if self.scroll_start_pos.is_none() {
             self.scroll_start_pos = ui.input(|i| i.pointer.press_origin());
-            self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+            self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
         }
 
         if let (Some(start_pos), Some(start_offset), Some(curr_pos)) = (
@@ -330,7 +331,7 @@ impl Chart {
                 let drag_delta_x = curr_pos.x - start_pos.x;
                 let bar_spacing = self.state.time_scale().bar_spacing();
                 let drag_in_bars = drag_delta_x / bar_spacing;
-                let new_offset = start_offset - drag_in_bars;
+                let new_offset = start_offset - f64::from(drag_in_bars);
 
                 self.state.time_scale_mut().set_right_offset(new_offset);
 
@@ -388,8 +389,8 @@ impl Chart {
             let velocity_in_bars_per_s =
                 self.kinetic_scroll.velocity / self.state.time_scale().bar_spacing();
             let delta_offset = velocity_in_bars_per_s * dt;
-            let curr_offset = self.state.time_scale().right_offset();
-            let new_offset = curr_offset - delta_offset;
+            let curr_offset = self.state.time_scale().right_offset_precise();
+            let new_offset = curr_offset - f64::from(delta_offset);
 
             self.state.time_scale_mut().set_right_offset(new_offset);
 
@@ -522,8 +523,7 @@ impl Chart {
         let spacing = time_scale.bar_spacing();
         let base_idx = time_scale.base_idx() as f64;
         time_scale.set_right_offset(
-            (center_idx - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing)
-                - 0.5) as f32,
+            center_idx - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing) - 0.5,
         );
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
@@ -627,7 +627,7 @@ impl Chart {
                     .is_some_and(|link| !link.paging_stopped);
             let scale = self.state.time_scale_mut();
             let half_window = (chart_width / scale.bar_spacing() - 1.0) / 2.0;
-            scale.set_right_offset(index as f32 + half_window - scale.base_idx() as f32);
+            scale.set_right_offset(index as f64 - scale.base_idx() as f64 + f64::from(half_window));
             if !needs_history {
                 self.pending_scroll_time = None;
             }
@@ -638,8 +638,8 @@ impl Chart {
             let bar_spacing = self.state.time_scale().bar_spacing();
             if bar_spacing > 0.0 {
                 let visible_len = chart_width / bar_spacing;
-                let base_idx = self.state.time_scale().base_idx() as f32;
-                let desired_right_border = (target_start as f32) + visible_len - 1.0;
+                let base_idx = self.state.time_scale().base_idx() as f64;
+                let desired_right_border = target_start as f64 + f64::from(visible_len) - 1.0;
                 let desired_offset = desired_right_border - base_idx;
                 self.state.time_scale_mut().set_right_offset(desired_offset);
             }

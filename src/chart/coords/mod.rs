@@ -36,7 +36,7 @@ pub struct ChartMapping {
     /// Index of the last visible bar (anchor point for x conversion)
     pub base_idx: usize,
     /// Right-side offset for chart scrolling (in bar units)
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Price-to-y mapping of the pane; it carries its own vertical extent,
     /// which need not match `rect`
     pub price: PriceMap,
@@ -49,7 +49,7 @@ impl ChartMapping {
         bar_spacing: f32,
         start_idx: usize,
         base_idx: usize,
-        right_offset: f32,
+        right_offset: impl Into<f64>,
         price: PriceMap,
     ) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl ChartMapping {
             bar_spacing,
             start_idx,
             base_idx,
-            right_offset,
+            right_offset: right_offset.into(),
             price,
         }
     }
@@ -71,8 +71,7 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right =
-            (self.base_idx as f64 - bar_idx as f64) + f64::from(self.right_offset);
+        let delta_from_right = (self.base_idx as f64 - bar_idx as f64) + self.right_offset;
         (f64::from(self.rect.min.x) + f64::from(self.rect.width())
             - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
             - 1.0) as f32
@@ -106,12 +105,12 @@ impl ChartMapping {
     #[inline]
     pub fn x_to_idx_f64(&self, x: f32) -> f64 {
         if self.bar_spacing.abs() < f32::EPSILON {
-            return self.base_idx as f64 + f64::from(self.right_offset);
+            return self.base_idx as f64 + self.right_offset;
         }
         let relative_x = f64::from(x) - f64::from(self.rect.min.x);
         let delta_from_right =
             (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
-        self.base_idx as f64 + (f64::from(self.right_offset) - delta_from_right)
+        self.base_idx as f64 + (self.right_offset - delta_from_right)
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -251,15 +250,17 @@ mod tests {
             let recovered = mapping.x_to_idx(x);
             assert_eq!(recovered, idx, "idx {idx} -> x {x} -> idx {recovered}");
         }
-        let large = ChartMapping {
-            base_idx: 999_999,
-            bar_spacing: 200.0,
-            right_offset: -0.005,
-            ..mapping
-        };
-        assert_eq!(large.idx_to_x(999_999), 800.0);
-        assert_eq!(large.x_to_idx(800.0), 999_999);
-        assert_eq!(large.x_to_idx(901.0), 1_000_000);
+        for (right_offset, index) in [(-0.005, 999_999), (-500_000.005, 499_999)] {
+            let large = ChartMapping {
+                base_idx: 999_999,
+                bar_spacing: 200.0,
+                right_offset,
+                ..mapping
+            };
+            assert_eq!(large.idx_to_x(index), 800.0);
+            assert_eq!(large.x_to_idx(800.0), index);
+            assert_eq!(large.x_to_idx(901.0), index + 1);
+        }
     }
 
     #[test]

@@ -27,7 +27,7 @@ pub struct ZoomState {
     /// Pixels per bar at the time of the snapshot.
     pub bar_spacing: f32,
     /// Right offset in bars from the chart edge.
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Manual price range in prices, or `None` when auto-scaled.
     pub price_range: Option<(f64, f64)>,
 }
@@ -182,7 +182,7 @@ impl ChartState {
         let near_live = ts.is_near_live_edge();
         let kept = (!old.is_empty() && !new.is_empty()).then(|| {
             // Several elements can share the completion time of one source bar.
-            let right = ts.base_idx() as f32 + ts.right_offset();
+            let right = ts.base_idx() as f64 + ts.right_offset_precise();
             let at = (right.floor().max(0.0) as usize).min(old.len() - 1);
             let time = old[at].time;
             let rank = at - old.partition_point(|bar| bar.time < time);
@@ -191,7 +191,7 @@ impl ChartState {
             let to = (first + rank.min(same.saturating_sub(1))).min(new.len() - 1);
             let newer = new[new.len() - 1].time > old[old.len() - 1].time;
             (
-                to as f32 + (right - at as f32) - (new.len() - 1) as f32,
+                to as f64 + (right - at as f64) - (new.len() - 1) as f64,
                 newer,
             )
         });
@@ -491,7 +491,7 @@ impl ChartState {
         let (range, t) = (self.price_scale.range(), self.price_scale.transform());
         let curr_state = ZoomState {
             bar_spacing: self.time_scale.bar_spacing(),
-            right_offset: self.time_scale.right_offset(),
+            right_offset: self.time_scale.right_offset_precise(),
             price_range: self
                 .price_scale
                 .is_manual()

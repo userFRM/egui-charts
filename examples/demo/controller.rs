@@ -5653,7 +5653,8 @@ mod tests {
                                 (range.from - day.and_hms_opt(0, 0, 0).unwrap().and_utc())
                                     .num_seconds()
                                     .abs()
-                                    <= 1
+                                    <= 1,
+                                "size={size:?}, sync={sync}, day={day}, range={range:?}"
                             );
                             assert!(
                                 (range.to - day.and_hms_opt(23, 59, 59).unwrap().and_utc())

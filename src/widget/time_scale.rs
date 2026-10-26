@@ -11,7 +11,7 @@ pub(super) struct ScrollAnimation {
     to: f32,
     duration: f64,
     /// Start time and offset, taken on the first frame, and the offset the last frame set.
-    progress: Option<(f64, f32, f32)>,
+    progress: Option<(f64, f64, f64)>,
 }
 
 impl Chart {
@@ -177,11 +177,12 @@ impl Chart {
         };
         let now = ui.input(|input| input.time);
         let scale = self.state.time_scale_mut();
-        let (start, from, last) =
-            *animation
-                .progress
-                .get_or_insert((now, scale.right_offset(), scale.right_offset()));
-        if scale.right_offset() != last {
+        let (start, from, last) = *animation.progress.get_or_insert((
+            now,
+            scale.right_offset_precise(),
+            scale.right_offset_precise(),
+        ));
+        if scale.right_offset_precise() != last {
             return;
         }
         let elapsed = ((now - start) / animation.duration) as f32;
@@ -189,8 +190,8 @@ impl Chart {
             scale.set_right_offset(animation.to);
             return;
         }
-        scale.set_right_offset(from + (animation.to - from) * elapsed);
-        animation.progress = Some((start, from, scale.right_offset()));
+        scale.set_right_offset(from + (f64::from(animation.to) - from) * f64::from(elapsed));
+        animation.progress = Some((start, from, scale.right_offset_precise()));
         self.scroll_animation = Some(animation);
         ui.ctx().request_repaint();
     }
@@ -359,6 +360,12 @@ mod tests {
             plot.width(),
         ));
         assert!((chart.index_to_x(center).unwrap() - plot.center().x).abs() < 1e-3);
+        chart.state.time_scale_mut().set_bar_spacing(200.0);
+        chart.state.time_scale_mut().set_right_offset(-500_000.005);
+        let x = chart.index_to_x(499_999.0).unwrap();
+        assert_eq!(chart.get_chart_mapping().idx_to_x(499_999), x);
+        chart.state.time_scale_mut().scroll_pixels(1.0);
+        assert!((chart.index_to_x(499_999.0).unwrap() - x - 1.0).abs() < 1e-4);
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical

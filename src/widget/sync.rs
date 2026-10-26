@@ -87,7 +87,7 @@ impl Chart {
             return false;
         }
         scale.set_bar_spacing(((scale.width() - 1.0) as f64 / (to - from)) as f32);
-        scale.set_right_offset((to - scale.base_idx() as f64 - 0.5) as f32);
+        scale.set_right_offset(to - scale.base_idx() as f64 - 0.5);
         self.tracking_mode_active = false;
         self.kinetic_scroll = super::state::KineticScrollState::new();
         true

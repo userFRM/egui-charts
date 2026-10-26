@@ -66,7 +66,7 @@ pub struct TimeScale {
     /// Bar spacing in pixels
     bar_spacing: f32,
     /// Right offset in bars from the edge
-    right_offset: f32,
+    right_offset: f64,
     /// Configured right offset in bars, restored at the live edge
     live_right_offset: f32,
     /// Configured right offset in pixels, restored at the live edge; has priority over bars
@@ -184,8 +184,8 @@ impl TimeScale {
     }
 
     /// Set right offset (with constraint checking)
-    pub fn set_right_offset(&mut self, offset: f32) {
-        self.right_offset = offset;
+    pub fn set_right_offset(&mut self, offset: impl Into<f64>) {
+        self.right_offset = offset.into();
         self.apply_constraints();
     }
 
@@ -200,8 +200,13 @@ impl TimeScale {
         self.bar_spacing
     }
 
-    /// Get current right offset
+    /// Get current right offset. [`Self::right_offset_precise`] retains sub-bar precision.
     pub fn right_offset(&self) -> f32 {
+        self.right_offset as f32
+    }
+
+    /// The scroll offset without narrowing fractional movement far into a large history.
+    pub fn right_offset_precise(&self) -> f64 {
         self.right_offset
     }
 
@@ -223,12 +228,12 @@ impl TimeScale {
 
     /// Calculate visible logical range
     pub fn visible_logical_range(&self) -> LogicalRange {
-        let base_idx = self.base_idx() as f32;
-        let bars_len = self.width / self.bar_spacing;
+        let base_idx = self.base_idx() as f64;
+        let bars_len = f64::from(self.width) / f64::from(self.bar_spacing);
         let right_border = base_idx + self.right_offset;
         let left_border = right_border - bars_len + 1.0;
 
-        LogicalRange::new(left_border, right_border)
+        LogicalRange::new(left_border as f32, right_border as f32)
     }
 
     /// Convert logical index to x coord
@@ -250,8 +255,7 @@ impl TimeScale {
         rect_min_x: f32,
         rect_width: f32,
     ) -> f32 {
-        let delta_from_right =
-            (self.base_idx() as f64 - index.into()) + f64::from(self.right_offset);
+        let delta_from_right = (self.base_idx() as f64 - index.into()) + self.right_offset;
         (f64::from(rect_min_x) + f64::from(rect_width)
             - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
             - 1.0) as f32
@@ -271,12 +275,12 @@ impl TimeScale {
         let relative_x = f64::from(x) - f64::from(rect_min_x);
         let delta_from_right =
             (f64::from(rect_width) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
-        self.base_idx() as f64 + (f64::from(self.right_offset) - delta_from_right)
+        self.base_idx() as f64 + (self.right_offset - delta_from_right)
     }
 
     /// Scroll by number of bars (negative = left, positive = right)
     pub fn scroll_bars(&mut self, bars: f32) {
-        self.right_offset -= bars;
+        self.right_offset -= f64::from(bars);
         self.apply_constraints();
     }
 
@@ -300,9 +304,8 @@ impl TimeScale {
         self.bar_spacing = self.clamp_spacing(new_spacing);
 
         // The absolute bar index cancels: only the change in distance from the right matters.
-        self.right_offset = (f64::from(self.right_offset)
-            + anchor_distance / f64::from(self.bar_spacing)
-            - anchor_distance / f64::from(old_spacing)) as f32;
+        self.right_offset += anchor_distance / f64::from(self.bar_spacing)
+            - anchor_distance / f64::from(old_spacing);
 
         // Debug logging - check for width mismatch
         if (rect_width - self.width).abs() > 0.1 {
@@ -368,7 +371,7 @@ impl TimeScale {
                 (max_right, min_val)
             }
         } else {
-            (f32::NEG_INFINITY, max_right)
+            (f64::NEG_INFINITY, max_right)
         };
 
         // Clamp right_offset between bounds
@@ -384,22 +387,22 @@ impl TimeScale {
     /// This limits how far we can scroll to the LEFT (showing older data): with
     /// `fix_left_edge` to the first bar at the left edge, also when every bar fits;
     /// without it to 100 bars past the first.
-    fn calculate_min_right_offset(&self) -> Option<f32> {
+    fn calculate_min_right_offset(&self) -> Option<f64> {
         if self.bar_cnt == 0 || self.bar_spacing <= 0.0 || self.width <= 0.0 {
             return None;
         }
 
         if self.fix_left_edge {
             // The offset that puts the left border of `visible_logical_range` at bar 0.
-            Some(self.width / self.bar_spacing - self.bar_cnt as f32)
+            Some(f64::from(self.width) / f64::from(self.bar_spacing) - self.bar_cnt as f64)
         } else {
-            Some(-(self.bar_cnt as f32 + 100.0))
+            Some(-(self.bar_cnt as f64 + 100.0))
         }
     }
 
     /// Calculate max allowed right_offset (most positive value).
     /// This limits how far we can scroll to the RIGHT (into the future).
-    fn calculate_max_right_offset(&self) -> f32 {
+    fn calculate_max_right_offset(&self) -> f64 {
         if self.bar_cnt == 0 {
             return 0.0;
         }
@@ -410,7 +413,7 @@ impl TimeScale {
             // Allow scrolling into future whitespace
             // Use a generous bound based on visible bars at minimum zoom
 
-            self.width / self.spacing_bounds().0
+            f64::from(self.width) / f64::from(self.spacing_bounds().0)
         }
     }
 
@@ -456,18 +459,20 @@ mod tests {
     /// At 200 points per bar a one-point pan is 0.005 bars, even with a million-bar anchor.
     #[test]
     fn large_history_keeps_small_pans_and_zoom_anchors() {
-        let mut scale = TimeScale::new();
-        scale.set_bar_cnt(1_000_000);
-        scale.set_width(800.0);
-        scale.set_bar_spacing(200.0);
-        scale.set_right_offset(0.0);
-        assert_eq!(scale.idx_to_coord(999_999, 0.0, 800.0), 699.0);
-        scale.scroll_pixels(1.0);
-        assert_eq!(scale.idx_to_coord(999_999, 0.0, 800.0), 700.0);
-        let anchor = scale.idx_to_coord(999_997, 0.0, 800.0);
-        for delta in [1.0, -1.0, 2.0] {
-            scale.zoom(delta, anchor, 0.0, 800.0);
-            assert!((scale.idx_to_coord(999_997, 0.0, 800.0) - anchor).abs() < 1e-3);
+        for (offset, index) in [(0.0, 999_999), (-500_000.0, 499_999)] {
+            let mut scale = TimeScale::new();
+            scale.set_bar_cnt(1_000_000);
+            scale.set_width(800.0);
+            scale.set_bar_spacing(200.0);
+            scale.set_right_offset(offset);
+            assert_eq!(scale.idx_to_coord(index, 0.0, 800.0), 699.0);
+            scale.scroll_pixels(1.0);
+            assert_eq!(scale.idx_to_coord(index, 0.0, 800.0), 700.0);
+            let anchor = scale.idx_to_coord(index - 2, 0.0, 800.0);
+            for delta in [1.0, -1.0, 2.0] {
+                scale.zoom(delta, anchor, 0.0, 800.0);
+                assert!((scale.idx_to_coord(index - 2, 0.0, 800.0) - anchor).abs() < 1e-3);
+            }
         }
     }
 
