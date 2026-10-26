@@ -188,8 +188,6 @@ let classic = Theme { chart: Theme::dark().chart, ..Theme::light() };
 
 With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a theme can be stored in any serde format. The `dark` flag and complete UI and chart palettes are required; omitted text, spacing and radius scales use their defaults.
 
-<!-- section slot: multi-chart layouts, once #115 lands -->
-
 ## Layers and feature flags
 
 | Layer | What it gives | Feature |
@@ -239,9 +237,7 @@ Implement `Datafeed` to connect any market data provider, as in the [terminal ex
 
 ## Workflow examples
 
-Run each with `cargo run --example <name>`. CI compiles them through the existing
-`--all-targets` checks. The standalone historical examples share generated OHLCV
-data in `examples/support`; the demo separately builds its history from executions.
+Run each with `cargo run --example <name>`. These examples use generated market data.
 
 | Example | Workflow |
 |---|---|

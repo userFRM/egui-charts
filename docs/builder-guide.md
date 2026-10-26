@@ -72,7 +72,7 @@ assert_eq!(change.values().value(0, 2), Some(-2.0));
 The chart recalculates the closure when bars change. Implement `studies::Indicator`
 directly when incremental calculation is needed. `CustomIndicator::with_inputs`
 declares validated editable settings. Additional symbol and interval histories use
-[`StudyDataRequest`](crate::studies::StudyDataRequest).
+`studies::StudyDataRequest`.
 
 ## Save and load drawings
 

@@ -71,7 +71,7 @@ pub enum ChartType {
     Renko,
     /// Kagi chart (trend reversals)
     Kagi,
-    /// Three line break chart
+    /// Line Break chart with a configurable reversal lookback.
     LineBreak,
     /// Heikin-Ashi candles (smoothed)
     Heikin,
