@@ -36,6 +36,10 @@ impl Default for VisibleAveragePrice {
 }
 
 impl Indicator for VisibleAveragePrice {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         source: choice("Source", PriceSource::all())
     ; {});

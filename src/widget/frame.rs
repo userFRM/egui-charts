@@ -928,9 +928,41 @@ impl Chart {
         } else {
             (&mut self.studies, self.state.data().bars.as_slice())
         };
-        for study in registry.indicators_mut() {
-            if study.set_visible_range(start_idx..end_idx) {
-                study.calculate(bars);
+        let mut changed: Vec<_> = registry
+            .indicators_mut()
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(at, study)| study.set_visible_range(start_idx..end_idx).then_some(at))
+            .collect();
+        if !changed.is_empty() {
+            let requests = registry
+                .indicators()
+                .iter()
+                .flat_map(|study| study.data_requests())
+                .collect();
+            let sources = self.study_data.data(requests, &self.symbol, self.timeframe);
+            for at in super::studies::order(registry.indicators(), &self.study_ids) {
+                if let Some(crate::studies::StudySource::Study { id, .. }) =
+                    registry.indicators()[at].source()
+                    && let Some(parent) = self
+                        .study_ids
+                        .iter()
+                        .position(|candidate| candidate.0 == id)
+                    && changed.contains(&parent)
+                    && !changed.contains(&at)
+                {
+                    changed.push(at);
+                }
+                if changed.contains(&at) {
+                    super::studies::update(
+                        registry.indicators_mut(),
+                        &self.study_ids,
+                        at,
+                        bars,
+                        0,
+                        &sources,
+                    );
+                }
             }
         }
         self.start_idx = start_idx;
