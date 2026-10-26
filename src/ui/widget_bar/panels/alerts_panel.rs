@@ -11,6 +11,7 @@ use crate::icons::icons;
 use crate::model::{Alert, AlertId, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::notifications::Toasts;
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
@@ -251,8 +252,9 @@ impl AlertsPanel {
             ui.colored_label(ui.visuals().error_fg_color, error.to_string());
         }
         if self.show_log {
-            if ui
-                .add_enabled(!self.log.is_empty(), egui::Button::new("Export CSV…"))
+            if Button::new("Export CSV…")
+                .enabled(!self.log.is_empty())
+                .show(ui)
                 .clicked()
             {
                 action = AlertPanelAction::ExportLog(self.log_csv());
@@ -325,12 +327,15 @@ impl AlertsPanel {
                             if !alert.message.is_empty() {
                                 ui.label(&alert.message);
                             }
-                            ui.horizontal(|ui| {
-                                if ui.button("Edit").clicked() {
+                            ui.horizontal_wrapped(|ui| {
+                                if Button::new("Edit").show(ui).clicked() {
                                     action = AlertPanelAction::EditAlert(Box::new(alert.clone()));
                                 }
                                 let active = alert.status == AlertStatus::Active;
-                                if ui.button(if active { "Pause" } else { "Enable" }).clicked() {
+                                if Button::new(if active { "Pause" } else { "Enable" })
+                                    .show(ui)
+                                    .clicked()
+                                {
                                     let mut changed = alert.clone();
                                     changed.status = if active {
                                         AlertStatus::Disabled

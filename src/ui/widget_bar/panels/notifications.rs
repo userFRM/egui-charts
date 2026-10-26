@@ -9,6 +9,7 @@ use crate::data::inbox::Inbox;
 use crate::icons::icons;
 use crate::services::{Listener, Notification, Notifications};
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::{EmptyState, PanelHeader};
 
 /// Entries kept at most; older ones are dropped.
@@ -105,20 +106,36 @@ impl NotificationsPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for entry in self.log.iter().rev() {
-                    ui.label(
-                        RichText::new(entry.time.format("%b %-d, %H:%M:%S UTC").to_string())
-                            .size(theme.text.small)
-                            .color(theme.ui.text_secondary),
-                    );
-                    ui.label(RichText::new(&entry.title).strong());
-                    if !entry.body.is_empty() {
-                        ui.label(&entry.body);
-                    }
-                    if let Some(symbol) = &entry.symbol
-                        && ui.link(symbol).clicked()
-                    {
-                        action = NotificationsAction::SelectSymbol(symbol.clone());
-                    }
+                    ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::hover()), |ui| {
+                        let hovered = ui.response().hovered();
+                        egui::Frame::new()
+                            .fill(if hovered {
+                                theme.ui.btn_bg_hover
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            })
+                            .inner_margin(egui::Margin::symmetric(8, 0))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.set_min_height(26.0);
+                                ui.label(
+                                    RichText::new(
+                                        entry.time.format("%b %-d, %H:%M:%S UTC").to_string(),
+                                    )
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                                );
+                                ui.label(RichText::new(&entry.title).strong());
+                                if !entry.body.is_empty() {
+                                    ui.label(&entry.body);
+                                }
+                                if let Some(symbol) = &entry.symbol
+                                    && Button::new(symbol).small().show(ui).clicked()
+                                {
+                                    action = NotificationsAction::SelectSymbol(symbol.clone());
+                                }
+                            });
+                    });
                     ui.separator();
                 }
             });

@@ -23,16 +23,14 @@ mod gann;
 mod options;
 mod pitchfork;
 mod template;
-// tool_type is now a subdirectory with multiple modules
-mod tool_type;
 
+pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
 pub use gann::GannConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle,
-    PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    PositionSize, ProfileDisplay, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
-pub use tool_type::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};

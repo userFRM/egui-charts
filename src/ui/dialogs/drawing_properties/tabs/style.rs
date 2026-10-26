@@ -32,17 +32,20 @@ impl StyleTab {
             line_width_row(ui, &mut props.line_width);
             ui.end_row();
 
-            ui.label("Line style");
-            ui.combo_select(
-                "line_style",
-                &mut props.line_style,
-                DrawingLineStyle::all(),
-                |v| v.label().to_string(),
-            );
+            let label = ui.label("Line style");
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "line_style",
+                    &mut props.line_style,
+                    DrawingLineStyle::all(),
+                    |v| v.label().to_string(),
+                );
+            });
             ui.end_row();
 
-            ui.label("Fill");
-            ui.checkbox(&mut props.fill_enabled, "Enable fill");
+            let label = ui.label("Fill");
+            ui.checkbox(&mut props.fill_enabled, "Enable fill")
+                .labelled_by(label.id);
             ui.end_row();
 
             if props.fill_enabled {
@@ -138,6 +141,7 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 .max_decimals(1)
                 .custom_formatter(|v, _| v.to_string())
                 .suffix(" px"),
-        );
+        )
+        .accessible_name("Line width");
     });
 }

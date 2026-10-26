@@ -157,6 +157,13 @@ impl Modal {
             add_contents(ui)
         });
 
+        if !self.title.is_empty() {
+            response
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, &self.title));
+            ctx.accesskit_node_builder(response.response.id, |node| node.set_modal());
+        }
+
         // `should_close` covers Escape and a click on the backdrop.
         let close_requested = self.closable && (close_clicked || response.should_close());
         if close_requested {

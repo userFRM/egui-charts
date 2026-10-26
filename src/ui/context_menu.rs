@@ -487,7 +487,13 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
-    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            egui::Role::MenuItem,
+            response.enabled() && item.enabled,
+            &item.label,
+        )
+    });
 
     let hovered = item.enabled && (response.hovered() || highlighted);
     // (label, icon, trailing text)
@@ -2121,8 +2127,10 @@ mod tests {
         let sma_behind = |chart: &mut Chart, menus: &mut ChartMenus| {
             let (_, shapes) = frame(chart, menus, vec![]);
             let first = |color| {
-                shapes.iter().position(|shape| {
-                    matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)
+                shapes.iter().position(|shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
                 })
             };
             first(sma_color).unwrap() < first(bullish).unwrap()

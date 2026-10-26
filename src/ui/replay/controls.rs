@@ -227,6 +227,13 @@ impl<'a> ReplayControls<'a> {
             egui::Sense::click_and_drag(),
         );
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.xs);
+        response.widget_info(|| {
+            egui::WidgetInfo::slider(
+                response.enabled(),
+                f64::from(progress) * 100.0,
+                "Replay position",
+            )
+        });
 
         if ui.is_rect_visible(rect) {
             // Background

@@ -17,9 +17,11 @@ impl CanvasTab {
         ui.space_sm();
 
         FormGrid::new("canvas_bg_grid").show(ui, |ui| {
-            ui.label("Type");
-            ui.combo_select("bg_type", &mut settings.background_type, [0u8, 1], |v| {
-                Self::background_type_label(*v).to_string()
+            let label = ui.label("Type");
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select("bg_type", &mut settings.background_type, [0u8, 1], |v| {
+                    Self::background_type_label(*v).to_string()
+                });
             });
             ui.end_row();
         });
@@ -32,12 +34,14 @@ impl CanvasTab {
         ui.space_sm();
 
         FormGrid::new("canvas_grid_grid").show(ui, |ui| {
-            ui.label("Vertical grid lines");
-            ui.checkbox(&mut settings.show_vertical_grid, "");
+            let label = ui.label("Vertical grid lines");
+            ui.checkbox(&mut settings.show_vertical_grid, "")
+                .labelled_by(label.id);
             ui.end_row();
 
-            ui.label("Horizontal grid lines");
-            ui.checkbox(&mut settings.show_horizontal_grid, "");
+            let label = ui.label("Horizontal grid lines");
+            ui.checkbox(&mut settings.show_horizontal_grid, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
 
@@ -49,13 +53,15 @@ impl CanvasTab {
         ui.space_sm();
 
         FormGrid::new("canvas_crosshair_grid").show(ui, |ui| {
-            ui.label("Mode");
-            ui.combo_select(
-                "crosshair_mode",
-                &mut settings.crosshair_mode,
-                [0u8, 1, 2],
-                |v| Self::crosshair_mode_label(*v).to_string(),
-            );
+            let label = ui.label("Mode");
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "crosshair_mode",
+                    &mut settings.crosshair_mode,
+                    [0u8, 1, 2],
+                    |v| Self::crosshair_mode_label(*v).to_string(),
+                );
+            });
             ui.end_row();
         });
     }

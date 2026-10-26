@@ -80,6 +80,12 @@ impl<const OSCILLATOR: bool> Default for SMIErgodic<OSCILLATOR> {
 }
 
 impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         long_length: length("Long length", 1, usize::MAX),
         short_length: length("Short length", 1, usize::MAX),

@@ -56,6 +56,12 @@ impl Default for RciRibbon {
 }
 
 impl Indicator for RciRibbon {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         lengths[0]: length("Short RCI length", 2, usize::MAX),
         lengths[1]: length("Middle RCI length", 2, usize::MAX),

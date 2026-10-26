@@ -530,6 +530,9 @@ impl TopToolbar {
                     response.id.with("save_menu"),
                     egui::Sense::click(),
                 );
+                arrow.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, arrow.enabled(), "Layout options")
+                });
                 crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
                 egui::Popup::menu(&arrow)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -1001,6 +1004,7 @@ mod tests {
                         "Chart layout",
                         "Named layouts",
                         "Save chart",
+                        "Layout options",
                         "Quick Search",
                         "Settings",
                         "Fullscreen",
@@ -1050,7 +1054,7 @@ mod tests {
                 ),
                 (
                     S::LayoutName,
-                    "Rename layout…",
+                    "Rename…",
                     TopToolbarAction::Layout(LayoutAction::Rename("Unnamed".into(), "Desk".into())),
                 ),
                 (

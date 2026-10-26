@@ -10,7 +10,7 @@ impl DrawingToolType {
     /// drawing tool.
     ///
     /// Cursor tools (`CrossCursor`, `DotCursor`, `ArrowCursor`, `Eraser`)
-    /// do not create [`Drawing`](crate::drawings::Drawing) objects. They modify
+    /// do not create `Drawing` objects. They modify
     /// the cursor appearance or provide utility functions (e.g., erasing).
     #[inline]
     pub fn is_cursor(&self) -> bool {
@@ -140,6 +140,7 @@ impl DrawingToolType {
     /// what the toolbar collects, so a drawing finished early or saved by an earlier release
     /// still counts. Tools without a meaningful partial construction require all their
     /// geometry anchors; the other multi-point tools can draw partial paths.
+    #[cfg(feature = "drawings")]
     pub(crate) fn anchors_needed(&self) -> usize {
         match self {
             Self::ParallelChannel
@@ -174,7 +175,7 @@ impl DrawingToolType {
         }
     }
 
-    /// Returns the number of [`ChartPoint`](crate::drawings::ChartPoint)s
+    /// Returns the number of `ChartPoint`s
     /// required to complete a drawing of this type, or `None` for tools with
     /// no fixed point count (`Polyline`, `Brush`, cursors).
     ///
@@ -233,7 +234,7 @@ impl DrawingToolType {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "drawings"))]
 mod tests {
     use super::*;
 

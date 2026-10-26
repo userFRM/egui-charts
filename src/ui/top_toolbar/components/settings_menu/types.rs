@@ -64,6 +64,9 @@ pub enum SettingsTab {
     ScalesAndLines,
     /// Canvas appearance (background, grid, crosshair, watermark, margins)
     Canvas,
+    /// Buy and Sell buttons, instant orders, fill sounds, notifications, and the positions,
+    /// orders and executions drawn on the chart
+    Trading,
     /// Alert display settings
     Alerts,
     /// Corporate, economic and news event visibility.
@@ -77,6 +80,7 @@ impl SettingsTab {
             SettingsTab::StatusLine,
             SettingsTab::ScalesAndLines,
             SettingsTab::Canvas,
+            SettingsTab::Trading,
             SettingsTab::Alerts,
             SettingsTab::Events,
         ]
@@ -88,6 +92,7 @@ impl SettingsTab {
             SettingsTab::StatusLine => "Status line",
             SettingsTab::ScalesAndLines => "Scales and lines",
             SettingsTab::Canvas => "Canvas",
+            SettingsTab::Trading => "Trading",
             SettingsTab::Alerts => "Alerts",
             SettingsTab::Events => "Events",
         }

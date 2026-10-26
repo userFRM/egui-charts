@@ -125,6 +125,12 @@ impl Default for PriceMomentumOscillator {
 }
 
 impl Indicator for PriceMomentumOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         first_length: length("Length 1", 2, usize::MAX),
         second_length: length("Length 2", 2, usize::MAX),

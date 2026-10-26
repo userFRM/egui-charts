@@ -99,6 +99,12 @@ impl Default for CoppockCurve {
 }
 
 impl Indicator for CoppockCurve {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         long_roc: length("Long roc", 1, usize::MAX),
         short_roc: length("Short roc", 1, usize::MAX),

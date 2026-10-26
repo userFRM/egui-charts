@@ -113,12 +113,27 @@ pub struct UiColors {
     pub danger_text: Color32,
     /// Success text and icons.
     pub success: Color32,
+    /// Take-profit lines, labels and controls.
+    #[cfg_attr(feature = "serde", serde(default = "default_take_profit"))]
+    pub take_profit: Color32,
+    /// Stop-loss lines, labels and controls.
+    #[cfg_attr(feature = "serde", serde(default = "default_stop_loss"))]
+    pub stop_loss: Color32,
     /// Warning text and icons.
     pub warning: Color32,
     /// Error text and icons.
     pub error: Color32,
     /// Informational text and icons.
     pub info: Color32,
+}
+
+#[cfg(feature = "serde")]
+fn default_take_profit() -> Color32 {
+    Color32::from_rgb(0, 166, 147)
+}
+#[cfg(feature = "serde")]
+fn default_stop_loss() -> Color32 {
+    Color32::from_rgb(255, 166, 0)
 }
 
 impl Default for UiColors {
@@ -310,6 +325,14 @@ impl Default for Radii {
             lg: 8.0,
             xl: 12.0,
         }
+    }
+}
+
+/// The shared buy and sell colours of trading controls and execution marks.
+pub(crate) fn trading_side_color(theme: &Theme, side: crate::model::OrderSide) -> Color32 {
+    match side {
+        crate::model::OrderSide::Buy => theme.ui.accent,
+        crate::model::OrderSide::Sell => theme.chart.candle_down,
     }
 }
 

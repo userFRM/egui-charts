@@ -74,64 +74,6 @@ impl PlaybackState {
     }
 }
 
-/// Trading simulation state during replay
-#[derive(Debug, Clone, Default)]
-pub struct TradingSimulationState {
-    /// Whether trading simulation is enabled
-    pub enabled: bool,
-    /// Simulated cash balance
-    pub cash: f64,
-    /// Simulated position quantity
-    pub pos_qty: f64,
-    /// Simulated entry price
-    pub entry_price: Option<f64>,
-    /// Total simulated P&L
-    pub total_pnl: f64,
-    /// Number of trades executed
-    pub trade_cnt: u32,
-    /// Win rate percentage
-    pub win_rate: f64,
-}
-
-impl TradingSimulationState {
-    /// Create with initial capital
-    pub fn new(initial_capital: f64) -> Self {
-        Self {
-            enabled: false,
-            cash: initial_capital,
-            pos_qty: 0.0,
-            entry_price: None,
-            total_pnl: 0.0,
-            trade_cnt: 0,
-            win_rate: 0.0,
-        }
-    }
-
-    /// Reset to initial state
-    pub fn reset(&mut self, initial_capital: f64) {
-        self.cash = initial_capital;
-        self.pos_qty = 0.0;
-        self.entry_price = None;
-        self.total_pnl = 0.0;
-        self.trade_cnt = 0;
-        self.win_rate = 0.0;
-    }
-
-    /// Calculate current equity given current price
-    pub fn equity(&self, curr_price: f64) -> f64 {
-        self.cash + (self.pos_qty * curr_price)
-    }
-
-    /// Calculate unrealized P&L
-    pub fn unrealized_pnl(&self, curr_price: f64) -> f64 {
-        if let Some(entry) = self.entry_price {
-            (curr_price - entry) * self.pos_qty
-        } else {
-            0.0
-        }
-    }
-}
-
 /// Main replay state
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -168,16 +110,10 @@ pub struct ReplayState {
     pub date_picker_open: bool,
     /// Whether settings panel is open
     pub settings_open: bool,
-    /// Whether to show trading simulation panel
-    pub show_trading_panel: bool,
 
     // Markers
     /// User-placed markers
     pub markers: Vec<ReplayMarker>,
-
-    // Trading simulation
-    /// Trading simulation state
-    pub trading_sim: TradingSimulationState,
 
     // Internal timing
     /// Last update instant (for frame timing)
@@ -204,9 +140,7 @@ impl ReplayState {
             speed_dropdown_open: false,
             date_picker_open: false,
             settings_open: false,
-            show_trading_panel: false,
             markers: Vec::new(),
-            trading_sim: TradingSimulationState::default(),
             last_update: None,
             accumulated_time: 0.0,
             bar_duration_secs: 1.0, // Default 1 second per bar at 1x

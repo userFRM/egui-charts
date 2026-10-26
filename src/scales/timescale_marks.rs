@@ -102,6 +102,9 @@ pub struct TickMark {
 
     /// Index in the data series
     pub index: usize,
+
+    /// Whether the label is drawn bold where the time scale options allow bold labels
+    pub bold: bool,
 }
 
 /// Configuration for tick mark generation
@@ -159,6 +162,7 @@ impl TickMarkGenerator {
         let formatter = Box::new(DefaultTimeFormatter {
             use_24_hour: config.use_24_hour,
             show_seconds: config.show_subseconds,
+            date_format: None,
         });
 
         Self {
@@ -244,19 +248,7 @@ impl TickMarkGenerator {
         marks = if intraday {
             let span = bars.last().unwrap().1.saturating_sub(bars[0].1).max(1) as f32;
             let min_bars = self.config.min_spacing * span / width_pixels;
-            marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
-            let mut kept: Vec<TickMark> = Vec::new();
-            for mark in marks {
-                if kept
-                    .iter()
-                    .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
-                {
-                    kept.push(mark);
-                } else if self.uniform_distribution {
-                    kept.retain(|other| other.weight > mark.weight);
-                    break;
-                }
-            }
+            let mut kept = keep_spaced(marks, min_bars, self.uniform_distribution);
             kept.sort_by_key(|mark| mark.time);
             kept
         } else {
@@ -270,6 +262,10 @@ impl TickMarkGenerator {
 
         for mark in &mut marks {
             mark.label = self.format_time_label(mark.time, mark.mark_type);
+            mark.bold = matches!(
+                mark.mark_type,
+                TickMarkType::DayOfMonth | TickMarkType::Month | TickMarkType::Year
+            );
         }
         marks
     }
@@ -328,6 +324,7 @@ impl TickMarkGenerator {
                     weight,
                     label: String::new(),
                     index,
+                    bold: false,
                 });
             }
             previous = Some(local);
@@ -471,6 +468,7 @@ impl TickMarkGenerator {
                         weight: TickMarkWeight::YEAR,
                         label: String::new(),
                         index: 0, // Will be set later
+                        bold: false,
                     });
                 }
                 current = time.checked_add_months(Months::new(12 * years as u32));
@@ -493,6 +491,7 @@ impl TickMarkGenerator {
                         weight,
                         label: String::new(),
                         index: 0,
+                        bold: false,
                     });
                 }
                 current = time.checked_add_months(Months::new(months));
@@ -510,6 +509,7 @@ impl TickMarkGenerator {
                 weight,
                 label: String::new(),
                 index: 0, // Will be set later
+                bold: false,
             });
 
             let Some(next) = current.checked_add_signed(interval) else {
@@ -756,6 +756,26 @@ impl TickMarkGenerator {
         marks.sort_by_key(|m| m.time);
         marks
     }
+}
+
+/// The heaviest of `marks` that lie `min_bars` bars apart: lighter marks give way, and with a
+/// `uniform` distribution a weight that does not fit everywhere is left out with every lighter
+/// one.
+pub(super) fn keep_spaced(mut marks: Vec<TickMark>, min_bars: f32, uniform: bool) -> Vec<TickMark> {
+    marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
+    let mut kept: Vec<TickMark> = Vec::new();
+    for mark in marks {
+        if kept
+            .iter()
+            .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
+        {
+            kept.push(mark);
+        } else if uniform {
+            kept.retain(|other| other.weight > mark.weight);
+            break;
+        }
+    }
+    kept
 }
 
 impl Default for TickMarkGenerator {
