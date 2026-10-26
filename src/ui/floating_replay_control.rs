@@ -16,11 +16,17 @@ use egui::{
 /// Replay speed presets for playback control
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReplaySpeed {
+    /// Play at 0.5 times the original speed.
     X0_5,
+    /// Play at 1 times the original speed.
     X1,
+    /// Play at 2 times the original speed.
     X2,
+    /// Play at 3 times the original speed.
     X3,
+    /// Play at 5 times the original speed.
     X5,
+    /// Play at 10 times the original speed.
     X10,
 }
 

@@ -12,7 +12,9 @@ use crate::ui_kit::{EmptyState, PanelHeader};
 pub struct Product {
     /// Stable host id, returned when the product is opened.
     pub id: String,
+    /// Glyph displayed by the component.
     pub icon: Icon,
+    /// Display title.
     pub title: String,
     /// One line under the title. May be empty.
     pub description: String,

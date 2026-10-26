@@ -39,10 +39,13 @@ fn parse_date(text: &str) -> Option<NaiveDate> {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DatePickerAction {
+    /// No action requested.
     None,
+    /// Navigate to the supplied calendar date.
     GoToDate(NaiveDate),
     /// The first and the last day of the range, both included.
     SetRange(NaiveDate, NaiveDate),
+    /// Cancel the current interaction.
     Cancel,
 }
 
@@ -73,6 +76,7 @@ impl Default for DatePicker {
 }
 
 impl DatePicker {
+    /// Create a [`DatePicker`] with default settings.
     pub fn new() -> Self {
         let today = today();
         Self {

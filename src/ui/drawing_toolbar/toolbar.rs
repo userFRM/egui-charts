@@ -43,10 +43,10 @@ impl CursorStateData {
     }
 }
 
-/// Domain state that should be synced with AppState
+/// Drawing and cursor choices shared by the host and drawing toolbar.
 ///
-/// This represents the drawing-related state that is managed centrally
-/// in AppState.drawing, not UI-specific state like expanded menus.
+/// Copy host choices into the toolbar before showing it, then apply its returned
+/// actions to the chart and host state.
 #[derive(Clone, Debug)]
 pub struct DrawingToolbarDomainState {
     /// The chart's active drawing tool, or `None` after construction finishes.
@@ -96,6 +96,7 @@ pub struct DrawingToolbar {
 }
 
 impl DrawingToolbar {
+    /// Create a [`DrawingToolbar`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }
@@ -117,11 +118,7 @@ impl DrawingToolbar {
 
     // === State Sync Methods ===
 
-    /// Sync toolbar state FROM a domain state snapshot.
-    ///
-    /// Call this BEFORE `show_with_action()` to ensure the toolbar
-    /// reflects the current application state. This makes AppState
-    /// the single source of truth for domain state.
+    /// Copy the host's drawing and cursor choices before [`Self::show_with_action`].
     pub fn sync_from_domain_state(&mut self, domain: &DrawingToolbarDomainState) {
         if domain.sel_tool.is_some()
             || domain.eraser_mode_enabled
@@ -138,10 +135,7 @@ impl DrawingToolbar {
         self.state.drawing_color = domain.drawing_color;
     }
 
-    /// Get the current domain state for syncing TO AppState
-    ///
-    /// This can be used to initialize AppState from component state
-    /// during migration.
+    /// Read the toolbar's drawing and cursor choices for synchronization with the host.
     pub fn get_domain_state(&self) -> DrawingToolbarDomainState {
         DrawingToolbarDomainState {
             sel_tool: self.state.sel_tool,
@@ -156,32 +150,39 @@ impl DrawingToolbar {
 
     // === State management methods ===
 
+    /// Select the tool if its registry entry is enabled.
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         if self.registry.availability(tool).enabled {
             self.state.select_tool(tool);
         }
     }
 
+    /// Record a tool in the recent selection list.
     pub fn add_to_recent(&mut self, tool: DrawingToolType) {
         self.state.add_to_recent(tool);
     }
 
+    /// Clear the toolbar's selected tool.
     pub fn clear_selection(&mut self) {
         self.state.clear_selection();
     }
 
+    /// Toggle a tool's membership in favorites.
     pub fn toggle_favorite(&mut self, tool: DrawingToolType) {
         self.state.toggle_favorite(tool);
     }
 
+    /// Whether the tool is marked as a favorite.
     pub fn is_favorite(&self, tool: &DrawingToolType) -> bool {
         self.state.is_favorite(tool)
     }
 
+    /// Toggle the toolbar's magnet setting.
     pub fn toggle_magnet(&mut self) {
         self.state.toggle_magnet();
     }
 
+    /// Toggle whether the selected tool stays active after completing a drawing.
     pub fn toggle_stay_in_drawing(&mut self) {
         self.state.toggle_stay_in_drawing();
     }

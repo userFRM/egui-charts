@@ -18,6 +18,7 @@ use super::bar::Bar;
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct BarData {
+    /// Bars in caller-supplied order; construction does not sort or validate them.
     pub bars: Vec<Bar>,
 }
 

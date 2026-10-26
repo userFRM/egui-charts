@@ -1,7 +1,6 @@
-//! State management for drawing toolbar.
+//! Selection, recent tools, favorites and drawing utility state for the toolbar.
 //!
-//! This module contains all state-related logic separated from rendering.
-//! Pure state mutations with no UI coupling.
+//! Keep [`ToolbarState`] across frames to retain the user's choices.
 
 use super::DrawingTemplate;
 use super::categories::cursors::CursorType;

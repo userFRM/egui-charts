@@ -5,11 +5,14 @@ pub use crate::chart::coords::ChartMapping;
 
 /// Core rendering context containing painter and drawing area
 pub struct RenderContext<'a> {
+    /// Painter used to draw the overlay.
     pub painter: &'a Painter,
+    /// Screen rectangle available for rendering.
     pub rect: Rect,
 }
 
 impl<'a> RenderContext<'a> {
+    /// Bind a painter to the rectangle available for rendering.
     pub fn new(painter: &'a Painter, rect: Rect) -> Self {
         Self { painter, rect }
     }

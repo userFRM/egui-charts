@@ -66,10 +66,13 @@ pub enum ChatEvent {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ChatMessage {
+    /// Host identifier of the chat room.
     pub room: String,
     /// The author's display name.
     pub author: String,
+    /// UTC timestamp supplied by the host.
     pub time: DateTime<Utc>,
+    /// Message text.
     pub text: String,
 }
 

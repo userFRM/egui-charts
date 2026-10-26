@@ -22,7 +22,9 @@ pub struct MetricSeries {
 /// Non-finite values are rejected, like invalid price bars.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MetricPoint {
+    /// UTC instant at which this observation takes effect.
     pub time: DateTime<Utc>,
+    /// Metric value in the units declared by `MetricSeries`.
     pub value: f64,
 }
 
@@ -43,10 +45,13 @@ impl From<MetricPoint> for Bar {
 /// Include the point in effect before the chart's first bar when paging back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetricRequest {
+    /// Instrument identifier used by the host.
     pub symbol: String,
     /// [`MetricSeries::id`] for this instrument.
     pub metric: String,
+    /// Exclusive upper time bound, or `None` for the latest points.
     pub before: Option<DateTime<Utc>>,
+    /// Maximum number of points to return.
     pub count: usize,
 }
 
@@ -54,7 +59,9 @@ pub struct MetricRequest {
 /// A live correction of the same timestamp takes precedence over history.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MetricPage {
+    /// Metric observations in this page.
     pub points: Vec<MetricPoint>,
+    /// Whether this page reaches the beginning of the available history.
     pub end_of_history: bool,
 }
 
@@ -62,9 +69,13 @@ pub struct MetricPage {
 /// Push with [`Sink::push_metric`]; timestamps are retained without price-bar aggregation.
 #[derive(Clone)]
 pub struct MetricSubscription {
+    /// Identifier used to unsubscribe this metric stream.
     pub id: SubscriptionId,
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Host-owned metric identifier for this instrument.
     pub metric: String,
+    /// Destination for updates; stop publishing when it becomes inactive.
     pub sink: Sink,
 }
 

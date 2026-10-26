@@ -1,32 +1,7 @@
-//! Shared button components.
+//! Icon buttons, split buttons and button styling helpers.
 //!
-//! Consolidates scattered button implementations into a consistent API.
-//!
-//! # Components
-//!
-//! - [`IconButton`] - Simple icon button (most common)
-//! - [`SplitButton`] - Icon + dropdown arrow (category buttons)
-//! - [`Button`] - Text, icon or both, in a [`ButtonVariant`]
-//!
-//! # Usage
-//!
-//! ```
-//! use egui_charts::icons::icons;
-//! use egui_charts::ui_kit::buttons::IconButton;
-//!
-//! # egui::__run_test_ui(|ui| {
-//! # let is_selected = false;
-//! // Simple icon button
-//! let response = IconButton::new(&icons::TREND_LINE)
-//!     .tooltip("Trend Line (Alt+T)")
-//!     .selected(is_selected)
-//!     .show(ui);
-//!
-//! if response.clicked() {
-//!     // handle click
-//! }
-//! # });
-//! ```
+//! Use [`IconButton`] for an individual action and [`SplitButton`] for an action
+//! with a separate dropdown trigger.
 
 use crate::localization as l10n;
 mod button;
@@ -45,19 +20,19 @@ use egui::{Response, Role, Ui, WidgetInfo};
 /// Button sizes
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ButtonSize {
-    /// 24x24 - small buttons
+    /// Small buttons.
     SM,
-    /// 28x28 - standard toolbar buttons
+    /// Medium toolbar buttons.
     #[default]
     MD,
-    /// 36x36 - large buttons
+    /// Large buttons.
     LG,
-    /// 40x40 - extra large
+    /// Extra-large buttons.
     XL,
 }
 
 impl ButtonSize {
-    /// Get the pixel size
+    /// Side length in egui logical points.
     #[inline]
     pub fn pixels(&self) -> f32 {
         match self {

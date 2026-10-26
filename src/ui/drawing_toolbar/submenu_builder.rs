@@ -57,22 +57,29 @@ pub struct SubmenuBuilder<'a> {
 /// A single item in a submenu
 #[derive(Default)]
 pub struct SubmenuItem {
+    /// Glyph displayed by the component.
     pub icon: Option<&'static Icon>,
+    /// Text displayed by the component.
     pub label: String,
+    /// Help text displayed on hover.
     pub tooltip: String,
     /// Draw the row in the accent fill.
     pub is_sel: bool,
+    /// Whether the entry is marked as a favorite.
     pub is_favorite: bool,
     /// Show a check mark in the right column.
     pub is_checked: bool,
     /// Draw the row in the error colour, for an action that destroys data.
     pub is_danger: bool,
+    /// Callback invoked when the row is clicked, optionally returning an action.
     pub on_click: Option<Box<dyn Fn() -> Option<DrawingToolbarAction>>>,
 }
 
 /// Configuration for a toggle checkbox at the bottom of a submenu
 pub struct ToggleConfig<'a> {
+    /// Text displayed by the component.
     pub label: String,
+    /// Mutable toggle state.
     pub value: &'a mut bool,
 }
 

@@ -1,156 +1,105 @@
-//! # egui-charts
+//! Interactive financial charts for [egui](https://docs.rs/egui), using your historical and streaming data.
 //!
-//! Financial charting engine for
-//! [egui](https://docs.rs/egui). Render interactive charts (candlesticks, OHLC
-//! bars, line, area, Renko, Kagi, Point & Figure, Market Profile (TPO)) with
-//! drawing tools, technical indicators and a design-token theme system. The
-//! chart is an egui widget and runs in any egui host, native or WebAssembly.
+//! [`Chart`] provides price and volume panes, pan and zoom, crosshairs and live bar
+//! updates on native and WebAssembly targets. Optional features add built-in studies,
+//! drawing tools, order flow visualizations and application UI such as toolbars,
+//! replay controls, trading panels and dialogs. The host supplies market data,
+//! external accounts and durable storage through the crate's contracts.
 //!
-//! ## Quick start
+//! # Quick start
 //!
-//! ```rust,no_run
+//! Enable `widget` for a chart without application UI or built-in studies:
+//!
+//! ```toml
+//! egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
+//! ```
+//!
+//! Create the chart once with bars ordered from oldest to newest, then call
+//! [`Chart::show`] in your egui UI callback each frame:
+//!
+//! ```
 //! # #[cfg(feature = "widget")] {
-//! use egui_charts::ChartBuilder;
-//! use egui_charts::model::Timeframe;
-//! use egui_charts::theme::Theme;
+//! use egui_charts::{Chart, model::{Bar, BarData}};
 //!
-//! // Build a chart with the fluent API
-//! let chart = ChartBuilder::new()
-//!     .with_symbol("BTCUSDT")
-//!     .with_timeframe(Timeframe::Hour1)
-//!     .with_theme(Theme::dark())
-//!     .build();
+//! let bars = vec![
+//!     Bar::new("2024-01-01T00:00:00Z".parse().unwrap(),
+//!              100.0, 102.0, 99.0, 101.0, 1_000.0),
+//!     Bar::new("2024-01-01T00:01:00Z".parse().unwrap(),
+//!              101.0, 103.0, 100.0, 102.0, 1_200.0),
+//! ];
+//! let mut chart = Chart::new(BarData::from_bars(bars));
 //!
-//! // In `eframe::App::ui`, with `ui: &mut egui::Ui`:
-//! // chart.show(ui); // load from the feed, if any, and render the chart
+//! # egui::__run_test_ui(|ui| {
+//! chart.show(ui);
+//! # });
 //! # }
 //! ```
 //!
-//! For a minimal price ticker (no grid, no crosshair, no tools):
+//! For live data, merge bars with `Chart::update(widget::SeriesId::MAIN, bar)`.
+//! [`data::Datafeed`] supports paged history and streaming bars, trades and depth;
+//! attach a feed with [`ChartBuilder::with_feed`]. Feed methods return promptly,
+//! answer requests through [`data::Reply`] and push updates through [`data::Sink`].
+//! A symbol identifies the host's instrument; setting it does not fetch data without
+//! a feed. See the [`guide`] for complete integration examples.
 //!
-//! ```rust,no_run
-//! # #[cfg(feature = "widget")] {
-//! # use egui_charts::ChartBuilder;
-//! let mini = ChartBuilder::price_chart()
-//!     .with_symbol("ETHUSDT")
-//!     .with_visible_candles(30)
-//!     .build();
-//! # }
-//! ```
+//! # API map
 //!
-//! ## Architecture
+//! | Module | Use it for |
+//! |---|---|
+//! | [`widget`] | `Chart`, `ChartBuilder`, events, panes, chart layouts, replay and export |
+//! | [`model`] | Bars, instruments, intervals, chart types, price transforms and host data records |
+//! | [`data`] | Historical and streaming data contracts, aggregation and order flow data |
+//! | [`studies`] | The `Indicator` extension point, calculation helpers and built-in studies |
+//! | `drawings` | Drawing tools, selection, undo and timestamp-based persistence |
+//! | [`scales`] | Price ranges, coordinate mapping, axis ticks and label formatting |
+//! | [`config`] | Chart appearance and interaction options |
+//! | [`services`] | Host storage, symbol search, quotes, alerts, signals and broker contracts |
+//! | [`theme`], [`tokens`], [`styles`] | Theme presets, design tokens and UI styling helpers |
+//! | `ui`, `ui_kit` | Chart controls and reusable UI components placed in the host's layout |
+//! | `icons` | Embedded SVG icons |
+//! | [`localization`] | Host translations scoped to an egui context |
+//! | [`prelude`] | Common types and traits for chart integration |
 //!
-//! The crate is organized into a layered set of modules:
+//! # Feature flags
 //!
-//! | Layer | Modules | Purpose |
+//! The defaults are `ui`, `locales` and `timezones`. With `default-features = false`,
+//! the data model, scales, feed and service contracts, tokens and study extension
+//! points are available without an egui dependency.
+//!
+//! | Feature | Default | Enables |
 //! |---|---|---|
-//! | **Domain model** | [`model`] | `Bar`, `BarData`, `Instrument`, `Timeframe`, `ChartType`, Renko/Kagi/P&F transforms |
-//! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
-//! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
-//! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
-//! | **Drawing tools** | `drawings` | *(feature `drawings`)* 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 177 indicator names in `IndicatorFactory` with default features; automatic drawing studies also require `drawings` |
-//! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
-//! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
-//! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
-//! | **Widget** | [`widget`] | `Chart` egui widget and `ChartBuilder`: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes, loading from a feed |
-//! | **Extensions** | `ui_kit::ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
-//! | **Icons** | `icons` | Compile-time embedded SVG icons |
-//! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
+//! | `widget` | via `ui` | The chart widget, rendering, configuration, themes, styling and localization |
+//! | `drawings` | via `ui` | Drawing tools, interaction, undo and persistence; enables `widget` |
+//! | `studies` | via `ui` | Built-in studies, `IndicatorFactory` and study templates; usable without egui |
+//! | `icons` | via `ui` | Embedded SVG icons and their image loaders; enables `widget` |
+//! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies` and `drawings` |
+//! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |
+//! | `timezones` | on | IANA zones and daylight-saving rules through chrono-tz; otherwise UTC, system local time and fixed offsets |
+//! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme` |
 //!
-//! ## Feature flags
+//! # Application integration
 //!
-//! The default build includes the chart widget, the icons, the built-in
-//! studies, the application-level UI components and the localized month and
-//! weekday names and IANA time zones. An application that only shows charts uses
-//! `default-features = false, features = ["widget"]`. With
-//! `default-features = false` alone the crate is the headless engine, which
-//! does not depend on egui.
+//! Keep a chart across frames so its viewport, studies and drawings persist.
+//! Application UI components return actions for the host to apply; the crate does
+//! not assemble an application or connect to a market data provider on its own.
 //!
-//! | Feature | Default | Description |
-//! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`] and the `Indicator` trait layer of [`studies`]. Required by `drawings`, `icons` and `ui`. |
-//! | `drawings` | **on** | Drawing tools, rendering, hit tests, undo and persistence. Implies `widget`; enabled by `ui`. |
-//! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
-//! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
-//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`. |
-//! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
-//! | `timezones` | **on** | IANA zones and daylight-saving rules through optional chrono-tz. Without it UTC, system local time and fixed offsets remain available through [`model::TimezoneId`]; unavailable names are rejected. Named exchange presets require this feature. |
-//! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
+//! Apply [`theme::apply_to_egui`] at startup and after changing the theme. It installs
+//! the bundled font and applies UI colors and spacing. Use
+//! [`localization::set_translator`] for UI text; the host owns translation resources
+//! and additional fonts. Chart date and number labels use the chart's formatters.
 //!
-//! ## Embedding in an application
+//! The [`guide`] covers historical and streaming data, custom studies, drawing
+//! persistence, synchronized charts and host strategy and script results.
 //!
-//! The [`guide`] covers historical and streaming data, custom studies,
-//! drawing persistence, synchronized charts and host strategy or script results.
+//! # API compatibility
 //!
-//! A typical setup:
+//! The 0.3 release line uses egui 0.37. Use a compatible egui version in your host
+//! so types such as `egui::Ui` agree across the dependency graph. Before 1.0,
+//! breaking API changes require a minor release; afterward they require a major
+//! release. An incompatible upgrade of exposed egui types is a breaking change.
 //!
-//! 1. Add the crate to your dependencies:
-//!
-//!    ```toml
-//!    [dependencies]
-//!    egui-charts = "0.3"
-//!    ```
-//!
-//! 2. Implement [`data::Datafeed`] to bridge your backend (IPC, a WebSocket
-//!    or a database) to the chart: answer `history` through its
-//!    [`data::Reply`] and push live updates into the [`data::Sink`] that
-//!    `subscribe` receives, from any thread. `examples/live_feed.rs` shows one.
-//!
-//! 3. Build the chart once with [`ChartBuilder`] and
-//!    [`ChartBuilder::with_feed`], then call `chart.show(ui)` inside an
-//!    `egui::CentralPanel` in `eframe::App::ui`.
-//!
-//! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
-//!    design tokens into egui's visual system.
-//!
-//! UI labels use the crate's English text by default. Install a host lookup with
-//! [`localization::set_translator`] before drawing to translate toolbars, dialogs,
-//! panels and accessibility names in that egui context. Missing entries retain
-//! English; replacing or clearing the lookup takes effect on the next frame.
-//! The host supplies translation resources and any additional fonts. Date and
-//! numeric formatting remain controlled by the chart's formatters and locale.
-//!
-//! ## API compatibility
-//!
-//! Documented public exports are supported API. Implementation modules and state are
-//! private; `Chart`, `ChartBuilder`, `ChartState`, `BarData`, `TimeScale`, `PriceScale` and
-//! `IndicatorRegistry` expose their state through methods. Configuration and host data records
-//! have editable fields deliberately. Build extensible options from `Default` or their
-//! constructors and include a fallback when matching a `#[non_exhaustive]` enum.
-//!
-//! Before 1.0, breaking API changes require the next minor version; patch releases preserve
-//! compatibility within that minor line. From 1.0, breaking changes require a major version.
-//! This includes an egui upgrade that changes types exposed by this crate: the 0.3 line uses
-//! egui 0.37, and an incompatible egui upgrade requires a new breaking crate release. Compatible
-//! egui patch upgrades may ship in patch releases. CI checks the API against the latest
-//! published crate version, including when CI is called by the release workflow.
-//!
-//! ## Building for the web
-//!
-//! The download of a `wasm32` build shrinks with:
-//!
-//! - the `[profile.wasm-release]` of this crate's `Cargo.toml` (`opt-level = "s"`,
-//!   `lto = "fat"`, `codegen-units = 1`) and `wasm-opt -Oz`;
-//! - eframe's `glow` renderer instead of `wgpu`;
-//! - eframe without its `default_fonts` feature: [`theme::apply_to_egui`] installs the
-//!   one font the chart draws with;
-//! - disabling `timezones` when UTC, system local time and fixed offsets suffice;
-//! - with `timezones`, chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
-//!   keeps the zones the application uses and the ones this crate names: `UTC`,
-//!   `America/New_York`, `Europe/London`, `Asia/Tokyo` and `Asia/Hong_Kong`.
-//!
-//! `scripts/web-size.sh` builds `examples/bare_chart.rs`, which takes the first three,
-//! and the demo for the web and prints their sizes.
-//!
-//! ## Crate-level re-exports
-//!
-//! The most commonly used types are re-exported at the crate root for
-//! convenience:
-//!
-//! - [`ChartBuilder`]: fluent chart construction
-//! - [`Chart`]: the egui chart widget
-//! - [`ChartType`]: candlestick, line, area, bar, etc.
+//! Construct extensible options with their constructors or `Default`, then assign
+//! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
 #![allow(clippy::too_many_arguments)]
@@ -219,19 +168,10 @@ pub mod guide {}
 
 // ─── Application-level UI (feature-gated) ────────────────────────────────────
 
-/// Reusable UI components (buttons, dialogs, forms, color pickers, etc.).
-///
-/// These are domain-agnostic building blocks consumed by the [`ui`] module.
-/// Enable the `ui` feature to access them.
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub mod ui_kit;
 
-/// Application-level chart UI: drawing toolbar, top toolbar, timeframe bar,
-/// replay controls, dialogs, and widget panels.
-///
-/// Built on top of [`ui_kit`] primitives and the core chart engine. Enable the
-/// `ui` feature to access this module.
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub mod ui;
@@ -247,6 +187,39 @@ pub use widget::{Chart, ChartBuilder, RightClickTarget};
 #[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
+
+// Compile the documentation pages alongside their shared source guides.
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/chart-types.mdx")]
+pub struct SiteChartTypesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/data-model.mdx")]
+pub struct SiteDataModelDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/data.mdx")]
+pub struct SiteDataDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/first-chart.mdx")]
+pub struct SiteFirstChartDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/studies.mdx")]
+pub struct SiteStudiesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/theming.mdx")]
+pub struct SiteThemingDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/study-data.md")]
+pub struct StudyDataGuideDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/strategy-report.md")]
+pub struct StrategyReportGuideDoctests;
 
 #[cfg(all(test, feature = "ui"))]
 mod tests {

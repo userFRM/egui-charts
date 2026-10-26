@@ -1,0 +1,14 @@
+{
+  "name": "egui-charts-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --test remark-docs.test.mjs && node prepare-guides.mjs && astro build",
+    "dev": "node prepare-guides.mjs && astro dev"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "7.3.3",
+    "@astrojs/starlight": "0.42.6",
+    "astro": "7.4.0"
+  }
+}

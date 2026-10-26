@@ -1,7 +1,7 @@
-//! Chart control components.
+//! Pane maximize, restore and close buttons.
 //!
-//! Provides:
-//! - Pane controls (maximize, minimize, close) at top-right of each pane
+//! Use [`PaneControls`] when composing pane headers outside the chart widget, and
+//! apply the returned [`PaneControlAction`] to the relevant pane.
 
 mod pane_controls;
 

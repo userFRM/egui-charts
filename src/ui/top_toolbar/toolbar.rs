@@ -170,7 +170,9 @@ impl Slot {
 
 /// Top toolbar widget
 pub struct TopToolbar {
+    /// Display and layout options for this component.
     pub config: TopToolbarConfig,
+    /// Mutable interaction state of this component.
     pub state: TopToolbarState,
     /// Timeframe selector dropdown
     pub timeframe_selector: TimeframeSelector,

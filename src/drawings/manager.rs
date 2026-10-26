@@ -1,14 +1,8 @@
-//! Drawing manager -- thin coordinator that delegates to specialized services.
+//! Drawing state, selection, editing and undo history.
 //!
-//! `DrawingManager` is the primary entry point for managing drawings on a
-//! chart. It owns the drawing list, delegates selection to
-//! `SelectionService`, undo/redo to `HistoryService`, snapping to
-//! `SnapService`, and handle manipulation to `HandleService`.
-//!
-//! At the start of each frame, call [`DrawingManager::sync_from_app_state`] to
-//! synchronize the active tool, magnet mode, and selection from the central
-//! application state. Then call [`DrawingManager::update_all_screen_coords`] to
-//! recompute screen positions from chart coordinates before rendering.
+//! Use [`DrawingManager`] through the chart's drawing accessors, or directly when
+//! composing your own renderer. Direct users synchronize screen coordinates with
+//! [`DrawingManager::update_all_screen_coords`] after changing the viewport.
 
 use crate::drawings::domain::{ChartPoint, Drawing, DrawingToolType, HandlePos};
 use crate::drawings::rendering::ChartView;
@@ -345,8 +339,7 @@ impl DrawingManager {
         }
     }
 
-    /// Sync drawing manager state from central AppState
-    /// Called at the start of each frame to ensure consistency
+    /// Apply the host's tool, snapping, color, eraser and selection state.
     pub fn sync_from_app_state(&mut self, drawing_state: &DrawingState) {
         if self.active_tool != drawing_state.active_tool {
             self.set_active_tool(drawing_state.active_tool);

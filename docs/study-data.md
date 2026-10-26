@@ -18,11 +18,19 @@ and one hour on longer intervals. A custom interval that cannot contain whole ca
 that size uses one-second intrabars. Subsecond and tick-count charts have no request. Supply
 the same symbol and session as the chart. Read the request again after a symbol or interval change:
 
-```rust,ignore
-for request in chart.study_data_requests() {
-    // The host obtains a snapshot, including the developing intrabar.
-    let bars = host_history_and_stream_snapshot(&request);
-    chart.set_study_data(request, bars, instrument.clone());
+```rust
+use egui_charts::{Chart, model::{Bar, Instrument}, studies::StudyDataRequest};
+
+fn supply_snapshots(
+    chart: &mut Chart,
+    instrument: Option<Instrument>,
+    host_history_and_stream_snapshot: impl Fn(&StudyDataRequest) -> Vec<Bar>,
+) {
+    for request in chart.study_data_requests() {
+        // The host obtains a snapshot, including the developing intrabar.
+        let bars = host_history_and_stream_snapshot(&request);
+        chart.set_study_data(request, bars, instrument.clone());
+    }
 }
 ```
 

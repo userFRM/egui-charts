@@ -1,100 +1,36 @@
-//! The primary Chart widget for embedding interactive financial charts in egui.
+//! Interactive charts, events, panes, layouts and export.
 //!
-//! This module provides [`Chart`], the main entry point for rendering OHLCV
-//! (Open-High-Low-Close-Volume) financial data as an interactive egui widget.
-//! It supports multiple chart types (candlestick, line, area, bar, Renko, Kagi),
-//! real-time data streaming, drawing tools, technical indicators, and
-//! multi-chart synchronization.
+//! Keep a [`Chart`] across frames and call [`Chart::show`] from your egui UI callback.
+//! Construct it from [`BarData`](crate::model::BarData), or use [`ChartBuilder`] to
+//! configure an instrument, interval and optional [`Datafeed`](crate::data::Datafeed).
 //!
-//! # Quick Start
+//! # Updating data
 //!
-//! ```rust
-//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-//! use egui_charts::model::BarData;
-//! use egui_charts::widget::Chart;
+//! Merge each live bar into its series. The chart updates studies when it next draws;
+//! use [`Chart::set_data`] to replace a series' history.
 //!
-//! let bar_data = BarData::from_bars(bars);
+//! ```
+//! use egui_charts::{Chart, model::{Bar, BarData}, widget::SeriesId};
 //!
-//! // Create chart with OHLCV data
-//! let mut chart = Chart::new(bar_data);
-//!
-//! // Show the chart in your egui update loop
+//! let mut chart = Chart::new(BarData::default());
+//! let bar = Bar::new("2024-01-01T00:00:00Z".parse().unwrap(),
+//!                    100.0, 102.0, 99.0, 101.0, 50.0);
+//! chart.update(SeriesId::MAIN, bar);
 //! # egui::__run_test_ui(|ui| {
-//! egui::CentralPanel::default().show(ui, |ui| {
-//!     chart.show(ui);
-//! });
+//! chart.show(ui);
 //! # });
 //! ```
 //!
-//! # Builder Pattern
+//! # Host integration
 //!
-//! Configure the chart before showing it:
+//! Read [`ChartEvent`] values with [`Chart::drain_events`] for host legends,
+//! inspection and application actions. [`ChartLayout`] arranges multiple charts
+//! and synchronizes their viewports and crosshairs by timestamp.
 //!
-//! ```rust
-//! # let bars: Vec<egui_charts::model::Bar> = (0..100).map(|i| { let p = 100.0 + (i as f64 * 0.2).sin() * 5.0; egui_charts::model::Bar::new(chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-//! # let bar_data = egui_charts::model::BarData::from_bars(bars.clone());
-//! # use egui_charts::{config::{ChartConfig, ChartOptions}, widget::Chart};
-//! # let my_chart_config = ChartConfig::default();
-//! # let opts = ChartOptions::default();
-//! let mut chart = Chart::with_config(bar_data, my_chart_config) // Custom visual config
-//!     .visible_bars(100)          // Show 100 bars at a time
-//!     .with_chart_options(opts);  // Scroll/zoom behavior
-//! ```
-//!
-//! # Real-Time Updates
-//!
-//! For live data feeds, reuse the chart instance across frames and merge each
-//! bar as it arrives:
-//!
-//! ```rust
-//! # use egui_charts::{model::Bar, widget::{Chart, SeriesId}};
-//! // In your app struct:
-//! struct MyApp {
-//!     chart: Chart,
-//! }
-//!
-//! impl MyApp {
-//!     fn on_new_bar(&mut self, bar: Bar, ui: &mut egui::Ui) {
-//!         self.chart.update(SeriesId::MAIN, bar);
-//!         self.chart.show(ui);
-//!     }
-//! }
-//! ```
-//!
-//! # Drawing Tools and Indicators
-//!
-//! The chart computes, updates and draws its studies and drawings itself:
-//!
-//! ```rust
-//! # #[cfg(all(feature = "drawings", feature = "studies"))]
-//! # use egui_charts::{drawings::DrawingToolType, studies::{EMA, RSI}, widget::Chart};
-//! # #[cfg(all(feature = "drawings", feature = "studies"))]
-//! # fn example(chart: &mut Chart, ui: &mut egui::Ui) {
-//! let ema = chart.add_indicator(Box::new(EMA::new(20))); // on the main pane
-//! chart.add_indicator(Box::new(RSI::new(14))); // in a pane below it
-//! chart.drawings_mut().set_active_tool(Some(DrawingToolType::TrendLine));
-//! chart.show(ui);
-//! chart.remove_series(ema);
-//! # }
-//! ```
-//!
-//! # Multi-Chart Sync
-//!
-//! Synchronize crosshairs and time scales between multiple charts:
-//!
-//! ```rust
-//! # fn example(chart_a: &egui_charts::Chart, chart_b: &mut egui_charts::Chart) {
-//! chart_b.set_synced_crosshair_time(chart_a.hover_time());
-//! if let Some(range) = chart_a.visible_time_range() {
-//!     chart_b.apply_synced_time_range(range);
-//! }
-//! # }
-//! ```
-//!
-//! # Sub-modules
-//!
-//! - [`ChartBuilder`] -- Constructor and configuration methods for [`Chart`]
-//! - [`IndicatorPane`] -- Separate indicator panels (RSI, MACD, Stochastic)
+//! Studies added with [`Chart::add_indicator`] are calculated and drawn by the
+//! chart. Built-in studies require the `studies` feature; drawing tools require
+//! `drawings`. Toolbars and dialogs in `ui` are separate components placed and
+//! connected by the host.
 
 #[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
@@ -165,7 +101,6 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
-/// Shared display settings used by the chart and its host controls.
 pub mod settings;
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
@@ -248,18 +183,13 @@ pub use state::{BoxZoomState, ElasticBounceState, KineticScrollState};
 /// - **Keyboard shortcuts**: Arrow keys, Home/End, +/- for navigation
 /// - **Double-click**: Reset zoom on price or time axis
 ///
-/// # Architecture
+/// # Undo and redo
 ///
 /// User drawing interactions and shortcuts share [`Chart::undo`] / [`Chart::redo`] with
 /// host toolbar, menu and dialog edits wrapped in [`Chart::user_action`]. Direct programmatic
 /// setters and feed/data updates do not enter this history. Use [`Chart::can_undo`] and
 /// [`Chart::can_redo`] for toolbar availability, and [`Chart::take_history_changed`] to
 /// synchronize host controls and data after restoring an interval or settings.
-///
-/// `Chart` owns a [`ChartState`] (data + coordinate systems) and a
-/// [`ChartConfig`] (visual styling). Rendering is delegated to specialized
-/// modules in `crate::chart::rendering`, while interaction logic lives in
-/// `crate::chart::state`.
 pub struct Chart {
     /// Backend state holding OHLCV data and coordinate system (time scale, price range).
     pub(crate) state: ChartState,

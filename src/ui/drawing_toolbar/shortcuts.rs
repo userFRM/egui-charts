@@ -45,6 +45,7 @@ impl Default for DrawingToolShortcuts {
 }
 
 impl DrawingToolShortcuts {
+    /// Create a [`DrawingToolShortcuts`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }

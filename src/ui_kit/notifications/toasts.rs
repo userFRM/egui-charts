@@ -1,8 +1,7 @@
 //! Toasts container
 //!
-//! Per-instance storage for toast notifications. Each chart instance owns its
-//! own [`Toasts`] queue so that notifications never leak across independent
-//! widgets in the same process.
+//! Keep a [`Toasts`] queue in the state of the host component that displays it.
+//! Separate queues keep unrelated notification panels independent.
 
 use super::toast::Toast;
 

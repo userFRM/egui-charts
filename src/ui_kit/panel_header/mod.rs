@@ -1,14 +1,6 @@
-//! Panel header component: title, right-aligned actions and a separator.
+//! Panel title with right-aligned actions and a separator.
 //!
-//! Extracts the universal panel header boilerplate:
-//! ```
-//! # use egui_charts::ui_kit::PanelHeader;
-//! # egui::__run_test_ui(|ui| {
-//! PanelHeader::new("Watchlist").show(ui, |ui| {
-//!     if ui.button("+").on_hover_text("Add Symbol").clicked() { /* ... */ }
-//! });
-//! # });
-//! ```
+//! Use [`PanelHeader`] at the top of a sidebar or host panel.
 
 use crate::localization as l10n;
 use egui::{Align, Layout, Response, RichText, Ui, vec2};

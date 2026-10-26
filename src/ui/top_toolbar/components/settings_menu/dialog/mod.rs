@@ -1,9 +1,7 @@
-//! Settings dialog with tabs
+//! Tabbed dialog for editing chart display settings.
 //!
-//! This implementation follows the corporate architecture guidelines:
-//! - Uses `crate::styles::sizing::settings_dialog` for all layout dimensions
-//! - Reads colours and scales directly from the theme
-//! - Implements full interaction states (hover, active, focus)
+//! Open [`SettingsDialog`] with the chart's settings and apply the returned
+//! [`SettingsAction`] in the host.
 
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -86,6 +84,7 @@ impl Default for SettingsDialog {
 }
 
 impl SettingsDialog {
+    /// Create a [`SettingsDialog`] with default settings.
     pub fn new() -> Self {
         let settings = ChartSettingsState::default();
         let timezones: &[&str] = if cfg!(feature = "timezones") {
@@ -154,6 +153,7 @@ impl SettingsDialog {
         }
     }
 
+    /// Open the dialog with the supplied state.
     pub fn open(&mut self, settings: ChartSettingsState) {
         self.is_open = true;
         self.template_menu_open = false;
@@ -191,14 +191,17 @@ impl SettingsDialog {
         self.margin_right_str = format!("{}", self.settings.margins.right_bars);
     }
 
+    /// Close the dialog.
     pub fn close(&mut self) {
         self.is_open = false;
     }
 
+    /// Read the display settings being edited.
     pub fn settings(&self) -> &ChartSettingsState {
         &self.settings
     }
 
+    /// Show the dialog and return the requested action.
     pub fn show(&mut self, ctx: &Context, theme: &Theme) -> SettingsAction {
         self.templates.poll(ctx);
         let mut action = SettingsAction::None;

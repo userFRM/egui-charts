@@ -1,19 +1,30 @@
-//! The contract between a chart and its market data.
+//! Historical and streaming market data contracts, aggregation and order flow data.
 //!
-//! A host implements [`Datafeed`] to connect a chart to its backend, whether the data comes from
-//! a WebSocket stream, a REST API, a local file or an in-memory buffer, and gives it to the chart
-//! with `ChartBuilder::with_feed`. Only [`Datafeed::history`] is required. The chart calls the
-//! feed on the UI thread and never waits for it: the feed answers each request once through a
-//! [`Reply`] and pushes live bars, trades, depth and status into the [`Sink`] of each
-//! [`Subscription`], from any thread, runtime or browser task. Best bid/ask quotes use
-//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`], and
-//! `Chart::depth_history` keeps the order book over time in a [`DepthHistory`].
+//! Implement [`Datafeed`] to connect a chart to your backend, or use the data
+//! containers and aggregation functions independently of a widget.
 //!
-//! Symbol search is not part of the feed: it is the separate
-//! [`SymbolSearch`](crate::services::SymbolSearch) service. Connect it to the symbol dialogs,
-//! which otherwise search their supplied list.
+//! # Connecting a feed
 //!
-//! [`resample`] aggregates bars into a longer timeframe.
+//! Attach a feed with `ChartBuilder::with_feed`. Only [`Datafeed::history`] is
+//! required. The chart calls the feed on the UI thread; implementations should
+//! return promptly, answer each request once through [`Reply`] and push live updates
+//! into the [`Sink`] of a [`Subscription`]. Replies and pushes can come from another
+//! thread, runtime or browser task. No network connection or data provider is built in.
+//!
+//! [`Subscription::clock`] and [`HistoryRequest::clock`] carry the same bar boundaries
+//! so history and streaming aggregation agree. Symbol search is a separate
+//! [`SymbolSearch`](crate::services::SymbolSearch) service.
+//!
+//! # Order flow and derived data
+//!
+//! Push executions, quotes and book updates through [`Sink`]. [`Footprint`] holds
+//! executed volume at price; [`DepthHistory`] holds the book over time.
+//! [`ReplayClock`] coordinates host-supplied recorded events. [`resample`] aggregates
+//! bars into a longer interval, and [`VolumeProfile`] describes volume by price.
+//!
+//! The optional feed methods provide auxiliary study data and records for host UI,
+//! including news, calendars, hotlists and screener rows. Unsupported requests use
+//! [`FeedError::NotSupported`].
 
 pub use crate::model::Bar;
 pub use crate::model::Timeframe;
@@ -250,7 +261,9 @@ pub trait Datafeed: MaybeSend + 'static {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HistoryRequest {
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Bar interval requested from the feed.
     pub timeframe: Timeframe,
     /// Calendar boundaries selected by the chart, shared by historical and streaming aggregation.
     pub clock: BarClock,
@@ -282,6 +295,7 @@ pub struct HistoryPage {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TradeRequest {
+    /// Instrument identifier used by the host.
     pub symbol: String,
     /// Only trades strictly before this instant. `None` asks for the latest trades.
     pub before: Option<DateTime<Utc>>,
@@ -402,13 +416,17 @@ impl SymbolDetails {
 /// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
 #[non_exhaustive]
 pub struct Subscription {
+    /// Identifier passed back to the feed when unsubscribing.
     pub id: SubscriptionId,
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Bar interval requested from the feed.
     pub timeframe: Timeframe,
     /// The same calendar boundaries supplied to history requests.
     pub clock: BarClock,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// Destination for updates; stop publishing when it becomes inactive.
     pub sink: Sink,
 }
 
@@ -420,8 +438,11 @@ pub struct SubscriptionId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FeedStatus {
+    /// A connection attempt is in progress.
     Connecting,
+    /// The feed reports live data.
     Live,
+    /// The connection is closed.
     Disconnected,
 }
 
@@ -431,14 +452,20 @@ pub enum FeedStatus {
 pub enum FeedError {
     /// The feed or service does not offer this request.
     NotSupported,
+    /// The service could not find the requested instrument.
     SymbolNotFound(String),
+    /// The service has limited the request rate.
     RateLimited {
+        /// Suggested delay before retrying, when supplied by the service.
         retry_after: Option<Duration>,
     },
+    /// A transport error with a service-supplied message.
     Network(String),
+    /// Invalid input or data, described by the service.
     InvalidData(String),
     /// The feed or service dropped a [`Reply`] without answering.
     Unanswered,
+    /// A service error outside the other categories.
     Other(String),
 }
 
@@ -479,8 +506,11 @@ pub struct FeedState {
     pub status: Option<FeedStatus>,
     /// Catalog-change notifications received for this subscription, for host search refreshes.
     pub symbol_catalog_revision: u64,
+    /// Whether a historical page is currently being requested.
     pub loading_history: bool,
+    /// Whether the feed has reported that no older history remains.
     pub history_complete: bool,
+    /// Most recent feed error, when present.
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
     /// the open and close, negative volume, a tick that would overflow its bar's volume, a time

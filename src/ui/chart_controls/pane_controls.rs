@@ -41,6 +41,7 @@ pub struct PaneControlsConfig {
     pub rounding: f32,
     /// Offset from pane corner
     pub offset_x: f32,
+    /// Offset vertical, in egui logical points.
     pub offset_y: f32,
 }
 
@@ -59,6 +60,7 @@ impl Default for PaneControlsConfig {
 
 /// Pane control buttons (maximize, minimize, close, settings)
 pub struct PaneControls {
+    /// Display and layout options for this component.
     pub config: PaneControlsConfig,
 }
 

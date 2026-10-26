@@ -71,10 +71,15 @@ impl Default for DrawingProps {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DrawingPropertiesAction {
+    /// No action requested.
     None,
+    /// Cancel the current interaction.
     Cancel,
+    /// Apply the supplied properties to the drawing.
     Apply(DrawingId, DrawingProps),
+    /// Delete the identified drawing.
     Delete(DrawingId),
+    /// Duplicate the identified drawing.
     Clone(DrawingId),
 }
 

@@ -29,9 +29,9 @@ impl std::fmt::Display for OrderId {
 /// Buy or sell, shared by orders, executions, aggressor trades and strategy positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderSide {
-    /// Long / buy order.
+    /// Buy side.
     Buy,
-    /// Short / sell order.
+    /// Sell side.
     Sell,
 }
 
@@ -56,7 +56,12 @@ pub enum OrderType {
     /// As a market order once the market trades at this price.
     Stop(f64),
     /// As a limit order at `limit` once the market trades at `stop`.
-    StopLimit { stop: f64, limit: f64 },
+    StopLimit {
+        /// Trigger price for the stop order.
+        stop: f64,
+        /// Limit price of the order after triggering.
+        limit: f64,
+    },
 }
 
 /// The role of an exit order attached to the net position in its symbol.

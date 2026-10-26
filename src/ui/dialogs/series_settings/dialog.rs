@@ -16,11 +16,17 @@ use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
 
 /// Series settings dialog with sidebar layout
 pub struct SeriesSettingsDialog {
+    /// Display and layout options for this component.
     pub config: SeriesSettingsConfig,
+    /// Whether the dialog is currently visible.
     pub is_open: bool,
+    /// Identifier of the series being edited, when open.
     pub series_id: Option<SeriesId>,
+    /// Currently selected tab.
     pub active_tab: SeriesSettingsTab,
+    /// Editable settings currently shown by the dialog.
     pub settings: SeriesSettings,
+    /// Settings captured when the dialog opened.
     pub original_settings: SeriesSettings,
 }
 
@@ -31,6 +37,7 @@ impl Default for SeriesSettingsDialog {
 }
 
 impl SeriesSettingsDialog {
+    /// Create a [`SeriesSettingsDialog`] with default settings.
     pub fn new() -> Self {
         Self {
             config: SeriesSettingsConfig::default(),
@@ -42,6 +49,7 @@ impl SeriesSettingsDialog {
         }
     }
 
+    /// Open the dialog with the supplied state.
     pub fn open(&mut self, id: SeriesId, settings: SeriesSettings) {
         self.is_open = true;
         self.series_id = Some(id);
@@ -50,6 +58,7 @@ impl SeriesSettingsDialog {
         self.active_tab = SeriesSettingsTab::default();
     }
 
+    /// Close the dialog.
     pub fn close(&mut self) {
         self.is_open = false;
         self.series_id = None;
@@ -64,6 +73,7 @@ impl SeriesSettingsDialog {
         }
     }
 
+    /// Show the dialog and return the requested action.
     pub fn show(&mut self, ctx: &Context) -> SeriesSettingsAction {
         if !self.is_open {
             return SeriesSettingsAction::None;

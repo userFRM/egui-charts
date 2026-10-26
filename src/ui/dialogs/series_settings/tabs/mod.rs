@@ -18,13 +18,18 @@ use crate::icons::{Icon, icons as embedded_icons};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SeriesSettingsTab {
     #[default]
+    /// Symbol and series appearance.
     Symbol,
+    /// Legend and status line visibility.
     StatusLine,
+    /// Price scale and reference line options.
     ScalesAndLines,
+    /// Chart background, grid and crosshair appearance.
     Canvas,
 }
 
 impl SeriesSettingsTab {
+    /// Display label for this value.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Symbol => "Symbol",
@@ -34,6 +39,7 @@ impl SeriesSettingsTab {
         }
     }
 
+    /// Icon representing this value.
     pub fn icon(&self) -> &'static Icon {
         match self {
             Self::Symbol => &embedded_icons::SETTINGS_SYMBOL,
@@ -43,6 +49,7 @@ impl SeriesSettingsTab {
         }
     }
 
+    /// Values in display order.
     pub fn all() -> [Self; 4] {
         [
             Self::Symbol,

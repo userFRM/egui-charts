@@ -18,6 +18,7 @@ pub struct LoadingIndicator<'a> {
 }
 
 impl<'a> LoadingIndicator<'a> {
+    /// Create a spinner without a message.
     pub fn new() -> Self {
         Self { message: None }
     }

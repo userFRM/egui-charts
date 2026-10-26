@@ -1,20 +1,8 @@
-//! Price and time scale engines for charting.
+//! Price ranges, coordinate transforms, axis ticks and label formatting.
 //!
-//! This module provides the coordinate-system and formatting infrastructure
-//! that maps raw data values to pixel positions and human-readable labels on
-//! the chart axes.
-//!
-//! # Sub-modules
-//!
-//! | Component                  | Purpose                                                  |
-//! |---------------------------|----------------------------------------------------------|
-//! | [`PriceScale`]            | Price axis range: autoscale, zoom, Normal/Log/%/Indexed  |
-//! | [`PriceMap`]              | Per-frame price-to-Y mapping produced by a [`PriceScale`] |
-//! | [`PriceMarkGenerator`]    | Smart tick placement on the price axis ("nice numbers")  |
-//! | [`TickMarkGenerator`]     | Hierarchical tick placement on the time axis              |
-//! | [`PriceFormatter`] trait  | Customizable price label formatting                      |
-//! | [`TimeFormatter`] trait   | Customizable time label formatting                       |
-//! | [`HorizontalScale`] trait | Horizontal axes other than time: strikes, maturities     |
+//! Use [`PriceScale`] and its per-frame [`PriceMap`] to map prices to screen
+//! coordinates. [`PriceFormatter`] and [`TimeFormatter`] customize axis labels;
+//! [`HorizontalScale`] supports non-time axes such as strikes and maturities.
 
 mod countdown;
 mod horizontal;

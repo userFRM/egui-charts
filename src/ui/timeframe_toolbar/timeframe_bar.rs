@@ -1,6 +1,7 @@
-//! Bottom Timeframe Quick-Select Bar
+//! Date range preset buttons with an optional adjustment toggle.
 //!
-//! Shows btns for quick timeframe switching (1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, All)
+//! [`TimeframeBar`] returns the selected [`QuickTimeframe`] range for the host to
+//! apply to the viewport; these controls do not change the bar interval.
 
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
@@ -34,6 +35,7 @@ pub enum QuickTimeframe {
 }
 
 impl QuickTimeframe {
+    /// Display label for this value.
     pub fn label(&self) -> &'static str {
         match self {
             QuickTimeframe::OneDay => "1D",
@@ -52,13 +54,21 @@ impl QuickTimeframe {
 /// Configuration for the timeframe bar
 #[derive(Clone, Debug)]
 pub struct TimeframeBarConfig {
+    /// Height, in egui logical points.
     pub height: f32,
+    /// Background color.
     pub bg_color: Color32,
+    /// Text color.
     pub text_color: Color32,
+    /// Active text color.
     pub active_text_color: Color32,
+    /// Active background.
     pub active_bg: Color32,
+    /// Hover background.
     pub hover_bg: Color32,
+    /// Border color.
     pub border_color: Color32,
+    /// Button padding, in egui logical points.
     pub btn_padding: f32,
 }
 
@@ -113,9 +123,13 @@ pub enum TimeframeBarAction {
 
 /// Bottom Timeframe Quick-Select Bar
 pub struct TimeframeBar {
+    /// Display and layout options for this component.
     pub config: TimeframeBarConfig,
+    /// Currently selected date range preset.
     pub active_timeframe: QuickTimeframe,
+    /// Whether to display the adjustment toggle.
     pub show_adj: bool,
+    /// Whether the adjustment toggle is selected.
     pub adj_enabled: bool,
     /// Theme and config `config` was last derived from; `None` when the caller supplied it.
     config_theme: Option<(Theme, TimeframeBarConfig)>,
@@ -392,6 +406,7 @@ impl TimeframeBar {
         action
     }
 
+    /// Select the displayed date range preset.
     pub fn set_active_timeframe(&mut self, tf: QuickTimeframe) {
         self.active_timeframe = tf;
     }

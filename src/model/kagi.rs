@@ -3,9 +3,9 @@
 //! Kagi charts display price movements as a series of connected vertical
 //! lines whose thickness changes based on trend direction:
 //!
-//! - **Thick (Yin)** -- uptrend; price has broken above the previous
+//! - **Thick** -- uptrend; price has broken above the previous
 //!   significant high.
-//! - **Thin (Yang)** -- downtrend; price has broken below the previous
+//! - **Thin** -- downtrend; price has broken below the previous
 //!   significant low.
 //!
 //! A new line segment is created whenever price reverses by at least the
@@ -34,9 +34,9 @@ pub struct KagiLine {
 /// Kagi line thickness, encoding the current trend direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KagiThickness {
-    /// Thin line -- downtrend (Yang).
+    /// Thin line after a break below the previous significant low.
     Thin,
-    /// Thick line -- uptrend (Yin).
+    /// Thick line after a break above the previous significant high.
     Thick,
 }
 

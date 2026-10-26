@@ -17,15 +17,20 @@ use crate::ui_kit::tab_bar::TabLabel;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PropertiesTab {
     #[default]
+    /// Drawing line, fill and color settings.
     Style,
+    /// Drawing anchor coordinates.
     Coordinates,
     /// Tool-specific levels, sizing and calculation settings.
     Inputs,
+    /// Interval visibility settings.
     Visibility,
+    /// Drawing text and its appearance.
     Text,
 }
 
 impl PropertiesTab {
+    /// Display label for this value.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Style => "Style",
@@ -36,6 +41,7 @@ impl PropertiesTab {
         }
     }
 
+    /// Values in display order.
     pub fn all() -> [Self; 5] {
         [
             Self::Style,

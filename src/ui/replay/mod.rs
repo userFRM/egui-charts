@@ -1,30 +1,9 @@
-//! Replay/playback UI module
+//! Historical bar replay controls, session state and cursor management.
 //!
-//! Historical data replay system for stepping through market data bar-by-bar.
-//! This module provides:
-//!
-//! - Play/pause/step controls for navigating historical data
-//! - Variable playback speeds (0.1x to 100x)
-//! - Progress bar with seek functionality
-//! - Markers for annotating specific bars
-//!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                    ReplayController                         │
-//! │  (Orchestrates replay state, data feeding, and events)      │
-//! └─────────────────────────┬───────────────────────────────────┘
-//!                           │
-//!          ┌────────────────┼────────────────┐
-//!          ▼                ▼                ▼
-//! ┌────────────────┐ ┌─────────────┐ ┌──────────────────┐
-//! │  ReplayState   │ │ ReplayConfig│ │ ReplayControls   │
-//! │ (Current pos,  │ │ (Colors,    │ │ (UI widget for   │
-//! │  playback,     │ │  layout,    │ │  play/pause/     │
-//! │  markers)      │ │  behavior)  │ │  progress)       │
-//! └────────────────┘ └─────────────┘ └──────────────────┘
-//! ```
+//! Use [`ReplayController`] to drive playback over host-supplied bars and apply its
+//! cutoff to the chart with [`Chart::set_replay_time`](crate::Chart::set_replay_time).
+//! [`ReplayControls`] emits playback and seek actions; the host retains or persists
+//! the session and supplies any additional source history.
 //!
 //! # Example
 //!

@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-description = "Financial charting engine for egui: candlesticks and other chart types, drawing tools, technical indicators and a design-token theme system"
+description = "Interactive financial charts for egui with historical and streaming data, studies, drawing tools and order flow"
 repository = "https://github.com/userFRM/egui-charts"
 homepage = "https://github.com/userFRM/egui-charts"
 documentation = "https://docs.rs/egui-charts"
@@ -24,6 +24,9 @@ exclude = [
     "benches/",
     "docs/*",
     "!docs/builder-guide.md",
+    "!docs/site/src/content/docs/*.mdx",
+    "!docs/study-data.md",
+    "!docs/strategy-report.md",
     "fuzz/",
     "*.png",
     "*.gif",

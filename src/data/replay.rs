@@ -15,16 +15,33 @@ pub enum MarketEvent {
     /// Best bid and ask.
     Quote(Level1Quote),
     /// A periodic aggregated book snapshot, also a depth seek anchor.
-    DepthSnapshot { sequence: u64, book: OrderBook },
+    DepthSnapshot {
+        /// Exchange sequence number for this book stream.
+        sequence: u64,
+        /// Aggregated price levels in this snapshot or delta.
+        book: OrderBook,
+    },
     /// Changed aggregated levels.
-    DepthDelta { sequence: u64, book: OrderBook },
+    DepthDelta {
+        /// Exchange sequence number for this book stream.
+        sequence: u64,
+        /// Aggregated price levels in this snapshot or delta.
+        book: OrderBook,
+    },
     /// A periodic per-order snapshot in queue order, also a depth seek anchor.
     OrderSnapshot {
+        /// Exchange sequence number for this book stream.
         sequence: u64,
+        /// Resting orders in queue order.
         orders: Vec<RestingOrder>,
     },
     /// One sequenced resting order change.
-    Order { sequence: u64, event: OrderEvent },
+    Order {
+        /// Exchange sequence number for this book stream.
+        sequence: u64,
+        /// Change to one resting order.
+        event: OrderEvent,
+    },
 }
 
 /// One instrument's event at an observation instant. The host supplies a merge sequence to
