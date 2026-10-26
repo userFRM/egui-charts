@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Restoring a layout rejects main or pane scales requesting more than 1,000 tick marks before changing the chart. Direct tick generation caps the limit at 1,000, and built-in numeric formatters cap precision at 324 places even when fields are set directly, preventing overflow and formatting panics. Migration: lower saved `tick_marks.max_marks` values above 1,000 before restoring; formatter precisions above 324 now produce at most 324 decimal places. ([#947](https://github.com/userFRM/egui-charts/issues/947))
+
 - Bar CSV/JSON imports and exports and `Chart::export_csv` return errors with `Send + Sync` bounds, allowing results and original error values to cross worker-thread boundaries. Migration: update explicitly typed results, function pointers and error adapters from `Box<dyn std::error::Error>` to `Box<dyn std::error::Error + Send + Sync>`. ([#950](https://github.com/userFRM/egui-charts/issues/950))
 
 - Session range lookup clips its final one-minute check to the requested end and uses checked timestamp addition, so sub-minute ranges do not report a later break and ranges at the maximum UTC timestamp do not panic. Empty and reversed ranges remain empty. ([#953](https://github.com/userFRM/egui-charts/issues/953))

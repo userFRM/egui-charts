@@ -31,7 +31,7 @@ pub struct PriceMarkGeneratorConfig {
     /// Min spacing between marks in pixels, which keeps labels from overlapping at any density
     pub min_spacing: f32,
 
-    /// Max number of marks
+    /// Max number of marks, capped at 1,000 during generation.
     pub max_marks: usize,
 
     /// Target density (marks per 100 pixels): marks stay at least `100 / target_density`
@@ -40,6 +40,10 @@ pub struct PriceMarkGeneratorConfig {
 
     /// Min price step (for crypto/forex precision)
     pub min_price_step: Option<f64>,
+}
+
+impl PriceMarkGeneratorConfig {
+    pub(crate) const MAX_MARKS: usize = 1_000;
 }
 
 impl Default for PriceMarkGeneratorConfig {
@@ -68,7 +72,8 @@ impl PriceMarkGenerator {
     }
 
     /// Create with custom config
-    pub fn with_config(config: PriceMarkGeneratorConfig) -> Self {
+    pub fn with_config(mut config: PriceMarkGeneratorConfig) -> Self {
+        config.max_marks = config.max_marks.min(PriceMarkGeneratorConfig::MAX_MARKS);
         Self { config }
     }
 
@@ -493,6 +498,15 @@ mod tests {
     fn test_linear_marks_generation() {
         let generator = PriceMarkGenerator::new();
         let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 100.0, 200.0));
+        let oversized = PriceMarkGenerator::with_config(PriceMarkGeneratorConfig {
+            max_marks: usize::MAX,
+            ..Default::default()
+        });
+        assert!(
+            !oversized
+                .generate_marks(&map(PriceScaleMode::Normal, 100.0, 200.0))
+                .is_empty()
+        );
 
         assert!(!marks.is_empty());
         assert!(marks.len() <= 20); // Max marks constraint

@@ -192,6 +192,8 @@ impl Chart {
                 && margins.top >= 0.0
                 && margins.bottom >= 0.0
                 && margins.top + margins.bottom < 1.0
+                && scale.options().tick_marks.max_marks
+                    <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
         };
         if snapshot
             .price_scale
@@ -545,6 +547,18 @@ mod tests {
             snapshot.bar_spacing = bad;
             snapshot.symbol = "Invalid".into();
             assert!(restored.restore(&snapshot).is_err());
+            assert_eq!(restored.symbol(), "A");
+        }
+        for key in ["price_scale", "panes"] {
+            let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let scale = if key == "price_scale" {
+                &mut invalid["charts"][0]["price_scale"]
+            } else {
+                &mut invalid["charts"][0]["panes"][0]["scale"]
+            };
+            scale["options"]["tick_marks"]["max_marks"] = usize::MAX.into();
+            let invalid = SavedLayout::from_json(&invalid.to_string()).unwrap();
+            assert!(restored.restore(&invalid.charts[0]).is_err());
             assert_eq!(restored.symbol(), "A");
         }
         // Both theme palettes survive instead of being replaced by dialog defaults.
