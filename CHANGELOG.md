@@ -297,6 +297,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Fitting and reading a UTC chart range retain fractional bar precision across long session gaps, including ranges contained within a gap after thousands of bars. Public pixel-coordinate and saved-view APIs keep their existing types.
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 

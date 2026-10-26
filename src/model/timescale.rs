@@ -63,10 +63,10 @@ const DEFAULT_MIN_BAR_SPACING: f32 = 0.5;
 /// ```
 #[derive(Debug, Clone)]
 pub struct TimeScale {
-    /// Bar spacing in pixels
-    bar_spacing: f32,
+    /// Bar spacing in pixels; retain fractional precision when fitting session gaps.
+    bar_spacing: f64,
     /// Right offset in bars from the edge
-    right_offset: f32,
+    right_offset: f64,
     /// Configured right offset in bars, restored at the live edge
     live_right_offset: f32,
     /// Configured right offset in pixels, restored at the live edge; has priority over bars
@@ -132,7 +132,9 @@ impl TimeScale {
     /// option has priority over bars.
     pub(crate) fn live_edge_offset(&self) -> f32 {
         self.live_right_offset_pixels
-            .map_or(self.live_right_offset, |px| px / self.bar_spacing)
+            .map_or(self.live_right_offset as f64, |px| {
+                px as f64 / self.bar_spacing
+            }) as f32
     }
 
     /// Set the width of the chart area (must be called when chart resizes)
@@ -151,7 +153,7 @@ impl TimeScale {
 
     /// Set bar spacing (with clamping to constraints)
     pub fn set_bar_spacing(&mut self, spacing: f32) {
-        self.bar_spacing = self.clamp_spacing(spacing);
+        self.bar_spacing = self.clamp_spacing(spacing as f64);
         // CRITICAL: Changing bar_spacing changes visible_bars calculation,
         // which affects edge constraints. Must re-apply constraints!
         self.apply_constraints();
@@ -161,14 +163,16 @@ impl TimeScale {
     pub fn set_min_bar_spacing(&mut self, min: f32) {
         self.min_bar_spacing = min.max(0.0);
         // Re-apply spacing to respect new constraints
-        self.set_bar_spacing(self.bar_spacing);
+        self.bar_spacing = self.clamp_spacing(self.bar_spacing);
+        self.apply_constraints();
     }
 
     /// Update max bar spacing (0 = unlimited)
     pub fn set_max_bar_spacing(&mut self, max: f32) {
         self.max_bar_spacing = max.max(0.0);
         // Re-apply spacing to respect new constraints
-        self.set_bar_spacing(self.bar_spacing);
+        self.bar_spacing = self.clamp_spacing(self.bar_spacing);
+        self.apply_constraints();
     }
 
     /// Configure whether left edge is fixed
@@ -185,7 +189,7 @@ impl TimeScale {
 
     /// Set right offset (with constraint checking)
     pub fn set_right_offset(&mut self, offset: f32) {
-        self.right_offset = offset;
+        self.right_offset = offset as f64;
         self.apply_constraints();
     }
 
@@ -197,12 +201,12 @@ impl TimeScale {
 
     /// Get current bar spacing
     pub fn bar_spacing(&self) -> f32 {
-        self.bar_spacing
+        self.bar_spacing as f32
     }
 
     /// Get current right offset
     pub fn right_offset(&self) -> f32 {
-        self.right_offset
+        self.right_offset as f32
     }
 
     /// Within 1.5 slots of the live edge, including future whitespace.
@@ -223,12 +227,12 @@ impl TimeScale {
 
     /// Calculate visible logical range
     pub fn visible_logical_range(&self) -> LogicalRange {
-        let base_idx = self.base_idx() as f32;
-        let bars_len = self.width / self.bar_spacing;
+        let base_idx = self.base_idx() as f64;
+        let bars_len = self.width as f64 / self.bar_spacing;
         let right_border = base_idx + self.right_offset;
         let left_border = right_border - bars_len + 1.0;
 
-        LogicalRange::new(left_border, right_border)
+        LogicalRange::new(left_border as f32, right_border as f32)
     }
 
     /// Convert logical index to x coord
@@ -237,9 +241,9 @@ impl TimeScale {
     /// NOT self.width (which may differ from the chart area's rect).
     pub fn idx_to_coord(&self, index: usize, rect_min_x: f32, rect_width: f32) -> f32 {
         let base_idx = self.base_idx();
-        let delta_from_right = base_idx as f32 + self.right_offset - index as f32;
-        let relative_x = rect_width - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        rect_min_x + relative_x
+        let delta_from_right = base_idx as f64 + self.right_offset - index as f64;
+        let relative_x = rect_width as f64 - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
+        (rect_min_x as f64 + relative_x) as f32
     }
 
     /// Convert fractional bar index to x coord (preserves sub-bar precision)
@@ -248,10 +252,10 @@ impl TimeScale {
     /// IMPORTANT: rect_width must be the actual width of the rect being drawn in,
     /// NOT self.width (which may differ from the chart area's rect).
     pub fn idx_to_coord_precise(&self, index: f32, rect_min_x: f32, rect_width: f32) -> f32 {
-        let base_idx = self.base_idx() as f32;
-        let delta_from_right = base_idx + self.right_offset - index;
-        let relative_x = rect_width - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        rect_min_x + relative_x
+        let base_idx = self.base_idx() as f64;
+        let delta_from_right = base_idx + self.right_offset - index as f64;
+        let relative_x = rect_width as f64 - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
+        (rect_min_x as f64 + relative_x) as f32
     }
 
     /// Convert x coord to logical index
@@ -259,22 +263,35 @@ impl TimeScale {
     /// IMPORTANT: rect_width must be the actual width of the rect being used,
     /// NOT self.width (which may differ from the chart area's rect).
     pub fn coord_to_idx(&self, x: f32, rect_min_x: f32, rect_width: f32) -> f32 {
-        let base_idx = self.base_idx() as f32;
-        let relative_x = x - rect_min_x;
-        let delta_from_right = (rect_width - relative_x - 1.0) / self.bar_spacing - 0.5;
+        self.coord_to_idx_f64(x, rect_min_x, rect_width) as f32
+    }
+
+    /// Logical coordinates retain their precision across long gaps between bars.
+    pub(crate) fn coord_to_idx_f64(&self, x: f32, rect_min_x: f32, rect_width: f32) -> f64 {
+        let base_idx = self.base_idx() as f64;
+        let relative_x = x as f64 - rect_min_x as f64;
+        let delta_from_right = (rect_width as f64 - relative_x - 1.0) / self.bar_spacing - 0.5;
         base_idx + self.right_offset - delta_from_right
+    }
+
+    /// Fit fractional logical edges while retaining their sub-bar precision.
+    #[cfg(feature = "widget")]
+    pub(crate) fn fit_logical_range(&mut self, left: f64, right: f64) {
+        self.bar_spacing = self.clamp_spacing((self.width as f64 - 1.0) / (right - left));
+        self.right_offset = right - self.base_idx() as f64 - 0.5;
+        self.apply_constraints();
     }
 
     /// Scroll by number of bars (negative = left, positive = right)
     pub fn scroll_bars(&mut self, bars: f32) {
-        self.right_offset -= bars;
+        self.right_offset -= bars as f64;
         self.apply_constraints();
     }
 
     /// Scroll by pixels
     pub fn scroll_pixels(&mut self, pixels: f32) {
-        let bars = pixels / self.bar_spacing;
-        self.scroll_bars(bars);
+        self.right_offset -= pixels as f64 / self.bar_spacing;
+        self.apply_constraints();
     }
 
     /// Zoom at a specific point
@@ -285,10 +302,10 @@ impl TimeScale {
         let _old_right_offset = self.right_offset;
 
         // Get the bar index at anchor point BEFORE zoom
-        let anchor_bar_idx = self.coord_to_idx(rect_min_x + anchor_x, rect_min_x, rect_width);
+        let anchor_bar_idx = self.coord_to_idx_f64(rect_min_x + anchor_x, rect_min_x, rect_width);
 
         // Calculate new bar spacing
-        let zoom_scale = delta;
+        let zoom_scale = delta as f64;
         let new_spacing = old_spacing + zoom_scale * (old_spacing / 10.0);
 
         self.bar_spacing = self.clamp_spacing(new_spacing);
@@ -298,9 +315,9 @@ impl TimeScale {
         //   x = rect_min_x + rect_width - (base_idx + right_offset - bar_idx + 0.5) * bar_spacing - 1
         // Solving for right_offset:
         //   right_offset = bar_idx - base_idx + (rect_width - (x - rect_min_x) - 1) / bar_spacing - 0.5
-        let base_idx = self.base_idx() as f32;
-        let relative_anchor = anchor_x; // anchor_x is already relative to rect_min_x
-        let delta_from_right = (rect_width - relative_anchor - 1.0) / self.bar_spacing - 0.5;
+        let base_idx = self.base_idx() as f64;
+        let relative_anchor = anchor_x as f64; // anchor_x is already relative to rect_min_x
+        let delta_from_right = (rect_width as f64 - relative_anchor - 1.0) / self.bar_spacing - 0.5;
         let calculated_offset = anchor_bar_idx - base_idx + delta_from_right;
         self.right_offset = calculated_offset;
 
@@ -337,7 +354,9 @@ impl TimeScale {
             let (pixels, bars) = self
                 .live_right_offset_pixels
                 .map_or((0.0, self.live_right_offset), |px| (px, 0.0));
-            self.set_bar_spacing((self.width - pixels) / (self.bar_cnt as f32 + bars).max(1.0));
+            self.bar_spacing = self.clamp_spacing(
+                (self.width as f64 - pixels as f64) / (self.bar_cnt as f64 + bars as f64).max(1.0),
+            );
             self.scroll_to_realtime();
         }
     }
@@ -368,7 +387,7 @@ impl TimeScale {
                 (max_right, min_val)
             }
         } else {
-            (f32::NEG_INFINITY, max_right)
+            (f64::NEG_INFINITY, max_right)
         };
 
         // Clamp right_offset between bounds
@@ -384,22 +403,22 @@ impl TimeScale {
     /// This limits how far we can scroll to the LEFT (showing older data): with
     /// `fix_left_edge` to the first bar at the left edge, also when every bar fits;
     /// without it to 100 bars past the first.
-    fn calculate_min_right_offset(&self) -> Option<f32> {
+    fn calculate_min_right_offset(&self) -> Option<f64> {
         if self.bar_cnt == 0 || self.bar_spacing <= 0.0 || self.width <= 0.0 {
             return None;
         }
 
         if self.fix_left_edge {
             // The offset that puts the left border of `visible_logical_range` at bar 0.
-            Some(self.width / self.bar_spacing - self.bar_cnt as f32)
+            Some(self.width as f64 / self.bar_spacing - self.bar_cnt as f64)
         } else {
-            Some(-(self.bar_cnt as f32 + 100.0))
+            Some(-(self.bar_cnt as f64 + 100.0))
         }
     }
 
     /// Calculate max allowed right_offset (most positive value).
     /// This limits how far we can scroll to the RIGHT (into the future).
-    fn calculate_max_right_offset(&self) -> f32 {
+    fn calculate_max_right_offset(&self) -> f64 {
         if self.bar_cnt == 0 {
             return 0.0;
         }
@@ -410,27 +429,27 @@ impl TimeScale {
             // Allow scrolling into future whitespace
             // Use a generous bound based on visible bars at minimum zoom
 
-            self.width / self.spacing_bounds().0
+            self.width as f64 / self.spacing_bounds().0
         }
     }
 
     /// The spacing bounds in a form `clamp` accepts: a NaN or infinite minimum is the default, a NaN
     /// or infinite maximum is unlimited (0), and a minimum above a set maximum is that maximum.
-    fn spacing_bounds(&self) -> (f32, f32) {
+    fn spacing_bounds(&self) -> (f64, f64) {
         let max = if self.max_bar_spacing.is_finite() {
-            self.max_bar_spacing.max(0.0)
+            self.max_bar_spacing.max(0.0) as f64
         } else {
             0.0
         };
         let min = if self.min_bar_spacing.is_finite() {
-            self.min_bar_spacing.max(0.0)
+            self.min_bar_spacing.max(0.0) as f64
         } else {
-            DEFAULT_MIN_BAR_SPACING
+            DEFAULT_MIN_BAR_SPACING as f64
         };
         (if max > 0.0 { min.min(max) } else { min }, max)
     }
 
-    fn clamp_spacing(&self, spacing: f32) -> f32 {
+    fn clamp_spacing(&self, spacing: f64) -> f64 {
         match self.spacing_bounds() {
             (min, max) if max > 0.0 => spacing.clamp(min, max),
             (min, _) => spacing.max(min),
@@ -439,7 +458,7 @@ impl TimeScale {
 
     /// Get number of visible candles
     pub fn visible_candles(&self) -> usize {
-        (self.width / self.bar_spacing).floor() as usize
+        (self.width as f64 / self.bar_spacing).floor() as usize
     }
 }
 
