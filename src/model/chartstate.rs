@@ -359,19 +359,7 @@ impl ChartState {
             .find(|bar| !bar.is_whitespace())
             .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
-        let relative = matches!(
-            mode,
-            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
-        );
-        // Without a usable base there is no percentage, so such a frame shows prices. The other
-        // modes ignore the base, so a scroll does not change their transform.
-        let transform = if !relative {
-            PriceTransform { mode, base: 0.0 }
-        } else if base.is_finite() && base != 0.0 {
-            PriceTransform { mode, base }
-        } else {
-            PriceTransform::default()
-        };
+        let transform = PriceTransform::new(mode, base);
         let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
         let study_values = indicators
             .into_iter()
@@ -461,7 +449,13 @@ impl ChartState {
                 let range = visible
                     .iter()
                     .flat_map(|bar| [bar.low, bar.high])
-                    .filter(|value| value.is_finite())
+                    .chain(
+                        visible
+                            .iter()
+                            .flat_map(|bar| [bar.open, bar.close])
+                            .filter(|_| mode == PriceScaleMode::Logarithmic),
+                    )
+                    .filter(|value| transform.to_scale(*value).is_finite())
                     .fold(None, |range: Option<(f64, f64)>, value| {
                         Some(range.map_or((value, value), |(min, max)| {
                             (min.min(value), max.max(value))

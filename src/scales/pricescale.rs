@@ -177,6 +177,20 @@ pub struct PriceTransform {
 }
 
 impl PriceTransform {
+    /// Relative modes without a finite, nonzero reference show ordinary prices instead.
+    pub(crate) fn new(mode: PriceScaleMode, base: f64) -> Self {
+        match mode {
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => {
+                if base.is_finite() && base != 0.0 {
+                    Self { mode, base }
+                } else {
+                    Self::default()
+                }
+            }
+            _ => Self { mode, base: 0.0 },
+        }
+    }
+
     /// Converts a price to scale units.
     ///
     /// Logarithmic maps non-positive prices to negative infinity, which
