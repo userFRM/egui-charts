@@ -295,9 +295,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Studies sourced from another study continue refreshing during continuous ticks. Incremental parents update before full refresh selection, and consumers can use retained parent results while tail changes wait, preserving the one-study full-recompute budget and refresh order. Full history and source invalidations still wait for their parent. ([#911](https://github.com/userFRM/egui-charts/issues/911))
-- Native trackpad zoom events use the same pointer anchor and sensitivity as contact pinches. Contact input takes precedence when both are reported, and wheel zoom remains applied once. ([#918](https://github.com/userFRM/egui-charts/issues/918))
-- Touch panning respects its horizontal and vertical permissions independently of mouse dragging and pinch scaling, including two-finger translation and the transition back to one finger. Price and time axis drags use their own scaling permissions even when plot panning is disabled; disabled axis gestures do not fall through to plot panning. ([#919](https://github.com/userFRM/egui-charts/issues/919), [#920](https://github.com/userFRM/egui-charts/issues/920))
+- Studies sourced from another study continue refreshing during continuous ticks, within the existing full-recompute budget. ([#911](https://github.com/userFRM/egui-charts/issues/911))
+
+- Native trackpad pinches zoom around the pointer and exit tracking mode. Contact input takes precedence when both are reported, and wheel zoom remains applied once. ([#918](https://github.com/userFRM/egui-charts/issues/918))
+
+- Touch panning respects its horizontal and vertical permissions independently of mouse dragging and pinch scaling, including two-finger translation and the transition back to one finger. Price and time axis drags use their own scaling permissions even when plot panning is disabled and retain the gesture after leaving the axis; disabled axis gestures do not pan the plot. ([#919](https://github.com/userFRM/egui-charts/issues/919), [#920](https://github.com/userFRM/egui-charts/issues/920))
 
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))

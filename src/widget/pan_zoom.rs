@@ -202,6 +202,7 @@ impl Chart {
                 // zoom_delta < 1.0 means fingers pinching (zoom out)
                 let zoom_scale = (zoom_delta - 1.0) * 2.0;
                 self.pending_scroll_time = None;
+                self.tracking_mode_active = false;
 
                 // Use hover position or center of chart as zoom anchor
                 let zoom_point_x = self.zoom_anchor(
@@ -333,7 +334,8 @@ impl Chart {
             self.scroll_start_offset,
             response.interact_pointer_pos(),
         ) {
-            if price_axis_rect.contains(start_pos) {
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(start_pos);
+            if price_axis_rect.contains(origin) {
                 if self
                     .chart_options
                     .handle_scale
@@ -341,13 +343,9 @@ impl Chart {
                     .price
                 {
                     // Zoom by this frame's movement around the point where the drag began.
-                    let anchor_y = ui
-                        .input(|i| i.pointer.press_origin())
-                        .unwrap_or(start_pos)
-                        .y;
-                    self.price_axis_drag = Some((anchor_y, response.drag_delta().y));
+                    self.price_axis_drag = Some((origin.y, response.drag_delta().y));
                 }
-            } else if time_axis_rect.contains(start_pos) {
+            } else if time_axis_rect.contains(origin) {
                 if self.chart_options.handle_scale.axis_pressed_mouse_move.time {
                     let dx = curr_pos.x - start_pos.x;
                     if dx.abs() > 0.1 {
@@ -700,13 +698,15 @@ mod tests {
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
     /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_and_contact_pinch_keep_the_zoom_anchor() {
-        for (contacts, native, enabled) in [
-            (false, true, true),
-            (true, false, true),
-            (true, true, true),
-            (false, true, false),
+        for (contacts, native, enabled, tracking) in [
+            (false, true, true, false),
+            (true, false, true, false),
+            (true, true, true, false),
+            (false, true, false, false),
+            (false, true, true, true),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
@@ -733,6 +733,9 @@ mod tests {
                     ],
                 );
             }
+            if tracking {
+                chart.enable_tracking_mode();
+            }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();
             if contacts {
@@ -755,6 +758,11 @@ mod tests {
             let expected_offset =
                 offset + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
             assert!((moved - expected_offset).abs() < 1e-4);
+            frame(&ctx, &mut chart, 0.08, vec![]);
+            assert_eq!(chart.get_time_scale_state(), (zoomed, moved));
+            if tracking {
+                assert!(!chart.is_tracking_mode_active());
+            }
         }
     }
 
@@ -1109,7 +1117,8 @@ mod tests {
     }
 
     /// Two contacts translate each enabled axis once, independently of pinch scaling.
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn two_finger_translation_respects_touch_permissions() {
         for pinch in [false, true] {
             for (horizontal, vertical) in
@@ -1205,78 +1214,113 @@ mod tests {
         }
     }
 
-    /// Axis drag scaling uses its own permission even when plot dragging is disabled.
-    #[test]
+    /// Axis drags keep their own permission after leaving the axis, including in narrow layouts.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn axis_drag_permissions_are_independent_of_plot_drag() {
-        for price in [false, true] {
-            for plot in [false, true] {
-                for axis in [true, false] {
-                    let ctx = egui::Context::default();
-                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                    chart.chart_options.handle_scroll.pressed_mouse_move = plot;
-                    chart
-                        .chart_options
-                        .handle_scale
-                        .axis_pressed_mouse_move
-                        .price = axis;
-                    chart
-                        .chart_options
-                        .handle_scale
-                        .axis_pressed_mouse_move
-                        .time = axis;
-                    frame(&ctx, &mut chart, 0.0, vec![]);
-                    let rect = chart.last_rendered_price_rect;
-                    let start = if price {
-                        Pos2::new(rect.right() + 10.0, rect.center().y)
-                    } else {
-                        Pos2::new(
-                            rect.center().x,
-                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
-                        )
-                    };
-                    let end = start
-                        + if price {
-                            egui::vec2(0.0, 100.0)
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 800.0),
+            (crate::theme::Theme::dark(), 800.0),
+            (crate::theme::Theme::light(), 360.0),
+            (crate::theme::Theme::dark(), 360.0),
+        ] {
+            let frame = |ctx: &egui::Context, chart: &mut Chart, time, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            for price in [false, true] {
+                for plot in [false, true] {
+                    for axis in [true, false] {
+                        let ctx = egui::Context::default();
+                        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                        chart.set_theme(&ctx, &theme);
+                        chart.chart_options.handle_scroll.pressed_mouse_move = plot;
+                        chart
+                            .chart_options
+                            .handle_scale
+                            .axis_pressed_mouse_move
+                            .price = axis;
+                        chart
+                            .chart_options
+                            .handle_scale
+                            .axis_pressed_mouse_move
+                            .time = axis;
+                        frame(&ctx, &mut chart, 0.0, vec![]);
+                        let rect = chart.last_rendered_price_rect;
+                        let start = if price {
+                            Pos2::new(rect.right() + 10.0, rect.center().y)
                         } else {
-                            egui::vec2(100.0, 0.0)
+                            Pos2::new(
+                                rect.center().x,
+                                rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                            )
                         };
-                    let before = chart.state.price_scale().range();
-                    let before = before.max - before.min;
-                    let (spacing, offset) = chart.get_time_scale_state();
-                    let button = |pos, pressed| Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
-                    };
-                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
-                    frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
-                    frame(&ctx, &mut chart, 0.06, vec![Event::PointerMoved(end)]);
-                    frame(&ctx, &mut chart, 0.08, vec![button(end, false)]);
-                    let expected_span = if price && axis {
-                        before * (100.0 / rect.height() as f64).exp()
-                    } else {
-                        before
-                    };
-                    let expected_spacing = if !price && axis {
-                        spacing * 1.1
-                    } else {
-                        spacing
-                    };
-                    assert!(
-                        ((chart.state.price_scale().range().max
-                            - chart.state.price_scale().range().min)
-                            - expected_span)
-                            .abs()
-                            < 1e-5,
-                        "price={price}, plot={plot}, axis={axis}"
-                    );
-                    assert!(
-                        (chart.state.time_scale().bar_spacing() - expected_spacing).abs() < 1e-5,
-                        "price={price}, plot={plot}, axis={axis}"
-                    );
-                    if !axis {
-                        assert_eq!(chart.state.time_scale().right_offset(), offset);
+                        let end = start
+                            + if price {
+                                egui::vec2(-100.0, 100.0)
+                            } else {
+                                egui::vec2(100.0, -100.0)
+                            };
+                        let before = chart.state.price_scale().range();
+                        let before = before.max - before.min;
+                        let (spacing, offset) = chart.get_time_scale_state();
+                        let button = |pos, pressed| Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        };
+                        frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                        frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.06,
+                            vec![Event::PointerMoved(start.lerp(end, 0.5))],
+                        );
+                        frame(&ctx, &mut chart, 0.08, vec![Event::PointerMoved(end)]);
+                        frame(&ctx, &mut chart, 0.10, vec![button(end, false)]);
+                        let expected_span = if price && axis {
+                            before * (100.0 / rect.height() as f64).exp()
+                        } else {
+                            before
+                        };
+                        let expected_spacing = if !price && axis {
+                            spacing * 1.05 * 1.05
+                        } else {
+                            spacing
+                        };
+                        assert!(
+                            ((chart.state.price_scale().range().max
+                                - chart.state.price_scale().range().min)
+                                - expected_span)
+                                .abs()
+                                < 1e-5,
+                            "price={price}, plot={plot}, axis={axis}"
+                        );
+                        assert!(
+                            (chart.state.time_scale().bar_spacing() - expected_spacing).abs()
+                                < 1e-5,
+                            "price={price}, plot={plot}, axis={axis}"
+                        );
+                        if !axis {
+                            assert_eq!(chart.state.time_scale().right_offset(), offset);
+                        }
                     }
                 }
             }
