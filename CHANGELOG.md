@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
+
 - Selecting a drawing in the object tree reveals offscreen anchors by panning while keeping zoom and the price scale's auto/manual state. Double-click and Zoom to object use the same navigation instead of fitting a manual range to one drawing. `Chart::reset_chart_view` restores configured bar spacing and right margin, scrolls to the latest bar, cancels pending view motion and returns every price scale in every pane to auto-scaling. Chart-menu, keyboard, navigation-button and demo resets use this method. ([#935](https://github.com/userFRM/egui-charts/issues/935))
 - The command palette consumes Enter in search and Enter or Space on a focused row before returning a command, so a host can open an export dialog without also submitting its empty save path. ([#834](https://github.com/userFRM/egui-charts/issues/834))
 
