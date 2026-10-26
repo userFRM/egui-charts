@@ -464,21 +464,17 @@ mod tests {
         assert_eq!("2hour".parse::<Timeframe>(), Ok(custom(7200)));
         assert_eq!("2d".parse::<Timeframe>(), Ok(custom(172800)));
         assert_eq!("2day".parse::<Timeframe>(), Ok(custom(172800)));
-        for (text, expected, label) in [
-            ("2week", Timeframe::Weeks(NonZeroU32::new(2).unwrap()), "2W"),
-            (
-                "3month",
-                Timeframe::Months(NonZeroU32::new(3).unwrap()),
-                "3M",
-            ),
+        for (text, label, saved) in [
+            ("2w", "2W", r#"{"Weeks":2}"#),
+            ("3month", "3M", r#"{"Months":3}"#),
         ] {
-            assert_eq!(text.parse::<Timeframe>(), Ok(expected));
-            assert_eq!(expected.to_string(), label);
-            assert_eq!(label.parse::<Timeframe>(), Ok(expected));
-            assert_eq!(Timeframe::from_resolution(label), Some(expected));
-            let saved = serde_json::to_string(&expected).unwrap();
-            assert_eq!(serde_json::from_str::<Timeframe>(&saved).unwrap(), expected);
-            assert!(expected.is_custom());
+            let timeframe: Timeframe = text.parse().unwrap();
+            assert_eq!(serde_json::to_string(&timeframe).unwrap(), saved);
+            assert_eq!(timeframe.to_string(), label);
+            assert_eq!(label.parse::<Timeframe>(), Ok(timeframe));
+            assert_eq!(Timeframe::from_resolution(label), Some(timeframe));
+            assert_eq!(serde_json::from_str::<Timeframe>(saved).unwrap(), timeframe);
+            assert!(timeframe.is_custom());
         }
         for text in ["0w", "0month", "-1month", "4294967296month"] {
             assert!(text.parse::<Timeframe>().is_err());
