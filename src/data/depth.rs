@@ -139,6 +139,18 @@ impl Book {
         })
     }
 
+    /// Synchronized levels, best first on each side, without copying the book.
+    pub(crate) fn levels(&self) -> Option<impl Iterator<Item = (bool, &OrderBookLevel)>> {
+        self.sequence?;
+        Some(
+            self.bids
+                .iter()
+                .rev()
+                .map(|(_, level)| (true, level))
+                .chain(self.asks.iter().rev().map(|(_, level)| (false, level))),
+        )
+    }
+
     /// The best `rows` price rows of each side, bids then asks, each best first, as the row of
     /// `ticks_per_row` integer ticks the levels fall in, rounding down, and the sum of their
     /// sizes. `None` for a book without a tick size.

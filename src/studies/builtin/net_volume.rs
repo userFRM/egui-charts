@@ -29,6 +29,12 @@ impl Default for NetVolume {
 }
 
 impl Indicator for NetVolume {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn value_format(&self) -> crate::studies::StudyFormat {
         crate::studies::StudyFormat::Volume
     }

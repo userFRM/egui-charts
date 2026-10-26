@@ -1,5 +1,17 @@
 //! Typed input schemas for built-in and host studies.
 
+use crate::model::{PriceSource, Timeframe};
+use egui::Color32;
+
+/// A price series or an output of another study on the chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StudySource {
+    /// A field or average of fields of the input bars.
+    Price(PriceSource),
+    /// A stable chart study id and its zero-based output column, without plot displacement.
+    Study { id: usize, plot: usize },
+}
+
 /// A study input's current value.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum InputValue {
@@ -13,6 +25,14 @@ pub enum InputValue {
     Choice(usize),
     /// An enabled or disabled input.
     Toggle(bool),
+    /// A price field or another study's output.
+    Source(StudySource),
+    /// An RGBA colour.
+    Color(Color32),
+    /// A calculation interval; `None` follows the chart.
+    Timeframe(Option<Timeframe>),
+    /// A host-resolved symbol; an empty string follows the chart.
+    Symbol(String),
 }
 
 /// The accepted values of a study input.
@@ -28,6 +48,14 @@ pub enum InputKind {
     Choice(Vec<String>),
     /// An enabled or disabled input.
     Toggle,
+    /// A price field or another study's output. The chart checks dependency availability.
+    Source,
+    /// An RGBA colour.
+    Color,
+    /// A calculation interval, or the chart interval.
+    Timeframe,
+    /// A host-resolved symbol, or the chart symbol.
+    Symbol,
 }
 
 /// An editable input, with a stable study-local id and its current value.
@@ -39,6 +67,8 @@ pub struct StudyInput {
     pub label: String,
     /// Current value.
     pub value: InputValue,
+    /// Initial value, retained when the current value is edited.
+    pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
 }
@@ -54,9 +84,16 @@ impl StudyInput {
         Self {
             id: id.into(),
             label: label.into(),
+            default: value.clone(),
             value,
             kind,
         }
+    }
+
+    /// Set the declared default independently of the current value.
+    pub fn with_default(mut self, value: InputValue) -> Self {
+        self.default = value;
+        self
     }
 
     /// Check a value against this input's schema. Setters must also validate values.
@@ -68,7 +105,13 @@ impl StudyInput {
                 v.is_finite() && (*min..=*max).contains(v)
             }
             (InputKind::Choice(choices), InputValue::Choice(v)) => *v < choices.len(),
-            (InputKind::Toggle, InputValue::Toggle(_)) => true,
+            (InputKind::Toggle, InputValue::Toggle(_))
+            | (InputKind::Source, InputValue::Source(_))
+            | (InputKind::Color, InputValue::Color(_))
+            | (InputKind::Timeframe, InputValue::Timeframe(_)) => true,
+            (InputKind::Symbol, InputValue::Symbol(value)) => {
+                value.trim() == value && !value.chars().any(char::is_control)
+            }
             _ => false,
         }
     }
@@ -162,7 +205,9 @@ macro_rules! input_assign {
 macro_rules! study_inputs {
     ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*)),+ $(,)? ; $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
-            vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))),+]
+            let defaults = Self::default();
+            vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
+                .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)),+]
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), &'static str> {

@@ -1,6 +1,7 @@
 //! Data structures for settings state - Canvas style
 
 use super::types::{BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode};
+use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -270,22 +271,91 @@ impl Default for ScalesAndLinesSettings {
     }
 }
 
-/// Trading tab settings
+/// Trading tab settings: the Buy and Sell buttons' behaviour, notifications and the layers
+/// [`Trading::show`](crate::ui::trading::Trading::show) draws, through
+/// [`Trading::display`](crate::ui::trading::Trading::display). The Buy and Sell buttons
+/// themselves are [`StatusLineOptions::show_quote_boxes`]. Saved settings without a field take
+/// its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TradingSettings {
+    /// Buy and Sell place a market order of the order quantity at once instead of opening the
+    /// order ticket.
+    pub instant_orders: bool,
+    /// Show current Bid and Ask tags supplied by the quote source.
+    pub bid_ask_labels: bool,
+    /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
+    /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
+    pub play_execution_sound: bool,
+    /// The name of the sound the host plays for fills, one of the
+    /// [`SettingsDialog::execution_sounds`](super::SettingsDialog::execution_sounds); empty for
+    /// the host's first.
+    pub execution_sound: String,
+    /// Which trading events raise a notification.
+    pub notifications: TradingNotifications,
+    /// Draw the open positions.
     pub show_poss: bool,
+    /// Give each position's profit or loss on its label.
+    pub position_pnl: bool,
+    /// The unit of the positions' profit or loss.
+    pub position_pnl_unit: PnlUnit,
+    /// Show a position's reverse button while its label is hovered.
+    pub reverse_button: bool,
+    /// Draw the working orders and their brackets.
     pub show_orders: bool,
+    /// Give on each take profit and stop loss the profit or loss of reaching it.
+    pub bracket_pnl: bool,
+    /// The unit of the brackets' profit or loss.
+    pub bracket_pnl_unit: PnlUnit,
+    /// Draw the fills on their bars.
     pub show_executions: bool,
-    pub show_buy_sell_btns: bool,
+    /// Write the quantity and average price beside each fill's mark.
+    pub show_execution_labels: bool,
 }
 
 impl Default for TradingSettings {
     fn default() -> Self {
         Self {
+            instant_orders: false,
+            bid_ask_labels: true,
+            play_execution_sound: false,
+            execution_sound: String::new(),
+            notifications: TradingNotifications::All,
             show_poss: true,
+            position_pnl: true,
+            position_pnl_unit: PnlUnit::Money,
+            reverse_button: true,
             show_orders: true,
+            bracket_pnl: true,
+            bracket_pnl_unit: PnlUnit::Money,
             show_executions: true,
-            show_buy_sell_btns: false,
+            show_execution_labels: false,
+        }
+    }
+}
+
+/// Which trading events raise a notification: the levels of the toasts they use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TradingNotifications {
+    /// Fills, partial fills, rejections and refused orders.
+    #[default]
+    All,
+    /// Rejections and refused orders only.
+    Errors,
+    /// None.
+    Off,
+}
+
+impl TradingNotifications {
+    /// Every level, in the order a menu lists them.
+    pub const ALL: [Self; 3] = [Self::All, Self::Errors, Self::Off];
+
+    /// The level's name in menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All events",
+            Self::Errors => "Errors only",
+            Self::Off => "Off",
         }
     }
 }
@@ -318,6 +388,9 @@ pub struct ChartSettingsState {
     pub candle_colors: CandleColorConfig,
     pub precision: PrecisionMode,
     pub timezone: String,
+    /// Show analyst estimates answered by the host feed.
+    #[serde(default)]
+    pub show_price_targets: bool,
 
     // Status line tab
     pub status_line: StatusLineOptions,
@@ -357,6 +430,7 @@ impl Default for ChartSettingsState {
             candle_colors: CandleColorConfig::default(),
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
+            show_price_targets: false,
 
             status_line: StatusLineOptions::default(),
 

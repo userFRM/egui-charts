@@ -383,6 +383,13 @@ impl ChartState {
                     && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
+                #[cfg(not(feature = "drawings"))]
+                let drawing_prices = std::iter::empty();
+                #[cfg(feature = "drawings")]
+                let drawing_prices = crate::studies::plots::drawing_prices(
+                    study,
+                    study_start.max(start)..study_end.max(end),
+                );
                 (0..study.line_cnt())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
@@ -432,6 +439,24 @@ impl ChartState {
                             })
                             .flat_map(|zone| [zone.bottom, zone.top]),
                     )
+                    .chain(
+                        study
+                            .projections()
+                            .iter()
+                            .filter(|projection| {
+                                projection.bars.end > study_start.max(start) as f64
+                                    && projection.bars.start < study_end.max(end) as f64
+                                    && study.plot_style(projection.plot).visible
+                            })
+                            .flat_map(|projection| [projection.bottom, projection.top]),
+                    )
+                    .chain(
+                        study
+                            .volume_profiles(study_start.max(start)..study_end.max(end))
+                            .into_iter()
+                            .flat_map(|plot| [plot.profile.low(), plot.profile.high()]),
+                    )
+                    .chain(drawing_prices)
             });
         let main = main_visible
             .then(|| {

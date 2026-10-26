@@ -103,6 +103,7 @@ struct Live {
     tick_size: Option<f64>,
     /// Samples the book for the chart's depth history, when it keeps one.
     sampler: Option<Sampler>,
+    study_inputs: Vec<crate::studies::OrderFlowInput>,
     taken: TakenIds,
     updates: Updates,
 }
@@ -152,6 +153,8 @@ pub(crate) struct Updates {
     pub(crate) depth_columns: VecDeque<DepthColumn>,
     /// Latest top-of-book quote pushed in this frame.
     pub(crate) quote: Option<Level1Quote>,
+    /// Latest accepted heartbeat, applied to studies after the queued trades are merged.
+    pub(crate) time: Option<DateTime<Utc>>,
     /// The book lost its snapshot: call `Datafeed::request_depth_snapshot`.
     pub(crate) resnapshot: bool,
     pub(crate) symbols_changed: bool,
@@ -179,6 +182,7 @@ impl Updates {
             orders_changed: false,
             depth_columns: VecDeque::new(),
             quote: None,
+            time: None,
             resnapshot: false,
             symbols_changed: false,
             status: None,
@@ -240,6 +244,7 @@ impl Inbox {
             orders_changed: false,
             tick_size,
             sampler: None,
+            study_inputs: Vec::new(),
             taken: TakenIds {
                 order: VecDeque::new(),
                 ids: HashSet::new(),
@@ -260,6 +265,18 @@ impl Inbox {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
             live.updates.depth_columns.clear();
+        }
+    }
+
+    /// Connects active stream studies before their inputs are coalesced for the frame.
+    #[cfg(feature = "widget")]
+    pub(crate) fn study_inputs(
+        &self,
+        id: SubscriptionId,
+        inputs: Vec<crate::studies::OrderFlowInput>,
+    ) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.study_inputs = inputs;
         }
     }
 
@@ -497,12 +514,16 @@ impl Sink {
             {
                 return false;
             }
+            if live.ahead(live.clock.bar_open(now), system) {
+                return false;
+            }
+            live.updates.time = live.updates.time.max(Some(now));
             let open = live.clock.bar_open(now);
             let Some(close) = live.last_close else {
-                return false;
+                return !live.study_inputs.is_empty();
             };
-            if live.forming.is_none_or(|last| open <= last) || live.ahead(open, system) {
-                return false;
+            if live.forming.is_none_or(|last| open <= last) {
+                return !live.study_inputs.is_empty();
             }
             live.updates.bars.insert(
                 open,
@@ -623,6 +644,11 @@ impl Sink {
                 .as_ref()
                 .is_none_or(|old| quote.ts >= old.ts)
             {
+                if let Some(tick) = live.tick_size {
+                    for input in &live.study_inputs {
+                        input.push_quote(&live.clock, &quote, tick);
+                    }
+                }
                 live.updates.quote = Some(quote);
             }
         });
@@ -919,6 +945,13 @@ impl Live {
             Err(lost) => {
                 self.updates.rejected_depth += u64::from(lost.invalid);
                 self.updates.resnapshot |= lost.request;
+            }
+        }
+        if (Utc::now().checked_add_signed(self.offset + TimeDelta::minutes(1)))
+            .is_some_and(|limit| ts <= limit)
+        {
+            for input in &self.study_inputs {
+                input.book_levels(&self.clock, ts, self.book.levels());
             }
         }
     }
@@ -1458,6 +1491,13 @@ mod tests {
                 column(0, 3, &[(1, 2.0), (-1, 4.0)], &[(2, 3.0)]),
                 column(3, 1, &[(1, 6.0), (-1, 4.0)], &[]),
             ]
+        );
+        sink.push_depth_delta(7, &book(5, vec![], vec![]));
+        inbox.sample_depth(sink.id, Some(DepthHistoryConfig::default()));
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert!(
+            updates.depth_columns.is_empty(),
+            "new settings discard pending old rows"
         );
     }
 }

@@ -330,7 +330,7 @@ impl IndicatorPane {
         // Allocate the panel area
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
-        let (rect, _response) = ui.allocate_exact_size(panel_size, Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(panel_size, Sense::hover());
 
         if !ui.is_rect_visible(rect) {
             return;
@@ -388,6 +388,9 @@ impl IndicatorPane {
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
         self.draw_legend(painter, chart_rect, indicator, text_color);
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(ui, chart_rect, table, response.id);
+        }
     }
 
     /// Render with explicit coordinate parameters for perfect x-axis alignment.
@@ -420,7 +423,7 @@ impl IndicatorPane {
         // Allocate the panel area
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
-        let (rect, _response) = ui.allocate_exact_size(panel_size, Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(panel_size, Sense::hover());
 
         if !ui.is_rect_visible(rect) {
             return;
@@ -480,6 +483,9 @@ impl IndicatorPane {
         // Draw indicator legend at top-left. The non-interactive path cannot
         // host a clickable close affordance, so no remove "x" is drawn here.
         self.draw_legend(painter, chart_rect, indicator, text_color);
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(ui, chart_rect, table, response.id);
+        }
     }
 
     /// Render with coordinate alignment and return layout info for hit testing.
@@ -502,7 +508,7 @@ impl IndicatorPane {
         _visible_range: Range<usize>,
         coords: IndicatorCoordParams,
     ) -> Option<PaneInteraction> {
-        self.show_aligned_interactive_in(
+        let interaction = self.show_aligned_interactive_in(
             ui,
             indicator,
             bars,
@@ -513,7 +519,16 @@ impl IndicatorPane {
             None,
             &[],
             false,
-        )
+        )?;
+        if let Some(table) = indicator.table() {
+            crate::studies::table::paint(
+                ui,
+                interaction.chart_rect,
+                table,
+                interaction.response.id,
+            );
+        }
+        Some(interaction)
     }
 
     /// Shows the pane with attached `primitives`. For a bar series, `indicator` supplies only
@@ -549,6 +564,13 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::GraphicsObject,
+                response.enabled(),
+                format!("{} pane", indicator.name()),
+            )
+        });
 
         if !ui.is_rect_visible(rect) {
             return None;
@@ -854,6 +876,11 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for plot in indicator.volume_profiles(visible_range.clone()) {
+            min_val = min_val.min(plot.profile.low());
+            max_val = max_val.max(plot.profile.high());
+        }
+
         for zone in indicator.zones().iter().filter(|zone| {
             zone.bars.end > visible_range.start
                 && zone.bars.start < visible_range.end
@@ -861,6 +888,21 @@ impl IndicatorPane {
         }) {
             min_val = min_val.min(zone.bottom);
             max_val = max_val.max(zone.top);
+        }
+
+        for projection in indicator.projections().iter().filter(|projection| {
+            projection.bars.end > visible_range.start as f64
+                && projection.bars.start < visible_range.end as f64
+                && indicator.plot_style(projection.plot).visible
+        }) {
+            min_val = min_val.min(projection.bottom);
+            max_val = max_val.max(projection.top);
+        }
+
+        #[cfg(feature = "drawings")]
+        for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
         }
 
         if min_val != f64::MAX

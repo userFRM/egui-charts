@@ -10,8 +10,8 @@
 //! `Chart::depth_history` keeps the order book over time in a [`DepthHistory`].
 //!
 //! Symbol search is not part of the feed: it is the separate
-//! [`SymbolSearch`](crate::services::SymbolSearch) service. Until an application wires it into
-//! the symbol dialogs, they list the symbols the application passes them.
+//! [`SymbolSearch`](crate::services::SymbolSearch) service. Connect it to the symbol dialogs,
+//! which otherwise search their supplied list.
 //!
 //! [`resample`] aggregates bars into a longer timeframe.
 
@@ -147,6 +147,13 @@ pub trait Datafeed: MaybeSend + 'static {
     /// [`FeedError::NotSupported`]; live-only feeds need not implement this method.
     fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
         let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
+    /// which leaves the chart without targets and shows no error.
+    fn price_targets(&self, symbol: &str, reply: Reply<crate::services::PriceTargets>) {
+        let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
     }
 

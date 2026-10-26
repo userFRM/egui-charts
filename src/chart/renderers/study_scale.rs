@@ -41,6 +41,15 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
             high = high.max(0.0);
         }
     }
+    for plot in study.volume_profiles(super::volume_profile::profile_range(coords)) {
+        low = low.min(plot.profile.low());
+        high = high.max(plot.profile.high());
+    }
+    #[cfg(feature = "drawings")]
+    for price in crate::studies::plots::drawing_prices(study, start..end) {
+        low = low.min(price);
+        high = high.max(price);
+    }
     if !low.is_finite() {
         low = 0.0;
         high = 1.0;
@@ -179,7 +188,14 @@ mod tests {
                     );
                 }
             });
-            let painted = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::LineSegment {points, stroke} if stroke.color == egui::Color32::BLUE && (points[0].y - 110.0).abs() < 0.001 && (points[1].y - 10.0).abs() < 0.001));
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(egui::Color32::BLUE)
+                        && path.points.len() == 2
+                        && (path.points[0].y - 110.0).abs() < 0.001
+                        && (path.points[1].y - 10.0).abs() < 0.001)
+            });
             let labels: Vec<_> = output
                 .shapes
                 .iter()

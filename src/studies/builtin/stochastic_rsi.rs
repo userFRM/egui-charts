@@ -218,6 +218,12 @@ impl Default for StochasticRSI {
 }
 
 impl Indicator for StochasticRSI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         rsi_period: length("RSI period", 1, usize::MAX),
         stoch_period: length("Stoch period", 1, usize::MAX),

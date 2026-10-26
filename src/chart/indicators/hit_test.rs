@@ -41,6 +41,18 @@ where
         return None;
     }
 
+    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
+        click_pos,
+        indicator,
+        coords,
+        &price_to_y,
+    ) {
+        return Some(IndicatorHitResult {
+            indicator_idx,
+            bar_idx,
+        });
+    }
+
     let line_cnt = indicator.line_cnt();
 
     // Test each line of the indicator
@@ -80,6 +92,13 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
+    #[cfg(feature = "drawings")]
+    if !indicator.drawings().is_empty() {
+        let drawings = crate::studies::plots::mapped_drawings(indicator, coords, value_to_y);
+        return crate::drawings::services::DrawingInteraction::new()
+            .hit_test(click_pos, &drawings, "")
+            .map(|_| coords.x_to_idx(click_pos.x));
+    }
     let mut plot = indicator.plot_style(line_idx);
     if !indicator.candles().is_empty() {
         return indicator
@@ -112,6 +131,18 @@ where
                 .x_to_idx(click_pos.x)
                 .clamp(zone.bars.start, zone.bars.end - 1),
         );
+    }
+    if let Some(projection) = indicator
+        .projections()
+        .iter()
+        .filter(|projection| projection.plot == line_idx)
+        .find(|projection| {
+            projection
+                .rect(coords, &value_to_y)
+                .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
+        })
+    {
+        return Some(projection.bars.start as usize);
     }
     if plot.plot_type == PlotType::Columns
         || (indicator.is_volume() && plot.plot_type == PlotType::Histogram)
@@ -217,6 +248,18 @@ pub fn hit_test_pane_indicator(
     // Ensure click is within chart area
     if !chart_rect.contains(click_pos) {
         return None;
+    }
+
+    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
+        click_pos,
+        indicator,
+        coords,
+        &|price| coords.price_to_y(price),
+    ) {
+        return Some(IndicatorHitResult {
+            indicator_idx,
+            bar_idx,
+        });
     }
 
     let line_cnt = indicator.line_cnt();

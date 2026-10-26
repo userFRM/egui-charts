@@ -123,6 +123,12 @@ impl KnowSureThing {
 }
 
 impl Indicator for KnowSureThing {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         roc_periods[0]: length("Roc periods 1", 1, usize::MAX),
         roc_periods[1]: length("Roc periods 2", 1, usize::MAX),

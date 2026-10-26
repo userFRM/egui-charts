@@ -9,7 +9,7 @@ use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
 use crate::model::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
-    OrderSide, OrderStatus, OrderType, Position, TimeInForce, TradingRules,
+    OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
 
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
@@ -24,7 +24,9 @@ use crate::model::{
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
-/// pays the commission rate times its value. Every change is pushed as an [`AccountEvent`], with
+/// pays the commission rate times its value. Orders that increase exposure beyond the balance
+/// at the account's leverage are rejected. Position exits only reduce the remaining position.
+/// Every change is pushed as an [`AccountEvent`], with
 /// the most recent 1,000 finished orders, executions, balance changes and journal entries.
 /// The history bound keeps a reconnect snapshot below the event stream's burst limit for
 /// ordinary interactive accounts.
@@ -212,7 +214,9 @@ impl State {
         let orders_margin: f64 = self
             .working
             .iter()
-            .filter(|order| !self.exits.contains_key(&order.id))
+            .filter(|order| {
+                !self.exits.contains_key(&order.id) && order.request.position_bracket.is_none()
+            })
             .map(|order| {
                 let price = match order.request.order_type {
                     OrderType::Limit(price) | OrderType::Stop(price) => price,
@@ -318,7 +322,9 @@ impl State {
         }
         // Exits may only reduce the remaining position, including after a manual close or reverse.
         for mut exit in self.working.clone() {
-            if exit.request.symbol != request.symbol || !self.exits.contains_key(&exit.id) {
+            if exit.request.symbol != request.symbol
+                || (!self.exits.contains_key(&exit.id) && exit.request.position_bracket.is_none())
+            {
                 continue;
             }
             let buy = exit.request.side == OrderSide::Buy;
@@ -349,6 +355,10 @@ impl State {
             };
             let mut exit = OrderRequest::new(&request.symbol, side, protected, order_type(price));
             exit.time_in_force = TimeInForce::GoodTillCancelled;
+            exit.position_bracket = Some(match exit.order_type {
+                OrderType::Limit(_) => PositionBracket::TakeProfit,
+                _ => PositionBracket::StopLoss,
+            });
             exit
         };
         let exits: Vec<_> = [
@@ -509,6 +519,37 @@ impl Broker for PaperAccount {
         state.log(format!("Order {id} placed: {}", describe(&order)));
         let mut order = Order::new(id, order, OrderStatus::Working);
         order.placed = Some(Utc::now());
+        let held = state
+            .positions
+            .get(&order.request.symbol)
+            .map_or(0.0, |p| p.quantity);
+        let request = &order.request;
+        if request.position_bracket.is_some()
+            && (held == 0.0
+                || (request.side == OrderSide::Buy) == (held > 0.0)
+                || request.quantity > held.abs())
+        {
+            state.finish(
+                order,
+                OrderStatus::Rejected("A position exit must reduce the open position".into()),
+            );
+            return;
+        }
+        let signed = if request.side == OrderSide::Buy {
+            request.quantity
+        } else {
+            -request.quantity
+        };
+        let after = held + signed;
+        let needed = after.abs() * last.abs() / self.leverage;
+        if after.abs() > held.abs() && needed > state.balance {
+            let reason = format!(
+                "Insufficient buying power: {needed:.2} {} needed, {:.2} available",
+                self.currency, state.balance
+            );
+            state.finish(order, OrderStatus::Rejected(reason));
+            return;
+        }
         if order.request.order_type == OrderType::Market {
             state.fill(self, order, last);
         } else {
@@ -540,16 +581,19 @@ impl Broker for PaperAccount {
                 "order {id} is no longer working"
             ))));
         };
-        if order.symbol != working.request.symbol || order.side != working.request.side {
+        if order.symbol != working.request.symbol
+            || order.side != working.request.side
+            || order.position_bracket != working.request.position_bracket
+        {
             return reply.send(Err(FeedError::Other(
-                "an order's symbol and side cannot change".into(),
+                "an order's symbol, side and position bracket cannot change".into(),
             )));
         }
         let last = state.last[&order.symbol];
         if let Err(error) = validate(&order, last) {
             return reply.send(Err(error));
         }
-        if state.exits.contains_key(&id)
+        if (state.exits.contains_key(&id) || order.position_bracket.is_some())
             && (state.positions.get(&order.symbol).is_none_or(|position| {
                 order.quantity > position.quantity.abs()
                     || (order.side == OrderSide::Buy) == (position.quantity > 0.0)
@@ -583,6 +627,7 @@ impl Broker for PaperAccount {
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let mut rules = TradingRules::new(symbol);
         rules.time_in_force = vec![TimeInForce::Day, TimeInForce::GoodTillCancelled];
+        rules.leverage = Some(self.leverage);
         reply.send(Ok(rules));
     }
 }
@@ -783,7 +828,7 @@ mod tests {
 
     #[test]
     fn reconnect_keeps_recent_history_within_the_stream_limit() {
-        let paper = PaperAccount::new("USD", 10_000.0).commission(0.001);
+        let paper = PaperAccount::new("USD", 1_000_000.0).commission(0.001);
         paper.set_price("SYM", 100.0);
         for _ in 0..1_001 {
             place(
@@ -822,6 +867,44 @@ mod tests {
         ] {
             assert_eq!(count, 1_000);
         }
+    }
+
+    #[test]
+    fn rejected_exposure_and_position_exits_do_not_fill() {
+        let paper = PaperAccount::new("USD", 100.0).leverage(2.0);
+        paper.set_price("SYM", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market),
+        )
+        .unwrap();
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+        )
+        .unwrap();
+        for (side, quantity) in [(OrderSide::Buy, 1.0), (OrderSide::Sell, 3.0)] {
+            let mut exit = OrderRequest::new("SYM", side, quantity, OrderType::Limit(105.0));
+            exit.position_bracket = Some(PositionBracket::TakeProfit);
+            place(&paper, exit).unwrap();
+        }
+        let events = snapshot(&paper);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, AccountEvent::Execution(_)))
+                .count(),
+            1
+        );
+        assert_eq!(events.iter().filter(|e| matches!(e, AccountEvent::Order(o) if matches!(o.status, OrderStatus::Rejected(_)))).count(), 3);
+        // Reducing exposure remains possible even when the position exceeds buying power.
+        paper.set_price("SYM", 200.0);
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Market),
+        )
+        .unwrap();
+        assert_eq!(paper.lock().positions["SYM"].quantity, 1.0);
     }
 
     #[test]
@@ -875,5 +958,78 @@ mod tests {
                 .is_err()
         );
         assert_eq!(snapshot(&paper), before);
+    }
+    #[test]
+    fn bracket_exits_only_reduce_the_remaining_position() {
+        let terms = PaperAccount::new("USD", 0.0);
+        for attached in [false, true] {
+            for stop_loss in [None, Some(95.0)] {
+                for closed in [1.0, 2.0, 4.0] {
+                    let mut state = State::default();
+                    let mut entry =
+                        OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market);
+                    if attached {
+                        entry.take_profit = Some(105.0);
+                        entry.stop_loss = stop_loss;
+                    }
+                    state.fill(
+                        &terms,
+                        Order::new(OrderId::new("entry"), entry, OrderStatus::Working),
+                        100.0,
+                    );
+                    if !attached {
+                        for (price, role) in [
+                            (Some(105.0), PositionBracket::TakeProfit),
+                            (stop_loss, PositionBracket::StopLoss),
+                        ] {
+                            if let Some(price) = price {
+                                let kind = match role {
+                                    PositionBracket::TakeProfit => OrderType::Limit(price),
+                                    PositionBracket::StopLoss => OrderType::Stop(price),
+                                };
+                                let mut exit = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
+                                exit.position_bracket = Some(role);
+                                let id = state.id();
+                                state
+                                    .working
+                                    .push(Order::new(id, exit, OrderStatus::Working));
+                            }
+                        }
+                    }
+                    state.fill(
+                        &terms,
+                        Order::new(
+                            OrderId::new("close"),
+                            OrderRequest::new("SYM", OrderSide::Sell, closed, OrderType::Market),
+                            OrderStatus::Working,
+                        ),
+                        100.0,
+                    );
+                    if closed == 1.0 {
+                        assert!(!state.working.is_empty());
+                        assert!(
+                            state
+                                .working
+                                .iter()
+                                .all(|order| order.request.quantity == 1.0)
+                        );
+                    } else {
+                        assert!(state.working.is_empty());
+                    }
+                    state.reach(&terms, "SYM", 106.0);
+                    state.reach(&terms, "SYM", 94.0);
+                    assert_eq!(
+                        state.positions.get("SYM").map_or(0.0, |p| p.quantity),
+                        if closed == 4.0 { -2.0 } else { 0.0 }
+                    );
+                    if closed == 1.0 {
+                        assert_eq!(
+                            state.balance, 6.0,
+                            "a marketable limit fills at the better price"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

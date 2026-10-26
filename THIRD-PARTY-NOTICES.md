@@ -10,7 +10,7 @@
 
 `assets/icons/shapes-annotations/arrow-mark-left.svg`, `arrow-mark-right.svg`, `sector.svg` and `sticker.svg` in the same directory, and the vector glyphs in `src/drawings/glyphs.rs`, are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
-`assets/icons/ui/columns.svg`, `maximize.svg` and `square-plus.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+`assets/icons/ui/columns.svg`, `maximize.svg`, `square-plus.svg`, `screener.svg`, `hotlists.svg` and `news.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 ## Lucide icons
 

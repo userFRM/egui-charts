@@ -5,8 +5,8 @@ use crate::data::MaybeSend;
 use crate::model::{Signal, SignalId, Timeframe};
 
 /// The host's analytics as markers, levels and zones. The library computes nothing: the terminal
-/// is to draw what the service pushes, let the user hide signals by category, and report clicks.
-/// Nothing in the crate calls this service yet.
+/// draws what the service pushes, lets the user hide signals by category, and reports clicks.
+/// Connect it through `Chart::set_signal_source` (with the `widget` feature).
 ///
 /// Methods are called on the UI thread and must return at once. Compute elsewhere and push from
 /// any thread, runtime or browser task.

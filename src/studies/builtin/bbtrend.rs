@@ -93,6 +93,12 @@ impl Default for BBTrend {
 }
 
 impl Indicator for BBTrend {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         short_length: length("Short BB Length", 1, usize::MAX),
         long_length: length("Long BB Length", 1, usize::MAX),

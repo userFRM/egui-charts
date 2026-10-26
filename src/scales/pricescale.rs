@@ -18,7 +18,7 @@ use super::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
 ///
 /// Determines how raw price values are transformed before being mapped to
 /// pixel coordinates.  The default is [`Normal`](PriceScaleMode::Normal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PriceScaleMode {
     /// Prices on a linear axis: equal price differences take equal heights.
     #[default]
@@ -57,7 +57,7 @@ impl FromStr for PriceScaleMode {
 }
 
 /// A min/max price range, used throughout the scale engine.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceRange {
     /// Minimum price in the range.
     pub min: f64,
@@ -86,7 +86,7 @@ impl PriceRange {
 ///
 /// The defaults keep the data in the middle 80% of the pane. Margins that together
 /// leave no room for the data are ignored.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleMargins {
     /// Space above the highest value, as a fraction of the pane height (0.0 to 1.0)
     pub top: f64,
@@ -149,7 +149,7 @@ impl fmt::Display for PriceScaleId {
 }
 
 /// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,
@@ -168,7 +168,7 @@ pub struct PriceScaleOptions {
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,
@@ -233,7 +233,7 @@ impl PriceTransform {
 
 /// One price axis: options and the visible range in scale units, fitted to the
 /// data until the user scales it by hand.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PriceScale {
     options: PriceScaleOptions,
     /// Visible range in scale units

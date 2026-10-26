@@ -4,6 +4,8 @@
 //! cargo run --release --example bare_chart --no-default-features --features widget
 //! ```
 //!
+//! For native screen-reader support, use `--features widget,eframe/accesskit`.
+//!
 //! On `wasm32` it fills a canvas it adds to the page, in the dark theme, whose Roboto is the one
 //! font of its web build; `scripts/web-size.sh` builds it for the web.
 //!

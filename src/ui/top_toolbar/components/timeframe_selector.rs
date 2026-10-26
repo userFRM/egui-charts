@@ -333,7 +333,8 @@ impl CustomTimeframeDialog {
                         .desired_width(0.0)
                         .align(egui::Align2::LEFT_CENTER)
                         .font(egui::FontId::proportional(theme.text.body)),
-                );
+                )
+                .accessible_name("Interval value");
                 let width = ui
                     .horizontal(|ui| {
                         let unit = Self::available_units()
@@ -735,8 +736,8 @@ impl ListItemContent for TimeframeRow<'_> {
         };
         context.response.widget_info(|| {
             WidgetInfo::selected(
-                Role::Button,
-                ui.is_enabled(),
+                Role::MenuItemRadio,
+                context.response.enabled(),
                 context.selected,
                 self.tf.display_long(),
             )

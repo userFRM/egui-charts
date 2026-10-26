@@ -580,41 +580,49 @@ mod tests {
             ),
             Dots,
         );
-        let mut drawing = crate::drawings::Drawing::with_color(
-            1,
-            crate::drawings::DrawingToolType::HorizontalLine,
-            [255, 0, 0, 255],
-        );
-        drawing.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 10.0)];
-        drawing.pane = chart.series_pane(id).map(|pane| pane.0);
-        chart.drawings_mut().drawings.push(drawing);
+        #[cfg(feature = "drawings")]
+        {
+            let mut drawing = crate::drawings::Drawing::with_color(
+                1,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [255, 0, 0, 255],
+            );
+            drawing.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 10.0)];
+            drawing.pane = chart.series_pane(id).map(|pane| pane.0);
+            chart.drawings_mut().drawings.push(drawing);
+        }
         frame(&ctx, &mut chart, 0.0, vec![]);
         let shapes = shapes(&ctx, &mut chart, 0.1, vec![]);
-        // The last pass of a study pane is above the pane's drawings.
-        let red = |shape: &Shape| match shape {
-            Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED),
-            Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
-            // Unchanged drawings paint their cached triangles in the same place in the list.
-            Shape::Mesh(mesh) => mesh.triangles().any(|triangle| {
-                triangle
-                    .into_iter()
-                    .all(|index| mesh.vertices[index as usize].color == Color32::RED)
-            }),
-            _ => false,
-        };
-        let above = |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == ABOVE);
-        let drawing = shapes
-            .iter()
-            .position(red)
-            .expect("the red drawing is painted");
-        let last_pass = shapes
-            .iter()
-            .position(above)
-            .expect("the last pass is painted");
-        assert!(
-            drawing < last_pass,
-            "the last pass must paint above the drawing"
-        );
+        #[cfg(feature = "drawings")]
+        {
+            // The last pass of a study pane is above the pane's drawings.
+            let red = |shape: &Shape| match shape {
+                Shape::Path(path) => {
+                    path.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED)
+                }
+                Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+                // Unchanged drawings paint their cached triangles in the same place in the list.
+                Shape::Mesh(mesh) => mesh.triangles().any(|triangle| {
+                    triangle
+                        .into_iter()
+                        .all(|index| mesh.vertices[index as usize].color == Color32::RED)
+                }),
+                _ => false,
+            };
+            let above = |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == ABOVE);
+            let drawing = shapes
+                .iter()
+                .position(red)
+                .expect("the red drawing is painted");
+            let last_pass = shapes
+                .iter()
+                .position(above)
+                .expect("the last pass is painted");
+            assert!(
+                drawing < last_pass,
+                "the last pass must paint above the drawing"
+            );
+        }
         assert!(
             shapes
                 .iter()

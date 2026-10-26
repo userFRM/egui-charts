@@ -52,6 +52,20 @@ pub fn render_tool_submenu(
     sel_tool: Option<DrawingToolType>,
     favorites: &mut Vec<DrawingToolType>,
 ) -> DrawingToolbarAction {
+    render_registered_tool_submenu(ui, sections, sel_tool, favorites, &Default::default())
+}
+
+pub(crate) fn render_registered_tool_submenu(
+    ui: &mut Ui,
+    mut sections: Vec<(&'static str, Vec<DrawingToolType>)>,
+    sel_tool: Option<DrawingToolType>,
+    favorites: &mut Vec<DrawingToolType>,
+    registry: &crate::drawings::DrawingToolRegistry,
+) -> DrawingToolbarAction {
+    for (_, tools) in &mut sections {
+        tools.retain(|tool| registry.availability(*tool).visible);
+    }
+    sections.retain(|(_, tools)| !tools.is_empty());
     let mut action = DrawingToolbarAction::None;
     let shortcuts = DrawingToolShortcuts::default();
     let hint = |ui: &Ui, tool| shortcuts.hint(ui.ctx(), tool);
@@ -86,18 +100,22 @@ pub fn render_tool_submenu(
         section_header(ui, section, width);
         for &tool in tools {
             let hint = hint(ui, tool);
-            let response = flyout_row(
-                ui,
-                width,
-                &FlyoutRow {
-                    icon: Some(toolbar_icons::get_icon(tool)),
-                    label: tool.as_str(),
-                    shortcut: hint.as_deref(),
-                    selected: sel_tool == Some(tool),
-                    star: Some(favorites.contains(&tool)),
-                    ..Default::default()
-                },
-            );
+            let response = ui
+                .add_enabled_ui(registry.availability(tool).enabled, |ui| {
+                    flyout_row(
+                        ui,
+                        width,
+                        &FlyoutRow {
+                            icon: Some(toolbar_icons::get_icon(tool)),
+                            label: tool.as_str(),
+                            shortcut: hint.as_deref(),
+                            selected: sel_tool == Some(tool),
+                            star: Some(favorites.contains(&tool)),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .inner;
             if response.star.as_ref().is_some_and(Response::clicked) {
                 match favorites.iter().position(|&t| t == tool) {
                     Some(index) => {

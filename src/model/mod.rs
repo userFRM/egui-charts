@@ -115,7 +115,7 @@ pub use tpo::{
 };
 pub use trading::{
     Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
-    OrderSide, OrderStatus, OrderType, Position, TimeInForce, TradingRules,
+    OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
 
 #[cfg(test)]

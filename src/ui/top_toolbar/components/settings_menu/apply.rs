@@ -19,6 +19,7 @@ impl ChartSettingsState {
         let config = chart.config();
         let mut settings = Self {
             events: chart.event_visibility().clone(),
+            show_price_targets: chart.price_targets_visible(),
             ..Self::default()
         };
         settings.candle_colors.body_up = config.bullish_color;
@@ -182,6 +183,7 @@ impl ChartSettingsState {
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), &'static str> {
         let timezone = self.validate()?;
         chart.set_event_visibility(self.events.clone());
+        chart.set_price_targets_visible(self.show_price_targets);
         let watermark_text = if self.watermark.mode == WatermarkMode::SymbolAndDescription {
             Some(
                 chart

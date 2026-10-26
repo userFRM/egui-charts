@@ -80,6 +80,12 @@ impl Default for UlcerIndex {
 }
 
 impl Indicator for UlcerIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Length", 1, usize::MAX)
     ; {});

@@ -87,9 +87,10 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                     ),
                     Sense::click(),
                 );
-                response.widget_info(|| {
-                    WidgetInfo::selected(Role::Button, ui.is_enabled(), is_active, galley.text())
-                });
+                response
+                    .widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), galley.text()));
+                ui.ctx()
+                    .accesskit_node_builder(response.id, |node| node.set_selected(is_active));
 
                 let visuals = ui.visuals();
                 if self.pills {

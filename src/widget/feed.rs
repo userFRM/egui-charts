@@ -29,7 +29,7 @@ const MIN_SCROLL_BACK_PAGE: usize = 600;
 
 /// A chart's link to its feed.
 pub(crate) struct FeedLink {
-    feed: Arc<dyn Datafeed>,
+    pub(super) feed: Arc<dyn Datafeed>,
     inbox: Arc<Inbox>,
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
@@ -55,6 +55,9 @@ pub(crate) struct FeedLink {
     /// The order book over time, when the host turned it on.
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
+    heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
+    study_inputs: Vec<(crate::studies::OrderFlowInput, u64)>,
+    time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -129,6 +132,9 @@ impl Chart {
             order_queue: None,
             depth_history: None,
             depth_complete: false,
+            heatmap: None,
+            study_inputs: Vec::new(),
+            time: None,
             paging_stopped: false,
         });
     }
@@ -139,6 +145,9 @@ impl Chart {
     /// A removed main series stays paused.
     pub fn set_feed_paused(&mut self, paused: bool) {
         let paused = paused || !self.main_series_present || self.replay.is_some();
+        if paused {
+            self.study_data.pause();
+        }
         if let Some(link) = &mut self.feed_link
             && link.paused != paused
         {
@@ -150,6 +159,8 @@ impl Chart {
                     link.feed.unsubscribe(id);
                 }
                 link.pending.clear();
+            } else {
+                self.study_data.clear_feed();
             }
         }
     }
@@ -163,6 +174,8 @@ impl Chart {
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
         if symbol != self.symbol {
+            self.clear_source_signals();
+            self.reload_price_targets();
             self.set_replay_time(None);
         }
         if symbol != self.symbol
@@ -174,21 +187,37 @@ impl Chart {
         if symbol != self.symbol {
             self.host_events
                 .push(super::ChartEvent::SymbolChanged(symbol.clone()));
+            #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
-            self.drawings.cancel_curr_drawing();
-            self.drawings.end_drag_handle();
-            self.drawings.deselect();
-            let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
-            next.0.options = self.drawings.options.clone();
-            next.0.tool_defaults = self.drawings.tool_defaults.clone();
-            next.0.active_tool = self.drawings.active_tool;
-            next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
-            next.0.eraser_mode = self.drawings.eraser_mode;
-            next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
-            std::mem::swap(&mut self.drawings, &mut next.0);
-            std::mem::swap(&mut self.marks, &mut next.1);
-            self.symbol_drawings.insert(self.symbol.clone(), next);
-            self.history = Default::default();
+            #[cfg(feature = "drawings")]
+            {
+                self.save_stored_drawings();
+                self.drawings.cancel_curr_drawing();
+                self.drawings.end_drag_handle();
+                self.drawings.deselect();
+                let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+                next.0.registry = self.drawings.registry.clone();
+                next.0.options = self.drawings.options.clone();
+                next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.set_active_tool(self.drawings.active_tool);
+                if let Some(id) = self.drawings.active_custom_tool() {
+                    let _ = next.0.set_custom_tool(id);
+                }
+                next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+                next.0.eraser_mode = self.drawings.eraser_mode;
+                next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                std::mem::swap(&mut self.drawings, &mut next.0);
+                std::mem::swap(&mut self.marks, &mut next.1);
+                self.symbol_drawings.insert(self.symbol.clone(), next);
+            }
+            #[cfg(not(feature = "drawings"))]
+            {
+                let mut next_marks = self.symbol_markers.remove(&symbol).unwrap_or_default();
+                std::mem::swap(&mut self.marks, &mut next_marks);
+                self.symbol_markers.insert(self.symbol.clone(), next_marks);
+            }
+            self.history.clear();
+            self.history.edits += 1;
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -214,6 +243,7 @@ impl Chart {
     /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
+            self.clear_source_signals();
             self.host_events
                 .push(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
@@ -231,8 +261,14 @@ impl Chart {
         for study in self.studies.indicators_mut() {
             study.set_timeframe(timeframe);
         }
-        self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        #[cfg(feature = "drawings")]
+        {
+            self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        }
         if changed {
+            self.pending_from.fill(Some(0));
+            self.next_refresh.fill(f64::NEG_INFINITY);
+            self.element_studies.dirty = true;
             self.apply_replay_window();
         }
     }
@@ -243,6 +279,7 @@ impl Chart {
     pub fn set_extended_hours(&mut self, extended_hours: bool) {
         if self.extended_hours != extended_hours {
             self.extended_hours = extended_hours;
+            self.study_data.clear_feed();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
             }
@@ -252,6 +289,7 @@ impl Chart {
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
     pub fn reload_feed(&mut self) {
+        self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {
             link.reload_pending = true;
         }
@@ -351,6 +389,77 @@ impl Chart {
         }
     }
 
+    /// Shows resting liquidity behind the price series. A feed and instrument tick size are
+    /// required. Enabling starts the default depth history if none is configured; disabling
+    /// releases textures and retains that history. Trade bubbles and best bid/ask lines can be
+    /// enabled independently through the existing chart options.
+    pub fn set_liquidity_heatmap(&mut self, enabled: bool) {
+        if enabled && self.depth_history(SeriesId::MAIN).is_none() {
+            self.set_depth_history(Some(
+                DepthHistory::new(Default::default()).expect("default depth history"),
+            ));
+        }
+        if let Some(link) = &mut self.feed_link {
+            link.heatmap = enabled.then(|| std::cell::RefCell::new(Default::default()));
+        }
+    }
+
+    pub(super) fn paint_liquidity(
+        &self,
+        painter: &egui::Painter,
+        mapping: &crate::chart::coords::ChartMapping,
+    ) {
+        let Some(link) = &self.feed_link else { return };
+        let (Some(heatmap), Some(history), Some(tick)) = (
+            &link.heatmap,
+            &link.depth_history,
+            self.instrument().and_then(|i| i.tick_size),
+        ) else {
+            return;
+        };
+        heatmap.borrow_mut().render(
+            painter,
+            mapping,
+            history,
+            tick * history.config().ticks_per_row as f64,
+            |time| self.time_to_index(time).and_then(|i| self.index_to_x(i)),
+            [self.config.bullish_color, self.config.bearish_color],
+        );
+        if let Some(book) = &link.order_book {
+            let max = book
+                .bids
+                .iter()
+                .chain(&book.asks)
+                .map(|l| l.size)
+                .fold(0.0, f64::max);
+            if max > 0.0 {
+                for (levels, color) in [
+                    (&book.bids, self.config.bullish_color),
+                    (&book.asks, self.config.bearish_color),
+                ] {
+                    for level in levels {
+                        let y0 = mapping.price_to_y(level.price);
+                        let y1 = mapping.price_to_y(level.price + tick);
+                        let rect = egui::Rect::from_min_max(
+                            egui::pos2(
+                                mapping.rect.right() - 60.0 * (level.size / max) as f32,
+                                y0.min(y1),
+                            ),
+                            egui::pos2(mapping.rect.right(), y0.max(y1)),
+                        );
+                        if rect.is_finite() && rect.intersects(mapping.rect) {
+                            painter.with_clip_rect(mapping.rect).rect_filled(
+                                rect,
+                                0.0,
+                                color.gamma_multiply(0.7),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The order book history of `series`, if [`set_depth_history`](Self::set_depth_history)
     /// turned it on.
     pub fn depth_history(&self, series: SeriesId) -> Option<&DepthHistory> {
@@ -396,6 +505,10 @@ impl Chart {
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
         }
+        self.pump_study_data(
+            ctx,
+            self.feed_link.as_ref().map(|link| Arc::clone(&link.feed)),
+        );
         let clock = self.bar_clock();
         let Some(mut link) = self.feed_link.take() else {
             return;
@@ -418,6 +531,43 @@ impl Chart {
             });
         }
 
+        let mut inputs: Vec<crate::studies::OrderFlowInput> = Vec::new();
+        for study in self.studies.indicators() {
+            if let Some(input) = study.order_flow_input()
+                && !inputs.iter().any(|old| input.same_source(old))
+            {
+                inputs.push(input);
+            }
+        }
+        if inputs.len() != link.study_inputs.len()
+            || inputs
+                .iter()
+                .zip(&link.study_inputs)
+                .any(|(a, (b, _))| !a.same_source(b))
+        {
+            let previous = std::mem::take(&mut link.study_inputs);
+            link.study_inputs = inputs
+                .iter()
+                .map(|input| {
+                    let seen = previous
+                        .iter()
+                        .find(|(old, _)| input.same_source(old))
+                        .map(|(_, seen)| *seen);
+                    if let Some(seen) = seen {
+                        (input.clone(), seen)
+                    } else {
+                        input.replace_trades(&link.clock, link.trades.iter());
+                        if let Some(now) = link.time {
+                            input.advance_time(&link.clock, now);
+                        }
+                        (input.clone(), u64::MAX)
+                    }
+                })
+                .collect();
+            if let Some(id) = link.subscription {
+                link.inbox.study_inputs(id, inputs);
+            }
+        }
         let now = ctx.input(|input| input.time);
         let drained = link.inbox.drain();
         for (key, answer) in drained.answers {
@@ -468,10 +618,17 @@ impl Chart {
                 Request::Trades => match result::<TradePage>(answer) {
                     Ok(page) => {
                         let bubbles = &mut link.bubbles;
+                        let mut changed = false;
                         let fold = &mut |trade: &Tick, added| {
+                            changed |= added;
                             bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                         };
                         self.feed.rejected_bars += link.trades.prepend(page.trades, fold);
+                        if changed {
+                            for (input, _) in &link.study_inputs {
+                                input.replace_trades(&link.clock, link.trades.iter());
+                            }
+                        }
                     }
                     Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
                 },
@@ -519,10 +676,23 @@ impl Chart {
             feed.rejected_bars += updates.rejected;
             feed.rejected_depth += updates.rejected_depth;
             let bubbles = &mut link.bubbles;
+            let inputs = &link.study_inputs;
+            let clock = &link.clock;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
+                if added {
+                    for (input, _) in inputs {
+                        input.push_trade(clock, trade);
+                    }
+                }
             };
             link.trades.append(updates.trades, fold);
+            link.time = link.time.max(updates.time);
+            if let Some(now) = link.time {
+                for (input, _) in &link.study_inputs {
+                    input.advance_time(&link.clock, now);
+                }
+            }
             link.order_book = updates.depth.or(link.order_book.take());
             if updates.orders_changed {
                 link.order_queue = updates.orders;
@@ -575,6 +745,27 @@ impl Chart {
                     .unwrap_or(std::time::Duration::MAX),
             );
         }
+        for (input, seen) in &mut link.study_inputs {
+            let revision = input.revision();
+            if revision != *seen {
+                for (at, study) in self.studies.indicators().iter().enumerate() {
+                    if study
+                        .order_flow_input()
+                        .is_some_and(|other| input.same_source(&other))
+                    {
+                        let from = input.changed_since(*seen).map_or(0, |time| {
+                            self.state
+                                .data()
+                                .bars
+                                .partition_point(|bar| link.clock.bar_open(bar.time) < time)
+                        });
+                        self.pending_from[at] =
+                            Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                    }
+                }
+                *seen = revision;
+            }
+        }
         self.scroll_back(&mut link);
         self.scroll_depth(&mut link);
         self.feed_link = Some(link);
@@ -595,6 +786,13 @@ impl Chart {
             .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
+        for study in self.studies.indicators() {
+            if let Some(input) = study.order_flow_input() {
+                input.clear();
+            }
+        }
+        link.study_inputs.clear();
+        link.time = None;
         link.order_book = None;
         link.order_queue = None;
         link.depth_history.iter_mut().for_each(DepthHistory::clear);
@@ -675,6 +873,13 @@ impl Chart {
         );
         let config = link.depth_history.as_ref().map(|h| h.config().clone());
         link.inbox.sample_depth(sink.id, config);
+        link.inbox.study_inputs(
+            sink.id,
+            link.study_inputs
+                .iter()
+                .map(|(input, _)| input.clone())
+                .collect(),
+        );
         link.subscription = Some(sink.id);
         let subscription = Subscription {
             id: sink.id,
@@ -1962,5 +2167,278 @@ mod tests {
             "removed main cannot restart its feed"
         );
         assert_eq!(chart.state.data().bars, bars(1000));
+    }
+    #[cfg(feature = "studies")]
+    #[test]
+    fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
+        use crate::model::{Level1Quote, OrderBookLevel};
+        use crate::studies::{IndicatorFactory, InputValue};
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let factory = IndicatorFactory::new();
+        let names = [
+            "Quoted Spread",
+            "Book Size",
+            "Trade Rate",
+            "Levels Traded Through",
+        ];
+        let ids: Vec<_> = names
+            .iter()
+            .map(|name| chart.add_indicator(factory.create(name).unwrap()))
+            .collect();
+        let mut volume = factory.create("Trade Rate").unwrap();
+        volume
+            .set_input("volume", InputValue::Toggle(true))
+            .unwrap();
+        let volume_id = chart.add_indicator(volume);
+        let mut near = factory.create("Book Size").unwrap();
+        near.set_input("levels", InputValue::Length(1)).unwrap();
+        let near_id = chart.add_indicator(near);
+        let mut distance = factory.create("Book Size").unwrap();
+        distance
+            .set_input("distance", InputValue::Number(1.0))
+            .unwrap();
+        let distance_id = chart.add_indicator(distance);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.page().send(page(bars(3), true));
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(1.0);
+        feed.resolve().send(Ok(instrument));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        let sink = feed.sink();
+        let start = bars(1)[0].time;
+        let at = |second| start + TimeDelta::seconds(second);
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(
+                vec![Tick::new(at(2), 100.0, 3.0, None).with_id(1)],
+                true,
+            )));
+        for (second, bid, ask) in [(0, 99.0, 101.0), (10, 100.0, 103.0), (20, 98.0, 102.0)] {
+            sink.push_quote(Level1Quote {
+                ts: at(second),
+                symbol: "A".into(),
+                bid,
+                ask,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            });
+        }
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: None,
+        };
+        let book = |second, bids, asks| OrderBook {
+            ts: at(second),
+            symbol: "A".into(),
+            bids,
+            asks,
+        };
+        sink.push_depth_snapshot(
+            1,
+            book(
+                0,
+                vec![level(99.0, 2.0), level(98.0, 3.0)],
+                vec![level(101.0, 7.0), level(102.0, 11.0)],
+            ),
+        );
+        // A sequence gap erases the first book even though it was valid earlier in this bar.
+        sink.push_depth_delta(3, &book(20, vec![], vec![]));
+        for _ in 0..12 {
+            frames.run(&mut chart);
+        }
+        assert!(
+            chart
+                .indicators()
+                .find(|(id, _)| *id == ids[1])
+                .unwrap()
+                .1
+                .values()
+                .value(0, 0)
+                .is_none()
+        );
+        sink.push_depth_snapshot(
+            4,
+            book(
+                30,
+                vec![level(98.0, 6.0), level(97.0, 9.0)],
+                vec![level(102.0, 8.0), level(103.0, 12.0)],
+            ),
+        );
+        // No quotes in bar 1. The first quote after loss seeds the path rather than counting
+        // an unobserved jump from the old inside market.
+        sink.push_quote(Level1Quote {
+            ts: at(125),
+            symbol: "A".into(),
+            bid: 105.0,
+            ask: 107.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        });
+        for (id, (second, size)) in [(0, 2.0), (2, 3.0), (5, 5.0), (65, 7.0)]
+            .into_iter()
+            .enumerate()
+        {
+            sink.push_tick(Tick::new(at(second), 100.0, size, None).with_id(id as u64));
+        }
+        sink.push_tick(Tick::new(at(65), 100.0, 7.0, None).with_id(3));
+        for _ in 0..20 {
+            frames.run(&mut chart);
+        }
+        let expected = [
+            (
+                ids[0],
+                [[Some(4.0), Some(3.0), Some(4.0)], [None; 3], [Some(2.0); 3]],
+            ),
+            (
+                ids[1],
+                [[Some(15.0), Some(20.0), Some(-5.0)], [None; 3], [None; 3]],
+            ),
+            (
+                near_id,
+                [[Some(6.0), Some(8.0), Some(-2.0)], [None; 3], [None; 3]],
+            ),
+            (
+                distance_id,
+                [[Some(15.0), Some(20.0), Some(-5.0)], [None; 3], [None; 3]],
+            ),
+            (
+                ids[2],
+                [
+                    [Some(3.0), Some(3.0 / 60.0), Some(1.0 / 3.0)],
+                    [Some(1.0), Some(1.0 / 60.0), Some(1.0 / 3.0)],
+                    [None; 3],
+                ],
+            ),
+            (
+                volume_id,
+                [
+                    [Some(10.0), Some(10.0 / 60.0), Some(5.0 / 3.0)],
+                    [Some(7.0), Some(7.0 / 60.0), Some(7.0 / 3.0)],
+                    [None; 3],
+                ],
+            ),
+            (
+                ids[3],
+                [[Some(3.0), Some(3.0), Some(6.0)], [None; 3], [Some(0.0); 3]],
+            ),
+        ];
+        for (id, rows) in expected {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            for (bar, row) in rows.into_iter().enumerate() {
+                for (line, want) in row.into_iter().enumerate() {
+                    assert_eq!(
+                        study.values().value(line, bar),
+                        want,
+                        "{} bar {bar} line {line}",
+                        study.name()
+                    );
+                }
+            }
+        }
+        sink.advance_time(at(68));
+        for _ in 0..4 {
+            frames.run(&mut chart);
+        }
+        for id in [ids[2], volume_id] {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            assert_eq!(study.values().value(2, 1), Some(0.0), "idle instant rate");
+        }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(2.0),
+            "new rate replays the two retained bar-0 executions"
+        );
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            Some(3.0),
+            "existing rate keeps the execution already evicted from raw history"
+        );
+        assert_eq!(
+            study.values().value(2, 1),
+            Some(0.0),
+            "adding another study preserves the idle clock"
+        );
+        let band = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
+            levels: 10,
+            distance: 0.3,
+        });
+        band.push_book(
+            &Timeframe::Min1.into(),
+            at(130),
+            Some(&book(
+                130,
+                vec![level(0.4, 2.0), level(0.1, 3.0)],
+                vec![level(0.7, 7.0), level(1.0, 11.0)],
+            )),
+        );
+        assert_eq!(
+            band.values()[&at(120)],
+            [5.0, 18.0, -13.0],
+            "decimal price-distance endpoints are inclusive"
+        );
+        let input = chart
+            .indicators()
+            .find(|(id, _)| *id == ids[2])
+            .unwrap()
+            .1
+            .order_flow_input()
+            .unwrap();
+        input.clear();
+        input.push_trade(&chart.bar_clock(), &Tick::new(at(125), 100.0, 1.0, None));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == ids[2]).unwrap();
+        assert_eq!(
+            study.values().value(0, 0),
+            None,
+            "clearing an input removes earlier plot values"
+        );
+        assert_eq!(study.values().value(0, 1), None);
+        assert_eq!(study.values().value(0, 2), Some(1.0));
+
+        let copy = study.clone_box();
+        let copy_id = chart.add_indicator(copy);
+        frames.run(&mut chart);
+        sink.push_tick(Tick::new(at(130), 100.0, 2.0, None).with_id(4));
+        sink.advance_time(at(134));
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        for id in [ids[2], copy_id] {
+            let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+            assert_eq!(
+                study.values().value(0, 2),
+                Some(2.0),
+                "shared sources count once"
+            );
+            assert_eq!(
+                study.values().value(2, 2),
+                Some(0.0),
+                "heartbeat follows queued trades"
+            );
+        }
+        let fresh = chart.add_indicator(factory.create("Trade Rate").unwrap());
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == fresh).unwrap();
+        assert_eq!(
+            study.values().value(2, 2),
+            Some(0.0),
+            "new sources retain the idle clock"
+        );
     }
 }

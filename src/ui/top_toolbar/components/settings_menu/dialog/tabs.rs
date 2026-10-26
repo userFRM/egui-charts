@@ -11,10 +11,11 @@ use crate::ui_kit::ColorPicker;
 
 use crate::styles::typography;
 
-use super::super::data::LineStyle;
+use super::super::data::{LineStyle, TradingNotifications};
 use super::super::types::{
     BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
 };
+use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
 
 impl SettingsDialog {
@@ -306,6 +307,12 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
             ui.vertical(|ui| {
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.show_price_targets,
+                    "Analyst price targets",
+                    style.val_text,
+                );
                 // CANDLE COLORS
                 self.draw_section_header(ui, "CANDLE COLORS", style);
 
@@ -607,6 +614,117 @@ impl SettingsDialog {
         }
     }
 
+    pub(super) fn draw_trading_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
+        let text = style.val_text;
+        self.draw_section_header(ui, "GENERAL", style);
+        styled_checkbox(
+            ui,
+            &mut self.settings.status_line.show_quote_boxes,
+            "Buy/sell buttons",
+            text,
+        );
+        let trading = &mut self.settings.trading;
+        styled_checkbox(
+            ui,
+            &mut trading.instant_orders,
+            "Instant orders placement",
+            text,
+        );
+        let sounds = &self.execution_sounds;
+        let play = trading.play_execution_sound;
+        trading_option(
+            ui,
+            0.0,
+            &mut trading.play_execution_sound,
+            "Play sound for executions",
+            text,
+            |ui| {
+                if let Some(first) = sounds.first() {
+                    let sound = &mut trading.execution_sound;
+                    let selected = if sound.is_empty() { first } else { &*sound }.clone();
+                    ui.add_enabled_ui(play, |ui| {
+                        styled_dropdown(ui, "execution_sound", 140.0, text, &selected, |ui| {
+                            for name in sounds {
+                                if ui.selectable_label(selected == *name, name).clicked() {
+                                    sound.clone_from(name);
+                                }
+                            }
+                        });
+                    });
+                }
+            },
+        );
+        ui.horizontal(|ui| {
+            ui.set_min_height(42.0);
+            ui.label(RichText::new("Notifications").size(14.0).color(text));
+            ui.add_space((TRADING_LABEL_WIDTH - ui.min_rect().width()).max(0.0));
+            let level = &mut trading.notifications;
+            styled_dropdown(
+                ui,
+                "trading_notifications",
+                180.0,
+                text,
+                level.label(),
+                |ui| {
+                    for option in TradingNotifications::ALL {
+                        ui.selectable_value(level, option, option.label());
+                    }
+                },
+            );
+        });
+        ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
+
+        ui.add_space(24.0);
+        self.draw_section_header(ui, "APPEARANCE", style);
+        let trading = &mut self.settings.trading;
+        styled_checkbox(ui, &mut trading.bid_ask_labels, "Bid and ask labels", text);
+        styled_checkbox(ui, &mut trading.show_poss, "Positions", text);
+        ui.add_enabled_ui(trading.show_poss, |ui| {
+            let unit = &mut trading.position_pnl_unit;
+            let shown = trading.position_pnl;
+            trading_option(
+                ui,
+                TRADING_INDENT,
+                &mut trading.position_pnl,
+                "Profit & loss",
+                text,
+                |ui| pnl_unit_dropdown(ui, "position_pnl_unit", shown, unit, text),
+            );
+            trading_option(
+                ui,
+                TRADING_INDENT,
+                &mut trading.reverse_button,
+                "Reverse button on hover",
+                text,
+                |_| {},
+            );
+        });
+        styled_checkbox(ui, &mut trading.show_orders, "Orders", text);
+        ui.add_enabled_ui(trading.show_orders, |ui| {
+            let unit = &mut trading.bracket_pnl_unit;
+            let shown = trading.bracket_pnl;
+            trading_option(
+                ui,
+                0.0,
+                &mut trading.bracket_pnl,
+                "Brackets profit & loss",
+                text,
+                |ui| pnl_unit_dropdown(ui, "bracket_pnl_unit", shown, unit, text),
+            );
+        });
+        styled_checkbox(ui, &mut trading.show_executions, "Executions", text);
+        ui.add_enabled_ui(trading.show_executions, |ui| {
+            trading_option(
+                ui,
+                TRADING_INDENT,
+                &mut trading.show_execution_labels,
+                "Executions labels",
+                text,
+                |_| {},
+            );
+        });
+    }
+
     pub(super) fn draw_alerts_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
@@ -697,7 +815,7 @@ impl SettingsDialog {
         .fold(0.0_f32, f32::max);
         ui.horizontal(|ui| {
             // All tabs share the longest label's width.
-            ui.allocate_ui_with_layout(
+            let label = ui.allocate_ui_with_layout(
                 egui::vec2(label_width, 42.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
@@ -710,7 +828,7 @@ impl SettingsDialog {
                                 .color(style.label_text),
                         )
                         .wrap(),
-                    );
+                    )
                 },
             );
 
@@ -718,7 +836,7 @@ impl SettingsDialog {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.spacing_mut().interact_size.y = 32.0;
-                add_content(ui, self);
+                ui.label_inputs_by(label.inner.id, |ui| add_content(ui, self));
             });
         });
         ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
@@ -762,6 +880,42 @@ fn styled_dropdown<R>(
                 .color(text_color),
         )
         .show_ui(ui, add_contents);
+}
+
+/// The width of the Trading tab's labels, where its dropdowns start.
+const TRADING_LABEL_WIDTH: f32 = 264.0;
+/// How far the Trading tab's sub-options sit right of their group's checkbox.
+const TRADING_INDENT: f32 = 32.0;
+
+/// A Trading tab row: a checkbox `indent` from the left and, from
+/// [`TRADING_LABEL_WIDTH`], the controls `add_controls` adds.
+fn trading_option(
+    ui: &mut Ui,
+    indent: f32,
+    checked: &mut bool,
+    label: &str,
+    text_color: Color32,
+    add_controls: impl FnOnce(&mut Ui),
+) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(42.0);
+        ui.add_space(indent);
+        ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color));
+        ui.add_space((TRADING_LABEL_WIDTH - ui.min_rect().width()).max(0.0));
+        add_controls(ui);
+    });
+    ui.add_space(DESIGN_TOKENS.sizing.settings_dialog.row_spacing);
+}
+
+/// The profit and loss unit dropdown of a Trading tab row, enabled while `shown`.
+fn pnl_unit_dropdown(ui: &mut Ui, id: &str, shown: bool, unit: &mut PnlUnit, text_color: Color32) {
+    ui.add_enabled_ui(shown, |ui| {
+        styled_dropdown(ui, id, 140.0, text_color, unit.label(), |ui| {
+            for option in PnlUnit::ALL {
+                ui.selectable_value(unit, option, option.label());
+            }
+        });
+    });
 }
 
 fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Color32) -> bool {
