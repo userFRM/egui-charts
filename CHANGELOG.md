@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Session range lookup clips its final one-minute check to the requested end and uses checked timestamp addition, so sub-minute ranges do not report a later break and ranges at the maximum UTC timestamp do not panic. Empty and reversed ranges remain empty. ([#953](https://github.com/userFRM/egui-charts/issues/953))
+
 - The example dependency locks replace yanked `clipboard-win` 5.4.1 with 5.4.3. CI checks advisories as well as licences and duplicate versions, rejecting yanked packages. Three unmaintained standalone D-Bus packages required by the egui 0.37 accessibility backend have explicit maintenance exceptions pending its migration to zbus 6; these are development/example dependencies and have no patched standalone releases. ([#952](https://github.com/userFRM/egui-charts/issues/952))
 
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
