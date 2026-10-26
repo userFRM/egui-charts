@@ -423,14 +423,7 @@ impl Trading {
                     text += &format!(" {}", order.symbol);
                 }
                 text += &format!(" at {:.*}", self.decimals, fill.price);
-                let filled = self
-                    .account_panel
-                    .fills
-                    .executions
-                    .iter()
-                    .filter(|earlier| earlier.order == fill.order)
-                    .map(|earlier| earlier.quantity)
-                    .sum::<f64>();
+                let filled = self.account_panel.fills.filled_quantity(&fill.order);
                 // Fills that add up to the order within rounding complete it.
                 let mut toast = match order {
                     Some(order) => {

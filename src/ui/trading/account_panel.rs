@@ -24,6 +24,8 @@ const HEADER_HEIGHT: f32 = 52.0;
 const ROW_HEIGHT: f32 = 36.0;
 /// Room at the end of each row for its edit and close buttons and the column chooser.
 const ACTIONS_WIDTH: f32 = 64.0;
+/// Maximum entries retained in each completed account history.
+pub(super) const HISTORY_LIMIT: usize = 1_000;
 
 /// What the user asked for in the [`AccountPanel`] that the host carries out. Cancelling or
 /// changing an order and closing a position go to the broker from the panel itself.
@@ -61,7 +63,8 @@ pub enum AccountPanelAction {
 /// with a column chooser and an export. Order History also lists individual executions. A
 /// position offers close, and an order offers edit and cancel on hover; each waits for the
 /// user's confirmation like the chart's lines. Clicking
-/// a symbol asks the host to show it.
+/// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries in
+/// arrival order; active orders are retained independently. Older history remains host-owned.
 #[derive(Default)]
 pub struct AccountPanel {
     /// The broker's name, shown on the tab and in the account selector.
@@ -317,11 +320,21 @@ impl AccountPanel {
             AccountEvent::Order(order) if order.status != OrderStatus::Working => {
                 self.history.retain(|finished| finished.id != order.id);
                 self.history.push(order.clone());
+                if self.history.len() > HISTORY_LIMIT {
+                    let old = self.history.remove(0);
+                    self.fills.forget(&old.id);
+                }
             }
             AccountEvent::Execution(fill) => self.fills.execution(fill),
             AccountEvent::Balance(change) => self.balance.push(change.clone()),
             AccountEvent::Journal(entry) => self.journal.push(entry.clone()),
             _ => {}
+        }
+        if self.balance.len() > HISTORY_LIMIT {
+            self.balance.remove(0);
+        }
+        if self.journal.len() > HISTORY_LIMIT {
+            self.journal.remove(0);
         }
     }
 
@@ -1266,6 +1279,86 @@ mod tests {
         }
         panel.clear();
         assert!(panel.fills.executions.is_empty());
+    }
+
+    #[test]
+    fn history_retention_preserves_working_orders_and_latest_fills() {
+        let mut panel = AccountPanel::default();
+        let mut order = Order::new(
+            crate::model::OrderId::new("active"),
+            OrderRequest::new("OLD", OrderSide::Buy, 5_000.0, OrderType::Market),
+            OrderStatus::Working,
+        );
+        let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        panel.record(&AccountEvent::Order(order.clone()));
+        panel.record(&AccountEvent::Execution(Execution::new(
+            order.id.clone(),
+            time,
+            OrderSide::Buy,
+            99.0,
+            1.0,
+        )));
+        order.status = OrderStatus::Filled;
+        order.request.symbol = "NEW".into();
+        for i in 0..2_005 {
+            order.id = crate::model::OrderId::new(i.to_string());
+            let time = time + chrono::Duration::seconds(i);
+            panel.record(&AccountEvent::Order(order.clone()));
+            panel.record(&AccountEvent::Execution(Execution::new(
+                order.id.clone(),
+                time,
+                OrderSide::Buy,
+                100.0,
+                1.0,
+            )));
+            panel.record(&AccountEvent::Balance(BalanceChange::new(
+                time,
+                1000.0,
+                1.0,
+                i.to_string(),
+            )));
+            panel.record(&AccountEvent::Journal(JournalEntry::new(
+                time,
+                i.to_string(),
+            )));
+        }
+        assert_eq!(panel.history.len(), 1_000);
+        assert_eq!(panel.balance.len(), 1_000);
+        assert_eq!(panel.journal.len(), 1_000);
+        assert_eq!(panel.fills.executions.len(), 1_000);
+        assert_eq!(panel.history[0].id.0, "1005");
+        assert_eq!(panel.fills.executions[0].order.0, "1005");
+        assert_eq!(panel.fills.orders.len(), 1_001);
+        assert!(
+            panel
+                .fills
+                .orders
+                .contains_key(&crate::model::OrderId::new("active"))
+        );
+        assert_eq!(panel.fills.price("OLD"), Some(99.0));
+        assert_eq!(panel.fills.price("NEW"), Some(100.0));
+        // Orders without fills must not accumulate metadata either.
+        order.status = OrderStatus::Cancelled;
+        for i in 2_005..4_010 {
+            order.id = crate::model::OrderId::new(i.to_string());
+            panel.record(&AccountEvent::Order(order.clone()));
+        }
+        assert!(panel.fills.orders.len() <= 2_001);
+        let active = crate::model::OrderId::new("active");
+        for _ in 0..1_005 {
+            panel.record(&AccountEvent::Execution(Execution::new(
+                active.clone(),
+                time,
+                OrderSide::Buy,
+                99.0,
+                1.0,
+            )));
+        }
+        assert_eq!(panel.fills.executions.len(), 1_000);
+        assert_eq!(panel.fills.filled_quantity(&active), 1_006.0);
+        panel.clear();
+        assert!(panel.fills.orders.is_empty());
+        assert_eq!(panel.fills.price("OLD"), None);
     }
 
     #[test]
