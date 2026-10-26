@@ -353,11 +353,12 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
         return 0;
     };
     for (previous_i, prev) in priced {
-        total += ((b.open - prev.close).abs()
+        total += (((b.open - prev.close).abs()
             + (b.high - b.open).abs()
             + (b.high - b.low)
             + (b.close - b.low).abs())
-            / size
+            / size)
+            .max(0.0)
             + 4.0;
         if total + (prev.high - prev.low) / size > super::MAX_WORK {
             return i;

@@ -259,7 +259,7 @@ pub(crate) fn work_start(bars: &[Bar], size: f64, source: PriceBasedSource) -> u
             PriceBasedSource::Close => (bar.close - previous.close).abs(),
             PriceBasedSource::HighLow => bar.high.max(previous.high) - bar.low.min(previous.low),
         };
-        total += movement / size + 2.0;
+        total += (movement / size).max(0.0) + 2.0;
         if total > super::MAX_WORK {
             return i;
         }
