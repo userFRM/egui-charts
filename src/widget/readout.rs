@@ -30,6 +30,9 @@ impl Chart {
             let colors = study.colors();
             for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
                 let row = StudyValue {
+                    formatted: study
+                        .plot_value(line, index)
+                        .map(|value| study.format_value(value)),
                     study: study.name().to_owned(),
                     format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),

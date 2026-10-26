@@ -48,7 +48,7 @@ pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
-pub use tooltip::{StudyValue, render_tooltip_with_options};
+pub use tooltip::{StudyValue, ValueFormatters, render_tooltip_with_options};
 pub use trading_lines::{
     PnlUnit, TradingLineAction, TradingLineOptions, TradingLines, render_trading_lines,
 };

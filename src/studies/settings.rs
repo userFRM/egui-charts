@@ -82,6 +82,7 @@ pub struct ConfiguredStudy {
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     overlay: Option<bool>,
     scale: Option<super::StudyScale>,
     source: Option<super::StudySource>,
@@ -109,6 +110,7 @@ impl ConfiguredStudy {
             settings,
             timeframe: None,
             instrument_precision: None,
+            formatter: None,
             overlay: None,
             scale: None,
             source: None,
@@ -518,6 +520,22 @@ impl Indicator for ConfiguredStudy {
         self.aligned = None;
         self.settings = settings;
         Ok(())
+    }
+    fn set_value_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> bool {
+        self.formatter = formatter;
+        true
+    }
+    fn format_value(&self, value: f64) -> String {
+        self.formatter
+            .as_ref()
+            .filter(|_| value.is_finite())
+            .map_or_else(
+                || self.value_format().format(value, self.precision()),
+                |formatter| formatter.format(value),
+            )
     }
     fn value_format(&self) -> super::StudyFormat {
         self.study.value_format()

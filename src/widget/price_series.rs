@@ -176,10 +176,15 @@ pub(super) struct SeriesLegend {
     style: PlotStyle,
     close: Option<f64>,
     values: IndicatorValues,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
 }
 
 impl SeriesLegend {
-    pub(super) fn new(item: &PriceSeries, close: Option<f64>) -> Self {
+    pub(super) fn new(
+        item: &PriceSeries,
+        close: Option<f64>,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> Self {
         Self {
             name: item.options.name.clone(),
             style: PlotStyle {
@@ -190,6 +195,7 @@ impl SeriesLegend {
                 visible: true,
             },
             close,
+            formatter,
             values: IndicatorValues::default(),
         }
     }
@@ -202,6 +208,13 @@ impl Indicator for SeriesLegend {
 
     fn plot_value(&self, _line: usize, _bar: usize) -> Option<f64> {
         self.close
+    }
+
+    fn format_value(&self, value: f64) -> String {
+        self.formatter.as_ref().map_or_else(
+            || StudyFormat::Price.format(value, None),
+            |formatter| formatter.format(value),
+        )
     }
 
     fn value_format(&self) -> StudyFormat {
@@ -489,7 +502,7 @@ impl Chart {
         Some(transform.label(
             transform.to_scale(price),
             map.price_precision().unwrap_or(2),
-            self.price_label_formatter(transform.mode).as_deref(),
+            self.series_label_formatter(id, transform.mode).as_deref(),
         ))
     }
 
@@ -679,7 +692,14 @@ impl Chart {
         &self,
         key: SeriesScale,
         rect: Rect,
-    ) -> impl Iterator<Item = (f64, (Color32, Color32), PriceMap)> + '_ {
+    ) -> impl Iterator<
+        Item = (
+            f64,
+            (Color32, Color32),
+            PriceMap,
+            Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+        ),
+    > + '_ {
         self.main_pane_series()
             .filter(move |item| item.options.scale == key)
             .flat_map(move |item| {
@@ -688,7 +708,14 @@ impl Chart {
                     .filter(move |(value, _)| {
                         map.range().contains(map.transform().to_scale(*value))
                     })
-                    .map(move |(value, colors)| (value, colors, map))
+                    .map(move |(value, colors)| {
+                        (
+                            value,
+                            colors,
+                            map,
+                            self.series_label_formatter(item.id, map.transform().mode),
+                        )
+                    })
             })
     }
 
@@ -940,7 +967,16 @@ impl Chart {
                         .filter(|bar| !bar.is_whitespace()),
                     None => crate::model::last_with_value(&item.bars),
                 };
-                let value = bar.map_or_else(|| "∅".into(), |bar| format!("{:.2}", bar.close));
+                let formatter = self.series_label_formatter(item.id, PriceScaleMode::Normal);
+                let value = bar.map_or_else(
+                    || "∅".into(),
+                    |bar| {
+                        formatter.as_ref().map_or_else(
+                            || format!("{:.2}", bar.close),
+                            |formatter| formatter.format(bar.close),
+                        )
+                    },
+                );
                 let label = plot.text(
                     Pos2::new(rect.left() + 8.0, top + row as f32 * 20.0),
                     egui::Align2::LEFT_TOP,
@@ -1092,7 +1128,7 @@ impl Chart {
             let ctx = RenderContext::new(&clipped, label_rect);
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
-            for (value, colors, mapping) in self.secondary_axis_values(key, rect) {
+            for (value, colors, mapping, formatter) in self.secondary_axis_values(key, rect) {
                 tags.push(crate::chart::rendering::axes::render_axis_value(
                     &clipped,
                     label_rect,
@@ -1101,14 +1137,13 @@ impl Chart {
                     mapping.transform().label(
                         mapping.transform().to_scale(value),
                         2,
-                        self.price_label_formatter(mapping.transform().mode)
-                            .as_deref(),
+                        formatter.as_deref(),
                     ),
                     colors,
                     &tags,
                 ));
             }
-            let formatter = self.price_label_formatter(map.transform().mode);
+            let formatter = self.series_label_formatter(item.id, map.transform().mode);
             crate::chart::renderers::render_price_labels_at_pos(
                 &ctx,
                 &map,
@@ -1603,6 +1638,23 @@ mod tests {
             );
         }
         chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Normal;
+        frame(&ctx, &mut chart, 0.94, vec![]);
+        assert!(chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|price| format!("own {price:.1}")),
+            ))
+        ));
+        assert_eq!(
+            chart.format_series_price(id, 230.0).as_deref(),
+            Some("own 230.0")
+        );
+        frame(&ctx, &mut chart, 0.95, vec![]);
+        assert!(chart.set_series_formatter(id, None));
+        assert_eq!(
+            chart.format_series_price(id, 230.0).as_deref(),
+            Some("label 230.00")
+        );
 
         assert!(chart.move_series_to_pane(id, PaneId::MAIN));
         assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));

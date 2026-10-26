@@ -428,6 +428,9 @@ impl Chart {
         if let Some(timeframe) = self.timeframe() {
             indicator.set_timeframe(timeframe);
         }
+        if indicator.value_format() == crate::studies::StudyFormat::Volume {
+            indicator.set_value_formatter(self.volume_formatter.clone());
+        }
         indicator.set_instrument(self.instrument());
         indicator.set_bar_clock(&self.bar_clock());
         if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
@@ -485,6 +488,7 @@ impl Chart {
     /// its feed and retains the time axis for the remaining series and drawings. Returns
     /// `false` for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        self.series_formatters.remove(&id);
         if id == SeriesId::MAIN {
             if !self.main_series_present {
                 return false;

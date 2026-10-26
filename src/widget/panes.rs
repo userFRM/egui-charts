@@ -408,7 +408,17 @@ impl Chart {
                         Some(bar) => self.series_close_at(item, bar),
                         None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
                     };
-                    (item.id, super::price_series::SeriesLegend::new(item, close))
+                    (
+                        item.id,
+                        super::price_series::SeriesLegend::new(
+                            item,
+                            close,
+                            self.series_label_formatter(
+                                item.id,
+                                crate::scales::PriceScaleMode::Normal,
+                            ),
+                        ),
+                    )
                 })
                 .collect();
             // Each visible study and host series draws its legend in turn, with the study index
@@ -469,7 +479,8 @@ impl Chart {
                 let mut panel = IndicatorPane::with_config(config);
                 panel.price_map = Some(map);
                 if study.is_none() && id.is_some() {
-                    panel.price_formatter = self.price_label_formatter(map.transform().mode);
+                    panel.price_formatter =
+                        id.and_then(|id| self.series_label_formatter(id, map.transform().mode));
                 }
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = member_row > 0;
@@ -841,10 +852,15 @@ impl Chart {
                     }
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
-                    for (value, colors) in items
+                    for (id, (value, colors)) in items
                         .iter()
-                        .flat_map(|item| self.series_axis_values(item))
-                        .filter(|(value, _)| map.range().contains(map.transform().to_scale(*value)))
+                        .flat_map(|item| {
+                            self.series_axis_values(item)
+                                .map(move |value| (item.id, value))
+                        })
+                        .filter(|(_, (value, _))| {
+                            map.range().contains(map.transform().to_scale(*value))
+                        })
                     {
                         let tag = crate::chart::rendering::axes::render_axis_value(
                             &painter,
@@ -854,7 +870,8 @@ impl Chart {
                             map.transform().label(
                                 map.transform().to_scale(value),
                                 2,
-                                self.price_label_formatter(map.transform().mode).as_deref(),
+                                self.series_label_formatter(id, map.transform().mode)
+                                    .as_deref(),
                             ),
                             colors,
                             &axis_tags,

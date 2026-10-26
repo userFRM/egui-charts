@@ -380,6 +380,9 @@ pub struct Chart {
     time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
     price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    volume_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    series_formatters:
+        std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.

@@ -169,6 +169,8 @@ impl Chart {
             time_formatter: None,
             price_formatter: None,
             percentage_formatter: None,
+            volume_formatter: None,
+            series_formatters: Default::default(),
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,

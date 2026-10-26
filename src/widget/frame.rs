@@ -203,6 +203,70 @@ impl Chart {
         self.percentage_formatter = formatter;
     }
 
+    /// Formats volume readouts, including volume-formatted studies. `None` restores the
+    /// built-in suffixes and instrument volume precision. Values stay in volume units.
+    pub fn set_volume_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        self.volume_formatter = formatter.clone();
+        for study in self.studies.indicators_mut() {
+            if study.value_format() == crate::studies::StudyFormat::Volume {
+                study.set_value_formatter(formatter.clone());
+            }
+        }
+    }
+
+    /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
+    /// readouts, price tags and ticks; percentage and indexed scales retain the chart's
+    /// percentage formatter. `None` restores chart-wide formatting. Returns false for an
+    /// unknown series. A shared axis uses the first visible series' formatter.
+    pub fn set_series_formatter(
+        &mut self,
+        id: super::SeriesId,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> bool {
+        if !(id == super::SeriesId::MAIN && self.main_series_present)
+            && !self.price_series.iter().any(|item| item.id == id)
+        {
+            return false;
+        }
+        if let Some(formatter) = formatter {
+            self.series_formatters.insert(id, formatter);
+        } else {
+            self.series_formatters.remove(&id);
+        }
+        true
+    }
+
+    pub(super) fn series_label_formatter(
+        &self,
+        id: super::SeriesId,
+        mode: crate::scales::PriceScaleMode,
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        match mode {
+            crate::scales::PriceScaleMode::Percentage
+            | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
+            _ => self
+                .series_formatters
+                .get(&id)
+                .cloned()
+                .or_else(|| self.price_formatter.clone()),
+        }
+    }
+
+    fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
+        renderers::ValueFormatters {
+            price: self
+                .series_formatters
+                .get(&super::SeriesId::MAIN)
+                .or(self.price_formatter.as_ref())
+                .map(|formatter| formatter.as_ref()),
+            volume: self.volume_formatter.as_deref(),
+            percentage: self.percentage_formatter.as_deref(),
+        }
+    }
+
     /// The host formatter for the labels of a price scale in `mode`.
     pub(super) fn price_label_formatter(
         &self,
@@ -211,7 +275,11 @@ impl Chart {
         match mode {
             crate::scales::PriceScaleMode::Percentage
             | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
-            _ => self.price_formatter.clone(),
+            _ => self
+                .series_formatters
+                .get(&super::SeriesId::MAIN)
+                .cloned()
+                .or_else(|| self.price_formatter.clone()),
         }
     }
 
@@ -1926,7 +1994,7 @@ impl Chart {
             }
         }
         if show_price_axis {
-            for (value, colors, map) in
+            for (value, colors, map, formatter) in
                 self.secondary_axis_values(self.main_series_scale, price_rect)
             {
                 tags.push(rendering::axes::render_axis_value(
@@ -1934,11 +2002,8 @@ impl Chart {
                     price_rect,
                     axis_edge,
                     map.price_to_y(value),
-                    map.transform().label(
-                        map.transform().to_scale(value),
-                        2,
-                        self.price_label_formatter(map.transform().mode).as_deref(),
-                    ),
+                    map.transform()
+                        .label(map.transform().to_scale(value), 2, formatter.as_deref()),
                     colors,
                     &tags,
                 ));
@@ -2350,6 +2415,7 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
+                legend.formatters = self.value_formatters();
                 legend.instrument = self.instrument();
                 legend.badge = self.legend_badge.clone();
                 legend.statuses = &statuses;
@@ -2611,6 +2677,7 @@ impl Chart {
                         bar_seconds,
                         &self.study_values_at(start_idx + local_idx),
                         self.instrument(),
+                        self.value_formatters(),
                     );
                 }
             }
@@ -3974,7 +4041,7 @@ mod tests {
         // Wednesday 13 March 2024, 14:30 UTC, at the hovered bar.
         let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
         type Setup = fn(&mut crate::widget::Chart);
-        let cases: [(Setup, &[&str]); 5] = [
+        let cases: [(Setup, &[&str]); 6] = [
             (
                 |chart| chart.set_locale(Some("de-DE".into())),
                 &[if cfg!(feature = "locales") {
@@ -3993,7 +4060,11 @@ mod tests {
             ),
             (
                 |chart| chart.set_price_formatter(Some(Arc::new(Host))),
-                &["label price", "tick price"],
+                &["label price", "tick price", "O label price"],
+            ),
+            (
+                |chart| chart.set_volume_formatter(Some(Arc::new(Host))),
+                &["label price"],
             ),
             (
                 |chart| {
@@ -4037,6 +4108,16 @@ mod tests {
                         |shape| matches!(shape, Shape::Text(shape) if shape.galley.text() == *text)
                     ),
                     "{text}"
+                );
+            }
+            if expected.contains(&"O label price") {
+                chart.chart_options.tooltip.enabled = true;
+                chart.chart_options.tooltip.on_long_press = false;
+                let painted = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+                let labels = painted.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "label price")).count();
+                assert!(
+                    labels >= 5,
+                    "OHLC tooltip values must use the host formatter: {labels}"
                 );
             }
         }

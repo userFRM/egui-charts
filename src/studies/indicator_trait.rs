@@ -258,6 +258,16 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Replaces value formatting when supported by the presentation. `None` restores the
+    /// declared units and precision. Returns false when this study owns its formatting.
+    fn set_value_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> bool {
+        let _ = formatter;
+        false
+    }
+
     /// Format a value using the declared units and current precision override.
     fn format_value(&self, value: f64) -> String {
         self.value_format().format(value, self.precision())

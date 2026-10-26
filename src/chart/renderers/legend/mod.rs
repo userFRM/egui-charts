@@ -51,6 +51,8 @@ pub enum StudyAction {
 
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
+    /// Host number formatting for this series' readouts.
+    pub formatters: super::super::ValueFormatters<'a>,
     /// Fallback title when the instrument has no description.
     pub symbol: &'a str,
     /// Display interval.
@@ -100,6 +102,7 @@ impl<'a> Legend<'a> {
     /// A series readout with volume and no optional host metadata or quotes.
     pub fn new(symbol: &'a str, timeframe: &'a str, bar: &'a Bar) -> Self {
         Self {
+            formatters: Default::default(),
             symbol,
             timeframe,
             instrument: None,
@@ -241,21 +244,32 @@ impl<'a> Legend<'a> {
             if plot.width() < 600.0 {
                 layout.field(
                     "C ",
-                    format!("{:.precision$}", self.bar.close),
+                    self.formatters.price.map_or_else(
+                        || format!("{:.precision$}", self.bar.close),
+                        |formatter| formatter.format(self.bar.close),
+                    ),
                     layout.bar_color(self.bar),
                 );
             } else {
-                layout.ohlc(self.bar, precision);
+                layout.ohlc(self.bar, precision, self.formatters.price);
             }
         }
         if self.show_change || self.show_change_percent {
             let reference = self.previous_close.unwrap_or(self.bar.open);
             let change = self.bar.close - reference;
             let pct = percent_change(reference, self.bar.close);
+            let absolute = self.formatters.price.map_or_else(
+                || format!("{change:+.precision$}"),
+                |formatter| formatter.format(change),
+            );
+            let percent = self
+                .formatters
+                .percentage
+                .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
             let text = match (self.show_change, self.show_change_percent) {
-                (true, true) => format!("{change:+.precision$} ({pct:+.2}%)"),
-                (true, false) => format!("{change:+.precision$}"),
-                _ => format!("{pct:+.2}%"),
+                (true, true) => format!("{absolute} ({percent})"),
+                (true, false) => absolute,
+                _ => percent,
             };
             layout.text(
                 text,
@@ -376,19 +390,24 @@ impl<'a> Legend<'a> {
             {
                 layout.field(
                     "Vol ",
-                    self.instrument
-                        .and_then(|instrument| instrument.volume_decimals)
-                        .map_or_else(
-                            || format_volume(self.bar.volume),
-                            |decimals| {
-                                crate::scales::PriceFormatter::format(
-                                    &crate::scales::VolumeFormatter {
-                                        precision: usize::from(decimals),
+                    self.formatters
+                        .volume
+                        .map(|formatter| formatter.format(self.bar.volume))
+                        .unwrap_or_else(|| {
+                            self.instrument
+                                .and_then(|instrument| instrument.volume_decimals)
+                                .map_or_else(
+                                    || format_volume(self.bar.volume),
+                                    |decimals| {
+                                        crate::scales::PriceFormatter::format(
+                                            &crate::scales::VolumeFormatter {
+                                                precision: usize::from(decimals),
+                                            },
+                                            self.bar.volume,
+                                        )
                                     },
-                                    self.bar.volume,
                                 )
-                            },
-                        ),
+                        }),
                     layout.bar_color(self.bar),
                 );
                 layout.new_row();
@@ -805,7 +824,12 @@ impl<'a> Layout<'a> {
         self.colors.bar_color(bar.close >= bar.open)
     }
 
-    fn ohlc(&mut self, bar: &Bar, precision: usize) {
+    fn ohlc(
+        &mut self,
+        bar: &Bar,
+        precision: usize,
+        formatter: Option<&dyn crate::scales::PriceFormatter>,
+    ) {
         let color = self.bar_color(bar);
         for (label, value) in [
             ("O ", bar.open),
@@ -813,7 +837,14 @@ impl<'a> Layout<'a> {
             ("L ", bar.low),
             ("C ", bar.close),
         ] {
-            self.field(label, format!("{value:.precision$}"), color);
+            self.field(
+                label,
+                formatter.map_or_else(
+                    || format!("{value:.precision$}"),
+                    |formatter| formatter.format(value),
+                ),
+                color,
+            );
         }
     }
 }
