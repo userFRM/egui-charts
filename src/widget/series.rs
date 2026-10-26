@@ -215,8 +215,8 @@ impl Chart {
         }
         if self.replay.is_some() {
             self.apply_replay_window();
-        } else {
-            self.enforce_bar_limit(series);
+        } else if self.enforce_bar_limit(series) > 0 {
+            self.data_updated(series);
         }
     }
 
@@ -227,18 +227,27 @@ impl Chart {
 
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
     /// restart on the retained window; drawings keep their timestamps and the view keeps its
-    /// time position where possible. During replay this removes from the full retained history.
+    /// time position where possible. During replay this removes from the full retained history
+    /// and its matching finer-source slots.
     /// Emits [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) when bars are removed.
     /// Unknown ids and study ids are ignored with a warning.
     pub fn remove_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
+        let removed = self.take_oldest_bars(series, count);
+        if !removed.is_empty() {
+            self.data_updated(series);
+        }
+        removed
+    }
+
+    fn take_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
         if !self.bar_series_present(series, "remove_oldest_bars") || count == 0 {
             return Vec::new();
         }
+        let clock = self
+            .timeframe
+            .map_or_else(BarClock::exact, |_| self.bar_clock());
         let removed = if let Some(replay) = &mut self.replay {
-            let bars = replay.bars.entry(series).or_default();
-            let count = count.min(bars.len());
-            let removed = bars.drain(..count).collect();
-            bars.shrink_to_fit();
+            let removed = replay.remove_oldest_bars(series, count, &clock);
             self.apply_replay_window();
             removed
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
@@ -281,8 +290,8 @@ impl Chart {
             self.project_drawing_points();
             removed
         };
-        if !removed.is_empty() {
-            self.data_updated(series);
+        if series == SeriesId::MAIN && !removed.is_empty() {
+            self.feed.history_complete = false;
         }
         removed
     }
@@ -297,7 +306,7 @@ impl Chart {
             self.bars(series).len().saturating_sub(limit.get())
         });
         if count > 0 {
-            self.remove_oldest_bars(series, count);
+            self.take_oldest_bars(series, count);
         }
         count
     }
@@ -908,7 +917,7 @@ pub(super) fn retain_bars(bars: &mut Vec<Bar>, limit: Option<NonZeroUsize>) {
     }
 }
 
-fn shrink_bars(bars: &mut Vec<Bar>) {
+pub(super) fn shrink_bars(bars: &mut Vec<Bar>) {
     if bars.capacity() / 2 > bars.len() {
         bars.shrink_to_fit();
     }

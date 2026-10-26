@@ -943,6 +943,7 @@ impl Chart {
     fn apply_page(&mut self, link: &FeedLink, page: HistoryPage, scroll_back: bool) {
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
+        self.feed.history_complete |= (page.end_of_history || empty) && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
@@ -956,7 +957,7 @@ impl Chart {
             );
         }
         self.feed.loading_history = false;
-        self.feed.history_complete |= page.end_of_history || empty || stale;
+        self.feed.history_complete |= stale;
         self.data_loaded(SeriesId::MAIN);
     }
 
@@ -1294,22 +1295,58 @@ mod tests {
     /// Time and trade-count bars both keep their newest slots across per-frame tick batches.
     #[test]
     fn bar_limits_bound_feed_history_and_ticks() {
+        use crate::widget::ChartEvent;
         use std::num::NonZeroUsize;
-        for timeframe in [
-            Timeframe::Min1,
-            "1t".parse().unwrap(),
-            "2t".parse().unwrap(),
+        for (timeframe, end, limit_after_load) in [
+            (Timeframe::Min1, false, false),
+            ("1t".parse().unwrap(), false, false),
+            ("2t".parse().unwrap(), false, false),
+            (Timeframe::Min1, true, false),
+            (Timeframe::Min1, true, true),
         ] {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
             chart.set_timeframe(timeframe);
-            chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            if !limit_after_load {
+                chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            }
             let mut frames = Frames::new();
             frames.run(&mut chart);
+            chart.drain_events().for_each(drop);
             feed.resolve().send(Ok(Instrument::new("A")));
-            feed.page().send(page(bars(5), false));
+            feed.page().send(page(bars(5), end));
             frames.run(&mut chart);
+            if limit_after_load {
+                chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            }
             assert_eq!(chart.bars(SeriesId::MAIN), &bars(5)[2..]);
+            assert_eq!(
+                chart
+                    .drain_events()
+                    .filter(|event| matches!(
+                        event,
+                        ChartEvent::DataLoaded { .. } | ChartEvent::DataUpdated { .. }
+                    ))
+                    .collect::<Vec<_>>(),
+                if limit_after_load {
+                    vec![
+                        ChartEvent::DataLoaded {
+                            series: SeriesId::MAIN,
+                            bars: 5,
+                        },
+                        ChartEvent::DataUpdated {
+                            series: SeriesId::MAIN,
+                            bars: 3,
+                        },
+                    ]
+                } else {
+                    vec![ChartEvent::DataLoaded {
+                        series: SeriesId::MAIN,
+                        bars: 3,
+                    }]
+                },
+                "history eviction must not report a live update"
+            );
             assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
             assert!(
                 feed.pages.lock().unwrap().is_empty(),
@@ -1325,7 +1362,8 @@ mod tests {
             );
             // This page was already in flight when the limit was restored.
             chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
-            feed.page().send(page(bars(2), false));
+            feed.page()
+                .send(page(if end { Vec::new() } else { bars(2) }, end));
             frames.run(&mut chart);
             assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
             let sink = feed.sink();

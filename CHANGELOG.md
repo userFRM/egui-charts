@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- `Chart::set_bar_limit` optionally keeps only the newest bars of each series, including feed history, streaming ticks and retained replay history. The default remains unlimited. `remove_oldest_bars` returns evicted bars explicitly. Studies restart their warm-up on the retained window, drawings keep their timestamps and the viewport keeps its time position where possible. Full windows pause feed scroll-back until the limit is raised or cleared; markers, raw trades and host data retain their independent lifetimes. ([#945](https://github.com/userFRM/egui-charts/issues/945))
+- `Chart::set_bar_limit` optionally keeps only the newest bars of each series, including feed history, streaming ticks and retained replay history. The default remains unlimited. `remove_oldest_bars` returns evicted bars explicitly. Replay eviction also drops the matching finer-source slots. Studies restart their warm-up on the retained window, drawings keep their timestamps and the viewport keeps its time position where possible. Full windows pause feed scroll-back until the limit is raised or cleared; markers, raw trades and host data retain their independent lifetimes. ([#945](https://github.com/userFRM/egui-charts/issues/945))
 
 - `Chart::forget_symbol` releases an inactive symbol's drawings, markers and storage reader without deleting host storage. Pending local storage edits must finish first. Symbol changes no longer cache empty drawing managers or marker lists; pending drawing sync notifications are retained. ([#949](https://github.com/userFRM/egui-charts/issues/949))
 
