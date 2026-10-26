@@ -10,7 +10,7 @@ fn report_replacement_selection_export_and_clear() {
     let mut closed = StrategyTrade::new(StrategySide::Long, 1.0, start, 0.00001234);
     closed.exit = Some(StrategyExit::new(
         start + chrono::TimeDelta::minutes(1),
-        110.0,
+        98.92959251407622,
         10.0,
     ));
     let open = StrategyTrade::new(
@@ -67,6 +67,7 @@ fn report_replacement_selection_export_and_clear() {
         h.run();
         h.get_by_label("0.00001234");
         h.get_by_label("1970-01-01 00:00:00.250");
+        assert!(h.get_by_label("98.92959251407622").rect().height() < 28.0);
         h.get_by_role_and_label(Role::Button, "1").click();
         h.run();
         assert_eq!(

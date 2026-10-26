@@ -354,6 +354,7 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
         .id_salt("trade_columns")
         .show(ui, |ui| {
             ui.style_mut().interaction.selectable_labels = false;
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
