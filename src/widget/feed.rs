@@ -641,6 +641,7 @@ impl Chart {
                 continue;
             }
             if updates.reset {
+                link.time = None;
                 self.bar_close_time = None;
                 self.server_time_offset = None;
                 self.replace_main_data(Vec::new());
@@ -1221,9 +1222,18 @@ mod tests {
     fn replay_reset_removes_future_data_from_the_chart() {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
+        #[cfg(feature = "studies")]
+        let studies: Vec<_> = {
+            let factory = crate::studies::IndicatorFactory::new();
+            ["Quoted Spread", "Trade Rate", "Book Size"]
+                .map(|name| chart.add_indicator(factory.create(name).unwrap()))
+                .into()
+        };
         let mut frames = Frames::new();
         frames.run(&mut chart);
-        feed.resolve().send(Ok(Instrument::new("A")));
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = Some(0.25);
+        feed.resolve().send(Ok(instrument));
         feed.page().send(page(bars(10), true));
         frames.run(&mut chart);
         let sink = feed.sink();
@@ -1231,6 +1241,16 @@ mod tests {
         let future = time + TimeDelta::minutes(20);
         sink.set_server_time(future);
         sink.push_tick(Tick::new(future, 120.0, 9.0, None).with_id(7));
+        let quote = |ts, bid, ask| crate::model::Level1Quote {
+            ts,
+            symbol: "A".into(),
+            bid,
+            ask,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        };
+        sink.push_quote(quote(future, 119.0, 121.0));
+        sink.advance_time(future + TimeDelta::seconds(1));
         sink.push_depth_snapshot(
             1,
             OrderBook {
@@ -1245,6 +1265,8 @@ mod tests {
         assert!(chart.order_book(SeriesId::MAIN).is_some());
         sink.reset_replay(time);
         sink.push_tick(Tick::new(time, 100.0, 2.0, None).with_id(7));
+        sink.push_quote(quote(time, 99.0, 100.0));
+        sink.advance_time(time + TimeDelta::seconds(1));
         frames.run(&mut chart);
         assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
         assert_eq!(
@@ -1262,6 +1284,21 @@ mod tests {
             [100.0]
         );
         assert!(chart.order_book(SeriesId::MAIN).is_none());
+        #[cfg(feature = "studies")]
+        {
+            for _ in 0..8 {
+                frames.run(&mut chart);
+            }
+            for (id, expected) in studies.into_iter().zip([Some(4.0), Some(1.0), None]) {
+                let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+                let values = study.order_flow_input().unwrap().values();
+                assert!(values.keys().all(|at| *at == time), "{}", study.name());
+                assert_eq!(study.values().value(0, 0), expected, "{}", study.name());
+                if study.name() == "Trade Rate" {
+                    assert_eq!(study.values().value(2, 0), Some(1.0 / 3.0));
+                }
+            }
+        }
     }
 
     #[test]

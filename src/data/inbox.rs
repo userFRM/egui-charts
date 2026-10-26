@@ -440,6 +440,9 @@ impl Sink {
             live.taken.ids.clear();
             live.updates = Updates::new(live.updates.trades.empty());
             live.updates.reset = true;
+            for input in &live.study_inputs {
+                input.clear();
+            }
         });
     }
 
@@ -590,7 +593,7 @@ impl Sink {
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.set_snapshot(sequence, time, orders);
             let trades = book.take_executions();
-            live.sync_orders(sequence, result);
+            live.sync_orders(sequence, time, result);
             for trade in trades {
                 live.tick(trade, Utc::now());
             }
@@ -609,7 +612,7 @@ impl Sink {
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.event(sequence, time, event);
             let trades = book.take_executions();
-            live.sync_orders(sequence, result);
+            live.sync_orders(sequence, time, result);
             for trade in trades {
                 live.tick(trade, Utc::now());
             }
@@ -916,7 +919,7 @@ impl Live {
         }
     }
 
-    fn sync_orders(&mut self, sequence: u64, result: Result<(), Lost>) {
+    fn sync_orders(&mut self, sequence: u64, time: DateTime<Utc>, result: Result<(), Lost>) {
         self.orders_changed = true;
         let levels = self
             .orders
@@ -929,16 +932,17 @@ impl Live {
             .and_then(OrderQueue::sequence)
             .unwrap_or(sequence);
         let derived = self.book.snapshot(sequence, levels);
-        self.depth_result(result.and(derived));
+        self.depth_result(time, result.and(derived));
     }
 
     fn depth(&mut self, ts: DateTime<Utc>, apply: impl FnOnce(&mut Book) -> Result<(), Lost>) {
         self.sample_book(ts);
         let result = apply(&mut self.book);
-        self.depth_result(result);
+        self.depth_result(ts, result);
     }
 
-    fn depth_result(&mut self, result: Result<(), Lost>) {
+    fn depth_result(&mut self, ts: DateTime<Utc>, result: Result<(), Lost>) {
+        let lost = result.is_err();
         match result {
             // The book holds a snapshot newer than any loss, so a pending request is moot.
             Ok(()) => self.updates.resnapshot = false,
@@ -951,7 +955,7 @@ impl Live {
             .is_some_and(|limit| ts <= limit)
         {
             for input in &self.study_inputs {
-                input.book_levels(&self.clock, ts, self.book.levels());
+                input.book_levels(&self.clock, ts, self.book.levels().filter(|_| !lost));
             }
         }
     }
@@ -1014,6 +1018,11 @@ mod tests {
         use crate::model::TradeSide::{Buy, Sell};
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
+        let input = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
+            levels: 10,
+            distance: 0.0,
+        });
+        sink.update(|live| live.study_inputs.push(input.clone()));
         let time = at(0, 0);
         sink.set_server_time(time);
         sink.push_order_snapshot(
@@ -1043,6 +1052,7 @@ mod tests {
             (book.bids[0].size, book.asks[0].size, book.asks[0].order_cnt),
             (3.0, 3.0, Some(1))
         );
+        assert_eq!(input.values()[&time], [3.0, 3.0, 0.0]);
         let trades: Vec<_> = updates.trades.iter().collect();
         assert_eq!(
             (
@@ -1052,15 +1062,17 @@ mod tests {
             ),
             (1, Some(8), Some(9))
         );
-        sink.push_order_event(4, time, OrderEvent::Cancel { id: 7 });
-        sink.push_order_event(4, time, OrderEvent::Cancel { id: 7 });
+        sink.push_order_event(4, at(0, 10), OrderEvent::Cancel { id: 7 });
+        sink.push_order_event(4, at(0, 10), OrderEvent::Cancel { id: 7 });
         let (_, updates) = inbox.drain().updates.pop().unwrap();
         assert!(updates.resnapshot);
         assert!(updates.depth.unwrap().bids.is_empty());
-        sink.push_order_snapshot(3, time, vec![RestingOrder::new(7, Buy, 99.0, 3.0)]);
+        assert!(input.values()[&time].iter().all(|value| value.is_nan()));
+        sink.push_order_snapshot(3, at(0, 20), vec![RestingOrder::new(7, Buy, 99.0, 3.0)]);
         let (_, updates) = inbox.drain().updates.pop().unwrap();
         assert!(!updates.resnapshot);
         assert!(updates.orders.unwrap().orders().next().is_none());
+        assert_eq!(input.values()[&time], [0.0; 3]);
     }
 
     /// `minute` and `second` after 10:00.
