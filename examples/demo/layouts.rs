@@ -188,6 +188,7 @@ impl DemoApp {
     }
 
     fn refresh_active_chart(&mut self) {
+        self.refresh_strategy_signals();
         self.last_chart_click = None;
         self.crosshair = None;
         self.pointer_readout = None;

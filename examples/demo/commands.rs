@@ -12,6 +12,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("indicators", "Indicators", "Actions"),
         ("settings", "Chart settings", "Settings"),
         ("export", "Export chart", "Actions"),
+        ("backtest", "Sample backtest", "Actions"),
         ("reset", "Reset chart view", "Actions"),
         ("date", "Go to date", "Actions"),
         ("replay", "Toggle replay", "Actions"),
@@ -80,6 +81,10 @@ impl DemoApp {
             "export" => {
                 self.screenshot_requested = None;
                 self.export_dialog.open();
+                return;
+            }
+            "backtest" => {
+                self.run_sample_backtest();
                 return;
             }
             "replay" => TopToolbarAction::ToggleReplay,

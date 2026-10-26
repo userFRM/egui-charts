@@ -19,9 +19,7 @@ impl DemoApp {
     /// marks, a watermark of the symbol and its company and the demo level at the recent high.
     pub(super) fn annotate(&mut self) {
         let samples = self.api_samples;
-        self.chart.set_signal_source(
-            samples.then(|| self.live.clone() as Arc<dyn egui_charts::services::Signals>),
-        );
+        self.refresh_strategy_signals();
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {
             bars: self.bars.clone(),
             samples,
