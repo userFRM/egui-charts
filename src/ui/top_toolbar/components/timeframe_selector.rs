@@ -13,7 +13,7 @@ use crate::ui_kit::buttons::Button;
 use crate::ui_kit::list_item::{ContentContext, LabelContent, ListItem, ListItemContent};
 use egui::{Color32, Rect, RichText, Role, Ui, WidgetInfo, pos2, vec2};
 use std::collections::HashSet;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 /// Height of the interval menu's rows and section headers.
 const ROW_H: f32 = 32.0;
@@ -119,6 +119,8 @@ fn parts(tf: Timeframe) -> (u64, TimeframeUnit) {
         Timeframe::Volume(n) => (n.get(), Unit::Volume),
         Timeframe::Range(n) => (n.get(), Unit::Range),
         Timeframe::Delta(n) => (n.get(), Unit::Delta),
+        Timeframe::Months(n) => (u64::from(n.get()), Unit::Month),
+        Timeframe::Weeks(n) => (u64::from(n.get()), Unit::Week),
         Timeframe::Month1 => (1, Unit::Month),
         Timeframe::Week1 => (1, Unit::Week),
         _ if seconds >= 86_400 && seconds % 86_400 == 0 => (seconds / 86_400, Unit::Day),
@@ -195,6 +197,9 @@ const PRESETS: &[Timeframe] = &[
     Timeframe::Day1,
     Timeframe::Week1,
     Timeframe::Month1,
+    Timeframe::Months(NonZeroU32::new(3).unwrap()),
+    Timeframe::Months(NonZeroU32::new(6).unwrap()),
+    Timeframe::Months(NonZeroU32::new(12).unwrap()),
 ];
 
 /// Configuration for timeframe selector
@@ -291,6 +296,8 @@ impl CustomTimeframeDialog {
             (TimeframeUnit::Minute, "Minutes"),
             (TimeframeUnit::Hour, "Hours"),
             (TimeframeUnit::Day, "Days"),
+            (TimeframeUnit::Week, "Weeks"),
+            (TimeframeUnit::Month, "Months"),
         ]
     }
 
@@ -805,12 +812,12 @@ mod tests {
             let mut right = 0.0;
             let mut output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 2000.0))),
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 2600.0))),
                     events,
                     ..Default::default()
                 },
                 |ui| {
-                    action = selector.menu_ui(ui, &theme, 1900.0);
+                    action = selector.menu_ui(ui, &theme, 2500.0);
                     right = ui.min_rect().right();
                 },
             );
@@ -904,6 +911,21 @@ mod tests {
     #[test]
     fn custom_interval_tabs_from_value_to_unit_to_add() {
         for width in [320.0, 500.0] {
+            for unit in [TimeframeUnit::Week, TimeframeUnit::Month] {
+                assert!(
+                    CustomTimeframeDialog::available_units()
+                        .iter()
+                        .any(|(u, _)| *u == unit)
+                );
+                let mut dialog = CustomTimeframeDialog {
+                    value_input: "3".into(),
+                    unit,
+                    error: None,
+                };
+                assert_eq!(parts(dialog.validate().unwrap()), (3, unit));
+                dialog.value_input = "0".into();
+                assert!(dialog.validate().is_none());
+            }
             let ctx = egui::Context::default();
             let mut dialog = CustomTimeframeDialog::default();
             let mut frame = |events| {
@@ -959,6 +981,9 @@ mod tests {
                 ("45s".parse().unwrap(), "45S", "45 seconds"),
                 (Model::Min5, "5m", "5 minutes"),
                 (Model::Hour1, "1h", "1 hour"),
+                ("3month".parse().unwrap(), "3M", "3 months"),
+                ("6month".parse().unwrap(), "6M", "6 months"),
+                ("12month".parse().unwrap(), "12M", "12 months"),
                 (
                     Model::Custom(std::num::NonZeroU64::MAX),
                     "18446744073709551615S",

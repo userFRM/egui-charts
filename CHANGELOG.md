@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Custom intervals accept positive week and calendar-month counts, and the interval menu offers 3, 6 and 12 months. `Timeframe::Weeks` and `Months` retain calendar units through parsing and saved preferences. `BarClock` aligns multi-week bars to Monday 1970-01-05 and multi-month bars to January 1970 in its configured timezone, including daylight-saving changes; quarters open in January, April, July and October. Month durations remain approximate for sizing; bar boundaries use the calendar. Previously saved `Custom(seconds)` values keep their fixed-duration meaning. ([#963](https://github.com/userFRM/egui-charts/issues/963))
+
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
 
 - `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
