@@ -279,6 +279,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
+
 - Scalar rolling sums recover small values after a much larger value leaves the window. ([#545](https://github.com/userFRM/egui-charts/issues/545))
 
 - Force Index waits for a complete seed of price changes, including when the whole history is shorter than its period. It shares the SMA-seeded scalar EMA with the other studies. Envelopes, Guppy averages and the percentage oscillators also use the public scalar helpers while retaining their reference values. ([#545](https://github.com/userFRM/egui-charts/issues/545))

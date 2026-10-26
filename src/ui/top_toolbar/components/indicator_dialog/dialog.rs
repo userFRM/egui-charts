@@ -340,11 +340,12 @@ impl IndicatorDialog {
         // offset and the focused row. A click on a row opens the panel from the next frame,
         // so the list and the panel are never wider than the dialog.
         let show_config = self.show_config;
+        let list_width = ui.available_width() * 0.5 - ui.spacing().item_spacing.x;
         let mut action = IndicatorDialogAction::None;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 if show_config {
-                    ui.set_width(config.width - 420.0);
+                    ui.set_width(list_width);
                 }
                 action = self.draw_indicator_list(ui, config, theme);
             });
@@ -899,6 +900,45 @@ mod tests {
         assert!(!study.is_overlay());
         assert_eq!(study.value_format(), StudyFormat::Percent);
         assert_eq!(study.data_requests()[0].metric.as_deref(), Some("funding"));
+        use egui_kittest::{Harness, kittest::Queryable};
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [640.0, 800.0, 1440.0] {
+                dialog.open();
+                let metric = dialog
+                    .indicators
+                    .iter()
+                    .find(|info| info.id == "Metric: funding")
+                    .unwrap()
+                    .clone();
+                dialog.select(&metric);
+                let style = theme.clone();
+                let mut added = false;
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(width, 640.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &style);
+                    })
+                    .build_ui(|ui| {
+                        if let IndicatorDialogAction::AddIndicator(study) =
+                            dialog.show(ui.ctx(), &theme)
+                        {
+                            assert_eq!(study.name(), "Funding rate");
+                            added = true;
+                        }
+                    });
+                harness.run();
+                let add = harness.get_by_role_and_label(Role::Button, "Add");
+                assert!(
+                    harness.ctx.content_rect().contains_rect(add.rect()),
+                    "width {width}"
+                );
+                add.click();
+                harness.run();
+                drop(harness);
+                assert!(added, "width {width}");
+            }
+        }
         dialog.set_metric_source(None, "CURRENT");
         assert!(dialog.create("Metric: funding").is_none());
         assert!(dialog.create("SMA").is_some());
