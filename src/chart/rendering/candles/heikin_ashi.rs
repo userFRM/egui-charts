@@ -15,19 +15,9 @@
 //! the complete dataset and slicing the visible window out of it keeps every
 //! bar's Heikin-Ashi value invariant under panning and zooming.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 
 use crate::model::Bar;
-
-/// Transform a full OHLC series into its Heikin-Ashi representation.
-///
-/// The input must be the complete dataset (not a visible sub-window) so that
-/// the recurrence is seeded deterministically from the first bar.
-pub fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
-    let mut ha_bars = Vec::with_capacity(bars.len());
-    extend(&mut ha_bars, bars);
-    ha_bars
-}
 
 /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
 /// value.
@@ -62,10 +52,10 @@ fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
     }
 }
 
+#[derive(Default)]
 struct CachedSeries {
-    revision: u64,
-    first: Bar,
-    last: Bar,
+    revision: Option<u64>,
+    last: Option<Bar>,
     bars: Vec<Bar>,
 }
 
@@ -74,60 +64,43 @@ fn same_bar(a: &Bar, b: &Bar) -> bool {
     a.time == b.time && bits(a) == bits(b)
 }
 
-thread_local! {
-    static HEIKIN_ASHI_CACHE: RefCell<Vec<CachedSeries>> = const { RefCell::new(Vec::new()) };
+/// The Heikin-Ashi history of one series, retained until its owner is dropped.
+///
+/// Keep one cache per series and pass it to [`super::CandleDataContext`]. Unchanged frames
+/// reuse the history; appends and forming-bar updates recompute only the tail.
+#[derive(Default)]
+pub struct HeikinAshiCache {
+    entry: RefCell<CachedSeries>,
 }
 
-/// Calls `use_window` with the Heikin-Ashi values of the visible window
-/// [start_idx, start_idx + len) of full_data, a series at revision; indices outside the dataset are clamped.
-pub(super) fn with_window<R>(
-    full_data: &[Bar],
-    revision: u64,
-    start_idx: usize,
-    len: usize,
-    use_window: impl FnOnce(&[Bar]) -> R,
-) -> R {
-    let (Some(first), Some(last)) = (full_data.first(), full_data.last()) else {
-        return use_window(&[]);
-    };
-    HEIKIN_ASHI_CACHE.with_borrow_mut(|cache| {
-        let pos = cache.iter().position(|entry| {
-            entry.revision == revision
-                && same_bar(&entry.first, first)
-                && entry.bars.len() <= full_data.len()
-        });
-        let entry = match pos {
-            Some(pos) => {
-                // A live tail update retains the preceding bars.
-                let mut entry = cache.remove(pos);
-                let old_len = entry.bars.len();
-                let from = if same_bar(&entry.last, &full_data[old_len - 1]) {
+impl HeikinAshiCache {
+    /// Returns the full transformed history at `revision`, following
+    /// [`ChartState::revision`](crate::model::ChartState::revision)'s contract.
+    pub(crate) fn bars(&self, full_data: &[Bar], revision: u64) -> Ref<'_, [Bar]> {
+        {
+            let mut entry = self.entry.borrow_mut();
+            if entry.revision != Some(revision) || entry.bars.len() > full_data.len() {
+                entry.bars.clear();
+            }
+            let old_len = entry.bars.len();
+            let from = old_len.checked_sub(1).map_or(0, |last| {
+                if entry
+                    .last
+                    .as_ref()
+                    .is_some_and(|old| same_bar(old, &full_data[last]))
+                {
                     old_len
                 } else {
-                    old_len - 1
-                };
-                entry.bars.truncate(from);
-                extend(&mut entry.bars, &full_data[from..]);
-                entry.last = last.clone();
-                entry
-            }
-            None => CachedSeries {
-                revision,
-                first: first.clone(),
-                last: last.clone(),
-                bars: transform_to_heikin_ashi(full_data),
-            },
-        };
-        let start = start_idx.min(entry.bars.len());
-        let end = start.saturating_add(len).min(entry.bars.len());
-        let result = use_window(&entry.bars[start..end]);
-        // Eight recently drawn datasets cover a multi-chart layout without unbounded history.
-        if cache.len() >= 8 {
-            cache.remove(0);
+                    last
+                }
+            });
+            entry.bars.truncate(from);
+            extend(&mut entry.bars, &full_data[from..]);
+            entry.revision = Some(revision);
+            entry.last = full_data.last().cloned();
         }
-        cache.push(entry);
-        result
-    })
+        Ref::map(self.entry.borrow(), |entry| entry.bars.as_slice())
+    }
 }
 
 #[cfg(test)]
@@ -135,8 +108,14 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    fn window(full: &[Bar], revision: u64, start: usize, len: usize) -> Vec<Bar> {
-        with_window(full, revision, start, len, <[Bar]>::to_vec)
+    /// Transform a full OHLC series into its Heikin-Ashi representation.
+    ///
+    /// The input must be the complete dataset (not a visible sub-window) so that
+    /// the recurrence is seeded deterministically from the first bar.
+    fn transform_to_heikin_ashi(bars: &[Bar]) -> Vec<Bar> {
+        let mut ha_bars = Vec::with_capacity(bars.len());
+        extend(&mut ha_bars, bars);
+        ha_bars
     }
 
     fn bar(i: i64, open: f64, high: f64, low: f64, close: f64) -> Bar {
@@ -170,23 +149,6 @@ mod tests {
         assert_eq!(a.close.to_bits(), b.close.to_bits(), "{ctx}: close");
     }
 
-    /// A bar's Heikin-Ashi value must not depend on where the visible window
-    /// begins: the windowed result must equal the tail of the full transform.
-    #[test]
-    fn ha_window_is_independent_of_start() {
-        let full = sample_series();
-        let ha_full = transform_to_heikin_ashi(&full);
-
-        for start in 0..full.len() {
-            let len = full.len() - start;
-            let win = window(&full, 0, start, len);
-            assert_eq!(win.len(), len, "start={start}");
-            for (i, w) in win.iter().enumerate() {
-                assert_bars_eq(w, &ha_full[start + i], &format!("start={start}, i={i}"));
-            }
-        }
-    }
-
     /// Seeding from a later bar (the old visible-window behavior) produces a
     /// different early value, confirming the defect the cache fixes.
     #[test]
@@ -206,18 +168,18 @@ mod tests {
     fn streaming_updates_retain_the_prefix_and_match_a_fresh_transform() {
         use crate::model::{BarData, ChartState};
         let mut state = ChartState::new(BarData::new());
+        let cache = HeikinAshiCache::default();
         let check = |state: &ChartState| {
             let full = &state.data().bars;
             let fresh = transform_to_heikin_ashi(full);
-            with_window(full, state.revision(), 0, full.len(), |cached| {
-                assert_eq!(cached.len(), fresh.len());
-                for (a, b) in cached.iter().zip(&fresh) {
-                    assert_bars_eq(a, b, "stream");
-                    assert_eq!(a.time, b.time);
-                    assert_eq!(a.volume.to_bits(), b.volume.to_bits());
-                }
-                cached.as_ptr()
-            })
+            let cached = cache.bars(full, state.revision());
+            assert_eq!(cached.len(), fresh.len());
+            for (a, b) in cached.iter().zip(&fresh) {
+                assert_bars_eq(a, b, "stream");
+                assert_eq!(a.time, b.time);
+                assert_eq!(a.volume.to_bits(), b.volume.to_bits());
+            }
+            cached.as_ptr()
         };
         for next in sample_series() {
             state.edit_bars(|bars| {
@@ -272,18 +234,30 @@ mod tests {
         check(&state);
     }
 
-    /// Out-of-range indices clamp to the available data instead of panicking.
     #[test]
-    fn window_clamps_out_of_range() {
-        let full = sample_series();
-        assert!(window(&full, 0, 100, 10).is_empty());
-        let tail = window(&full, 0, full.len() - 1, 50);
-        assert_eq!(tail.len(), 1);
-    }
-
-    /// An empty dataset yields an empty window without panicking.
-    #[test]
-    fn empty_series_is_empty() {
-        assert!(window(&[], 0, 0, 10).is_empty());
+    fn active_series_do_not_evict_each_other() {
+        let owners: Vec<_> = (0..9).map(|_| HeikinAshiCache::default()).collect();
+        let histories: Vec<_> = (0..9)
+            .map(|i| {
+                let mut bars = sample_series();
+                bars[0].open += i as f64;
+                bars[0].high += i as f64;
+                bars
+            })
+            .collect();
+        let pointers: Vec<_> = owners
+            .iter()
+            .zip(&histories)
+            .enumerate()
+            .map(|(i, (cache, bars))| cache.bars(bars, i as u64).as_ptr())
+            .collect();
+        for _ in 0..3 {
+            for (i, (cache, bars)) in owners.iter().zip(&histories).enumerate() {
+                let transformed = cache.bars(bars, i as u64);
+                assert_eq!(transformed.as_ptr(), pointers[i]);
+                assert_eq!(transformed[0].open, 10.5 + i as f64 / 2.0);
+                assert_eq!(transformed[1].open, 10.5 + i as f64 / 2.0);
+            }
+        }
     }
 }

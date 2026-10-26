@@ -136,6 +136,7 @@ pub(super) struct PriceSeries {
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
+    pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
     pub markers: Vec<Marker>,
     pub marker_options: MarkerOptions,
@@ -252,6 +253,7 @@ impl Chart {
             visible: true,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
+            heikin_ashi: Default::default(),
             feed: FeedState::default(),
             markers: Vec::new(),
             marker_options: MarkerOptions::default(),
@@ -522,7 +524,7 @@ impl Chart {
         let logical = self.state.time_scale().visible_logical_range();
         let bars = self.state.shown();
         super::sync::time_at(bars, logical.left.floor() as f64)
-            .zip(super::sync::time_at(bars, logical.right.floor() as f64))
+            .zip(super::sync::time_at(bars, logical.right.ceil() as f64))
             .filter(|(first, last)| first <= last)
     }
 
@@ -572,7 +574,7 @@ impl Chart {
             .iter()
             .find(|bar| !bar.is_whitespace())
             .map_or(f64::NAN, |bar| bar.close);
-        PriceTransform { mode, base }
+        PriceTransform::new(mode, base)
     }
 
     /// The visible host series drawn on the price pane.
@@ -596,7 +598,12 @@ impl Chart {
     /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
     /// chart type draws and the columns' base, or what its autoscale provider makes of them.
     pub(super) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
-        let bars = &item.bars[self.series_range(item)];
+        let heikin_ashi = (item.options.chart_type == ChartType::Heikin)
+            .then(|| item.heikin_ashi.bars(&item.bars, item.revision));
+        let bars = &heikin_ashi.as_deref().unwrap_or(&item.bars)[self.series_range(item)];
+        let logarithmic = self
+            .series_price_scale(item.id)
+            .is_some_and(|scale| scale.options().mode == PriceScaleMode::Logarithmic);
         let base = item
             .options
             .columns_base
@@ -604,8 +611,13 @@ impl Chart {
         let default = bars
             .iter()
             .flat_map(|bar| item.extremes(bar))
+            .chain(
+                bars.iter()
+                    .flat_map(|bar| [bar.open, bar.close])
+                    .filter(|_| logarithmic && item.options.chart_type.uses_ohlc()),
+            )
             .chain(base)
-            .filter(|value| value.is_finite())
+            .filter(|value| value.is_finite() && (!logarithmic || *value > 0.0))
             .fold(None, |range: Option<(f64, f64)>, value| {
                 Some(range.map_or((value, value), |(min, max)| {
                     (min.min(value), max.max(value))
@@ -781,11 +793,9 @@ impl Chart {
                 .get(index)
                 .and_then(|bar| super::sync::index_at(main, bar.time))
                 .map_or(f32::NAN, |at| {
-                    self.state.time_scale().idx_to_coord_precise(
-                        at as f32,
-                        rect.left(),
-                        rect.width(),
-                    )
+                    self.state
+                        .time_scale()
+                        .idx_to_coord_precise(at, rect.left(), rect.width())
                 })
         };
         rendering::render_chart_type(
@@ -798,6 +808,7 @@ impl Chart {
                 visible_data: visible,
                 full_data: &item.bars,
                 revision: item.revision,
+                heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,
                 tick_size: None,
@@ -852,11 +863,10 @@ impl Chart {
         if let Some(marks) = &item.change_marks {
             marks.paint(plot, |time, close| {
                 let index = super::sync::index_at(main, time)?;
-                let x = self.state.time_scale().idx_to_coord_precise(
-                    index as f32,
-                    rect.left(),
-                    rect.width(),
-                );
+                let x =
+                    self.state
+                        .time_scale()
+                        .idx_to_coord_precise(index, rect.left(), rect.width());
                 Some(Pos2::new(x, map.price_to_y(close)))
             });
         }
@@ -884,7 +894,7 @@ impl Chart {
             if let Some(bar) = item.bars.get(at) {
                 let coords = crate::chart::coords::ChartMapping {
                     start_idx: 0,
-                    right_offset: self.get_chart_mapping().right_offset - index as f32,
+                    right_offset: self.get_chart_mapping().right_offset - index,
                     price: map,
                     ..self.get_chart_mapping()
                 };
@@ -925,7 +935,7 @@ impl Chart {
                         main.get(
                             self.state
                                 .time_scale()
-                                .coord_to_idx(point.x, rect.left(), rect.width())
+                                .coord_to_idx_precise(point.x, rect.left(), rect.width())
                                 .round()
                                 .max(0.0) as usize,
                         )
@@ -1163,6 +1173,118 @@ mod tests {
             .collect()
     }
 
+    /// Logarithms are monotone on positive prices. With 10% margins, ln(2)..ln(100)
+    /// occupies 80% of the pane; a lone zero-crossing bar instead starts at ln(5).
+    #[test]
+    fn log_fit_includes_positive_ohlc_of_zero_crossing_bars() {
+        for secondary in [false, true] {
+            for count in [1, 2] {
+                let mut input = bars(&[10.0, 15.0]);
+                input[0].open = 5.0;
+                input[0].high = 100.0;
+                input[0].low = -1.0;
+                input[1].high = 20.0;
+                input[1].low = 2.0;
+                input.truncate(count);
+                let mut chart = Chart::new(BarData::from_bars(input.clone()));
+                let id = if secondary {
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: ChartType::Candles,
+                        scale: SeriesScale::Left,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, input);
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                    PriceScaleMode::Logarithmic;
+                frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+                let map = chart.series_price_map(id).unwrap();
+                let low: f64 = if count == 1 { 5.0 } else { 2.0 };
+                let span = (100.0_f64.ln() - low.ln()) / 0.8;
+                assert!(
+                    (map.range().min - (low.ln() - span * 0.1)).abs() < 1e-10,
+                    "secondary={secondary}, count={count}: {:?}",
+                    map.range()
+                );
+                assert!((map.range().max - (100.0_f64.ln() + span * 0.1)).abs() < 1e-10);
+                for price in [low, 5.0, 10.0, 100.0] {
+                    let y = map.price_to_y(price);
+                    let (top, bottom) = map.extent();
+                    assert!((top..=bottom).contains(&y), "{price}: {y}");
+                }
+            }
+        }
+    }
+
+    /// The first transformed open after the gap is (100 + 100) / 2 = 100,
+    /// although its raw prices are between 9 and 11. A right edge at 1.5 also fits bar 2.
+    #[test]
+    fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
+        for (secondary, right, high) in [
+            (false, 8.0, 100.0),
+            (true, 8.0, 100.0),
+            (false, 1.5, 1001.0),
+            (true, 1.5, 1001.0),
+        ] {
+            let mut input = bars(&[10.0; 9]);
+            for bar in &mut input {
+                bar.high = 11.0;
+                bar.low = 9.0;
+            }
+            input[0].open = 100.0;
+            input[0].close = 100.0;
+            input[0].high = 101.0;
+            input[0].low = 99.0;
+            if right == 1.5 {
+                input[2].open = 1000.0;
+                input[2].close = 1000.0;
+                input[2].high = high;
+                input[2].low = 999.0;
+            }
+            let mut chart = Chart::new(BarData::from_bars(input.clone()));
+            let id = if secondary {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: ChartType::Heikin,
+                    scale: SeriesScale::Left,
+                    ..Default::default()
+                });
+                chart.set_data(id, input);
+                id
+            } else {
+                chart.set_chart_type(ChartType::Heikin);
+                SeriesId::MAIN
+            };
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, right));
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert!(
+                (map.range().min - (9.0 - (high - 9.0) / 8.0)).abs() < 1e-8,
+                "secondary={secondary}, right={right}: {:?}",
+                map.range()
+            );
+            assert!((map.range().max - (high + (high - 9.0) / 8.0)).abs() < 1e-8);
+            for price in [9.0, 10.0, 100.0, high] {
+                let (top, bottom) = map.extent();
+                assert!((top..=bottom).contains(&map.price_to_y(price)));
+            }
+            let x = chart.index_to_x(1.0).unwrap();
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Rect(body)
+                        if (body.rect.center().x - x).abs() < 1e-3
+                            && (body.rect.top() - map.price_to_y(100.0)).abs() < 1e-3
+                            && (body.rect.bottom() - map.price_to_y(10.0)).abs() < 1e-3
+                )),
+                "secondary={secondary}: the first visible body must span 10..100"
+            );
+        }
+    }
+
     /// Percent compares returns, not absolute prices: 100 -> 110 and 200 -> 220
     /// coincide at +10%; 200 -> 240 extends the shared range to 20%, plus an eighth of that on
     /// each side for the 10% of the pane above and below.
@@ -1193,11 +1315,21 @@ mod tests {
         chart.set_data(id, bars(&[200.0, 220.0, 240.0])[1..].to_vec());
         frame(&ctx, &mut chart, 0.1, vec![]);
         assert_eq!(chart.series_transform(&chart.price_series[0]).base, 220.0);
-        for invalid in [0.0, f64::NAN] {
-            chart.set_data(id, bars(&[invalid]));
-            frame(&ctx, &mut chart, 0.2, vec![]);
-            let map = chart.series_map(&chart.price_series[0], rect);
-            assert!(!map.price_to_y(invalid).is_finite());
+        chart.set_data(id, bars(&[f64::NAN]));
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let map = chart.series_map(&chart.price_series[0], rect);
+        assert!(!map.price_to_y(f64::NAN).is_finite());
+        for mode in [PriceScaleMode::Percentage, PriceScaleMode::IndexedTo100] {
+            chart.price_scale_mut().options_mut().mode = mode;
+            chart.set_data(id, bars(&[0.0, 1.0, 1.0]));
+            frame(&ctx, &mut chart, 0.25, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.transform(), PriceTransform::default());
+            for price in [0.0, 1.0] {
+                let y = map.price_to_y(price);
+                assert!(y.is_finite(), "{mode:?}, {price}: {y}");
+                assert!((rect.top()..=rect.bottom()).contains(&y));
+            }
         }
         for change in ["hide", "remove", "empty", "join_main"] {
             let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));

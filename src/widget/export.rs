@@ -305,6 +305,7 @@ impl Chart {
                 visible: series.visible,
                 bars: series.bars.clone(),
                 revision: series.revision,
+                heikin_ashi: Default::default(),
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),
                 marker_options: series.marker_options,

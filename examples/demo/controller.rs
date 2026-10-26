@@ -5643,28 +5643,28 @@ mod tests {
                         app.layout.sync.sync_time_axis = false;
                         frame(&mut app);
                         let day = app.bars[app.bars.len() / 2].time.date_naive();
+                        let assert_date_range = |chart: &Chart| {
+                            let range = chart.visible_time_range().unwrap();
+                            for (actual, expected) in [
+                                (range.from, day.and_hms_opt(0, 0, 0).unwrap().and_utc()),
+                                (range.to, day.and_hms_opt(23, 59, 59).unwrap().and_utc()),
+                            ] {
+                                // A fraction of a pixel can span seconds across a session gap.
+                                let error = (chart.time_to_index(actual).unwrap()
+                                    - chart.time_to_index(expected).unwrap())
+                                .abs()
+                                    * f64::from(chart.get_time_scale_state().0);
+                                assert!(error < 0.001, "{day} {size:?}: {range:?}, {error}px");
+                            }
+                        };
                         for sync in [false, true] {
                             app.layout.sync.sync_date_range = sync;
                             let before = app.extra_charts[0].chart.get_time_scale_state();
                             app.set_date_range(day, day);
                             frame(&mut app);
-                            let range = app.chart.visible_time_range().unwrap();
-                            assert!(
-                                (range.from - day.and_hms_opt(0, 0, 0).unwrap().and_utc())
-                                    .num_seconds()
-                                    .abs()
-                                    <= 1
-                            );
-                            assert!(
-                                (range.to - day.and_hms_opt(23, 59, 59).unwrap().and_utc())
-                                    .num_seconds()
-                                    .abs()
-                                    <= 1
-                            );
+                            assert_date_range(&app.chart);
                             if sync {
-                                let other = app.extra_charts[0].chart.visible_time_range().unwrap();
-                                assert!((other.from - range.from).num_seconds().abs() <= 1);
-                                assert!((other.to - range.to).num_seconds().abs() <= 1);
+                                assert_date_range(&app.extra_charts[0].chart);
                             } else {
                                 assert_eq!(
                                     app.extra_charts[0].chart.get_time_scale_state(),

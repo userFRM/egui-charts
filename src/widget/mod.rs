@@ -266,6 +266,7 @@ pub struct Chart {
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
     price_series: Vec<price_series::PriceSeries>,
+    heikin_ashi: crate::chart::rendering::candles::HeikinAshiCache,
     series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
     pub(crate) chart_options: ChartOptions,
@@ -286,7 +287,7 @@ pub struct Chart {
     /// Last scroll position for drag tracking (UI state only)
     pub(crate) scroll_start_pos: Option<Pos2>,
     /// Initial right offset when starting scroll (for drag) (UI state only)
-    pub(crate) scroll_start_offset: Option<f32>,
+    pub(crate) scroll_start_offset: Option<f64>,
     /// Previous widget width for resize handling (UI state only)
     pub(crate) prev_width: Option<f32>,
     /// Price-axis drag this frame: anchor y where the drag began, and the y movement (UI state only)
@@ -893,7 +894,7 @@ impl Chart {
             self.state.time_scale().bar_spacing(),
             self.start_idx,
             self.state.time_scale().base_idx(),
-            self.state.time_scale().right_offset(),
+            self.state.time_scale().right_offset_precise(),
             self.last_price_map,
         )
     }
@@ -977,7 +978,7 @@ impl Chart {
             new.right_offset_pixels,
         ) {
             let scale = self.state.time_scale_mut();
-            let offset = scale.right_offset();
+            let offset = scale.right_offset_precise();
             let spacing = if new.bar_spacing == old.bar_spacing {
                 scale.bar_spacing()
             } else {

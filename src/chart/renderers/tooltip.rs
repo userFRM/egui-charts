@@ -479,7 +479,7 @@ pub fn render_magnifier_tooltip(
         1.0 / coords.bar_spacing
     };
     let center_bars_from_right =
-        (context.rect.max.x - hover_pos.x) * bars_per_pixel - 0.5 - coords.right_offset;
+        f64::from((context.rect.max.x - hover_pos.x) * bars_per_pixel) - 0.5 - coords.right_offset;
     let src_bars = (src_width * bars_per_pixel) as isize;
     let half_bars = src_bars / 2;
 
@@ -492,14 +492,14 @@ pub fn render_magnifier_tooltip(
     let candle_width = zoomed_bar_spacing * 0.7;
 
     // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
-    let last = (coords.base_idx as f32 - center_bars_from_right - coords.start_idx as f32).floor()
+    let last = (coords.base_idx as f64 - center_bars_from_right - coords.start_idx as f64).floor()
         as isize;
     let first = last
         .saturating_add(1)
         .saturating_sub(visible_data.len() as isize);
     for i in (-half_bars).max(first)..=half_bars.min(last) {
-        let bar_offset = center_bars_from_right + i as f32;
-        let global_idx = (coords.base_idx as f32 - bar_offset).floor() as isize;
+        let bar_offset = center_bars_from_right + i as f64;
+        let global_idx = (coords.base_idx as f64 - bar_offset).floor() as isize;
 
         if global_idx < coords.start_idx as isize {
             continue;

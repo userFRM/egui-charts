@@ -1010,7 +1010,7 @@ impl ChartMenus {
                 | RightClickTarget::Background { pos, .. } => pos,
             };
             let mapping = chart.get_chart_mapping();
-            let index = mapping.x_to_idx_f32(pos.x).round();
+            let index = mapping.x_to_idx_f64(pos.x).round();
             let time = (index >= 0.0)
                 .then(|| chart.state().shown().get(index as usize))
                 .flatten()

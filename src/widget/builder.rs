@@ -123,6 +123,7 @@ impl Chart {
             main_series_present: true,
             main_series_scale: Default::default(),
             price_series: Vec::new(),
+            heikin_ashi: Default::default(),
             series_scales: Default::default(),
             study_ids: Vec::new(),
             study_inputs: Vec::new(),

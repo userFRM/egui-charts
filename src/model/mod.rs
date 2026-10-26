@@ -104,7 +104,8 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyExit, StrategyPerformance, StrategyReport, StrategySide, StrategyTrade,
+    StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
+    StrategySide, StrategyTrade,
 };
 pub use symbol::Symbol;
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
