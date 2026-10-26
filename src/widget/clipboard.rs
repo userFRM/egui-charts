@@ -1,7 +1,7 @@
 //! Drawing clipboard uses the existing validated, timestamp-based storage format; the study
 //! clipboard holds a study's name, inputs and presentation.
 
-use crate::drawings::persistence::{DrawingStorage, SaveError, stored_to_drawing};
+use crate::drawings::persistence::{DrawingStorage, SaveError, stored_to_drawing_with};
 use crate::studies::{InputValue, StudyScale, StudySettings};
 use crate::widget::{Chart, SeriesId, sync::index_at};
 
@@ -52,7 +52,8 @@ impl Chart {
         let mut copies = Vec::new();
         for stored in storage.drawings() {
             for point in &stored.points {
-                if chrono::DateTime::from_timestamp_millis(point.ts_ms)
+                if point
+                    .time()
                     .and_then(|time| index_at(self.state.shown(), time))
                     .is_none()
                 {
@@ -61,12 +62,12 @@ impl Chart {
                     ));
                 }
             }
-            copies.push(stored_to_drawing(
+            copies.push(stored_to_drawing_with(
                 stored,
-                |ts| {
+                |point| {
                     index_at(
                         self.state.shown(),
-                        chrono::DateTime::from_timestamp_millis(ts).expect("validated timestamp"),
+                        point.time().expect("validated timestamp"),
                     )
                     .expect("validated time mapping") as f32
                 },

@@ -217,6 +217,23 @@ mod tests {
                 chart.drawing_point_time(&chart.drawings().drawings[0].chart_points[1]),
                 Some(start + chrono::Duration::nanoseconds(2))
             );
+            let id = chart.drawings().drawings[0].id;
+            chart.drawings_mut().select(id);
+            let copied = chart.copy_selected_drawings().unwrap().unwrap();
+            chart.paste_drawings(&copied).unwrap();
+            assert_eq!(
+                chart
+                    .drawings()
+                    .drawings
+                    .last()
+                    .unwrap()
+                    .chart_points
+                    .iter()
+                    .map(|point| point.bar_idx)
+                    .collect::<Vec<_>>(),
+                [4.0, 5.0]
+            );
+            assert!(chart.undo());
             // Retained anchors also survive a save while history is absent.
             chart.set_data(SeriesId::MAIN, Vec::new());
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
