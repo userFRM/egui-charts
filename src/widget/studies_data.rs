@@ -32,8 +32,54 @@ struct Stream {
     inbox: Arc<Inbox>,
     subscription: Option<SubscriptionId>,
     pending: bool,
+    next_key: u64,
+    /// Kept intact until success, including while newer live data arrives.
+    history: Option<HistoryRequest>,
+    retry_at: Option<f64>,
+    failures: u32,
     end: bool,
     wake: Arc<Mutex<Option<egui::ViewportId>>>,
+}
+
+impl Stream {
+    fn request(&mut self, source: &StudyDataRequest) {
+        self.next_key += 1;
+        self.pending = true;
+        if let Some(history) = &self.history {
+            if let Some(metric) = &source.metric {
+                self.feed.metric_history(
+                    MetricRequest {
+                        symbol: history.symbol.clone(),
+                        metric: metric.clone(),
+                        before: history.before,
+                        count: history.count,
+                    },
+                    self.inbox.reply(self.next_key),
+                );
+            } else {
+                self.feed
+                    .history(history.clone(), self.inbox.reply(self.next_key));
+            }
+        } else {
+            self.feed
+                .resolve(&source.symbol, self.inbox.reply(self.next_key));
+        }
+    }
+
+    fn failed(&mut self, error: &FeedError, now: f64) {
+        if error.is_recoverable() {
+            let backoff = std::time::Duration::from_secs(1 << self.failures.min(6))
+                .min(std::time::Duration::from_secs(60));
+            let delay = match error {
+                FeedError::RateLimited {
+                    retry_after: Some(after),
+                } => backoff.max(*after),
+                _ => backoff,
+            };
+            self.retry_at = Some(now + delay.as_secs_f64());
+            self.failures = self.failures.saturating_add(1);
+        }
+    }
 }
 
 impl Drop for Stream {
@@ -106,11 +152,18 @@ impl StudyDataCache {
     }
     pub(super) fn pause(&mut self) {
         for series in &mut self.series {
-            if let Some(stream) = &mut series.stream
-                && let Some(id) = stream.subscription.take()
-            {
-                stream.inbox.unsubscribe(id);
-                stream.feed.unsubscribe(id);
+            if let Some(stream) = &mut series.stream {
+                stream.pending = false;
+                stream.retry_at = None;
+                stream.history = None;
+                *stream
+                    .wake
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = None;
+                if let Some(id) = stream.subscription.take() {
+                    stream.inbox.unsubscribe(id);
+                    stream.feed.unsubscribe(id);
+                }
             }
         }
     }
@@ -182,7 +235,9 @@ impl Chart {
         self.invalidate_study_data();
     }
 
-    /// The last error for a requested study history. An unavailable source leaves gaps.
+    /// The last error for a requested study history. Recoverable resolve and page failures retry
+    /// with exponential backoff, respecting rate limits; success clears the error. An unavailable
+    /// source leaves gaps.
     pub fn study_data_error(&self, request: &StudyDataRequest) -> Option<&FeedError> {
         let request = resolved(request, self.symbol(), self.timeframe());
         self.study_data
@@ -250,6 +305,10 @@ impl Chart {
                         inbox,
                         subscription: None,
                         pending: true,
+                        next_key: 0,
+                        history: None,
+                        retry_at: None,
+                        failures: 0,
                         end: false,
                         wake,
                     }),
@@ -257,6 +316,7 @@ impl Chart {
             }
         }
         let extended = self.extended_hours();
+        let now = ctx.input(|input| input.time);
         let first = self.state.data().bars.first().map(|bar| bar.time);
         let count = self.state.data().bars.len().max(300);
         let mut changed = removed || self.study_data.series.len() != previous;
@@ -275,8 +335,11 @@ impl Chart {
                 .unwrap_or_else(|error| error.into_inner()) = Some(ctx.viewport_id());
             let drained = stream.inbox.drain();
             for (key, answer) in drained.answers {
+                if !stream.pending || key != stream.next_key {
+                    continue;
+                }
                 stream.pending = false;
-                if key == 0 {
+                if stream.history.is_none() {
                     let result = answer
                         .downcast::<Result<Instrument, FeedError>>()
                         .map(|result| *result)
@@ -295,8 +358,13 @@ impl Chart {
                             }
                             series.clock = clock(&series.request, Some(&instrument), extended);
                             series.instrument = Some(instrument);
+                            series.error = None;
+                            stream.failures = 0;
                         }
-                        Err(error) => series.error = Some(error),
+                        Err(error) => {
+                            stream.failed(&error, now);
+                            series.error = Some(error);
+                        }
                     }
                 } else {
                     let result = if series.request.metric.is_some() {
@@ -317,7 +385,9 @@ impl Chart {
                     };
                     match result {
                         Ok(page) => {
-                            let previous = series.bars.first().map(|bar| bar.time);
+                            let previous = stream.history.take().and_then(|request| request.before);
+                            series.error = None;
+                            stream.failures = 0;
                             stream.end = page.end_of_history || page.bars.is_empty();
                             let incoming = page
                                 .bars
@@ -337,11 +407,25 @@ impl Chart {
                             }
                             changed = true;
                         }
-                        Err(error) => series.error = Some(error),
+                        Err(error) => {
+                            stream.failed(&error, now);
+                            series.error = Some(error);
+                        }
                     }
                 }
             }
             for (_, updates) in drained.updates {
+                if updates.reset {
+                    series.bars.clear();
+                    series.from_ticks.clear();
+                    series.error = None;
+                    stream.pending = false;
+                    stream.history = None;
+                    stream.retry_at = None;
+                    stream.failures = 0;
+                    stream.end = false;
+                    changed = true;
+                }
                 if !updates.bars.is_empty() {
                     merge(
                         &mut series.bars,
@@ -385,7 +469,19 @@ impl Chart {
                     });
                 }
             }
+            if let Some(deadline) = stream.retry_at {
+                if now >= deadline {
+                    stream.retry_at = None;
+                    stream.request(&series.request);
+                } else {
+                    ctx.request_repaint_after(
+                        std::time::Duration::try_from_secs_f64(deadline - now)
+                            .unwrap_or(std::time::Duration::MAX),
+                    );
+                }
+            }
             if !stream.pending
+                && stream.retry_at.is_none()
                 && !stream.end
                 && series.error.is_none()
                 && series.instrument.is_some()
@@ -394,30 +490,15 @@ impl Chart {
                         .zip(series.bars.first())
                         .is_some_and(|(first, bar)| first < bar.time))
             {
-                stream.pending = true;
-                if let Some(metric) = &series.request.metric {
-                    stream.feed.metric_history(
-                        MetricRequest {
-                            symbol: series.request.symbol.clone(),
-                            metric: metric.clone(),
-                            before: series.bars.first().map(|bar| bar.time),
-                            count,
-                        },
-                        stream.inbox.reply(1),
-                    );
-                } else {
-                    stream.feed.history(
-                        HistoryRequest {
-                            symbol: series.request.symbol.clone(),
-                            timeframe: series.request.timeframe.unwrap(),
-                            clock: series.clock.clone(),
-                            before: series.bars.first().map(|bar| bar.time),
-                            count,
-                            extended_hours: extended,
-                        },
-                        stream.inbox.reply(1),
-                    );
-                }
+                stream.history = Some(HistoryRequest {
+                    symbol: series.request.symbol.clone(),
+                    timeframe: series.request.timeframe.unwrap(),
+                    clock: series.clock.clone(),
+                    before: series.bars.first().map(|bar| bar.time),
+                    count,
+                    extended_hours: extended,
+                });
+                stream.request(&series.request);
             }
         }
         if changed {
@@ -492,6 +573,330 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[derive(Default)]
+    struct RetryFeed {
+        resolves: Mutex<Vec<crate::data::Reply<Instrument>>>,
+        histories: Mutex<Vec<(HistoryRequest, crate::data::Reply<HistoryPage>)>>,
+        metrics: Mutex<Vec<(MetricRequest, crate::data::Reply<MetricPage>)>>,
+        sinks: Mutex<Vec<Sink>>,
+    }
+    impl Datafeed for RetryFeed {
+        fn resolve(&self, _: &str, reply: Reply<Instrument>) {
+            self.resolves.lock().unwrap().push(reply);
+        }
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.histories.lock().unwrap().push((request, reply));
+        }
+        fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+            self.metrics.lock().unwrap().push((request, reply));
+        }
+        fn subscribe(&self, subscription: Subscription) {
+            self.sinks.lock().unwrap().push(subscription.sink);
+        }
+        fn subscribe_metric(&self, subscription: MetricSubscription) {
+            self.sinks.lock().unwrap().push(subscription.sink);
+        }
+    }
+    impl RetryFeed {
+        fn pending(&self, metric: bool) -> usize {
+            if metric {
+                self.metrics.lock().unwrap().len()
+            } else {
+                self.histories.lock().unwrap().len()
+            }
+        }
+        fn answer(
+            &self,
+            metric: bool,
+            result: Result<HistoryPage, FeedError>,
+        ) -> (Option<DateTime<chrono::Utc>>, usize) {
+            if metric {
+                let (request, reply) = self.metrics.lock().unwrap().pop().unwrap();
+                reply.send(result.map(|page| {
+                    MetricPage {
+                        points: page
+                            .bars
+                            .into_iter()
+                            .map(|bar| crate::data::MetricPoint {
+                                time: bar.time,
+                                value: bar.close,
+                            })
+                            .collect(),
+                        end_of_history: page.end_of_history,
+                    }
+                }));
+                (request.before, request.count)
+            } else {
+                let (request, reply) = self.histories.lock().unwrap().pop().unwrap();
+                reply.send(result);
+                (request.before, request.count)
+            }
+        }
+    }
+
+    #[test]
+    fn study_sources_retry_resolve_and_history_at_the_original_boundary() {
+        for metric in [false, true] {
+            for (error, delay) in [
+                (FeedError::Network("offline".into()), 1.0),
+                (
+                    FeedError::RateLimited {
+                        retry_after: Some(std::time::Duration::from_secs(7)),
+                    },
+                    7.0,
+                ),
+                (FeedError::Unanswered, 1.0),
+                (FeedError::NotSupported, 0.0),
+            ] {
+                let feed = Arc::new(RetryFeed::default());
+                let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 5], 30)));
+                chart.set_symbol("REMOTE");
+                if metric {
+                    chart.add_indicator(Box::new(crate::studies::MetricStudy::new(
+                        crate::data::MetricSeries {
+                            id: "oi".into(),
+                            name: "Open interest".into(),
+                            unit: "contracts".into(),
+                            format: crate::studies::StudyFormat::Volume,
+                        },
+                    )));
+                } else {
+                    let id = chart.add_indicator(Box::new(SMA::new(1)));
+                    chart
+                        .indicator_mut(id)
+                        .unwrap()
+                        .set_input("calculation_symbol", InputValue::Symbol("REMOTE".into()))
+                        .unwrap();
+                }
+                let ctx = egui::Context::default();
+                let pump = |chart: &mut Chart, time| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            time: Some(time),
+                            ..Default::default()
+                        },
+                        |_| {},
+                    )
+                    .drop_without_applying_deltas();
+                    chart.pump_study_data(&ctx, Some(feed.clone()));
+                };
+                pump(&mut chart, 0.0);
+                feed.resolves
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .send(Err(error.clone()));
+                pump(&mut chart, 0.25);
+                let request = chart.study_data_requests().pop().unwrap();
+                assert_eq!(chart.study_data_error(&request), Some(&error));
+                pump(&mut chart, 0.25 + delay - 0.01);
+                assert!(feed.resolves.lock().unwrap().is_empty());
+                pump(&mut chart, 0.25 + delay);
+                if !error.is_recoverable() {
+                    pump(&mut chart, 120.0);
+                    assert!(feed.resolves.lock().unwrap().is_empty());
+                    continue;
+                }
+                assert_eq!(feed.resolves.lock().unwrap().len(), 1, "{error:?}");
+                feed.resolves
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .send(Ok(Instrument::new("REMOTE")));
+                let now = 0.5 + delay;
+                pump(&mut chart, now);
+                assert_eq!(chart.study_data_error(&request), None);
+                let mut newest = bars(&[20.0], 60);
+                newest[0].time += Duration::hours(2);
+                assert_eq!(
+                    feed.answer(
+                        metric,
+                        Ok(HistoryPage {
+                            bars: newest,
+                            end_of_history: false
+                        })
+                    )
+                    .0,
+                    None
+                );
+                pump(&mut chart, now + 0.25);
+                let failed = feed.answer(metric, Err(error.clone()));
+                pump(&mut chart, now + 0.5);
+                feed.sinks.lock().unwrap()[0].push_bar(Bar::new(
+                    DateTime::UNIX_EPOCH + Duration::hours(1),
+                    55.0,
+                    55.0,
+                    55.0,
+                    55.0,
+                    1.0,
+                ));
+                pump(&mut chart, now + 0.5 + delay - 0.01);
+                assert_eq!(feed.pending(metric), 0);
+                pump(&mut chart, now + 0.5 + delay);
+                assert_eq!(feed.pending(metric), 1);
+                let retried = feed.answer(
+                    metric,
+                    Ok(HistoryPage {
+                        bars: bars(&[12.0], 60),
+                        end_of_history: true,
+                    }),
+                );
+                assert_eq!(
+                    retried, failed,
+                    "retry must keep its boundary and count after a live prepend"
+                );
+                assert_eq!(retried.0, Some(DateTime::UNIX_EPOCH + Duration::hours(2)));
+                pump(&mut chart, now + 0.75 + delay);
+                assert_eq!(chart.study_data_error(&request), None);
+                assert_eq!(
+                    chart.study_data.series[0]
+                        .bars
+                        .iter()
+                        .map(|bar| bar.close)
+                        .collect::<Vec<_>>(),
+                    [12.0, 55.0, 20.0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn study_retries_back_off_and_cancel_with_their_source() {
+        for action in ["pause", "host data", "remove", "replace"] {
+            let feed = Arc::new(RetryFeed::default());
+            let mut chart = Chart::new(crate::model::BarData::new());
+            let id = chart.add_indicator(Box::new(SMA::new(1)));
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("calculation_symbol", InputValue::Symbol("REMOTE".into()))
+                .unwrap();
+            let ctx = egui::Context::default();
+            let pump = |chart: &mut Chart, time| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                chart.pump_study_data(&ctx, Some(feed.clone()));
+            };
+            pump(&mut chart, 0.0);
+            feed.resolves
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap()
+                .send(Err(FeedError::Network("offline".into())));
+            pump(&mut chart, 0.1);
+            pump(&mut chart, 1.1);
+            feed.resolves
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap()
+                .send(Err(FeedError::Network("still offline".into())));
+            pump(&mut chart, 1.2);
+            pump(&mut chart, 2.2);
+            assert!(
+                feed.resolves.lock().unwrap().is_empty(),
+                "second failure waits two seconds"
+            );
+            match action {
+                "pause" => {
+                    chart.set_feed_paused(true);
+                }
+                "host data" => {
+                    let request = chart.study_data_requests().pop().unwrap();
+                    chart.set_study_data(request, bars(&[99.0], 60), None);
+                }
+                "remove" => {
+                    chart.remove_series(id);
+                }
+                "replace" => {
+                    chart
+                        .indicator_mut(id)
+                        .unwrap()
+                        .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            pump(&mut chart, 60.0);
+            assert_eq!(
+                feed.resolves.lock().unwrap().len(),
+                usize::from(action == "replace"),
+                "{action}"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_reset_discards_future_study_bars_and_tick_origins() {
+        for replacement in [false, true] {
+            let feed = Arc::new(Feed::default());
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("MAIN")
+                .with_timeframe(Timeframe::Hour1)
+                .build();
+            let id = chart.add_indicator(Box::new(SMA::new(1)));
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("calculation_symbol", InputValue::Symbol("REMOTE".into()))
+                .unwrap();
+            let ctx = egui::Context::default();
+            for frame in 0..8 {
+                shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            }
+            let sink = feed
+                .sinks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(symbol, _)| symbol == "REMOTE")
+                .unwrap()
+                .1
+                .clone();
+            sink.set_server_time(DateTime::UNIX_EPOCH + Duration::hours(4));
+            sink.push_tick(crate::model::Tick::new(
+                DateTime::UNIX_EPOCH + Duration::hours(3),
+                30.0,
+                1.0,
+                None,
+            ));
+            chart.pump_study_data(&ctx, Some(feed.clone()));
+            assert!(!chart.study_data.series[0].from_ticks.is_empty());
+            sink.reset_replay(DateTime::UNIX_EPOCH);
+            if replacement {
+                sink.push_tick(crate::model::Tick::new(
+                    DateTime::UNIX_EPOCH,
+                    99.0,
+                    1.0,
+                    None,
+                ));
+            }
+            chart.pump_study_data(&ctx, Some(feed.clone()));
+            let series = &chart.study_data.series[0];
+            assert_eq!(series.bars.len(), usize::from(replacement));
+            assert!(
+                series
+                    .from_ticks
+                    .iter()
+                    .all(|time| *time == DateTime::UNIX_EPOCH)
+            );
+            if replacement {
+                assert_eq!(series.bars[0].close, 99.0);
+            }
+            assert_eq!(chart.pending_from[0], Some(0));
+        }
     }
 
     /// Metric streams keep exact publication times, refresh dependent studies, and use

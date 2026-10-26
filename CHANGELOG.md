@@ -295,6 +295,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Replay resets clear remote-symbol, alternate-interval and metric study histories, tick-origin bookkeeping, errors and paging state before merging the new position, and invalidate dependent calculations. ([#900](https://github.com/userFRM/egui-charts/issues/900))
+- Study sources retry recoverable resolve and history failures with exponential backoff capped at 60 seconds, honoring longer rate-limit delays. Retries retain the original page boundary and count, success clears the error, and paused or replaced sources cancel pending recovery. Replies from superseded requests are ignored. ([#908](https://github.com/userFRM/egui-charts/issues/908))
+
 - Live subscriptions retain at most 100,000 undrained bar slots independently of raw trade capacity. Overflow evicts the oldest slots, increments `FeedState::rejected_bars` and reports `InvalidData` through `last_error`, asking the host to reload history. Explicit historical execution batches retain their complete output. ([#901](https://github.com/userFRM/egui-charts/issues/901))
 - Time-based streams reject executions older than the last accepted execution, including inside the forming candle and across frame drains, so delayed trades cannot overwrite the chronological close. `aggregate_trades` enforces the same ordering contract. Equal timestamps remain valid and replay seeks reset the watermark. ([#903](https://github.com/userFRM/egui-charts/issues/903))
 
