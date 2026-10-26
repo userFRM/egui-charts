@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
@@ -17,8 +17,10 @@ use crate::model::{
 /// a real account.
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
-/// replayed. Market orders fill at the last price; limit and stop orders fill at the first price
-/// that reaches them, a limit at that price or better; a triggered stop-limit works on as a
+/// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
+/// fills and history use the source bar's time. Market orders fill at the last price; limit and
+/// stop orders fill at the first price that reaches them, a limit at that price or better;
+/// a triggered stop-limit works on as a
 /// limit order. An order's take profit and stop loss become exit orders once it fills, and when
 /// one exit fills the other is cancelled. Each symbol has one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
@@ -50,6 +52,7 @@ pub struct PaperAccount {
 #[derive(Default)]
 struct State {
     events: Option<Events<AccountEvent>>,
+    replay_time: Option<DateTime<Utc>>,
     next_id: u64,
     balance: f64,
     working: Vec<Order>,
@@ -133,6 +136,13 @@ impl PaperAccount {
         }
     }
 
+    /// Uses `time` for orders, executions, balance changes and journal entries during replay.
+    /// Set it to the revealed source bar's time before feeding its price. `None` restores the
+    /// live UTC clock, as does [`reset`](Self::reset).
+    pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) {
+        self.lock().replay_time = time;
+    }
+
     /// Returns the account to its starting balance without orders, positions or history. The
     /// terminal shows the fresh account once it connects again, such as through
     /// [`Trading::set_service`](crate::ui::trading::Trading::set_service).
@@ -148,6 +158,10 @@ impl PaperAccount {
 }
 
 impl State {
+    fn now(&self) -> DateTime<Utc> {
+        self.replay_time.unwrap_or_else(Utc::now)
+    }
+
     fn push(&self, event: AccountEvent) {
         if let Some(events) = &self.events {
             events.push(event);
@@ -155,7 +169,7 @@ impl State {
     }
 
     fn log(&mut self, text: String) {
-        let entry = JournalEntry::new(Utc::now(), text);
+        let entry = JournalEntry::new(self.now(), text);
         self.push(AccountEvent::Journal(entry.clone()));
         if self.journal.len() == 1_000 {
             self.journal.remove(0);
@@ -168,7 +182,7 @@ impl State {
             return;
         }
         self.balance += amount;
-        let change = BalanceChange::new(Utc::now(), self.balance, amount, action);
+        let change = BalanceChange::new(self.now(), self.balance, amount, action);
         self.push(AccountEvent::Balance(change.clone()));
         if self.balance_history.len() == 1_000 {
             self.balance_history.remove(0);
@@ -242,7 +256,7 @@ impl State {
 
     fn finish(&mut self, mut order: Order, status: OrderStatus) {
         order.status = status;
-        order.closed = Some(Utc::now());
+        order.closed = Some(self.now());
         self.push(AccountEvent::Order(order.clone()));
         if self.finished.len() == 1_000 {
             self.finished.remove(0);
@@ -285,7 +299,7 @@ impl State {
         order.fill_price = Some(price);
         let execution = Execution::new(
             order.id.clone(),
-            Utc::now(),
+            self.now(),
             request.side,
             price,
             request.quantity,
@@ -373,7 +387,7 @@ impl State {
         .map(|exit| {
             let id = self.id();
             let mut order = Order::new(id, exit, OrderStatus::Working);
-            order.placed = Some(Utc::now());
+            order.placed = Some(self.now());
             order
         })
         .collect();
@@ -518,7 +532,7 @@ impl Broker for PaperAccount {
         reply.send(Ok(id.clone()));
         state.log(format!("Order {id} placed: {}", describe(&order)));
         let mut order = Order::new(id, order, OrderStatus::Working);
-        order.placed = Some(Utc::now());
+        order.placed = Some(state.now());
         let held = state
             .positions
             .get(&order.request.symbol)
@@ -670,6 +684,8 @@ mod tests {
             let paper = PaperAccount::new("USD", 10_000.0)
                 .leverage(10.0)
                 .commission(0.001);
+            let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+            paper.set_replay_time(Some(time));
             let mut balance = 10_000.0;
             // Price, signed fill, remaining quantity, average, gross realised profit.
             for (price, fill, quantity, average, realized) in [
@@ -692,6 +708,15 @@ mod tests {
                 .unwrap();
                 balance += realized * direction - fill.abs() * price.abs() * 0.001;
                 let events = snapshot(&paper);
+                assert!(events.iter().all(|event| match event {
+                    AccountEvent::Order(order) => {
+                        order.placed == Some(time) && order.closed == Some(time)
+                    }
+                    AccountEvent::Execution(fill) => fill.time == time,
+                    AccountEvent::Balance(change) => change.time == time,
+                    AccountEvent::Journal(entry) => entry.time == time,
+                    _ => true,
+                }));
                 let account = events
                     .iter()
                     .find_map(|e| {
@@ -755,6 +780,7 @@ mod tests {
                 5
             );
             paper.reset();
+            assert!(paper.lock().replay_time.is_none());
             let events = snapshot(&paper);
             assert_eq!(events.len(), 1);
             assert!(matches!(&events[0], AccountEvent::Account(a) if a.balance == 10_000.0));

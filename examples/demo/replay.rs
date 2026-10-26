@@ -60,6 +60,7 @@ impl DemoApp {
         self.replay_start.is_open = false;
         self.replay_selecting = false;
         if self.replay.take().is_some() {
+            self.paper.set_replay_time(None);
             self.chart.set_replay_time(None);
             for extra in &mut self.extra_charts {
                 extra.chart.set_replay_time(None);
@@ -82,12 +83,19 @@ impl DemoApp {
             return;
         };
         let previous = self.chart.replay_time();
+        if previous.is_none_or(|previous| time < previous) {
+            self.paper.reset();
+            if self.trading.is_connected() {
+                self.trading.set_service(self.paper.clone());
+            }
+        }
         if let Some(previous) = previous.filter(|previous| *previous < time) {
             for bar in replay
                 .visible_bars()
                 .iter()
                 .filter(|bar| bar.time >= previous)
             {
+                self.paper.set_replay_time(Some(bar.time));
                 self.paper.set_price(self.chart.symbol(), bar.close);
             }
         }
@@ -130,7 +138,8 @@ impl DemoApp {
         }
         self.layout.set_replay_time(&mut charts, source, Some(time));
         self.replay_slots = slots;
-        if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
+        if let Some(bar) = replay.visible_bars().last() {
+            self.paper.set_replay_time(Some(bar.time));
             self.paper.set_price(self.chart.symbol(), bar.close);
         }
         self.checkpoint_replay();
@@ -307,5 +316,146 @@ fn source_clock(chart: &egui_charts::Chart, interval: Timeframe) -> BarClock {
         zone => zone
             .to_tz()
             .map_or(clock.clone(), |zone| clock.with_timezone(zone)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_charts::model::{Bar, OrderSide};
+    use egui_charts::ui::floating_replay_control::ReplayControlAction;
+
+    #[test]
+    fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let bars = [100.0, 80.0, 110.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, price)| {
+                Bar::new(
+                    start + chrono::Duration::minutes(i as i64),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
+        let symbol = app.chart.symbol().to_owned();
+        app.paper.set_price(&symbol, 100.0);
+        app.trading.set_service(app.paper.clone());
+        app.trading.display.instant_orders = true;
+        let position = |app: &mut DemoApp| {
+            // The first call after reconnecting requests the symbol's trading rules.
+            app.trading.poll(&ctx, &mut app.toasts);
+            app.trading.trade(symbol.clone(), OrderSide::Buy);
+            app.trading.poll(&ctx, &mut app.toasts);
+            app.trading.trade(symbol.clone(), OrderSide::Buy);
+            app.trading.poll(&ctx, &mut app.toasts);
+        };
+        let empty = |app: &mut DemoApp| {
+            app.trading.poll(&ctx, &mut app.toasts);
+            let mut empty = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.trading.show_account_panel(ui, &symbol);
+                    },
+                );
+                empty = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == "No open positions")
+                });
+                output.drop_without_applying_deltas();
+            }
+            empty
+        };
+
+        position(&mut app);
+        assert!(!empty(&mut app));
+        app.start_replay();
+        assert!(empty(&mut app), "a new replay must clear the live position");
+        for action in [
+            ReplayControlAction::PreviousBar,
+            ReplayControlAction::GoToStart,
+        ] {
+            position(&mut app);
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
+            assert!(!empty(&mut app), "forward playback must keep the position");
+            app.handle_replay_control(action);
+            assert!(empty(&mut app), "rewinding must clear the future position");
+        }
+        position(&mut app);
+        app.stop_replay();
+        app.start_replay();
+        assert!(
+            empty(&mut app),
+            "restarting must clear the previous session"
+        );
+    }
+
+    #[test]
+    fn replay_fill_mark_uses_the_historical_bar_instead_of_wall_clock_time() {
+        for (seconds, expected) in [(0, true), (30, true), (-1, false), (60, false)] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            let time = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+            app.chart.set_data(
+                SeriesId::MAIN,
+                vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)],
+            );
+            app.trading.set_service(app.paper.clone());
+            app.start_replay();
+            app.paper
+                .set_replay_time(Some(time + chrono::Duration::seconds(seconds)));
+            app.chart.fit_content();
+            app.trading.display.instant_orders = true;
+            app.trading.display.show_executions = true;
+            app.trading.display.show_execution_labels = true;
+            for _ in 0..2 {
+                app.trading.poll(&ctx, &mut app.toasts);
+                app.trading
+                    .trade(app.chart.symbol().to_owned(), OrderSide::Buy);
+            }
+            app.trading.poll(&ctx, &mut app.toasts);
+            let mut marked = false;
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.chart.show(ui);
+                        app.trading.show(ui, &mut app.chart);
+                    },
+                );
+                marked |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text() == "1 @ 100.00")
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(
+                marked, expected,
+                "fill at {seconds} seconds must follow the revealed one-minute bar"
+            );
+        }
     }
 }
