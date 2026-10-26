@@ -105,6 +105,86 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn summary_translation_runs_only_when_consumed() {
+        let ctx = egui::Context::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let lookup_calls = calls.clone();
+        let lookup_ctx = ctx.clone();
+        l10n::set_translator(&ctx, move |english| {
+            let _ = lookup_ctx.global_style();
+            if english == "{symbol} chart" {
+                lookup_calls.fetch_add(1, Ordering::Relaxed);
+                Some("Graphique {symbol}".into())
+            } else {
+                None
+            }
+        });
+        let mut chart = super::super::test_frames::chart(&[10.0], &[12.0]);
+        chart.set_symbol("TEST");
+        let mut draw = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    #[cfg(debug_assertions)]
+                    {
+                        ui.style_mut().debug.show_interactive_widgets = false;
+                    }
+                    chart.show(ui);
+                },
+            )
+        };
+        draw(Vec::new()).drop_without_applying_deltas();
+        draw(Vec::new()).drop_without_applying_deltas();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        let pos = egui::pos2(300.0, 200.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(vec![egui::Event::PointerMoved(pos)]).drop_without_applying_deltas();
+        draw(vec![button(true)]).drop_without_applying_deltas();
+        let output = draw(vec![button(false)]);
+        assert!(output.platform_output.events.iter().any(|event| {
+            matches!(event, egui::output::OutputEvent::Clicked(info)
+                if info.label.as_deref() == Some("Graphique TEST")
+                    && info.current_text_value.as_deref().is_some_and(|text| text.contains("100 bars")))
+        }));
+        output.drop_without_applying_deltas();
+        assert!(calls.swap(0, Ordering::Relaxed) > 0);
+
+        draw(Vec::new()).drop_without_applying_deltas();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        ctx.enable_accesskit();
+        draw(Vec::new()).drop_without_applying_deltas();
+        assert!(calls.swap(0, Ordering::Relaxed) > 0);
+        ctx.disable_accesskit();
+        draw(Vec::new()).drop_without_applying_deltas();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        #[cfg(debug_assertions)]
+        {
+            ctx.global_style_mut(|style| style.debug.show_interactive_widgets = true);
+            draw(Vec::new()).drop_without_applying_deltas();
+            assert!(calls.load(Ordering::Relaxed) > 0);
+        }
+        l10n::clear_translator(&ctx);
+    }
 
     #[test]
     fn chart_summary_tracks_hover_updates_and_empty_history() {

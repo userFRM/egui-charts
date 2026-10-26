@@ -519,8 +519,22 @@ impl Chart {
             ui.ctx().request_discard("Chart measured its axis labels");
         }
         self.record_host_events(ui);
-        let info = self.accessibility_info(ui.ctx(), response.enabled());
-        response.widget_info(|| info.clone());
+        let needs_info = response.clicked()
+            || response.double_clicked()
+            || response.triple_clicked()
+            || response.gained_focus()
+            || response.changed()
+            || ui
+                .ctx()
+                .accesskit_node_builder(response.id, |_| ())
+                .is_some();
+        #[cfg(debug_assertions)]
+        let needs_info = needs_info || ui.ctx().global_style().debug.show_interactive_widgets;
+        if needs_info {
+            // Translation callbacks must run outside the context locks held by widget_info.
+            let info = self.accessibility_info(ui.ctx(), response.enabled());
+            response.widget_info(|| info.clone());
+        }
         // Within the frame of the edit, in case it is the last.
         #[cfg(feature = "drawings")]
         self.save_stored_drawings();
