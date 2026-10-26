@@ -15,7 +15,6 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct MetricStudy {
     metric: MetricSeries,
-    symbol: String,
     values: IndicatorValues,
     color: Color32,
     visible: bool,
@@ -26,17 +25,10 @@ impl MetricStudy {
     pub fn new(metric: MetricSeries) -> Self {
         Self {
             metric,
-            symbol: String::new(),
             values: IndicatorValues::new(),
             color: DESIGN_TOKENS.semantic.extended.accent,
             visible: true,
         }
-    }
-
-    /// Read the metric of another host symbol instead of the chart instrument.
-    pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
-        self.symbol = symbol.into();
-        self
     }
 }
 
@@ -71,7 +63,7 @@ impl Indicator for MetricStudy {
     }
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         vec![StudyDataRequest {
-            symbol: self.symbol.clone(),
+            symbol: String::new(),
             timeframe: None,
             metric: Some(self.metric.id.clone()),
         }]
