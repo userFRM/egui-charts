@@ -20,9 +20,10 @@
 //! without a previous close or without a change in an earlier year has no value. Months are
 //! calendar months of the bar's UTC date, the date a feed gives a daily or longer bar.
 //!
-//! The study draws at loaded bars only: the part of the current month after the last bar, and
-//! the table of monthly changes per year with its summary rows, are left to the host, which can
-//! read the statistics from the hidden Average, Standard deviation and Months plots.
+//! The heatmap includes each loaded year and monthly average, population standard deviation
+//! and percentage positive. Its current month uses the latest close; projections use only
+//! earlier years. The final projection extends through the remaining calendar-month slots
+//! of the time axis, without adding bars to the source history.
 //!
 //! # Example
 //! ```
@@ -44,10 +45,14 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType};
+use crate::studies::{
+    Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyCell, StudyProjection,
+    StudyTable,
+};
 use crate::tokens::DESIGN_TOKENS;
-use chrono::Datelike;
+use chrono::{Datelike, Months};
 use egui::Color32;
+use std::collections::BTreeMap;
 
 /// Monthly projection from the average change of the same month in earlier years, drawn
 /// on the price chart.
@@ -55,6 +60,8 @@ use egui::Color32;
 pub struct Seasonality {
     start_year: i32,
     values: IndicatorValues,
+    table: StudyTable,
+    projection: Vec<StudyProjection>,
     /// One per line: Expected, Previous close, Average, Standard deviation, Months.
     colors: [Color32; 5],
     /// Expected line and box colour of a month whose average change is negative.
@@ -69,6 +76,17 @@ impl Seasonality {
         Self {
             start_year: 1900,
             values: IndicatorValues::new(),
+            table: StudyTable {
+                title: "Seasonality".into(),
+                columns: [
+                    "Year", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                    "Nov", "Dec",
+                ]
+                .map(String::from)
+                .to_vec(),
+                rows: Vec::new(),
+            },
+            projection: Vec::new(),
             colors: [DESIGN_TOKENS.semantic.chart.bullish, gray, gray, gray, gray],
             negative: DESIGN_TOKENS.semantic.chart.bearish,
             visible: true,
@@ -96,6 +114,12 @@ impl Default for Seasonality {
 }
 
 impl Indicator for Seasonality {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         start_year: integer("Starting year", 0, 9999)
     ; {});
@@ -160,7 +184,106 @@ impl Indicator for Seasonality {
                 values.set_value(line, i, value);
             }
         }
+        // The developing month's change belongs in the latest table, never in its projection.
+        if let Some(((year, month), last)) = month.filter(|((year, _), _)| *year >= self.start_year)
+            && let Some(change) = previous_close
+                .map(|base| (last / base - 1.0) * 100.0)
+                .filter(|c| c.is_finite())
+        {
+            history[month as usize].push((year, change));
+        }
+        let mut years: BTreeMap<i32, [Option<f64>; 12]> = data
+            .iter()
+            .filter(|bar| bar.close.is_finite() && bar.time.year() >= self.start_year)
+            .map(|bar| (bar.time.year(), [None; 12]))
+            .collect();
+        for (month, changes) in history.iter().enumerate() {
+            for &(year, change) in changes {
+                years.entry(year).or_insert([None; 12])[month] = Some(change);
+            }
+        }
+        self.table.rows = years
+            .into_iter()
+            .map(|(year, changes)| {
+                std::iter::once(StudyCell::Text(year.to_string()))
+                    .chain(changes.map(StudyCell::Percent))
+                    .collect()
+            })
+            .collect();
+        let mut summaries = [Vec::new(), Vec::new(), Vec::new()];
+        for changes in &history {
+            let n = changes.len() as f64;
+            let mean = changes.iter().map(|(_, change)| change).sum::<f64>() / n;
+            let deviation = (changes
+                .iter()
+                .map(|(_, change)| (change - mean).powi(2))
+                .sum::<f64>()
+                / n)
+                .sqrt();
+            let positive =
+                changes.iter().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
+            for (row, value) in summaries.iter_mut().zip([mean, deviation, positive]) {
+                row.push(StudyCell::Percent(value.is_finite().then_some(value)));
+            }
+        }
+        for (label, cells) in ["Average", "Standard deviation", "Positive"]
+            .into_iter()
+            .zip(summaries)
+        {
+            self.table.rows.push(
+                std::iter::once(StudyCell::Text(label.into()))
+                    .chain(cells)
+                    .collect(),
+            );
+        }
+        self.projection.clear();
+        if let Some(i) = data.iter().rposition(|bar| bar.close.is_finite())
+            && let (Some(expected), Some(base)) = (values.value(0, i), values.value(1, i))
+        {
+            let last = &data[i];
+            if let Some(end) = last
+                .time
+                .date_naive()
+                .with_day(1)
+                .and_then(|day| day.checked_add_months(Months::new(1)))
+                .and_then(|day| day.and_hms_opt(0, 0, 0))
+            {
+                // Match the time axis: interpolate inside history, extrapolate its last spacing.
+                let right = data
+                    .partition_point(|bar| bar.time < end.and_utc())
+                    .min(data.len() - 1);
+                let left = data[..right]
+                    .iter()
+                    .rposition(|bar| bar.time < data[right].time)
+                    .unwrap_or(right);
+                let seconds = |duration: chrono::TimeDelta| {
+                    duration.num_seconds() as f64 + duration.subsec_nanos() as f64 / 1e9
+                };
+                let step = if left == right {
+                    1.0
+                } else {
+                    seconds(data[right].time - data[left].time) / (right - left) as f64
+                };
+                let to = right as f64 + seconds(end.and_utc() - data[right].time) / step;
+                if to.is_finite() && to > i as f64 {
+                    self.projection.push(StudyProjection {
+                        bars: i as f64..to,
+                        top: expected.max(base),
+                        bottom: expected.min(base),
+                        plot: 0,
+                    });
+                }
+            }
+        }
         self.values = values;
+    }
+
+    fn table(&self) -> Option<&StudyTable> {
+        Some(&self.table)
+    }
+
+    fn projections(&self) -> &[StudyProjection] {
+        &self.projection
     }
 
     fn plot_style(&self, line: usize) -> PlotStyle {

@@ -234,6 +234,8 @@ impl Chart {
         // Study whose pane legend "x" was clicked this frame, if any.
         // Removed after the immutable study borrow ends.
         let mut pending_indicator_action = None;
+        // A host series whose legend asked to remove it, hide it, or open its settings.
+        let mut pending_series_action = None;
         let mut pending_pane_collapse = None;
         let current_selection = self.selection.selected_id();
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
@@ -247,6 +249,15 @@ impl Chart {
             if pane_id == PaneId::MAIN {
                 continue;
             }
+            #[cfg(feature = "drawings")]
+            let eraser_mode = self.drawings.eraser_mode;
+            #[cfg(not(feature = "drawings"))]
+            let eraser_mode = false;
+            #[cfg(feature = "drawings")]
+            let drawing_tool_active = self.drawings.active_tool.is_some();
+            #[cfg(not(feature = "drawings"))]
+            let drawing_tool_active = false;
+
             let height = panel_rect.height();
             let members = self.pane_layout.panes[pane_idx].members.clone();
             let series: Vec<_> = members
@@ -257,20 +268,22 @@ impl Chart {
                         .position(|item| item.id == *id && item.visible)
                 })
                 .collect();
-            // Closes of the visible host series in view, and the prices of their markers
-            // anchored in view, which share the pane scale.
-            let closes: Vec<f64> = series
+            // The fitted ranges of the visible host series in view, and the prices of their
+            // markers anchored in view, which share the pane scale.
+            let prices: Vec<f64> = series
                 .iter()
                 .flat_map(|at| {
                     let item = &self.price_series[*at];
-                    item.bars[self.series_range(item)]
-                        .iter()
-                        .map(|bar| bar.close)
+                    self.series_fit(item)
+                        .into_iter()
+                        .flat_map(|(min, max)| [min, max])
                         .chain(self.marker_prices(&item.markers, item.marker_options))
+                        .chain(self.primitive_prices(item.id))
                 })
-                .filter(|close| close.is_finite())
+                .filter(|price| price.is_finite())
                 .collect();
             let mut shared_range = (f64::INFINITY, f64::NEG_INFINITY);
+            let mut primitive_prices = Vec::new();
             for id in &members {
                 let Some(idx) = self.study_ids.iter().position(|study| study == id) else {
                     continue;
@@ -281,17 +294,29 @@ impl Chart {
                         .calculate_y_range(study, &displayed_range);
                     shared_range.0 = shared_range.0.min(range.0);
                     shared_range.1 = shared_range.1.max(range.1);
+                    primitive_prices.extend(self.primitive_prices(*id));
                 }
             }
+            for price in primitive_prices.iter().filter(|price| price.is_finite()) {
+                shared_range.0 = shared_range.0.min(*price);
+                shared_range.1 = shared_range.1.max(*price);
+            }
             if let (Some(min), Some(max)) = (
-                closes.iter().copied().reduce(f64::min),
-                closes.iter().copied().reduce(f64::max),
+                prices.iter().copied().reduce(f64::min),
+                prices.iter().copied().reduce(f64::max),
             ) {
                 // Pane studies fit with 10% padding; series in the pane do likewise.
                 let padding = crate::scales::auto_scale_span(min, max) * 0.1;
                 shared_range.0 = shared_range.0.min(min - padding);
                 shared_range.1 = shared_range.1.max(max + padding);
             }
+            let first_close = series.iter().find_map(|at| {
+                let item = &self.price_series[*at];
+                item.bars[self.series_range(item)]
+                    .iter()
+                    .find(|bar| !bar.is_whitespace())
+                    .map(|bar| bar.close)
+            });
             let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
             let mode = pane_scale.options().mode;
             let base = members
@@ -318,7 +343,7 @@ impl Chart {
                                 .find_map(|bar| study.plot_value(line, bar))
                         })
                 })
-                .or_else(|| closes.first().copied())
+                .or(first_close)
                 .filter(|base| *base != 0.0)
                 .unwrap_or(1.0);
             let transform = crate::scales::PriceTransform { mode, base };
@@ -352,7 +377,11 @@ impl Chart {
                         }
                     }
                 }
-                for value in closes.iter().filter(|value| **value > 0.0) {
+                for value in prices
+                    .iter()
+                    .chain(&primitive_prices)
+                    .filter(|value| **value > 0.0)
+                {
                     shared_range.0 = shared_range.0.min(*value);
                     shared_range.1 = shared_range.1.max(*value);
                 }
@@ -364,26 +393,62 @@ impl Chart {
             let map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
             let mut drawing_response = None;
             let mut axis_tags = Vec::new();
-            // Each visible study draws in turn; the frame draws a pane with none.
+            let hovered = self.last_hover_bar_idx.and_then(|index| {
+                let index = index.round() as usize;
+                (index < self.state.shown().len()).then_some(index)
+            });
+            // The legend of each visible host series, with its close at the crosshair or its
+            // last close.
+            let legends: Vec<_> = series
+                .iter()
+                .map(|at| {
+                    let item = &self.price_series[*at];
+                    let close = match hovered {
+                        Some(bar) => self.series_close_at(item, bar),
+                        None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
+                    };
+                    (item.id, super::price_series::SeriesLegend::new(item, close))
+                })
+                .collect();
+            // Each visible study and host series draws its legend in turn, with the study index
+            // of a study; the frame draws a pane with neither.
             let mut entries: Vec<_> = members
                 .iter()
-                .filter_map(|id| self.study_ids.iter().position(|study| study == id))
-                .filter(|idx| studies.indicators()[*idx].is_visible())
+                .filter_map(
+                    |id| match self.study_ids.iter().position(|study| study == id) {
+                        Some(idx) => studies.indicators()[idx]
+                            .is_visible()
+                            .then_some((*id, Some(idx))),
+                        None => legends
+                            .iter()
+                            .any(|(series, _)| series == id)
+                            .then_some((*id, None)),
+                    },
+                )
                 .map(Some)
                 .collect();
-            let study_rows = entries.len();
             if entries.is_empty() {
                 entries.push(None);
             }
+            // The crosshair lines of a pane with host series are drawn above their bars.
+            let mut series_crosshair = None;
             for (member_row, entry) in entries.into_iter().enumerate() {
-                let indicator: &dyn Indicator =
-                    entry.map_or(&frame, |idx| studies.indicators()[idx].as_ref());
-                let id = entry.map(|idx| self.study_ids[idx]);
+                let id = entry.map(|(id, _)| id);
+                let study = entry.and_then(|(_, idx)| idx);
+                let indicator: &dyn Indicator = match (study, id) {
+                    (Some(idx), _) => studies.indicators()[idx].as_ref(),
+                    (None, Some(id)) => legends
+                        .iter()
+                        .find(|(series, _)| *series == id)
+                        .map(|(_, legend)| legend)
+                        .expect("a series entry has a legend"),
+                    (None, None) => &frame,
+                };
                 let key = (pane_id, id);
                 let mut config = IndicatorPaneConfig::from_study(indicator);
                 config.show_name = self.config.show_indicator_labels;
                 config.show_values = self.config.show_indicator_last_val;
-                config.inputs = match entry {
+                config.inputs = match study {
                     Some(idx) if self.config.show_indicator_inputs => {
                         self.study_inputs[idx].clone()
                     }
@@ -402,15 +467,16 @@ impl Chart {
                 config.show_grid &= member_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.price_map = Some(map);
+                if study.is_none() && id.is_some() {
+                    panel.price_formatter = self.price_label_formatter(map.transform().mode);
+                }
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = member_row > 0;
 
                 panel.legend_offset = member_row as f32 * 24.0;
                 panel.pane_controls = true;
-                panel.bar_index = self.last_hover_bar_idx.and_then(|index| {
-                    let index = index.round() as usize;
-                    (index < self.state.shown().len()).then_some(index)
-                });
+                // A series legend reports its value at any bar, the last close without a crosshair.
+                panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
                 let mut hover = self
                     .axis_hover
                     .map(|(pos, _)| pos)
@@ -434,13 +500,13 @@ impl Chart {
                     })
                     .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
-                if self.drawings.eraser_mode {
+                if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
                 if panel.overlay {
                     hover = None;
-                } else if crosshair_options.mode == crate::config::CrosshairMode::Magnet {
+                } else if crosshair_options.mode.snaps() {
                     if let Some(pos) = &mut hover
                         && panel_rect.contains(*pos)
                         && let Some(bar) = panel.bar_index
@@ -477,6 +543,15 @@ impl Chart {
                     }
                     crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 }
+                if !series.is_empty()
+                    && !collapsed
+                    && let Some(pos) = hover
+                {
+                    // The pane draws the price tag; the lines go above the series' bars.
+                    series_crosshair = Some((pos, crosshair_options));
+                    crosshair_options.vert_line_color = egui::Color32::TRANSPARENT;
+                    crosshair_options.horz_line_color = egui::Color32::TRANSPARENT;
+                }
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =
@@ -496,6 +571,10 @@ impl Chart {
                         None
                     },
                     hover.map(|pos| (pos, crosshair_options)),
+                    &id.into_iter()
+                        .flat_map(|id| self.primitives_of(id))
+                        .collect::<Vec<_>>(),
+                    study.is_none() && id.is_some(),
                 ) {
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
@@ -509,30 +588,40 @@ impl Chart {
                         close_response,
                         visibility_response,
                         settings_response,
+                        menu,
                     } = interaction;
 
                     let pane_response = pane_response.interact(Sense::click_and_drag());
 
-                    // A click on the legend's close "x" removes this study.
+                    // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
                     let visibility_clicked =
                         visibility_response.as_ref().is_some_and(|r| r.clicked());
                     let settings_clicked = settings_response.as_ref().is_some_and(|r| r.clicked());
-                    if let Some(idx) = entry {
-                        if close_clicked {
-                            pending_indicator_action =
-                                Some(crate::chart::renderers::StudyAction::Remove(idx));
+                    let control_clicked =
+                        close_clicked || visibility_clicked || settings_clicked || menu.is_some();
+                    use crate::chart::renderers::StudyAction;
+                    match (study, id) {
+                        (Some(idx), _) if close_clicked => {
+                            pending_indicator_action = Some(StudyAction::Remove(idx));
                         }
-                        if visibility_clicked {
-                            pending_indicator_action =
-                                Some(crate::chart::renderers::StudyAction::ToggleVisibility(idx));
+                        (Some(idx), _) if visibility_clicked => {
+                            pending_indicator_action = Some(StudyAction::ToggleVisibility(idx));
                         }
-                        if settings_clicked {
-                            pending_indicator_action =
-                                Some(crate::chart::renderers::StudyAction::Settings(idx));
+                        (Some(idx), _) if settings_clicked => {
+                            pending_indicator_action = Some(StudyAction::Settings(idx));
                         }
+                        (Some(idx), _) if menu.is_some() => {
+                            pending_indicator_action = Some(StudyAction::Menu {
+                                index: idx,
+                                pos: menu.unwrap(),
+                            });
+                        }
+                        (None, Some(id)) if control_clicked => {
+                            pending_series_action = Some((id, close_clicked, visibility_clicked));
+                        }
+                        _ => {}
                     }
-                    let control_clicked = close_clicked || visibility_clicked || settings_clicked;
                     let header = Rect::from_min_max(
                         chart_rect.min + egui::vec2(0.0, panel.legend_offset),
                         Pos2::new(
@@ -552,22 +641,72 @@ impl Chart {
                         } else {
                             "Collapse pane"
                         });
+                    toggle.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            toggle.enabled(),
+                            if collapsed {
+                                "Expand pane"
+                            } else {
+                                "Collapse pane"
+                            },
+                        )
+                    });
+                    ui.ctx()
+                        .accesskit_node_builder(toggle.id, |node| node.set_expanded(!collapsed));
                     if toggle.clicked() && !control_clicked {
                         pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();
                     }
                     let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
                     pane_coords.price = map;
+                    // Primitives are hit tested at the pointer, before the chart state is
+                    // borrowed mutably.
+                    let pointer = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .filter(|pos| chart_rect.contains(*pos));
+                    let pane_primitives = || {
+                        self.primitives
+                            .iter()
+                            .filter(|item| {
+                                self.pane_layout.panes[pane_idx]
+                                    .members
+                                    .contains(&item.series)
+                                    && self.is_series_visible(item.series)
+                            })
+                            .map(|item| (item, self.primitive_view(item.series, pane_coords)))
+                    };
+                    let primitive_hit = pointer
+                        .and_then(|pos| super::primitives::primitive_at(pane_primitives(), pos));
+                    let renderer_hit = pointer.and_then(|pos| {
+                        super::primitives::primitive_at(
+                            pane_primitives().filter(|(item, _)| item.replaces),
+                            pos,
+                        )
+                    });
+                    let rendered: Vec<_> = self.pane_layout.panes[pane_idx]
+                        .members
+                        .iter()
+                        .copied()
+                        .filter(|id| self.has_renderer(*id))
+                        .collect();
 
                     // Resolve a click on this pane: a hit on the line selects
                     // it, an empty-pane click clears the whole selection. A
                     // close-"x" click is handled above and must not also
                     // change the selection.
                     let study_at = |pos| {
+                        if let Some(super::PointerTarget::Element(id)) = renderer_hit
+                            .filter(|_| Some(pos) == pointer)
+                            .map(|hit| hit.target)
+                        {
+                            return Some(id);
+                        }
                         self.pane_layout.panes[pane_idx]
                             .members
                             .iter()
                             .rev()
+                            .filter(|id| !rendered.contains(id))
                             .find_map(|id| {
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
                                 hit_test_pane_indicator(
@@ -585,8 +724,8 @@ impl Chart {
                         && !toggle.clicked()
                         && !control_clicked
                         && pane_response.clicked()
-                        && self.drawings.active_tool.is_none()
-                        && !self.drawings.eraser_mode
+                        && !drawing_tool_active
+                        && !eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
                         let hit = study_at(click_pos);
@@ -595,15 +734,23 @@ impl Chart {
                         }
                     }
                     // What the pointer is over, for host pointer events: drawings sit on top.
-                    if !collapsed
-                        && let Some(pos) = ui
-                            .input(|input| input.pointer.interact_pos())
-                            .filter(|pos| chart_rect.contains(*pos))
-                    {
-                        self.host_events.target = self
-                            .drawings
-                            .hit_test(pos)
+                    if !collapsed && let Some(pos) = pointer {
+                        #[cfg(feature = "drawings")]
+                        let drawing = self.drawings.hit_test(pos);
+                        #[cfg(not(feature = "drawings"))]
+                        let drawing: Option<usize> = None;
+                        if let Some(hit) = primitive_hit.filter(|_| {
+                            drawing.is_none()
+                                && pane_response.hovered()
+                                && !pane_response.dragged()
+                                && !eraser_mode
+                                && !drawing_tool_active
+                        }) {
+                            ui.ctx().set_cursor_icon(hit.cursor);
+                        }
+                        self.host_events.target = drawing
                             .map(super::PointerTarget::Drawing)
+                            .or(primitive_hit.map(|hit| hit.target))
                             .or_else(|| study_at(pos).map(super::PointerTarget::Element));
                     }
 
@@ -630,9 +777,9 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect, id));
+                    drawing_response = Some((pane_response, chart_rect, pane_coords, id));
                     // Store the pane info for hit testing by platform
-                    if let Some(idx) = entry {
+                    if let Some(idx) = study {
                         self.last_rendered_indicator_panes
                             .push(RenderedIndicatorPane {
                                 indicator_idx: idx,
@@ -646,7 +793,7 @@ impl Chart {
                     }
                 }
             }
-            if let Some((_, chart_rect, _)) = &drawing_response {
+            if let Some((_, chart_rect, pane_coords, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
                 let painter = ui
                     .painter()
@@ -664,6 +811,25 @@ impl Chart {
                         painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
                     for item in &items {
                         self.paint_series(&plot_painter, chart_rect, item, map);
+                        let view = self.primitive_view(item.id, *pane_coords);
+                        for primitive in self.primitives_of(item.id) {
+                            primitive.get().draw(
+                                &plot_painter,
+                                &view,
+                                super::PrimitivePass::Series,
+                            );
+                        }
+                    }
+                    if let Some((mut pos, options)) = series_crosshair {
+                        if let Some(index) = hovered {
+                            pos.x = horizontal.idx_to_x(index);
+                        }
+                        crate::chart::renderers::render_crosshair_lines(
+                            &crate::chart::renderers::RenderContext::new(&painter, chart_rect),
+                            pos,
+                            &options,
+                            chart_rect.bottom(),
+                        );
                     }
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
@@ -677,45 +843,58 @@ impl Chart {
                             chart_rect,
                             axis_edge,
                             map.price_to_y(value),
-                            map.transform().label(map.transform().to_scale(value), 2),
+                            map.transform().label(
+                                map.transform().to_scale(value),
+                                2,
+                                self.price_label_formatter(map.transform().mode).as_deref(),
+                            ),
                             colors,
                             &axis_tags,
                         );
                         axis_tags.push(tag);
                     }
                 }
-                // Series legends start below the study legend rows.
-                self.paint_secondary_legend(
-                    ui,
-                    &painter,
-                    chart_rect,
-                    chart_rect.top() + study_rows as f32 * 24.0 + 4.0,
-                    items.into_iter(),
-                );
             }
-            if !collapsed && let Some((pane_response, chart_rect, study_id)) = drawing_response {
+            if !collapsed
+                && let Some((pane_response, chart_rect, pane_coords, study_id)) = drawing_response
+            {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
-                let history = self.history.start_drawing_action(&mut self.drawings);
-                let mut drawings = std::mem::take(&mut self.drawings);
-                let mut cursors = std::mem::take(&mut self.cursor_modes);
-                let timescale = self.state.time_scale().clone();
-                let painter = ui.painter().clone();
-                self.handle_pane_drawings(
-                    ui,
-                    &mut drawings,
-                    &mut cursors,
-                    &pane_response,
-                    chart_rect,
-                    &map,
-                    &painter,
-                    &timescale,
-                    Some(pane_id),
-                );
-                let drawing_hit = pane_response
-                    .interact_pointer_pos()
-                    .and_then(|pos| drawings.hit_test(pos));
+                #[cfg(feature = "drawings")]
+                let drawing_hit = {
+                    let history = self.history.start_drawing_action(&mut self.drawings);
+                    let mut drawings = std::mem::take(&mut self.drawings);
+                    let mut cursors = std::mem::take(&mut self.cursor_modes);
+                    let timescale = self.state.time_scale().clone();
+                    let painter = ui.painter().clone();
+                    self.handle_pane_drawings(
+                        ui,
+                        &mut drawings,
+                        &mut cursors,
+                        &pane_response,
+                        chart_rect,
+                        &map,
+                        &painter,
+                        &timescale,
+                        Some(pane_id),
+                    );
+                    let drawing_hit = pane_response
+                        .interact_pointer_pos()
+                        .and_then(|pos| drawings.hit_test(pos));
+                    super::tool_interaction::render_pane_eraser_highlight(
+                        &ui.painter().with_clip_rect(chart_rect),
+                        &drawings,
+                        &cursors,
+                    );
+                    self.drawings = drawings;
+                    self.cursor_modes = cursors;
+                    self.history
+                        .finish_drawing_action(&mut self.drawings, history);
+                    drawing_hit
+                };
+                #[cfg(not(feature = "drawings"))]
+                let drawing_hit: Option<usize> = None;
                 if pane_response.double_clicked()
                     && drawing_hit.is_none()
                     && let Some(id) = study_id
@@ -726,21 +905,20 @@ impl Chart {
                     pending_pane_selection = None;
                     self.selection.deselect();
                 }
-                super::tool_interaction::render_pane_eraser_highlight(
-                    &ui.painter().with_clip_rect(chart_rect),
-                    &drawings,
-                    &cursors,
-                );
                 if pane_response.secondary_clicked()
                     && let Some(pos) = pane_response.interact_pointer_pos()
                 {
-                    self.right_click = Some(if let Some(id) = drawings.hit_test(pos) {
-                        if drawings.is_selected(id) {
-                            let ids: Vec<_> =
-                                std::iter::once(id).chain(drawings.selected_ids()).collect();
-                            drawings.select_drawings(ids);
-                        } else {
-                            drawings.select(id);
+                    self.right_click = Some(if let Some(id) = drawing_hit {
+                        #[cfg(feature = "drawings")]
+                        {
+                            if self.drawings.is_selected(id) {
+                                let ids: Vec<_> = std::iter::once(id)
+                                    .chain(self.drawings.selected_ids())
+                                    .collect();
+                                self.drawings.select_drawings(ids);
+                            } else {
+                                self.drawings.select(id);
+                            }
                         }
                         super::RightClickTarget::Drawing {
                             drawing_id: id,
@@ -753,10 +931,38 @@ impl Chart {
                         }
                     });
                 }
-                self.drawings = drawings;
-                self.cursor_modes = cursors;
-                self.history
-                    .finish_drawing_action(&mut self.drawings, history);
+                // The last pass of the pane's primitives, above its drawings.
+                let painter = ui.painter().with_clip_rect(chart_rect);
+                for item in self.primitives.iter().filter(|item| {
+                    self.pane_layout.panes[pane_idx]
+                        .members
+                        .contains(&item.series)
+                        && self.is_series_visible(item.series)
+                }) {
+                    let view = self.primitive_view(item.series, pane_coords);
+                    item.get()
+                        .draw(&painter, &view, super::PrimitivePass::Above);
+                }
+            }
+            if !collapsed {
+                let mut table_rect = plot;
+                for id in &members {
+                    if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
+                        let study = &studies.indicators()[idx];
+                        if study.is_visible()
+                            && let Some(table) = study.table()
+                        {
+                            table_rect.max.y = crate::studies::table::paint(
+                                ui,
+                                table_rect,
+                                table,
+                                ui.scope_id().with((pane_id, id)),
+                            )
+                            .top()
+                                - 8.0;
+                        }
+                    }
+                }
             }
         }
         for response in host_clicks {
@@ -803,6 +1009,16 @@ impl Chart {
         if let Some(action) = pending_indicator_action {
             self.apply_study_action(action);
         }
+        match pending_series_action {
+            Some((id, true, _)) => {
+                self.remove_series(id);
+            }
+            Some((id, _, true)) => {
+                self.set_series_visible(id, false);
+            }
+            Some((id, ..)) => self.indicator_settings_request = Some(id),
+            None => {}
+        }
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;
@@ -847,6 +1063,7 @@ mod tests {
 
     /// Pane drawings retain study units through editing, layout changes and storage.
     #[test]
+    #[cfg(feature = "drawings")]
     fn drawings_use_the_owning_study_pane_scale() {
         use crate::drawings::DrawingToolType;
         use crate::scales::PriceScaleMode;
@@ -1612,7 +1829,10 @@ mod tests {
             let overlay = chart.add_indicator(Box::new(CustomIndicator::new("Overlay", |bars| {
                 vec![IndicatorValue::Single(107.25); bars.len()]
             })));
-            chart.chart_options.crosshair.line_style = crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.vert_line_style =
+                crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.horz_line_style =
+                crate::config::CrosshairLineStyle::Solid;
             chart.chart_options.crosshair.vert_line_color = egui::Color32::RED;
             chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
             frame(&ctx, &mut chart, 0.0, vec![]);

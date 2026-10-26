@@ -111,6 +111,8 @@ impl RangeBar {
             low: self.low,
             close: self.close,
             volume: self.volume,
+            colors: None,
+            payload: None,
         }
     }
 }
@@ -344,11 +346,13 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
     let mut total = 0.0;
     for i in (1..bars.len()).rev() {
         let (b, prev) = (&bars[i], &bars[i - 1]);
-        total += ((b.open - prev.close).abs()
+        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
+        total += (((b.open - prev.close).abs()
             + (b.high - b.open).abs()
             + (b.high - b.low)
             + (b.close - b.low).abs())
-            / size
+            / size)
+            .max(0.0)
             + 4.0;
         if total + (prev.high - prev.low) / size > super::MAX_WORK {
             return i;
@@ -400,6 +404,8 @@ mod tests {
                     low: base - 2.0,
                     close: base + 1.0,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()

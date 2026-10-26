@@ -32,7 +32,7 @@ use crate::model::{Instrument, SymbolType};
 ///     let apple = Instrument::new("AAPL")
 ///         .with_description("Apple Inc.")
 ///         .with_exchange("NASDAQ");
-///     Ok([apple].into_iter().take(query.limit).collect())
+///     Ok([apple].into_iter().skip(query.offset).take(query.limit).collect())
 /// }
 /// ```
 pub trait SymbolSearch: MaybeSend + 'static {
@@ -50,6 +50,8 @@ pub struct SymbolQuery {
     pub symbol_type: Option<SymbolType>,
     /// Only instruments of this exchange, when set.
     pub exchange: Option<String>,
+    /// Matching results to skip, for the next page.
+    pub offset: usize,
     /// Results wanted at most.
     pub limit: usize,
 }
@@ -86,7 +88,7 @@ impl SymbolSearch for Vec<Instrument> {
             })
             .collect();
         found.sort_by_key(|&(rank, _)| rank);
-        let found = found.into_iter().take(query.limit);
+        let found = found.into_iter().skip(query.offset).take(query.limit);
         reply.send(Ok(found
             .map(|(_, instrument)| instrument.clone())
             .collect()));
@@ -103,7 +105,7 @@ mod tests {
     /// Guards the fallback's contract with the dialog: matching ignores case and reaches the
     /// description, each filter excludes what it should (also an instrument without the field),
     /// an exact symbol outranks a longer one listed first, a prefix outranks a match elsewhere
-    /// listed first, and the limit cuts after ranking.
+    /// listed first, and pagination cuts after ranking.
     #[test]
     fn list_search_matches_and_filters() {
         let list = vec![
@@ -121,22 +123,28 @@ mod tests {
                 .with_symbol_type(SymbolType::Stock)
                 .with_exchange("NASDAQ"),
         ];
-        let query = |text: &str, symbol_type, exchange: Option<&str>, limit| SymbolQuery {
+        let query = |text: &str, symbol_type, exchange: Option<&str>, offset, limit| SymbolQuery {
             text: text.into(),
             symbol_type,
             exchange: exchange.map(Into::into),
             limit,
+            offset,
         };
         let cases = [
-            (query("aapl", None, None, 10), &["AAPL"][..]),
-            (query("APPLE", None, None, 10), &["AAPL"]),
-            (query("s&p 500", None, None, 10), &["SPYG", "SPY"]),
-            (query("spy", None, None, 10), &["SPY", "SPYG"]),
-            (query("spy", None, None, 1), &["SPY"]),
-            (query("", Some(SymbolType::Crypto), None, 10), &["BTCUSD"]),
-            (query("", None, Some("NASDAQ"), 10), &["AAPL"]),
-            (query("s", None, None, 10), &["SPYG", "SPY", "BTCUSD"]),
-            (query("xyz", None, None, 10), &[]),
+            (query("aapl", None, None, 0, 10), &["AAPL"][..]),
+            (query("APPLE", None, None, 0, 10), &["AAPL"]),
+            (query("s&p 500", None, None, 0, 10), &["SPYG", "SPY"]),
+            (query("s&p 500", None, None, 1, 10), &["SPY"]),
+            (query("spy", None, None, 2, 10), &[]),
+            (query("spy", None, None, 0, 10), &["SPY", "SPYG"]),
+            (query("spy", None, None, 0, 1), &["SPY"]),
+            (
+                query("", Some(SymbolType::Crypto), None, 0, 10),
+                &["BTCUSD"],
+            ),
+            (query("", None, Some("NASDAQ"), 0, 10), &["AAPL"]),
+            (query("s", None, None, 0, 10), &["SPYG", "SPY", "BTCUSD"]),
+            (query("xyz", None, None, 0, 10), &[]),
         ];
         for (query, expected) in cases {
             let inbox = Arc::new(Inbox::default());

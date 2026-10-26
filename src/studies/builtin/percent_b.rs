@@ -43,6 +43,12 @@ impl Default for PercentB {
 }
 
 impl Indicator for PercentB {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         multiplier: number("Multiplier", 0.0, f64::MAX)
@@ -144,6 +150,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

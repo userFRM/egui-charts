@@ -81,6 +81,16 @@ impl DemoApp {
         let Some(time) = replay.cutoff(&clock) else {
             return;
         };
+        let previous = self.chart.replay_time();
+        if let Some(previous) = previous.filter(|previous| *previous < time) {
+            for bar in replay
+                .visible_bars()
+                .iter()
+                .filter(|bar| bar.time >= previous)
+            {
+                self.paper.set_price(self.chart.symbol(), bar.close);
+            }
+        }
         let source = self.layout_slot;
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| self.layout.sync_group(slot) == self.layout.sync_group(source))
@@ -120,6 +130,9 @@ impl DemoApp {
         }
         self.layout.set_replay_time(&mut charts, source, Some(time));
         self.replay_slots = slots;
+        if let Some(bar) = self.chart.bars(SeriesId::MAIN).last() {
+            self.paper.set_price(self.chart.symbol(), bar.close);
+        }
         self.checkpoint_replay();
     }
 

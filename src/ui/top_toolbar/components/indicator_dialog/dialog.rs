@@ -376,8 +376,10 @@ impl IndicatorDialog {
             .as_ref()
             .is_some_and(|s| s.id == indicator.id);
         response.widget_info(|| {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), is_sel, &indicator.name)
+            WidgetInfo::labeled(Role::ListBoxOption, response.enabled(), &indicator.name)
         });
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(is_sel));
         if is_first && self.focus_first_row {
             response.request_focus();
         }
@@ -431,7 +433,9 @@ impl IndicatorDialog {
         } else {
             "Add to favorites"
         };
-        star_res.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), tooltip));
+        star_res.widget_info(|| {
+            WidgetInfo::selected(Role::Button, star_res.enabled(), is_favorite, tooltip)
+        });
 
         let (icon, tint) = if is_favorite {
             (&icons::STAR_FILLED, config.favorite_color)
@@ -858,6 +862,8 @@ mod tests {
                     low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
                     close,
                     volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect();

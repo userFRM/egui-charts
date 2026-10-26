@@ -97,6 +97,12 @@ impl Default for WoodiesCCI {
 }
 
 impl Indicator for WoodiesCCI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         turbo_length: length("CCI Turbo length", 1, usize::MAX),
         cci_length: length("CCI 14 length", 1, usize::MAX)

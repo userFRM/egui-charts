@@ -75,6 +75,12 @@ impl Default for PriceVolumeTrendStudy {
 }
 
 impl Indicator for PriceVolumeTrendStudy {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});

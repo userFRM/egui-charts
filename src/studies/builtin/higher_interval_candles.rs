@@ -121,13 +121,20 @@ impl Indicator for HigherIntervalCandles {
                 "Interval",
                 InputValue::Choice(intervals.iter().position(|t| *t == self.interval).unwrap()),
                 InputKind::Choice(intervals.iter().map(ToString::to_string).collect()),
-            ),
+            )
+            .with_default(InputValue::Choice(
+                intervals
+                    .iter()
+                    .position(|t| *t == Timeframe::Day1)
+                    .unwrap(),
+            )),
             StudyInput::new(
                 "extended_hours",
                 "Include extended hours",
                 InputValue::Toggle(self.extended_hours),
                 InputKind::Toggle,
-            ),
+            )
+            .with_default(InputValue::Toggle(true)),
         ]
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
@@ -374,6 +381,7 @@ mod tests {
                 let transform = state.fit_price_scale_with_series(
                     [&study as &dyn Indicator],
                     false,
+                    None,
                     std::iter::empty(),
                     std::iter::empty(),
                 );

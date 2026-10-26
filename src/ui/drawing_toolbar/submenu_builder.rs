@@ -275,7 +275,14 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
     let theme = ui.active_theme();
     let gap = gap(ui);
     let (rect, row_response) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::click());
-    row_response.widget_info(|| WidgetInfo::selected(Role::Button, true, row.selected, row.label));
+    row_response.widget_info(|| {
+        WidgetInfo::selected(
+            Role::MenuItem,
+            row_response.enabled(),
+            row.selected || row.check,
+            row.label,
+        )
+    });
 
     let slot = |right_edge: f32| {
         Rect::from_center_size(
@@ -287,7 +294,14 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
     // The star answers its own clicks, so the row's click never selects the tool.
     let star_response = row.star.map(|favorite| {
         let response = ui.interact(right_slot, row_response.id.with("star"), Sense::click());
-        response.widget_info(|| WidgetInfo::selected(Role::Button, true, favorite, "Favourite"));
+        response.widget_info(|| {
+            WidgetInfo::selected(
+                Role::Button,
+                response.enabled(),
+                favorite,
+                format!("Favourite {}", row.label),
+            )
+        });
         response
     });
     let hovered = row_response.hovered() || star_response.as_ref().is_some_and(Response::hovered);

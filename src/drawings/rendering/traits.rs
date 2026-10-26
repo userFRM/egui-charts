@@ -8,40 +8,7 @@
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
-/// Trait for rendering drawing tools
-///
-/// This trait provides the interface for drawing tools to render themselves
-/// onto an egui Painter. Implementations handle the specific rendering logic
-/// for each tool type.
-pub trait DrawingRenderer {
-    /// Render the drawing onto the painter
-    ///
-    /// # Arguments
-    ///
-    /// * `painter` - The egui painter to draw on
-    /// * `chart_rect` - The visible chart area rectangle
-    /// * `is_selected` - Whether this drawing is currently selected
-    /// * `is_hovered` - Whether this drawing is being hovered
-    fn render(&self, painter: &Painter, chart_rect: Rect, is_selected: bool, is_hovered: bool);
-
-    /// Get the bounding box of the drawing
-    ///
-    /// Returns None if the drawing has no points or cannot be bounded.
-    fn bounding_box(&self) -> Option<Rect>;
-
-    /// Check if a point hits this drawing
-    ///
-    /// # Arguments
-    ///
-    /// * `point` - Screen position to test
-    /// * `tolerance` - Hit test tolerance in pixels
-    fn hit_test(&self, point: Pos2, tolerance: f32) -> bool;
-
-    /// Get the anchor points of the drawing
-    ///
-    /// Returns the screen positions of all anchor points (for handles).
-    fn anchor_points(&self) -> Vec<Pos2>;
-}
+pub use crate::drawings::registry::DrawingRenderer;
 
 /// Result of a handle hit test on a rendered drawing.
 ///

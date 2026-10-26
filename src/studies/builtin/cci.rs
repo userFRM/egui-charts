@@ -73,6 +73,12 @@ impl Default for CCI {
 }
 
 impl Indicator for CCI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});
@@ -174,6 +180,8 @@ mod tests {
                 low: 100.0,
                 close: 100.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 

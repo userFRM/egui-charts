@@ -14,6 +14,8 @@ pub struct TopToolbarState {
     pub can_undo: bool,
     /// Whether there is an undone action to redo; the redo button is disabled while this is `false`.
     pub can_redo: bool,
+    /// Whether a broker is attached; the Trade button is hidden while this is `false`.
+    pub can_trade: bool,
 }
 
 impl Default for TopToolbarState {
@@ -22,6 +24,7 @@ impl Default for TopToolbarState {
             replay_active: false,
             can_undo: true,
             can_redo: true,
+            can_trade: false,
         }
     }
 }

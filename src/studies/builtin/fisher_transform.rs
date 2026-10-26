@@ -117,6 +117,12 @@ impl Default for FisherTransform {
 }
 
 impl Indicator for FisherTransform {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});
@@ -185,6 +191,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

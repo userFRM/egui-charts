@@ -9,16 +9,25 @@ use egui_charts::model::{
 };
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
 use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
+use std::sync::Arc;
 
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
 
 impl DemoApp {
-    /// Annotates the bars on show: a fill and a stop marked at their prices, marks of the live
-    /// changes of the close, a watermark of the symbol and its company and the demo level at the
-    /// recent high.
+    /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
+    /// fill and a stop marked at their prices, marks of the live changes of the close, signal bar
+    /// marks, a watermark of the symbol and its company and the demo level at the recent high.
     pub(super) fn annotate(&mut self) {
-        let spec = DemoSymbol::find(&self.state.symbol);
-        let at = |back: usize| self.bars.len().checked_sub(back).map(|at| &self.bars[at]);
+        let samples = self.api_samples;
+        self.chart.set_signal_source(
+            samples.then(|| self.live.clone() as Arc<dyn egui_charts::services::Signals>),
+        );
+        self.chart.set_mark_source(Some(Arc::new(DemoMarks {
+            bars: self.bars.clone(),
+            samples,
+        })));
+        self.chart
+            .set_change_markers(SeriesId::MAIN, samples.then(ChangeMarkers::default));
         let recent = &self.bars[self.bars.len().saturating_sub(30)..];
         let low = recent
             .iter()
@@ -28,6 +37,10 @@ impl DemoApp {
             .iter()
             .map(|bar| bar.high)
             .fold(f64::NEG_INFINITY, f64::max);
+        let at = |back: usize| {
+            let at = self.bars.len().checked_sub(back).filter(|_| samples)?;
+            Some(&self.bars[at])
+        };
         let mut markers = Vec::new();
         if let Some(bar) = at(30) {
             markers.push(
@@ -48,8 +61,12 @@ impl DemoApp {
             );
         }
         self.chart.set_markers(SeriesId::MAIN, markers);
-        self.chart
-            .set_change_markers(SeriesId::MAIN, Some(ChangeMarkers::default()));
+        if !samples {
+            self.chart.set_watermark(None);
+            self.remove_demo_level();
+            return;
+        }
+        let spec = DemoSymbol::find(&self.state.symbol);
         let gray = Color32::from_rgba_unmultiplied(120, 123, 134, 56);
         self.chart.set_watermark(Some(
             Watermark::default()
@@ -88,13 +105,17 @@ impl DemoApp {
     }
 }
 
-pub(super) struct DemoMarks(pub Vec<Bar>);
+/// Time-axis events every 40 bars and, with `samples`, a signal mark on each of those bars.
+pub(super) struct DemoMarks {
+    pub bars: Vec<Bar>,
+    pub samples: bool,
+}
 
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
         let mut page = MarksPage::default();
         for (index, bar) in
-            self.0.iter().enumerate().filter(|(i, bar)| {
+            self.bars.iter().enumerate().filter(|(i, bar)| {
                 i % 40 == 0 && bar.time >= request.from && bar.time <= request.to
             })
         {
@@ -112,10 +133,12 @@ impl Marks for DemoMarks {
                 title: format!("Synthetic {} event", kind.label()),
                 details: "Demonstration data supplied by the host.".into(),
             });
-            page.bar_marks.push(
-                Marker::buy_signal(bar.time)
-                    .with_tooltip("Synthetic signal supplied by the demo host."),
-            );
+            if self.samples {
+                page.bar_marks.push(
+                    Marker::buy_signal(bar.time)
+                        .with_tooltip("Synthetic signal supplied by the demo host."),
+                );
+            }
         }
         reply.send(Ok(page));
     }

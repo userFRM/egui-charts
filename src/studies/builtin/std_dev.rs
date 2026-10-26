@@ -68,6 +68,12 @@ impl Default for StandardDeviation {
 }
 
 impl Indicator for StandardDeviation {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});
@@ -171,6 +177,8 @@ mod tests {
                 low: 1234.56,
                 close: 1234.56,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 

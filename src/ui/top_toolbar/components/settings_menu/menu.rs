@@ -79,6 +79,9 @@ impl SettingsMenu {
         let btn_id = ui.scope_id().with("settings_btn");
 
         let response = ui.interact(btn_rect, btn_id, egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), "Chart settings")
+        });
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         let visuals = ui.style().interact(&response);

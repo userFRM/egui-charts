@@ -29,7 +29,7 @@ const MIN_SCROLL_BACK_PAGE: usize = 600;
 
 /// A chart's link to its feed.
 pub(crate) struct FeedLink {
-    feed: Arc<dyn Datafeed>,
+    pub(super) feed: Arc<dyn Datafeed>,
     inbox: Arc<Inbox>,
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
@@ -140,6 +140,9 @@ impl Chart {
     /// A removed main series stays paused.
     pub fn set_feed_paused(&mut self, paused: bool) {
         let paused = paused || !self.main_series_present || self.replay.is_some();
+        if paused {
+            self.study_data.pause();
+        }
         if let Some(link) = &mut self.feed_link
             && link.paused != paused
         {
@@ -151,6 +154,8 @@ impl Chart {
                     link.feed.unsubscribe(id);
                 }
                 link.pending.clear();
+            } else {
+                self.study_data.clear_feed();
             }
         }
     }
@@ -164,6 +169,8 @@ impl Chart {
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
         if symbol != self.symbol {
+            self.clear_source_signals();
+            self.reload_price_targets();
             self.set_replay_time(None);
         }
         if symbol != self.symbol
@@ -175,21 +182,37 @@ impl Chart {
         if symbol != self.symbol {
             self.host_events
                 .push(super::ChartEvent::SymbolChanged(symbol.clone()));
+            #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
-            self.drawings.cancel_curr_drawing();
-            self.drawings.end_drag_handle();
-            self.drawings.deselect();
-            let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
-            next.0.options = self.drawings.options.clone();
-            next.0.tool_defaults = self.drawings.tool_defaults.clone();
-            next.0.active_tool = self.drawings.active_tool;
-            next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
-            next.0.eraser_mode = self.drawings.eraser_mode;
-            next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
-            std::mem::swap(&mut self.drawings, &mut next.0);
-            std::mem::swap(&mut self.marks, &mut next.1);
-            self.symbol_drawings.insert(self.symbol.clone(), next);
-            self.history = Default::default();
+            #[cfg(feature = "drawings")]
+            {
+                self.save_stored_drawings();
+                self.drawings.cancel_curr_drawing();
+                self.drawings.end_drag_handle();
+                self.drawings.deselect();
+                let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+                next.0.registry = self.drawings.registry.clone();
+                next.0.options = self.drawings.options.clone();
+                next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.set_active_tool(self.drawings.active_tool);
+                if let Some(id) = self.drawings.active_custom_tool() {
+                    let _ = next.0.set_custom_tool(id);
+                }
+                next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+                next.0.eraser_mode = self.drawings.eraser_mode;
+                next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                std::mem::swap(&mut self.drawings, &mut next.0);
+                std::mem::swap(&mut self.marks, &mut next.1);
+                self.symbol_drawings.insert(self.symbol.clone(), next);
+            }
+            #[cfg(not(feature = "drawings"))]
+            {
+                let mut next_marks = self.symbol_markers.remove(&symbol).unwrap_or_default();
+                std::mem::swap(&mut self.marks, &mut next_marks);
+                self.symbol_markers.insert(self.symbol.clone(), next_marks);
+            }
+            self.history.clear();
+            self.history.edits += 1;
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -215,6 +238,7 @@ impl Chart {
     /// checked against.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
+            self.clear_source_signals();
             self.host_events
                 .push(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
@@ -232,8 +256,14 @@ impl Chart {
         for study in self.studies.indicators_mut() {
             study.set_timeframe(timeframe);
         }
-        self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        #[cfg(feature = "drawings")]
+        {
+            self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        }
         if changed {
+            self.pending_from.fill(Some(0));
+            self.next_refresh.fill(f64::NEG_INFINITY);
+            self.element_studies.dirty = true;
             self.apply_replay_window();
         }
     }
@@ -244,6 +274,7 @@ impl Chart {
     pub fn set_extended_hours(&mut self, extended_hours: bool) {
         if self.extended_hours != extended_hours {
             self.extended_hours = extended_hours;
+            self.study_data.clear_feed();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
             }
@@ -253,6 +284,7 @@ impl Chart {
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
     pub fn reload_feed(&mut self) {
+        self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {
             link.reload_pending = true;
         }
@@ -444,6 +476,10 @@ impl Chart {
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
         }
+        self.pump_study_data(
+            ctx,
+            self.feed_link.as_ref().map(|link| Arc::clone(&link.feed)),
+        );
         let clock = self.bar_clock();
         let Some(mut link) = self.feed_link.take() else {
             return;
@@ -552,6 +588,9 @@ impl Chart {
                 let incoming = updates.bars.into_values().collect();
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
+                if merged.first_changed.is_some() {
+                    self.data_updated(SeriesId::MAIN);
+                }
             }
             if let Some(quote) = updates.quote
                 && self.quote.as_ref().is_none_or(|old| quote.ts >= old.ts)

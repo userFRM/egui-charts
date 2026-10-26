@@ -9,14 +9,14 @@
 //! [`SessionConfig`] describes trading session hours for a specific exchange,
 //! with presets for NYSE, LSE, TSE, crypto 24/7, and forex.
 
-use crate::model::PriceSource;
+use crate::model::{LineStyle, PriceSource};
 use crate::scales::PriceScaleMode;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Background style for the chart.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BackgroundStyle {
     /// Solid single-color background
     #[default]
@@ -34,7 +34,7 @@ pub enum BackgroundStyle {
 }
 
 /// When the chart shows its navigation buttons in the main pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NavigationButtons {
     /// Always show the buttons.
     Always,
@@ -46,7 +46,7 @@ pub enum NavigationButtons {
 }
 
 /// Style for session break lines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SessionBreakStyle {
     /// Solid line
     #[default]
@@ -55,6 +55,10 @@ pub enum SessionBreakStyle {
     Dashed,
     /// Dotted line
     Dotted,
+    /// Dashes twice as long as `Dashed`, with twice the gap
+    LargeDashed,
+    /// Dots with twice the spacing of `Dotted`
+    SparseDotted,
 }
 
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
@@ -62,7 +66,7 @@ pub enum SessionBreakStyle {
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceAxisOptions {
     /// Draw a line between the plot and the axis.
     /// Default: false
@@ -94,7 +98,7 @@ impl Default for PriceAxisOptions {
 }
 
 /// Trading session configuration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionConfig {
     /// Session start time in HH:MM format (24-hour)
     pub session_start: String,
@@ -193,7 +197,7 @@ impl SessionConfig {
 /// overlay, and the real-time navigation button.
 ///
 /// Defaults follow a common dark-theme charting palette.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,
@@ -217,6 +221,10 @@ pub struct ChartConfig {
     pub grid_color: Color32,
     /// Vertical grid colour; `None` follows `grid_color`.
     pub vertical_grid_color: Option<Color32>,
+    /// Grid line style, dotted by default.
+    pub grid_line_style: LineStyle,
+    /// Vertical grid line style; `None` follows `grid_line_style`.
+    pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
@@ -334,7 +342,7 @@ pub struct ChartConfig {
 }
 
 /// Pos options for the "Go to Realtime" button
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum RealtimeButtonPos {
     /// Top-left of the chart
     TopLeft,
@@ -352,7 +360,7 @@ pub enum RealtimeButtonPos {
 }
 
 /// Pos options for the watermark overlay
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WatermarkPos {
     /// Center of the chart (default)
     #[default]
@@ -388,6 +396,8 @@ impl Default for ChartConfig {
             // Grid colour from the default theme
             grid_color: chart.grid_line,
             vertical_grid_color: None,
+            grid_line_style: LineStyle::Dotted,
+            vertical_grid_line_style: None,
             // Text color
             text_color: chart.axis_text,
             // Candle bodies leave room for the wider volume bars

@@ -1,9 +1,11 @@
-//! Session-owned layouts and independent feeds for each chart slot.
+//! Open layouts as tabs with independent feeds for each chart slot, saved to and opened from
+//! the demo's storage, and the user settings kept beside them.
 
 use super::{DemoApp, LiveFeed};
 use egui_charts::model::Timeframe;
+use egui_charts::services::UserSettings;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
-use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SeriesId};
+use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
 use std::sync::Arc;
 
 pub(super) struct DemoChart {
@@ -98,14 +100,20 @@ impl DemoApp {
             .with_config(source.config().clone())
             .with_chart_options(source.chart_options().clone())
             .with_chart_type(source.chart_type())
+            .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
+        chart.set_price_targets_visible(source.price_targets_visible());
+        if self.api_samples {
+            chart.set_signal_source(Some(live.clone()));
+        }
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
-        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks(
-            chart.bars(SeriesId::MAIN).to_vec(),
-        ))));
+        chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
+            bars: chart.bars(SeriesId::MAIN).to_vec(),
+            samples: self.api_samples,
+        })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {
@@ -138,6 +146,7 @@ impl DemoApp {
             drawing.created_at = None;
             true
         });
+        chart.set_storage(self.storage.clone());
         DemoChart {
             chart,
             live,
@@ -173,6 +182,7 @@ impl DemoApp {
             self.extra_charts.insert(old_position, moved);
             self.layout_slot = slot;
             self.layout.set_active(slot);
+            self.chart.set_storage(self.storage.clone());
             self.refresh_active_chart();
         }
     }
@@ -294,6 +304,9 @@ impl DemoApp {
         if index == self.layout_tab {
             return;
         }
+        if self.top_toolbar.layout_menu.autosave {
+            self.save_layout();
+        }
         self.stop_replay();
         if self.footprint.take().is_some() {
             self.restore_feed_after_footprint();
@@ -314,6 +327,12 @@ impl DemoApp {
             slot: std::mem::replace(&mut self.layout_slot, next.slot),
         });
         self.layout_tab = index;
+        self.refresh_layout_menu();
+        // Other tabs may have edited the same symbol since this tab was last shown.
+        self.chart.set_storage(self.storage.clone());
+        for chart in &mut self.extra_charts {
+            chart.chart.set_storage(self.storage.clone());
+        }
         self.refresh_active_chart();
         self.top_toolbar
             .chart_grid_selector
@@ -375,28 +394,39 @@ impl DemoApp {
 
     pub(super) fn handle_layout_action(&mut self, action: LayoutAction) {
         match action {
-            LayoutAction::SelectGrid(mode) => self.ensure_chart_slots(mode),
+            LayoutAction::SelectGrid(mode) => {
+                self.grid_edits += 1;
+                self.ensure_chart_slots(mode);
+            }
             LayoutAction::CreateNew => self.new_layout(None),
-            LayoutAction::SaveAs(name) => self.new_layout(Some(name)),
+            LayoutAction::SaveAs(name) => match self.capture_layout() {
+                Ok(layout) => {
+                    self.new_layout(Some(name));
+                    let name = self.layout_tabs[self.layout_tab].name.clone();
+                    self.restore_layout(name, layout);
+                    self.save_layout();
+                }
+                Err(error) => self.toasts.error(error),
+            },
             LayoutAction::Open(name) => {
-                if let Some(i) = self.layout_tabs.iter().position(|t| t.name == name) {
-                    self.select_layout(i);
+                match self.layout_tabs.iter().position(|t| t.name == name) {
+                    Some(i) if i != self.layout_tab => self.select_layout(i),
+                    // The current layout opens again as it was saved.
+                    _ => self.top_toolbar.layout_menu.open(&name),
                 }
             }
-            LayoutAction::Delete(name) => {
-                if let Some(i) = self.layout_tabs.iter().position(|t| t.name == name) {
-                    self.close_layout(i);
+            LayoutAction::Delete(name) => self.top_toolbar.layout_menu.delete(&name),
+            LayoutAction::Rename(_, new) => {
+                if !new.trim().is_empty() && !self.layout_tabs.iter().any(|t| t.name == new) {
+                    match self.capture_layout() {
+                        Ok(layout) => {
+                            self.top_toolbar.layout_menu.rename(&new, &layout);
+                        }
+                        Err(error) => self.toasts.error(error),
+                    }
                 }
             }
-            LayoutAction::Rename(old, new) => {
-                if !new.trim().is_empty()
-                    && !self.layout_tabs.iter().any(|t| t.name == new)
-                    && let Some(tab) = self.layout_tabs.iter_mut().find(|t| t.name == old)
-                {
-                    tab.name = new;
-                }
-            }
-            LayoutAction::Save => self.new_layout(Some("Saved layout".into())),
+            LayoutAction::Save => self.save_layout(),
             LayoutAction::DownloadImage => {
                 self.export_generation += 1;
                 self.export_dialog.open();
@@ -408,8 +438,183 @@ impl DemoApp {
     pub(super) fn refresh_layout_menu(&mut self) {
         self.top_toolbar.layout_menu.curr_layout =
             Some(self.layout_tabs[self.layout_tab].name.clone());
-        self.top_toolbar.layout_menu.layouts =
-            self.layout_tabs.iter().map(|t| t.name.clone()).collect();
+    }
+
+    /// The chart in `slot` of the open layout, counted from the first.
+    fn chart_in_slot(&mut self, slot: usize) -> Option<&mut Chart> {
+        if slot == self.layout_slot {
+            return Some(&mut self.chart);
+        }
+        let index = if slot < self.layout_slot {
+            slot
+        } else {
+            slot - 1
+        };
+        self.extra_charts.get_mut(index).map(|c| &mut c.chart)
+    }
+
+    /// The open layout: its arrangement and the charts it shows, in slot order.
+    pub(super) fn capture_layout(&mut self) -> Result<SavedLayout, String> {
+        let mode = self.layout.mode;
+        let count = if mode == ChartLayoutMode::Tabs {
+            self.extra_charts.len() + 1
+        } else {
+            mode.chart_count().min(self.extra_charts.len() + 1)
+        };
+        let charts = (0..count)
+            .filter_map(|slot| self.chart_in_slot(slot).map(|chart| chart.snapshot()))
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("Could not save the layout: {error}"))?;
+        Ok(SavedLayout { mode, charts })
+    }
+
+    /// Saves the open layout under its tab's name.
+    fn save_layout(&mut self) {
+        let name = self.layout_tabs[self.layout_tab].name.clone();
+        match self.capture_layout() {
+            Ok(layout) => self.top_toolbar.layout_menu.save(&name, &layout),
+            Err(error) => self.toasts.error(error),
+        }
+    }
+
+    /// Shows a stored layout in the current tab, which takes its name.
+    fn restore_layout(&mut self, name: String, layout: SavedLayout) {
+        if let Some(index) = self.layout_tabs.iter().position(|t| t.name == name)
+            && index != self.layout_tab
+        {
+            self.select_layout(index);
+            return;
+        }
+        if layout.charts.is_empty()
+            || (layout.mode != ChartLayoutMode::Tabs
+                && layout.charts.len() != layout.mode.chart_count())
+        {
+            self.toasts
+                .error("Could not open layout: invalid chart count");
+            return;
+        }
+        for snapshot in &layout.charts {
+            let mut check = Chart::new(egui_charts::model::BarData::new());
+            if let Err(error) = check.restore(snapshot) {
+                self.toasts.error(format!("Could not open layout: {error}"));
+                return;
+            }
+        }
+        self.layout_tabs[self.layout_tab].name = name;
+        if self.layout_slot >= layout.charts.len() {
+            self.activate_chart_slot(0);
+        }
+        self.extra_charts.truncate(layout.charts.len() - 1);
+        self.ensure_chart_slots(layout.mode);
+        while self.extra_charts.len() + 1 < layout.charts.len() {
+            let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
+            self.extra_charts.push(copy);
+        }
+        for (slot, snapshot) in layout.charts.iter().enumerate() {
+            if slot == self.layout_slot {
+                // The demo's feed and toolbars follow the active chart's symbol and interval.
+                self.switch_symbol(&snapshot.symbol);
+                if let Some(interval) = snapshot.interval {
+                    self.switch_timeframe(interval);
+                }
+            }
+            let restored = self
+                .chart_in_slot(slot)
+                .map(|chart| chart.restore(snapshot));
+            match restored {
+                Some(Err(error)) => self
+                    .toasts
+                    .error(format!("Could not open chart {}: {error}", slot + 1)),
+                Some(Ok(skipped)) if !skipped.is_empty() => self
+                    .toasts
+                    .warning(format!("Skipped {} unreadable drawings", skipped.len())),
+                _ => {}
+            }
+        }
+        self.refresh_active_chart();
+        self.settings_state =
+            egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState::from_chart(&self.chart);
+    }
+
+    /// The settings the demo keeps between sessions.
+    pub(super) fn user_settings(&self) -> UserSettings {
+        let menu = &self.top_toolbar.layout_menu;
+        UserSettings {
+            theme: Some(if self.theme.dark { "dark" } else { "light" }.into()),
+            symbol: Some(self.state.symbol.clone()),
+            interval: Some(self.state.timeframe),
+            drawing_favorites: self.drawing_toolbar.state.favorites.clone(),
+            layout: menu
+                .curr_layout
+                .clone()
+                .filter(|name| menu.layouts.contains(name)),
+            layout_autosave: menu.autosave,
+        }
+    }
+
+    /// Applies stored settings, opening the layout that was open last.
+    pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
+        if settings
+            .theme
+            .is_some_and(|theme| (theme == "dark") != self.theme.dark)
+        {
+            self.toggle_theme(ctx);
+        }
+        // Switching stops a replay the demo restored from its own storage.
+        if let Some(symbol) = settings
+            .symbol
+            .filter(|symbol| *symbol != self.state.symbol)
+        {
+            self.switch_symbol(&symbol);
+        }
+        if let Some(interval) = settings
+            .interval
+            .filter(|interval| *interval != self.state.timeframe)
+        {
+            self.switch_timeframe(interval);
+        }
+        self.drawing_toolbar.state.favorites = settings.drawing_favorites;
+        self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
+        if let Some(layout) = settings.layout {
+            self.top_toolbar.layout_menu.open(&layout);
+        }
+    }
+
+    /// Takes the answers of storage, restoring settings and layouts, reports failures and saves
+    /// the open layout when autosave asks for it.
+    pub(super) fn poll_storage(&mut self, ctx: &egui::Context) {
+        let current = self.user_settings();
+        if let Some(settings) = self.settings.poll(ctx, &current) {
+            self.apply_user_settings(ctx, settings);
+        }
+        let previous = self.top_toolbar.layout_menu.curr_layout.clone();
+        if let Some((name, layout)) = self.top_toolbar.layout_menu.poll(ctx) {
+            self.restore_layout(name, layout);
+        } else if self.top_toolbar.layout_menu.curr_layout != previous
+            && let Some(name) = &self.top_toolbar.layout_menu.curr_layout
+        {
+            self.layout_tabs[self.layout_tab].name = name.clone();
+        }
+        let mut errors = vec![
+            self.settings.take_error(),
+            self.top_toolbar.layout_menu.take_error(),
+            self.chart.take_storage_error(),
+        ];
+        errors.extend(
+            self.extra_charts
+                .iter_mut()
+                .map(|c| c.chart.take_storage_error()),
+        );
+        for error in errors.into_iter().flatten() {
+            self.toasts.error(error);
+        }
+        let edits = std::iter::once(&self.chart)
+            .chain(self.extra_charts.iter().map(|c| &c.chart))
+            .map(Chart::edit_count)
+            .fold(self.grid_edits, u64::wrapping_add);
+        if self.top_toolbar.layout_menu.autosave_due(ctx, edits) {
+            self.save_layout();
+        }
     }
 }
 
@@ -423,6 +628,18 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
+            assert!(
+                app.widget_bar.widgets.is_empty(),
+                "sample panels start hidden"
+            );
+            app.execute_search_command(&ctx, "samples");
+            assert_eq!(app.widget_bar.widgets.len(), 2);
+            app.widget_bar.active_widget = Some(2);
+            app.execute_search_command(&ctx, "samples");
+            assert!(app.widget_bar.widgets.is_empty());
+            assert_eq!(app.widget_bar.active_widget, None);
+            app.execute_search_command(&ctx, "samples");
+
             let frame = |app: &mut DemoApp| {
                 let mut remaining = egui::Rect::NOTHING;
                 ctx.run_ui(
@@ -640,6 +857,13 @@ mod tests {
             .chart_points
             .push(egui_charts::drawings::ChartPoint::new(10.0, 42.0));
         app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.drawings_mut().registry.set_availability(
+            egui_charts::drawings::DrawingToolType::TrendLine,
+            egui_charts::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
         app.chart.set_main_series_visible(false);
         app.chart
             .set_event_visibility(egui_charts::model::EventVisibility {
@@ -651,6 +875,14 @@ mod tests {
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         for copy in &mut app.extra_charts {
+            assert!(
+                !copy
+                    .chart
+                    .drawings()
+                    .registry
+                    .availability(egui_charts::drawings::DrawingToolType::TrendLine)
+                    .enabled
+            );
             assert_eq!(copy.chart.event_visibility(), app.chart.event_visibility());
             copy.chart.set_visible_bars(200);
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {

@@ -74,6 +74,10 @@ impl Default for LinearRegressionChannel {
 }
 
 impl Indicator for LinearRegressionChannel {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 2, usize::MAX),
         multiplier: number("Multiplier", 0.0, f64::MAX),

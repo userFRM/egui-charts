@@ -60,6 +60,12 @@ impl Default for VolumePriceTrend {
 }
 
 impl Indicator for VolumePriceTrend {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn value_format(&self) -> crate::studies::StudyFormat {
         crate::studies::StudyFormat::Volume
     }
@@ -184,6 +190,12 @@ impl Default for NegativeVolumeIndex {
 }
 
 impl Indicator for NegativeVolumeIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn name(&self) -> &str {
         "NVI"
     }
@@ -274,6 +286,12 @@ impl Default for PositiveVolumeIndex {
 }
 
 impl Indicator for PositiveVolumeIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn name(&self) -> &str {
         "PVI"
     }
@@ -341,6 +359,8 @@ mod tests {
             low: close,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 

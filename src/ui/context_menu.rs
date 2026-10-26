@@ -3,6 +3,7 @@
 //! Right-click context menu for the chart area. Provides trading actions,
 //! clipboard operations, chart management, and navigation options.
 
+use super::tpo_context_menu::TpoMenu;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use crate::theme::{Theme, ThemeExt};
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
 use crate::ui::dialogs::drawing_context_menu::DRAWING_MENU_OFFSET;
+use crate::ui::dialogs::study_context_menu::{self, StudyContextMenu};
 use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
 use crate::widget::{Chart, RightClickTarget};
 
@@ -52,6 +54,12 @@ pub enum ContextMenuAction {
     ExportCsv,
     /// Reset the chart view to defaults
     ResetChart,
+    /// Merge the clicked TPO profile with its previous neighbour. Already applied by [`ChartMenus`].
+    MergeTpoPrevious,
+    /// Merge the clicked TPO profile with its next neighbour. Already applied by [`ChartMenus`].
+    MergeTpoNext,
+    /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
+    SplitTpoProfile,
 }
 
 // ============================================================================
@@ -107,10 +115,42 @@ impl<A> MenuItem<A> {
     }
 }
 
-/// Menu entry - either an item or separator
+/// Menu entry - an item, a submenu or a separator
 pub(crate) enum MenuEntry<A> {
     Item(MenuItem<A>),
+    /// A row that opens its entries beside the menu while it is hovered, or once clicked.
+    Submenu {
+        label: String,
+        icon: Option<&'static Icon>,
+        entries: Vec<MenuEntry<A>>,
+    },
     Separator,
+}
+
+impl<A> MenuEntry<A> {
+    /// The same entry with every action passed through `tag`.
+    pub(crate) fn map<B>(self, tag: &impl Fn(A) -> B) -> MenuEntry<B> {
+        match self {
+            Self::Item(item) => MenuEntry::Item(MenuItem {
+                label: item.label,
+                shortcut: item.shortcut,
+                icon: item.icon,
+                action: tag(item.action),
+                enabled: item.enabled,
+                danger: item.danger,
+            }),
+            Self::Submenu {
+                label,
+                icon,
+                entries,
+            } => MenuEntry::Submenu {
+                label,
+                icon,
+                entries: entries.into_iter().map(|entry| entry.map(tag)).collect(),
+            },
+            Self::Separator => MenuEntry::Separator,
+        }
+    }
 }
 
 /// Remove empty sections after controls have been filtered out.
@@ -190,8 +230,9 @@ pub(crate) fn format_price(price: f64) -> String {
 /// action, or with `None` when a click outside or Escape dismissed it.
 ///
 /// The menu opens `gap` px right of and below the anchor and flips to the other side of the
-/// anchor on an axis where it would leave the window. `just_opened` skips the dismiss check on
-/// the frame of the click that opened it.
+/// anchor on an axis where it would leave the window. A submenu opens beside its row, on the
+/// side with room. `just_opened` skips the dismiss check on the frame of the click that opened
+/// it.
 pub(crate) fn show_menu<A: Clone>(
     ctx: &Context,
     id: Id,
@@ -204,6 +245,46 @@ pub(crate) fn show_menu<A: Clone>(
     if entries.is_empty() {
         return Some(None);
     }
+    if just_opened {
+        ctx.data_mut(|data| data.remove::<usize>(id.with("submenu")));
+    }
+    let bounds = ctx.content_rect().shrink(theme.spacing.lg);
+    let mut rects = Vec::new();
+    let picked = draw_menu(
+        ctx,
+        id,
+        theme,
+        bounds,
+        &|size| place(anchor, gap, size, bounds),
+        entries,
+        &mut rects,
+    );
+    if picked.is_some() {
+        return Some(picked);
+    }
+    let dismissed = !just_opened
+        && ctx.input(|i| {
+            let clicked = i.pointer.primary_clicked() || i.pointer.secondary_clicked();
+            let outside = i
+                .pointer
+                .interact_pos()
+                .is_some_and(|p| !rects.iter().any(|rect| rect.contains(p)));
+            (clicked && outside) || i.key_pressed(egui::Key::Escape)
+        });
+    dismissed.then_some(None)
+}
+
+/// Draw one menu at the corner `place` gives for its size, then its open submenu, and return
+/// the picked action. Every drawn menu adds its rect to `rects`.
+fn draw_menu<A: Clone>(
+    ctx: &Context,
+    id: Id,
+    theme: &Theme,
+    bounds: Rect,
+    place: &dyn Fn(Vec2) -> Pos2,
+    entries: &[MenuEntry<A>],
+    rects: &mut Vec<Rect>,
+) -> Option<A> {
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let frame = egui::Frame::menu(&ctx.global_style())
         .inner_margin(theme.spacing.sm)
@@ -232,17 +313,26 @@ pub(crate) fn show_menu<A: Clone>(
                 item.shortcut
                     .map(|s| layout(ctx.format_shortcut(&s), t.shortcut_font_size, f32::INFINITY)),
             )),
+            MenuEntry::Submenu { label, .. } => {
+                Some((layout(label.clone(), t.font_size, MAX_LABEL_WIDTH), None))
+            }
             MenuEntry::Separator => None,
         })
         .collect();
 
-    let (label_width, trailing_width) = rows.iter().flatten().fold(
+    let (label_width, mut trailing_width) = rows.iter().flatten().fold(
         (0.0_f32, 0.0_f32),
         |(widest, widest_trailing), (label, trailing)| {
             let trailing = trailing.as_ref().map_or(0.0, |g| g.size().x);
             (widest.max(label.size().x), widest_trailing.max(trailing))
         },
     );
+    if entries
+        .iter()
+        .any(|entry| matches!(entry, MenuEntry::Submenu { .. }))
+    {
+        trailing_width = trailing_width.max(t.submenu_arrow_size);
+    }
     let trailing_column = if trailing_width > 0.0 {
         COLUMN_GAP + trailing_width
     } else {
@@ -253,11 +343,10 @@ pub(crate) fn show_menu<A: Clone>(
     let height: f32 = entries
         .iter()
         .map(|entry| match entry {
-            MenuEntry::Item(_) => t.item_height,
+            MenuEntry::Item(_) | MenuEntry::Submenu { .. } => t.item_height,
             MenuEntry::Separator => t.separator_height,
         })
         .sum();
-    let bounds = ctx.content_rect().shrink(theme.spacing.lg);
     let size = (Vec2::new(row_width, height) + chrome).min(bounds.size());
     let row_width = (size.x - chrome.x).max(0.0);
     let label_width = (row_width - 2.0 * pad - t.icon_width - trailing_column).max(0.0);
@@ -266,8 +355,13 @@ pub(crate) fn show_menu<A: Clone>(
             *label = layout(label.text().to_owned(), t.font_size, label_width);
         }
     }
-    let pos = place(anchor, gap, size, bounds);
+    let pos = place(size);
+    let menu_rect = Rect::from_min_size(pos, size);
+    rects.push(menu_rect);
 
+    let open_key = id.with("submenu");
+    let mut open = ctx.data(|data| data.get_temp::<usize>(open_key));
+    let mut open_row = None;
     let mut picked = None;
     egui::Area::new(id)
         .fixed_pos(pos)
@@ -279,12 +373,37 @@ pub(crate) fn show_menu<A: Clone>(
                 egui::ScrollArea::vertical()
                     .max_height((size.y - chrome.y).max(0.0))
                     .show(ui, |ui| {
-                        for (entry, row) in entries.iter().zip(rows) {
+                        for (index, (entry, row)) in entries.iter().zip(rows).enumerate() {
                             match (entry, row) {
-                                (MenuEntry::Item(item), Some((label, trailing))) => {
-                                    if draw_item(ui, theme, item, label, trailing, row_width, pad) {
+                                (MenuEntry::Item(item), Some(row)) => {
+                                    let response =
+                                        draw_item(ui, theme, item, row, row_width, pad, false);
+                                    if response.hovered() {
+                                        open = None;
+                                    }
+                                    if response.clicked() && item.enabled {
                                         picked = Some(item.action.clone());
                                     }
+                                }
+                                (MenuEntry::Submenu { label, icon, .. }, Some((galley, _))) => {
+                                    let mut item = MenuItem::new(label.clone(), ());
+                                    item.icon = *icon;
+                                    let response = draw_item(
+                                        ui,
+                                        theme,
+                                        &item,
+                                        (galley, None),
+                                        row_width,
+                                        pad,
+                                        open == Some(index),
+                                    );
+                                    if response.hovered() || response.clicked() {
+                                        open = Some(index);
+                                    }
+                                    if open == Some(index) {
+                                        open_row = Some(response.rect);
+                                    }
+                                    draw_chevron(ui, theme, response.rect, pad);
                                 }
                                 _ => draw_separator(ui, theme, row_width, pad),
                             }
@@ -292,21 +411,39 @@ pub(crate) fn show_menu<A: Clone>(
                     });
             });
         });
-
-    if picked.is_some() {
-        return Some(picked);
+    ctx.data_mut(|data| match open {
+        Some(index) => {
+            data.insert_temp(open_key, index);
+        }
+        None => data.remove::<usize>(open_key),
+    });
+    if let (Some(index), Some(row)) = (open, open_row)
+        && let Some(MenuEntry::Submenu { entries, .. }) = entries.get(index)
+        && !entries.is_empty()
+    {
+        let margin = frame.total_margin().top;
+        let beside = |size: Vec2| {
+            let x = if menu_rect.right() + size.x <= bounds.right() {
+                menu_rect.right()
+            } else {
+                (menu_rect.left() - size.x).max(bounds.left())
+            };
+            let y = (row.top() - margin)
+                .min(bounds.bottom() - size.y)
+                .max(bounds.top());
+            Pos2::new(x, y)
+        };
+        picked = picked.or(draw_menu(
+            ctx,
+            id.with(index),
+            theme,
+            bounds,
+            &beside,
+            entries,
+            rects,
+        ));
     }
-    let menu_rect = Rect::from_min_size(pos, size);
-    let dismissed = !just_opened
-        && ctx.input(|i| {
-            let clicked = i.pointer.primary_clicked() || i.pointer.secondary_clicked();
-            let outside = i
-                .pointer
-                .interact_pos()
-                .is_some_and(|p| !menu_rect.contains(p));
-            (clicked && outside) || i.key_pressed(egui::Key::Escape)
-        });
-    dismissed.then_some(None)
+    picked
 }
 
 /// The corner of a menu of `size`, `gap` px from `anchor` and inside `bounds`.
@@ -329,16 +466,16 @@ fn place(anchor: Pos2, gap: f32, size: Vec2, bounds: Rect) -> Pos2 {
     )
 }
 
-/// Draw one row and return whether it was clicked.
+/// Draw one row, filled as hovered when `highlighted`, and return its response.
 fn draw_item<A>(
     ui: &mut Ui,
     theme: &Theme,
     item: &MenuItem<A>,
-    label: Arc<Galley>,
-    trailing: Option<Arc<Galley>>,
+    (label, trailing): (Arc<Galley>, Option<Arc<Galley>>),
     width: f32,
     pad: f32,
-) -> bool {
+    highlighted: bool,
+) -> Response {
     let t = &DESIGN_TOKENS.sizing.context_menu;
     let c = &theme.ui;
     let (rect, response) = ui.allocate_exact_size(
@@ -350,9 +487,15 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
-    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            egui::Role::MenuItem,
+            response.enabled() && item.enabled,
+            &item.label,
+        )
+    });
 
-    let hovered = item.enabled && response.hovered();
+    let hovered = item.enabled && (response.hovered() || highlighted);
     // (label, icon, trailing text)
     let (text, icon, trailing_color) = if !item.enabled {
         (c.text_disabled, c.text_disabled, c.text_disabled)
@@ -394,7 +537,21 @@ fn draw_item<A>(
         ui.painter().galley(pos, trailing, trailing_color);
     }
 
-    response.clicked() && item.enabled
+    response
+}
+
+/// The arrow at the end of a submenu row.
+fn draw_chevron(ui: &Ui, theme: &Theme, row: Rect, pad: f32) {
+    let size = DESIGN_TOKENS.sizing.context_menu.submenu_arrow_size;
+    let tip = Pos2::new(row.max.x - pad, row.center().y);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            tip + Vec2::new(-size / 2.0, -size / 2.0),
+            tip,
+            tip + Vec2::new(-size / 2.0, size / 2.0),
+        ],
+        Stroke::new(1.5, theme.ui.text_secondary),
+    ));
 }
 
 fn draw_separator(ui: &mut Ui, theme: &Theme, width: f32, pad: f32) {
@@ -636,7 +793,7 @@ impl ChartContextMenu {
                     }
                     _ => return true,
                 },
-                MenuEntry::Separator => return true,
+                MenuEntry::Submenu { .. } | MenuEntry::Separator => return true,
             };
             !self.hidden.contains(&control)
         });
@@ -757,8 +914,15 @@ pub enum ChartContextAction {
     },
     /// An action from the chart-background menu.
     Chart(ContextMenuAction),
-    /// An action from the series/indicator menu.
+    /// An action from the series menu.
     Series(crate::ui::dialogs::SeriesContextMenuAction),
+    /// An action from the menu of study `id`, opened from its legend row or plot.
+    Study {
+        /// The study the menu acts on.
+        id: SeriesId,
+        /// The chosen action, already applied to the chart when it is the chart's to apply.
+        action: crate::ui::dialogs::StudyContextMenuAction,
+    },
     /// An action from the drawing menu.
     Drawing(crate::ui::dialogs::DrawingContextMenuAction),
 }
@@ -782,8 +946,10 @@ pub enum ChartContextAction {
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,
+    study: StudyContextMenu,
     drawing: DrawingContextMenu,
     axes: super::axis_context_menu::AxisMenus,
+    tpo: Option<TpoMenu>,
     /// Host rows in display order. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,
     context: Option<HostMenuContext>,
@@ -797,6 +963,7 @@ impl ChartMenus {
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         set_control_visible(&mut self.chart.hidden, control, visible);
         set_control_visible(&mut self.series.hidden, control, visible);
+        set_control_visible(&mut self.study.hidden, control, visible);
         set_control_visible(&mut self.axes.hidden, control, visible);
     }
 
@@ -815,6 +982,7 @@ impl ChartMenus {
         if self.chart.hidden.contains(&Control::ContextMenus) {
             self.chart.close();
             self.series.close();
+            self.study.close();
             self.drawing.close();
             self.axes.close();
             self.context = None;
@@ -825,6 +993,7 @@ impl ChartMenus {
         if self.axes.open_from_pointer(ctx, chart) {
             self.chart.close();
             self.series.close();
+            self.study.close();
             self.drawing.close();
             self.context = None;
         }
@@ -858,29 +1027,34 @@ impl ChartMenus {
                 time,
                 price,
             });
+            self.tpo = match target {
+                RightClickTarget::Background { .. }
+                | RightClickTarget::Element {
+                    id: ChartElementId::Series(SeriesId::MAIN),
+                    ..
+                } => TpoMenu::open(chart, pos),
+                _ => None,
+            };
             self.just_opened = true;
             // A new right-click supersedes any menu still open.
             self.chart.close();
             self.series.close();
+            self.study.close();
             self.drawing.close();
             match target {
-                RightClickTarget::Element { id, pos, price, .. } => {
-                    // The series menu fronts both the price series and indicator lines: it is
-                    // the object-level menu (settings, hide, etc.).
-                    let label = match id {
-                        ChartElementId::Series(_) => chart.symbol.clone(),
-                        ChartElementId::Indicator(id) => chart
-                            .indicators()
-                            .find(|(study, _)| *study == id)
-                            .map(|(_, study)| study.name().to_string())
-                            .unwrap_or_else(|| chart.symbol.clone()),
-                    };
-                    let series_id = match id {
-                        ChartElementId::Series(sid) => sid,
-                        _ => SeriesId::MAIN,
-                    };
-                    self.series.set_context(label, price);
-                    self.series.open(pos, series_id);
+                RightClickTarget::Element {
+                    id: ChartElementId::Indicator(id),
+                    bar_idx,
+                    ..
+                } => self.study.open(chart, id, bar_idx),
+                RightClickTarget::Element {
+                    id: ChartElementId::Series(id),
+                    pos,
+                    price,
+                    ..
+                } => {
+                    self.series.set_context(chart.symbol.clone(), price);
+                    self.series.open(pos, id);
                 }
                 RightClickTarget::Drawing { drawing_id, pos } => {
                     let drawings = &chart.drawings().drawings;
@@ -894,7 +1068,8 @@ impl ChartMenus {
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
                     self.chart.set_symbol(chart.symbol.clone());
-                    self.chart.market_price = chart.bars(SeriesId::MAIN).last().map(|b| b.close);
+                    self.chart.market_price =
+                        crate::model::last_with_value(chart.bars(SeriesId::MAIN)).map(|b| b.close);
                     self.chart.tick_size = chart
                         .instrument()
                         .and_then(|instrument| instrument.tick_size)
@@ -922,16 +1097,26 @@ impl ChartMenus {
                 &entries,
                 std::mem::take(&mut self.just_opened),
             ) {
+                if let Some(ChartContextAction::Study { id, action }) = &picked {
+                    chart.user_action(|chart| study_context_menu::apply(chart, *id, action));
+                }
+                if let Some(ChartContextAction::Chart(action)) = &picked
+                    && let Some(tpo) = &self.tpo
+                {
+                    chart.user_action(|chart| tpo.apply(chart, action));
+                }
                 menu_action = picked;
                 self.context = None;
                 self.chart.close();
                 self.series.close();
+                self.study.close();
                 self.drawing.close();
             }
         }
         let axis_action = chart.user_action(|chart| self.axes.show(ctx, chart));
         chart.menu_open = self.chart.is_open()
             || self.series.is_open()
+            || self.study.is_open()
             || self.drawing.is_open()
             || self.axes.is_open();
 
@@ -948,26 +1133,19 @@ impl ChartMenus {
             entries: Vec<MenuEntry<A>>,
             tag: impl Fn(A) -> ChartContextAction,
         ) -> Vec<MenuEntry<ChartContextAction>> {
-            entries
-                .into_iter()
-                .map(|entry| match entry {
-                    MenuEntry::Separator => MenuEntry::Separator,
-                    MenuEntry::Item(item) => MenuEntry::Item(MenuItem {
-                        label: item.label,
-                        shortcut: item.shortcut,
-                        icon: item.icon,
-                        action: tag(item.action),
-                        enabled: item.enabled,
-                        danger: item.danger,
-                    }),
-                })
-                .collect()
+            entries.into_iter().map(|entry| entry.map(&tag)).collect()
         }
         let mut entries = match context.target {
             RightClickTarget::Background { .. } => tagged(
                 self.chart.build_menu_items(shortcuts),
                 ChartContextAction::Chart,
             ),
+            RightClickTarget::Element {
+                id: ChartElementId::Indicator(id),
+                ..
+            } => tagged(self.study.build_menu_items(shortcuts), |action| {
+                ChartContextAction::Study { id, action }
+            }),
             RightClickTarget::Element { .. } => tagged(
                 self.series.build_menu_items(shortcuts),
                 ChartContextAction::Series,
@@ -977,6 +1155,14 @@ impl ChartMenus {
                 ChartContextAction::Drawing,
             ),
         };
+        if let Some(tpo) = &self.tpo {
+            let mut profile = tagged(tpo.entries(), ChartContextAction::Chart);
+            if !entries.is_empty() {
+                profile.push(MenuEntry::Separator);
+            }
+            profile.extend(entries);
+            entries = profile;
+        }
         let mut separated = false;
         for entry in &self.host_entries {
             if !(entry.condition)(&context) {
@@ -1526,7 +1712,8 @@ mod tests {
             let options = &mut chart.chart_options;
             options.crosshair.vert_line_color = ink;
             options.crosshair.horz_line_color = ink;
-            options.crosshair.label_background_color = ink;
+            options.crosshair.vert_label_background_color = ink;
+            options.crosshair.horz_label_background_color = ink;
             options.tooltip.enabled = true;
             options.tooltip.on_long_press = false;
             options.tooltip.background_color = ink;
@@ -1658,5 +1845,420 @@ mod tests {
             Some(KeyboardAction::ResetChart)
         );
         assert_eq!(ctx.format_shortcut(&shortcut), "Alt+R");
+    }
+
+    /// Guards #106: actual profile clicks merge neighbours, extend a composite and split it,
+    /// preserving unrelated host ranges and making each command one undoable edit.
+    #[test]
+    fn tpo_profile_menu_merges_and_splits_sessions() {
+        use crate::model::{Bar, BarData, ChartType, Timeframe, to_tpo_profiles};
+        use chrono::{DateTime, Duration};
+        use egui::{Event, PointerButton, RawInput, Shape};
+        for (theme, width) in [
+            (Theme::dark(), 900.0),
+            (Theme::light(), 900.0),
+            (Theme::dark(), 320.0),
+            (Theme::light(), 320.0),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let day = |d| DateTime::UNIX_EPOCH + Duration::days(d);
+            let bars: Vec<_> = (0..16)
+                .map(|i| {
+                    Bar::new(
+                        day(i / 4) + Duration::minutes(i % 4 * 30),
+                        100.0,
+                        102.0,
+                        100.0,
+                        102.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            let mut params = chart.chart_type_params().clone();
+            // The last loaded session belongs to a separate host range extending into the future.
+            params.tpo_composites = vec![day(3)..=day(4)];
+            chart.set_chart_type_params(params);
+            let mut menus = ChartMenus::default();
+            let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+                let mut action = None;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        action = menus.show(ui.ctx(), chart);
+                    },
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                (action, shapes)
+            };
+            frame(&mut chart, &mut menus, vec![]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 18.0));
+            frame(&mut chart, &mut menus, vec![]);
+            let click = |chart: &mut Chart, menus: &mut ChartMenus, pos, button| {
+                frame(chart, menus, vec![Event::PointerMoved(pos)]);
+                let mut action = None;
+                for pressed in [true, false] {
+                    action = action.or(frame(
+                        chart,
+                        menus,
+                        vec![Event::PointerButton {
+                            pos,
+                            button,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    )
+                    .0);
+                }
+                action
+            };
+            let pick = |chart: &mut Chart, menus: &mut ChartMenus, bar, label: &str| {
+                frame(chart, menus, vec![]);
+                let map = chart.get_chart_mapping();
+                let pos = Pos2::new(
+                    map.idx_to_x(bar).max(map.rect.left()) + 4.0,
+                    map.price_to_y(101.0),
+                );
+                click(chart, menus, pos, PointerButton::Secondary);
+                let (_, shapes) = frame(chart, menus, vec![]);
+                let row = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("no {label} row for profile at {bar}"));
+                click(chart, menus, row, PointerButton::Primary)
+            };
+            let counts = |chart: &Chart| {
+                let mut config = chart.chart_type_params().tpo_config(None);
+                config.tick_size = 1.0;
+                to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
+                    .iter()
+                    .map(|p| p.tpo_count_at(101.0, p.tick_size))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert!(matches!(
+                pick(&mut chart, &mut menus, 4, "Merge with previous profile"),
+                Some(ChartContextAction::Chart(_))
+            ));
+            // Four half-hour periods per session, one letter at every row per period.
+            assert_eq!(counts(&chart), [8, 4, 4]);
+            assert!(chart.undo());
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert!(chart.redo());
+            assert_eq!(counts(&chart), [8, 4, 4]);
+            pick(&mut chart, &mut menus, 0, "Merge with next profile");
+            assert_eq!(counts(&chart), [12, 4]);
+            // Pan the composite's opening offscreen; its displayed anchor still opens its menu.
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(3.0, 18.0));
+            pick(&mut chart, &mut menus, 0, "Split profile");
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert_eq!(chart.chart_type_params().tpo_composites, [day(3)..=day(4)]);
+            assert!(chart.undo());
+            assert_eq!(counts(&chart), [12, 4]);
+        }
+    }
+
+    /// Guards #850: a secondary click on a study's legend row opens the study's menu, and each
+    /// entry changes the study through the chart's public API or returns its host intent.
+    #[test]
+    fn study_menu_entries_act_on_the_study() {
+        use crate::model::{AlertCondition, AlertSource, Timeframe};
+        use crate::studies::{IndicatorFactory, RSI, SMA, StudyScale};
+        use crate::ui::dialogs::StudyContextMenuAction as A;
+        use egui::{Event, PointerButton, RawInput, Shape};
+        let ctx = Context::default();
+        crate::theme::apply_to_egui(&ctx, &Theme::dark());
+        // Closes alternate 110 and 120; the last bar, 99, closes at 120.
+        let mut chart = crate::widget::test_frames::chart(&[100.0, 104.0], &[110.0, 120.0]);
+        chart.symbol = "SYNTH".into();
+        chart.set_timeframe(Timeframe::Day1);
+        let sma = chart.add_indicator(Box::new(SMA::new(3)));
+        let rsi = chart.add_indicator(Box::new(RSI::new(3)));
+        let mut menus = ChartMenus::default();
+        let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+            let mut action = None;
+            let right_click = chart.right_click.take();
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    if right_click.is_some() {
+                        chart.right_click = right_click;
+                    }
+                    action = menus.show(ui.ctx(), chart);
+                },
+            );
+            fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+                match shape {
+                    Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
+                    shape => out.push(shape),
+                }
+            }
+            let mut shapes = Vec::new();
+            for clipped in std::mem::take(&mut output.shapes) {
+                flatten(clipped.shape, &mut shapes);
+            }
+            output.drop_without_applying_deltas();
+            (action, shapes)
+        };
+        let text_at = |shapes: &[Shape], label: &str| {
+            shapes.iter().find_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text().starts_with(label) => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+        };
+        let click = |chart: &mut Chart, menus: &mut ChartMenus, pos, button| {
+            frame(chart, menus, vec![Event::PointerMoved(pos)]);
+            let mut action = None;
+            for pressed in [true, false] {
+                let event = Event::PointerButton {
+                    pos,
+                    button,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                action = action.or(frame(chart, menus, vec![event]).0);
+            }
+            action
+        };
+        // Opens the menu of `id` and picks the rows of `path`, hovering each submenu row.
+        let pick = |chart: &mut Chart, menus: &mut ChartMenus, id, path: &[&str]| {
+            chart.right_click = Some(RightClickTarget::Element {
+                id: ChartElementId::Indicator(id),
+                bar_idx: 99,
+                pos: Pos2::new(120.0, 120.0),
+                price: 0.0,
+            });
+            let (label, submenus) = path.split_last().unwrap();
+            for row in submenus {
+                let (_, shapes) = frame(chart, menus, vec![]);
+                let pos = text_at(&shapes, row).unwrap_or_else(|| panic!("no {row} row"));
+                frame(chart, menus, vec![Event::PointerMoved(pos)]);
+            }
+            let (_, shapes) = frame(chart, menus, vec![]);
+            let pos = text_at(&shapes, label).unwrap_or_else(|| panic!("no {label} row"));
+            match click(chart, menus, pos, PointerButton::Primary) {
+                Some(ChartContextAction::Study { id: picked, action }) if picked == id => action,
+                other => panic!("{path:?} returned {other:?}"),
+            }
+        };
+        let study = |chart: &Chart, id| {
+            chart
+                .indicators()
+                .find(|(study, _)| *study == id)
+                .map(|(_, study)| study.clone_box())
+        };
+
+        // The legend row of the overlay opens its menu.
+        frame(&mut chart, &mut menus, vec![]);
+        let (_, shapes) = frame(&mut chart, &mut menus, vec![]);
+        let row = text_at(&shapes, "SMA").expect("the legend shows the overlay");
+        click(&mut chart, &mut menus, row, PointerButton::Secondary);
+        let (_, shapes) = frame(&mut chart, &mut menus, vec![]);
+        assert!(text_at(&shapes, "Add alert on SMA at 116.67").is_some());
+        assert_eq!(
+            chart.selected_element(),
+            Some(ChartElementId::Indicator(sma))
+        );
+        frame(
+            &mut chart,
+            &mut menus,
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+
+        // SMA(3) at the last bar: (120 + 110 + 120) / 3.
+        let A::AddAlert(alert) = pick(&mut chart, &mut menus, sma, &["Add alert on SMA at"]) else {
+            panic!("the alert row returns an alert");
+        };
+        assert_eq!(alert.symbol, "SYNTH");
+        assert_eq!(
+            alert.source,
+            AlertSource::Study {
+                id: sma.0.to_string(),
+                output: 0
+            }
+        );
+        assert!(
+            matches!(alert.condition, AlertCondition::Crossing(level) if (level - 350.0 / 3.0).abs() < 1e-9)
+        );
+        assert_eq!(
+            pick(&mut chart, &mut menus, sma, &["Add indicator on SMA"]),
+            A::AddIndicator
+        );
+        let A::AddToFavorites(name) = pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Add this indicator to favorites"],
+        ) else {
+            panic!("the favorites row names the study");
+        };
+        assert!(IndicatorFactory::new().has(&name), "{name}");
+
+        // In the main pane the price series is one of the items of the visual order.
+        let sma_color = study(&chart, sma).unwrap().colors()[0];
+        let bullish = chart.config().bullish_color;
+        let sma_behind = |chart: &mut Chart, menus: &mut ChartMenus| {
+            let (_, shapes) = frame(chart, menus, vec![]);
+            let first = |color| {
+                shapes.iter().position(|shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
+                })
+            };
+            first(sma_color).unwrap() < first(bullish).unwrap()
+        };
+        assert!(!sma_behind(&mut chart, &mut menus));
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Visual order", "Send to back"],
+        );
+        assert!(sma_behind(&mut chart, &mut menus));
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Visual order", "Bring forward"],
+        );
+        assert!(!sma_behind(&mut chart, &mut menus));
+
+        // On the daily chart, the daily interval and above hides the study on intraday ones.
+        use Timeframe::*;
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Visibility on intervals", "Current interval and above"],
+        );
+        assert_eq!(
+            study(&chart, sma).unwrap().settings().hidden_intervals,
+            [
+                Ms100, Ms250, Ms500, Sec1, Sec2, Sec5, Sec10, Sec30, Min1, Min5, Min15, Min30,
+                Hour1, Hour4
+            ]
+        );
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Visibility on intervals", "All intervals"],
+        );
+        assert!(
+            study(&chart, sma)
+                .unwrap()
+                .settings()
+                .hidden_intervals
+                .is_empty()
+        );
+
+        // Moves between the main pane and new and existing panes, in pane order.
+        let pane = |chart: &Chart, id| {
+            let at = chart
+                .indicators()
+                .position(|(study, _)| study == id)
+                .unwrap();
+            chart
+                .get_rendered_indicator_panes()
+                .iter()
+                .find(|pane| pane.indicator_idx == at)
+                .map(|pane| pane.chart_rect)
+        };
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane below"]);
+        frame(&mut chart, &mut menus, vec![]);
+        assert!(pane(&chart, sma).unwrap().top() < pane(&chart, rsi).unwrap().top());
+        pick(&mut chart, &mut menus, sma, &["Move to", "RSI pane"]);
+        frame(&mut chart, &mut menus, vec![]);
+        assert_eq!(pane(&chart, sma), pane(&chart, rsi));
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane above"]);
+        frame(&mut chart, &mut menus, vec![]);
+        assert!(pane(&chart, sma).unwrap().bottom() <= pane(&chart, rsi).unwrap().top());
+        pick(&mut chart, &mut menus, sma, &["Move to", "Main pane"]);
+        assert!(study(&chart, sma).unwrap().is_overlay());
+
+        // Stable pane handles also reach empty panes, which stay when a study leaves them.
+        use crate::widget::PaneId;
+        let empty = chart.add_pane();
+        assert!(chart.set_preserve_empty_pane(empty, true));
+        assert_eq!(
+            pick(&mut chart, &mut menus, sma, &["Move to", "empty pane"]),
+            A::MoveTo(crate::ui::dialogs::PaneTarget::Pane(empty))
+        );
+        assert_eq!(chart.series_pane(sma), Some(empty));
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane below"]);
+        let panes = chart.panes();
+        let at = panes.iter().position(|pane| *pane == empty).unwrap();
+        assert_eq!(chart.series_pane(sma), Some(panes[at + 1]));
+        assert!(chart.pane_series(empty).is_empty());
+        pick(&mut chart, &mut menus, sma, &["Move to", "Main pane"]);
+        assert!(chart.remove_pane(empty));
+
+        // Main can sit below another pane; an overlay's new pane is adjacent to main.
+        let rsi_pane = chart.series_pane(rsi).unwrap();
+        assert!(chart.move_pane(rsi_pane, 0));
+        pick(&mut chart, &mut menus, sma, &["Move to", "New pane above"]);
+        let sma_pane = chart.series_pane(sma).unwrap();
+        assert_eq!(chart.panes(), [rsi_pane, sma_pane, PaneId::MAIN]);
+        assert!(chart.undo());
+        assert_eq!(chart.series_pane(sma), Some(PaneId::MAIN));
+        assert_eq!(chart.panes(), [rsi_pane, PaneId::MAIN]);
+
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Pin to scale (now right)", "No scale"],
+        );
+        assert_eq!(study(&chart, sma).unwrap().scale(), StudyScale::None);
+        pick(
+            &mut chart,
+            &mut menus,
+            sma,
+            &["Pin to scale (now no scale)", "Pin to new left scale"],
+        );
+        assert_eq!(study(&chart, sma).unwrap().scale(), StudyScale::Independent);
+
+        assert_eq!(pick(&mut chart, &mut menus, sma, &["Copy"]), A::Copy);
+        pick(&mut chart, &mut menus, sma, &["Hide"]);
+        assert!(!study(&chart, sma).unwrap().is_visible());
+        pick(&mut chart, &mut menus, sma, &["Show"]);
+        assert!(study(&chart, sma).unwrap().is_visible());
+        pick(&mut chart, &mut menus, rsi, &["Settings…"]);
+        assert_eq!(chart.take_indicator_settings_request(), Some(rsi));
+        assert_eq!(
+            pick(&mut chart, &mut menus, rsi, &["Object tree"]),
+            A::ObjectTree
+        );
+        pick(&mut chart, &mut menus, rsi, &["Remove"]);
+        assert!(study(&chart, rsi).is_none());
+        assert!(chart.can_undo(), "menu edits are undoable");
     }
 }

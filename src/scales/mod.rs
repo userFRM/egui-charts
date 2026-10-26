@@ -14,8 +14,10 @@
 //! | [`TickMarkGenerator`]     | Hierarchical tick placement on the time axis              |
 //! | [`PriceFormatter`] trait  | Customizable price label formatting                      |
 //! | [`TimeFormatter`] trait   | Customizable time label formatting                       |
+//! | [`HorizontalScale`] trait | Horizontal axes other than time: strikes, maturities     |
 
 mod countdown;
+mod horizontal;
 mod price_formatter;
 mod pricescale;
 mod pricescale_marks;
@@ -23,6 +25,9 @@ mod time_formatter;
 mod timescale_marks;
 
 pub use countdown::bar_countdown;
+pub use horizontal::{
+    HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
+};
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,

@@ -141,6 +141,12 @@ impl ElderImpulseSystem {
 }
 
 impl Indicator for ElderImpulseSystem {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         ema_period: length("EMA period", 1, usize::MAX),
         macd_fast: length("MACD fast", 1, usize::MAX),
@@ -208,6 +214,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

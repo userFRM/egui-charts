@@ -1197,5 +1197,12 @@ mod tests {
                 column(3, 1, &[(1, 6.0), (-1, 4.0)], &[]),
             ]
         );
+        sink.push_depth_delta(7, &book(5, vec![], vec![]));
+        inbox.sample_depth(sink.id, Some(DepthHistoryConfig::default()));
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        assert!(
+            updates.depth_columns.is_empty(),
+            "new settings discard pending old rows"
+        );
     }
 }

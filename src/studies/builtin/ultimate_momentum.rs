@@ -52,6 +52,12 @@ impl Default for UltimateMomentum {
 }
 
 impl Indicator for UltimateMomentum {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         short_period: length("Short period", 1, usize::MAX),
         medium_period: length("Medium period", 1, usize::MAX),
@@ -148,6 +154,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

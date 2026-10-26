@@ -61,6 +61,12 @@ impl Default for RainbowOscillator {
 }
 
 impl Indicator for RainbowOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         levels: length("Levels", 1, usize::MAX),
         base_period: length("Base period", 1, usize::MAX)
@@ -168,6 +174,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

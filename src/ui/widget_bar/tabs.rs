@@ -184,6 +184,11 @@ impl RightPanelTabs {
 
             // Check for clicks
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+            btn_res.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Tab, btn_res.enabled(), tab.label())
+            });
+            ui.ctx()
+                .accesskit_node_builder(btn_res.id, |node| node.set_selected(is_active));
             crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();

@@ -41,6 +41,10 @@ use std::sync::Arc;
 /// [`IndicatorValue`] per bar.
 pub type CalculateFn = Arc<dyn Fn(&[Bar]) -> Vec<IndicatorValue> + Send + Sync>;
 
+/// Calculation callback receiving the validated current inputs.
+pub type InputCalculateFn =
+    Arc<dyn Fn(&[Bar], &[super::StudyInput]) -> Vec<IndicatorValue> + Send + Sync>;
+
 /// Per-bar colour callback, receiving the output line, source bar and calculated columns.
 pub type PlotColorFn = Arc<dyn Fn(usize, usize, &IndicatorValues) -> Option<Color32> + Send + Sync>;
 
@@ -53,6 +57,8 @@ pub struct CustomIndicator {
     name: String,
     desc: String,
     calculate_fn: CalculateFn,
+    input_calculate_fn: Option<InputCalculateFn>,
+    inputs: Vec<super::StudyInput>,
     values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
@@ -85,6 +91,8 @@ impl CustomIndicator {
             name,
             desc: String::new(),
             calculate_fn: Arc::new(calculate_fn),
+            input_calculate_fn: None,
+            inputs: Vec::new(),
             values: IndicatorValues::new(),
             colors: vec![DESIGN_TOKENS.semantic.extended.caution], // Yellow default
             is_overlay: true,
@@ -97,6 +105,31 @@ impl CustomIndicator {
             fills: Vec::new(),
             plot_color: None,
         }
+    }
+
+    /// Declare editable inputs and calculate from their current values. Ids must be unique;
+    /// defaults and initial values must satisfy the same schema used by the editor and setters.
+    pub fn with_inputs<F>(
+        mut self,
+        inputs: Vec<super::StudyInput>,
+        calculate: F,
+    ) -> Result<Self, &'static str>
+    where
+        F: Fn(&[Bar], &[super::StudyInput]) -> Vec<IndicatorValue> + Send + Sync + 'static,
+    {
+        for (at, input) in inputs.iter().enumerate() {
+            if input.id.is_empty()
+                || inputs[..at].iter().any(|other| other.id == input.id)
+                || !input.accepts(&input.value)
+                || !input.accepts(&input.default)
+            {
+                return Err("invalid custom study input schema");
+            }
+        }
+        self.inputs = inputs;
+        self.input_calculate_fn = Some(Arc::new(calculate));
+        self.values.clear();
+        Ok(self)
     }
 
     /// Set a human-readable description (used in tooltips).
@@ -177,6 +210,24 @@ impl CustomIndicator {
 }
 
 impl Indicator for CustomIndicator {
+    fn inputs(&self) -> Vec<super::StudyInput> {
+        self.inputs.clone()
+    }
+
+    fn set_input(&mut self, id: &str, value: super::InputValue) -> Result<(), &'static str> {
+        let input = self
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !input.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        input.value = value;
+        self.values.clear();
+        Ok(())
+    }
+
     fn value_format(&self) -> super::StudyFormat {
         self.value_format.unwrap_or(if self.is_overlay {
             super::StudyFormat::Price
@@ -226,7 +277,11 @@ impl Indicator for CustomIndicator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = (self.calculate_fn)(data).into();
+        self.values = match &self.input_calculate_fn {
+            Some(calculate) => calculate(data, &self.inputs),
+            None => (self.calculate_fn)(data),
+        }
+        .into();
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -271,6 +326,87 @@ impl Indicator for CustomIndicator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_inputs_validate_edits_and_reach_cloned_calculations() {
+        use crate::model::{PriceSource, Timeframe};
+        use crate::studies::{InputKind, InputValue, StudyInput, StudySource};
+        let schema = vec![
+            StudyInput::new(
+                "length",
+                "Length",
+                InputValue::Length(2),
+                InputKind::Length(1, 10),
+            ),
+            StudyInput::new(
+                "color",
+                "Colour",
+                InputValue::Color(Color32::RED),
+                InputKind::Color,
+            ),
+            StudyInput::new(
+                "source",
+                "Source",
+                InputValue::Source(StudySource::Price(PriceSource::HL2)),
+                InputKind::Source,
+            ),
+            StudyInput::new(
+                "interval",
+                "Interval",
+                InputValue::Timeframe(Some(Timeframe::Hour1)),
+                InputKind::Timeframe,
+            ),
+            StudyInput::new(
+                "symbol",
+                "Symbol",
+                InputValue::Symbol("TEST".into()),
+                InputKind::Symbol,
+            ),
+        ];
+        let mut study = CustomIndicator::new("Inputs", |_| Vec::new())
+            .with_inputs(schema, |bars, inputs| {
+                let InputValue::Length(length) = inputs[0].value else {
+                    unreachable!()
+                };
+                assert!(
+                    bars.iter()
+                        .all(|bar| bar.payload.as_deref() == Some(&serde_json::json!(42)))
+                );
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.close * length as f64))
+                    .collect()
+            })
+            .unwrap();
+        let mut bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 3.0, 3.0, 3.0, 3.0, 1.0);
+        bar.payload = Some(Arc::new(serde_json::json!(42)));
+        study.calculate(std::slice::from_ref(&bar));
+        for (id, bad) in [
+            ("length", InputValue::Length(0)),
+            ("length", InputValue::Number(2.0)),
+            ("symbol", InputValue::Symbol("\n".into())),
+        ] {
+            assert!(study.set_input(id, bad).is_err());
+            assert_eq!(study.values().value(0, 0), Some(6.0));
+        }
+        study.set_input("length", InputValue::Length(4)).unwrap();
+        assert!(study.values().is_empty());
+        assert_eq!(study.inputs()[0].default, InputValue::Length(2));
+        let saved: Vec<_> = study
+            .inputs()
+            .into_iter()
+            .map(|input| (input.id, input.value))
+            .collect();
+        let restored: Vec<(String, InputValue)> =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut cloned = study.clone_box();
+        for (id, value) in restored {
+            cloned.set_input(&id, value).unwrap();
+        }
+        cloned.calculate(std::slice::from_ref(&bar));
+        assert_eq!(cloned.values().value(0, 0), Some(12.0));
+        cloned.update_source(&[bar], 0, &[5.0]);
+        assert_eq!(cloned.values().value(0, 0), Some(20.0));
+    }
 
     #[test]
     fn clone_keeps_the_calculation() {

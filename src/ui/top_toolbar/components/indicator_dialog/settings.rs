@@ -36,6 +36,7 @@ pub struct IndicatorSettingsDialog {
     line_names: Vec<String>,
     tab: Tab,
     current_interval: Option<Timeframe>,
+    sources: Vec<(crate::studies::StudySource, String)>,
 }
 
 impl crate::ui_kit::tab_bar::TabLabel for Tab {
@@ -61,6 +62,47 @@ impl IndicatorSettingsDialog {
         self.line_names = study.line_names();
         self.current_interval = interval;
         self.tab = Tab::Inputs;
+        self.sources.clear();
+    }
+
+    /// Open on a chart study and offer its other studies as source inputs, excluding cycles.
+    pub fn open_for_chart(&mut self, chart: &crate::widget::Chart, id: SeriesId) -> bool {
+        let Some((_, study)) = chart.indicators().find(|(candidate, _)| *candidate == id) else {
+            return false;
+        };
+        self.open(id, study, chart.timeframe());
+        let studies: Vec<_> = chart.indicators().collect();
+        for (candidate, study) in &studies {
+            let mut next = Some(candidate.0);
+            for _ in 0..=studies.len() {
+                let Some(current) = next else {
+                    break;
+                };
+                if current == id.0 {
+                    break;
+                }
+                next = studies
+                    .iter()
+                    .find(|(id, _)| id.0 == current)
+                    .and_then(|(_, study)| match study.source() {
+                        Some(crate::studies::StudySource::Study { id, .. }) => Some(id),
+                        _ => None,
+                    });
+            }
+            if next.is_some() {
+                continue;
+            }
+            for (plot, name) in study.line_names().into_iter().enumerate() {
+                self.sources.push((
+                    crate::studies::StudySource::Study {
+                        id: candidate.0,
+                        plot,
+                    },
+                    format!("{}: {name}", study.name()),
+                ));
+            }
+        }
+        true
     }
 
     /// Whether an edit is open.
@@ -93,32 +135,49 @@ impl IndicatorSettingsDialog {
                             if self.inputs.is_empty() {
                                 ui.label("This study has no editable inputs.");
                             }
+                            if !self.inputs.is_empty() && ui.small_button("Reset inputs").clicked()
+                            {
+                                for input in &mut self.inputs {
+                                    input.value = input.default.clone();
+                                }
+                            }
+                            let study_source = self.inputs.iter().any(|input| {
+                                matches!(
+                                    input.value,
+                                    InputValue::Source(crate::studies::StudySource::Study { .. })
+                                )
+                            });
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for input in &mut self.inputs {
-                                    ui.label(&input.label);
-                                    match (&input.kind, &mut input.value) {
+                                    if study_source
+                                        && matches!(
+                                            input.id.as_str(),
+                                            "calculation_symbol"
+                                                | "calculation_timeframe"
+                                                | "wait_for_close"
+                                        )
+                                    {
+                                        input.value = input.default.clone();
+                                        continue;
+                                    }
+                                    let label = ui.label(&input.label);
+                                    let response = match (&input.kind, &mut input.value) {
                                         (
                                             InputKind::Length(min, max),
                                             InputValue::Length(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Integer(min, max),
                                             InputValue::Integer(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Number(min, max),
                                             InputValue::Number(value),
-                                        ) => {
-                                            ui.add(
-                                                egui::DragValue::new(value)
-                                                    .speed(0.1)
-                                                    .range(*min..=*max),
-                                            );
-                                        }
+                                        ) => ui.add(
+                                            egui::DragValue::new(value)
+                                                .speed(0.1)
+                                                .range(*min..=*max),
+                                        ),
                                         (InputKind::Choice(choices), InputValue::Choice(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
                                                 .selected_text(
@@ -129,15 +188,104 @@ impl IndicatorSettingsDialog {
                                                     {
                                                         ui.selectable_value(value, index, label);
                                                     }
-                                                });
+                                                })
+                                                .response
                                         }
                                         (InputKind::Toggle, InputValue::Toggle(value)) => {
-                                            ui.checkbox(value, "");
+                                            ui.checkbox(value, "")
                                         }
-                                        _ => {
-                                            ui.label("This input is unavailable.");
+                                        (InputKind::Source, InputValue::Source(value)) => {
+                                            egui::ComboBox::from_id_salt(&input.id)
+                                                .selected_text(match value {
+                                                    crate::studies::StudySource::Price(source) => {
+                                                        source.label().to_owned()
+                                                    }
+                                                    crate::studies::StudySource::Study {
+                                                        ..
+                                                    } => self
+                                                        .sources
+                                                        .iter()
+                                                        .find(|(source, _)| source == value)
+                                                        .map(|(_, label)| label.clone())
+                                                        .unwrap_or_else(|| {
+                                                            "Unavailable study".to_owned()
+                                                        }),
+                                                })
+                                                .show_ui(ui, |ui| {
+                                                    for (source, label) in &self.sources {
+                                                        ui.selectable_value(value, *source, label);
+                                                    }
+                                                    for source in crate::model::PriceSource::all() {
+                                                        ui.selectable_value(
+                                                            value,
+                                                            crate::studies::StudySource::Price(
+                                                                source,
+                                                            ),
+                                                            source.label(),
+                                                        );
+                                                    }
+                                                })
+                                                .response
                                         }
-                                    }
+                                        (InputKind::Color, InputValue::Color(value)) => {
+                                            ui.color_edit_button_srgba(value)
+                                        }
+                                        (InputKind::Symbol, InputValue::Symbol(value)) => ui.add(
+                                            egui::TextEdit::singleline(value)
+                                                .hint_text("Chart symbol"),
+                                        ),
+                                        (InputKind::Timeframe, InputValue::Timeframe(value)) => {
+                                            let response = egui::ComboBox::from_id_salt(&input.id)
+                                                .selected_text(value.map_or_else(
+                                                    || "Chart interval".to_owned(),
+                                                    |tf| tf.to_string(),
+                                                ))
+                                                .show_ui(ui, |ui| {
+                                                    ui.selectable_value(
+                                                        value,
+                                                        None,
+                                                        "Chart interval",
+                                                    );
+                                                    for tf in Timeframe::all() {
+                                                        ui.selectable_value(
+                                                            value,
+                                                            Some(tf),
+                                                            tf.to_string(),
+                                                        );
+                                                    }
+                                                    if ui
+                                                        .selectable_label(
+                                                            value.is_some_and(|tf| tf.is_custom()),
+                                                            "Custom",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        *value = Some(Timeframe::Custom(
+                                                            std::num::NonZeroU64::new(60).unwrap(),
+                                                        ));
+                                                    }
+                                                })
+                                                .response;
+                                            if let Some(Timeframe::Custom(seconds)) = value {
+                                                let mut count = seconds.get();
+                                                if ui
+                                                    .add(
+                                                        egui::DragValue::new(&mut count)
+                                                            .range(1..=u64::MAX)
+                                                            .suffix(" s"),
+                                                    )
+                                                    .labelled_by(label.id)
+                                                    .changed()
+                                                {
+                                                    *seconds =
+                                                        std::num::NonZeroU64::new(count).unwrap();
+                                                }
+                                            }
+                                            response
+                                        }
+                                        _ => ui.label("This input is unavailable."),
+                                    };
+                                    response.labelled_by(label.id);
                                     ui.end_row();
                                 }
                             });
@@ -157,7 +305,8 @@ impl IndicatorSettingsDialog {
                                             egui::DragValue::new(&mut plot.width)
                                                 .range(0.5..=10.0)
                                                 .suffix(" px"),
-                                        );
+                                        )
+                                        .accessible_name("Line width");
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         egui::ComboBox::from_id_salt("pattern")
@@ -167,6 +316,8 @@ impl IndicatorSettingsDialog {
                                                     PlotPattern::Solid,
                                                     PlotPattern::Dashed,
                                                     PlotPattern::Dotted,
+                                                    PlotPattern::LargeDashed,
+                                                    PlotPattern::SparseDotted,
                                                 ] {
                                                     ui.selectable_value(
                                                         &mut plot.pattern,
@@ -174,7 +325,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{pattern:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Line pattern");
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(format!("{:?}", plot.plot_type))
                                             .show_ui(ui, |ui| {
@@ -189,7 +342,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{kind:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Plot type");
                                     });
                                     ui.separator();
                                 });
@@ -206,7 +361,8 @@ impl IndicatorSettingsDialog {
                                         egui::DragValue::new(precision)
                                             .range(0..=12)
                                             .suffix(" decimals"),
-                                    );
+                                    )
+                                    .accessible_name("Precision");
                                 }
                             });
                         }
@@ -236,7 +392,11 @@ impl IndicatorSettingsDialog {
                             });
                         }
                     });
-                (apply, cancel) = DialogFooter::new("Apply").secondary("Cancel").show(ui);
+                let valid = self.inputs.iter().all(|input| input.accepts(&input.value));
+                (apply, cancel) = DialogFooter::new("Apply")
+                    .primary_enabled(valid)
+                    .secondary("Cancel")
+                    .show(ui);
             });
         if !open || cancel {
             self.edit = None;
@@ -263,16 +423,17 @@ mod tests {
     #[test]
     fn dialog_follows_the_window_when_it_shrinks() {
         for theme in [Theme::light(), Theme::dark()] {
-            for tab in [
-                None,
-                Some(Tab::Inputs),
-                Some(Tab::Style),
-                Some(Tab::Visibility),
+            for (name, tab) in [
+                ("MA Ribbon", None),
+                ("MA Ribbon", Some(Tab::Inputs)),
+                ("MA Ribbon", Some(Tab::Style)),
+                ("MA Ribbon", Some(Tab::Visibility)),
+                ("Vol Profile FR", Some(Tab::Inputs)),
             ] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let study = crate::studies::IndicatorFactory::new()
-                    .create("MA Ribbon")
+                    .create(name)
                     .unwrap();
                 let mut dialog = IndicatorSettingsDialog::default();
                 dialog.open(SeriesId(2), study.as_ref(), Some(Timeframe::Min1));
@@ -319,7 +480,7 @@ mod tests {
                         .unwrap();
                     assert!(
                         screen.contains_rect(shown),
-                        "tab {}: {shown:?} outside {screen:?}",
+                        "{name} tab {}: {shown:?} outside {screen:?}",
                         tab.map(|tab| tab as u8).unwrap_or(3)
                     );
                 }

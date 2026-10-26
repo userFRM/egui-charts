@@ -26,10 +26,12 @@ pub enum QuoteSide {
     Sell,
     /// Buy at the displayed ask.
     Buy,
+    /// Open the order ticket without placing an order.
+    Ticket,
 }
 
 /// An action on the zero-based study index in a legend's study slice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StudyAction {
     /// Open the study's settings in the host.
     Settings(usize),
@@ -37,6 +39,14 @@ pub enum StudyAction {
     ToggleVisibility(usize),
     /// Remove the study.
     Remove(usize),
+    /// Open the study's menu at `pos`: below the more-actions button, or at the pointer after a
+    /// secondary click on the row.
+    Menu {
+        /// Zero-based study index.
+        index: usize,
+        /// Screen position of the menu's corner.
+        pos: Pos2,
+    },
 }
 
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
@@ -81,6 +91,9 @@ pub struct Legend<'a> {
     pub show_indicator_inputs: bool,
     /// Display study outputs.
     pub show_indicator_values: bool,
+    /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
+    /// to change it.
+    pub(crate) quantity: Option<f64>,
 }
 
 impl<'a> Legend<'a> {
@@ -107,6 +120,7 @@ impl<'a> Legend<'a> {
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,
+            quantity: None,
         }
     }
 
@@ -134,20 +148,21 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, _) = self.show_with_colors(ui, plot, &colors);
+        let (quote, study, _, _) = self.show_with_colors(ui, plot, &colors);
         (quote, study)
     }
 
+    /// Also returns the bottom of the legend and the quantity box, when the user clicked it.
     pub(crate) fn show_with_colors(
         &self,
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
-    ) -> (Option<QuoteSide>, Option<StudyAction>, f32) {
+    ) -> (Option<QuoteSide>, Option<StudyAction>, f32, Option<Rect>) {
         let theme = ui.active_theme();
         let bounds = plot.shrink(8.0);
         if !bounds.is_positive() {
-            return (None, None, plot.top());
+            return (None, None, plot.top(), None);
         }
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
@@ -335,13 +350,13 @@ impl<'a> Legend<'a> {
             layout.new_row();
         }
 
-        let action = self.quote.and_then(|quote| {
+        let (action, quantity) = self.quote.map_or((None, None), |quote| {
             let (bid, ask) = (quote.bid, quote.ask);
             if !bid.is_finite() || !ask.is_finite() || bid > ask || !quote.spread().is_finite() {
-                return None;
+                return (None, None);
             }
             let precision = self.price_precision(bid.abs().max(ask.abs()));
-            let action = paint_quotes(ui, &mut layout, bid, ask, precision, id);
+            let action = paint_quotes(ui, &mut layout, bid, ask, precision, self.quantity, id);
             layout.new_row();
             layout.pos.y += 4.0;
             action
@@ -465,7 +480,7 @@ impl<'a> Legend<'a> {
                         layout.text(text, typography::MD, color, bounds.width());
                     }
                 }
-                let controls = layout.reserve(Vec2::new(60.0, 20.0)).intersect(bounds);
+                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()
                 } else {
@@ -473,7 +488,7 @@ impl<'a> Legend<'a> {
                 };
                 let row = Rect::from_min_max(row_start, Pos2::new(row_right, controls.bottom()))
                     .intersect(bounds);
-                let responses = study_controls(
+                let (responses, menu) = study_controls(
                     ui,
                     row,
                     controls,
@@ -488,6 +503,9 @@ impl<'a> Legend<'a> {
                     if response.clicked() {
                         study_settings = Some(intent);
                     }
+                }
+                if let Some(pos) = menu {
+                    study_settings = Some(StudyAction::Menu { index, pos });
                 }
                 layout.new_row();
             }
@@ -535,7 +553,12 @@ impl<'a> Legend<'a> {
                 ui.ctx().data_mut(|data| data.insert_temp(id, !collapsed));
             }
         }
-        (action, study_settings, layout.pos.y + layout.height)
+        (
+            action,
+            study_settings,
+            layout.pos.y + layout.height,
+            quantity,
+        )
     }
 
     fn title(&self) -> String {
@@ -566,13 +589,16 @@ impl<'a> Legend<'a> {
     }
 }
 
+/// The row outline and its hide, settings, remove and more-actions buttons. Returns the first
+/// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
+/// corner of the study menu.
 pub(crate) fn study_controls(
     ui: &mut Ui,
     row: Rect,
     controls: Rect,
     id: egui::Id,
     visible: bool,
-) -> [Response; 3] {
+) -> ([Response; 3], Option<Pos2>) {
     let theme = ui.active_theme();
     let touch_id = egui::Id::unique("legend_touch_input");
     let input_touch = ui.input(|input| {
@@ -601,6 +627,10 @@ pub(crate) fn study_controls(
     let row_response = ui.interact(row, id.with("row"), Sense::click());
     row_response
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Study controls"));
+    let mut menu = row_response
+        .secondary_clicked()
+        .then(|| row_response.interact_pointer_pos())
+        .flatten();
     let clicked_elsewhere = row_response.clicked_elsewhere();
     let clicked = row_response.clicked();
     let selected = ui.ctx().data_mut(|data| {
@@ -616,7 +646,7 @@ pub(crate) fn study_controls(
     // Keep controls focusable while Tab transfers focus from their row.
     let focused = row_response.has_focus()
         || row_response.lost_focus()
-        || (0..3_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+        || (0..4_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -629,7 +659,7 @@ pub(crate) fn study_controls(
             egui::StrokeKind::Inside,
         );
     }
-    std::array::from_fn(|index| {
+    let buttons: [Response; 4] = std::array::from_fn(|index| {
         let rect = Rect::from_min_size(
             controls.min + Vec2::new(index as f32 * 20.0, 0.0),
             Vec2::splat(20.0),
@@ -639,7 +669,8 @@ pub(crate) fn study_controls(
             0 if visible => "Hide study",
             0 => "Show study",
             1 => "Study settings",
-            _ => "Remove study",
+            2 => "Remove study",
+            _ => "More actions",
         };
         let response = ui.interact(
             rect,
@@ -665,7 +696,8 @@ pub(crate) fn study_controls(
                 0 if visible => &crate::icons::icons::EYE,
                 0 => &crate::icons::icons::EYE_HIDE,
                 1 => &crate::icons::icons::SETTINGS,
-                _ => &crate::icons::icons::CLOSE,
+                2 => &crate::icons::icons::TRASH,
+                _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
             };
             icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text_secondary)
                 .paint_at(ui, rect.shrink(3.0));
@@ -674,12 +706,17 @@ pub(crate) fn study_controls(
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            [if visible { "−" } else { "+" }, "...", "×"][index],
+            [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
             FontId::proportional(14.0),
             theme.ui.text_secondary,
         );
         response
-    })
+    });
+    let [hide, settings, remove, more] = buttons;
+    if more.clicked() {
+        menu = Some(more.rect.left_bottom());
+    }
+    ([hide, settings, remove], menu)
 }
 
 struct Layout<'a> {
@@ -781,14 +818,17 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
+/// Returns the button clicked and the quantity box, when clicked.
 fn paint_quotes(
     ui: &mut Ui,
     layout: &mut Layout<'_>,
     bid: f64,
     ask: f64,
     precision: usize,
+    quantity: Option<f64>,
     id: egui::Id,
-) -> Option<QuoteSide> {
+) -> (Option<QuoteSide>, Option<Rect>) {
     let spread = format!("{:.precision$}", ask - bid);
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
@@ -797,7 +837,8 @@ fn paint_quotes(
         layout.colors.text,
     );
     let gap = (spread_galley.size().x + 12.0).max(36.0);
-    let quote = |side: QuoteSide, price: f64, color| {
+    let quote = |side: QuoteSide, price: f64| {
+        let color = Color32::WHITE;
         let price = layout
             .painter
             .layout_job(egui::text::LayoutJob::single_section(
@@ -816,8 +857,8 @@ fn paint_quotes(
         );
         (price, label)
     };
-    let sell = quote(QuoteSide::Sell, bid, layout.colors.bearish);
-    let buy = quote(QuoteSide::Buy, ask, theme.ui.accent);
+    let sell = quote(QuoteSide::Sell, bid);
+    let buy = quote(QuoteSide::Buy, ask);
     let width = 66.0_f32
         .max(sell.0.size().x + 12.0)
         .max(buy.0.size().x + 12.0);
@@ -828,7 +869,7 @@ fn paint_quotes(
         layout.painter,
         sell_rect,
         sell,
-        layout.colors.bearish,
+        theme.chart.candle_down,
         "Sell at bid",
         id.with("sell"),
     );
@@ -837,8 +878,46 @@ fn paint_quotes(
         Vec2::new(gap, 34.0),
     );
     layout.painter.rect_filled(spread_rect, 0.0, theme.chart.bg);
+    let quantity = quantity.map(|quantity| {
+        let text = layout.painter.layout_no_wrap(
+            compact_quantity(quantity),
+            FontId::proportional(typography::SM),
+            layout.colors.text,
+        );
+        let rect = Rect::from_center_size(
+            Pos2::new(spread_rect.center().x, spread_rect.bottom() - 9.0),
+            Vec2::new((text.size().x + 10.0).max(gap - 8.0), 18.0),
+        );
+        let response = ui
+            .interact(
+                rect.intersect(layout.painter.clip_rect()),
+                id.with("quantity"),
+                Sense::click(),
+            )
+            .on_hover_text("Order quantity");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Order quantity"));
+        let fill = if response.hovered() {
+            theme.ui.btn_bg_active
+        } else {
+            theme.ui.btn_bg_hover
+        };
+        layout.painter.rect_filled(rect, 3.0, fill);
+        layout
+            .painter
+            .galley(rect.center() - text.size() / 2.0, text, layout.colors.text);
+        (rect, response.clicked())
+    });
+    // With the quantity box under it, the spread sits at the top.
+    let spread_y = match quantity {
+        Some((rect, _)) => (spread_rect.top() + rect.top() - spread_galley.size().y) / 2.0,
+        None => spread_rect.center().y - spread_galley.size().y / 2.0,
+    };
     layout.painter.galley(
-        spread_rect.center() - spread_galley.size() / 2.0,
+        Pos2::new(
+            spread_rect.center().x - spread_galley.size().x / 2.0,
+            spread_y,
+        ),
         spread_galley,
         layout.colors.text,
     );
@@ -853,13 +932,44 @@ fn paint_quotes(
         "Buy at ask",
         id.with("buy"),
     );
-    if sell_response.clicked() {
+    layout.pos.x = buy_rect.right() + 8.0;
+    let dropdown = layout.reserve(Vec2::new(28.0, size.y));
+    layout.painter.rect(
+        dropdown,
+        4.0,
+        theme.chart.bg,
+        Stroke::new(1.0, theme.ui.border),
+        egui::StrokeKind::Inside,
+    );
+    let c = dropdown.center();
+    let points = [
+        c + egui::vec2(-4.0, -2.0),
+        c + egui::vec2(0.0, 1.5),
+        c + egui::vec2(4.0, -2.0),
+    ];
+    for pair in points.windows(2) {
+        layout
+            .painter
+            .line_segment([pair[0], pair[1]], Stroke::new(1.5, theme.ui.text));
+    }
+    for point in points {
+        layout.painter.circle_filled(point, 0.75, theme.ui.text);
+    }
+    let dropdown = ui
+        .interact(dropdown, id.with("ticket"), Sense::click())
+        .on_hover_text("Order ticket");
+    dropdown.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Order ticket"));
+    let action = if dropdown.clicked() {
+        Some(QuoteSide::Ticket)
+    } else if sell_response.clicked() {
         Some(QuoteSide::Sell)
     } else if buy_response.clicked() {
         Some(QuoteSide::Buy)
     } else {
         None
-    }
+    };
+    let clicked = quantity.and_then(|(rect, clicked)| clicked.then_some(rect));
+    (action, clicked)
 }
 
 fn quote_box(
@@ -876,14 +986,14 @@ fn quote_box(
     painter.rect(
         rect,
         5.0,
-        ui.active_theme().chart.bg,
+        color,
         Stroke::new(1.0, color),
         egui::StrokeKind::Inside,
     );
     painter.galley(
         Pos2::new(rect.center().x - price.size().x / 2.0, rect.top() + 2.0),
         price,
-        color,
+        Color32::WHITE,
     );
     painter.galley(
         Pos2::new(
@@ -891,7 +1001,7 @@ fn quote_box(
             rect.bottom() - label.size().y - 2.0,
         ),
         label,
-        color,
+        Color32::WHITE,
     );
     if response.has_focus() {
         painter.rect_stroke(
@@ -902,6 +1012,19 @@ fn quote_box(
         );
     }
     response
+}
+
+fn compact_quantity(quantity: f64) -> String {
+    for (divisor, suffix) in [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "K")] {
+        if quantity.abs() >= divisor {
+            let number = format!("{:.2}", quantity / divisor);
+            return format!(
+                "{}{suffix}",
+                number.trim_end_matches('0').trim_end_matches('.')
+            );
+        }
+    }
+    quantity.to_string()
 }
 
 fn format_volume(volume: f64) -> String {
@@ -924,19 +1047,22 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(200.0, 20.0));
-            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(60.0, 20.0));
+            let row = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(220.0, 20.0));
+            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(80.0, 20.0));
+            let settings = controls.min + Vec2::new(30.0, 10.0);
             let frame = |events| {
                 let mut clicked = [false; 3];
+                let mut menu = None;
                 let output = ctx.run_ui(
                     egui::RawInput {
                         events,
                         ..Default::default()
                     },
                     |ui| {
-                        clicked =
-                            study_controls(ui, row, controls, egui::Id::unique("study"), true)
-                                .map(|response| response.clicked());
+                        let (buttons, opened) =
+                            study_controls(ui, row, controls, egui::Id::unique("study"), true);
+                        clicked = buttons.map(|response| response.clicked());
+                        menu = opened;
                     },
                 );
                 let painted = output.shapes.iter().any(|s| match &s.shape {
@@ -951,7 +1077,7 @@ mod tests {
                     }
                 });
                 output.drop_without_applying_deltas();
-                (painted, clicked, focused_label)
+                (painted, clicked, focused_label, menu)
             };
             let touch = |pos, phase| Event::Touch {
                 device_id: egui::TouchDeviceId(0),
@@ -983,9 +1109,9 @@ mod tests {
                 ])
             };
             assert!(!frame(vec![Event::PointerGone]).0);
-            let first = tap(controls.center());
+            let first = tap(settings);
             assert_eq!(first.1, [false; 3], "the first tap only reveals controls");
-            let second = tap(controls.center());
+            let second = tap(settings);
             assert_eq!(
                 second.1,
                 [false, true, false],
@@ -999,12 +1125,25 @@ mod tests {
                 frame(vec![Event::PointerMoved(row.center())]).0,
                 "mouse hover reveals controls"
             );
+            // A secondary click on the row opens the menu at the pointer.
+            let pos = row.left_center() + Vec2::new(20.0, 0.0);
+            frame(vec![Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                let clicked = frame(vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+                assert_eq!(clicked.3, (!pressed).then_some(pos));
+            }
             assert!(!frame(vec![Event::PointerGone]).0);
             for (index, label) in [
                 "Study controls",
                 "Hide study",
                 "Study settings",
                 "Remove study",
+                "More actions",
             ]
             .into_iter()
             .enumerate()
@@ -1029,6 +1168,11 @@ mod tests {
                 assert_eq!(
                     activated.1,
                     std::array::from_fn(|button| index == button + 1)
+                );
+                // The menu opens below the more-actions button.
+                assert_eq!(
+                    activated.3,
+                    (index == 4).then(|| controls.min + Vec2::new(60.0, 20.0))
                 );
             }
 
@@ -1200,8 +1344,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(buttons.len(), 6);
-            for (index, side) in [(3, QuoteSide::Sell), (4, QuoteSide::Buy)] {
+            assert_eq!(buttons.len(), 8);
+            for (index, side) in [
+                (4, QuoteSide::Sell),
+                (5, QuoteSide::Buy),
+                (6, QuoteSide::Ticket),
+            ] {
                 let pos = buttons[index].center();
                 frame(1, vec![Event::PointerMoved(pos)]);
                 frame(
@@ -1233,9 +1381,10 @@ mod tests {
             };
             // Tab through both legends, then activate each control in the second one.
             for (index, side) in [
-                (3, Some(QuoteSide::Sell)),
-                (4, Some(QuoteSide::Buy)),
-                (5, None),
+                (4, Some(QuoteSide::Sell)),
+                (5, Some(QuoteSide::Buy)),
+                (6, Some(QuoteSide::Ticket)),
+                (7, None),
             ] {
                 let mut reached = false;
                 for _ in 0..24 {

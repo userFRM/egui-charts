@@ -244,6 +244,9 @@ impl TextButton {
             ui.visuals().text_color(),
         );
 
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &self.text)
+        });
         if let Some(tooltip) = self.tooltip {
             toolbar_tooltip(response, tooltip, None)
         } else {
@@ -349,6 +352,90 @@ impl<'a> TextIconButton<'a> {
 
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
         toolbar_tooltip(response, self.tooltip, None)
+    }
+}
+
+/// Neutral colour of the toolbar's group rules and pill outlines.
+pub(crate) fn rule_color(theme: &Theme) -> Color32 {
+    if theme.dark {
+        theme.ui.border.lerp_to_gamma(theme.ui.text, 0.18)
+    } else {
+        theme.ui.panel_bg.lerp_to_gamma(theme.ui.text, 0.085)
+    }
+}
+
+/// Labelled pill at the right end of the toolbar: outlined for Trade, filled in the text colour
+/// for a host call to action.
+pub(crate) struct PillButton<'a> {
+    pub label: &'a str,
+    pub tooltip: Option<&'a str>,
+    pub filled: bool,
+}
+
+impl PillButton<'_> {
+    pub(crate) fn width(&self, ui: &Ui) -> f32 {
+        let font_id = egui::FontId::proportional(ui.active_theme().text.title);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(self.label.to_owned(), font_id, Color32::PLACEHOLDER);
+        galley.size().x + 2.0 * DESIGN_TOKENS.spacing.xl
+    }
+
+    pub(crate) fn show(self, ui: &mut Ui) -> Response {
+        let theme = ui.active_theme();
+        let size = Vec2::new(self.width(ui), DESIGN_TOKENS.sizing.button_md);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let radius = rect.height() / 2.0;
+        crate::styles::focus::draw_focus_ring(ui, &response, radius);
+
+        if ui.is_rect_visible(rect) {
+            let pressed = response.is_pointer_button_down_on();
+            let hovered = response.hovered();
+            let widgets = &ui.visuals().widgets;
+            let (fill, text) = if self.filled {
+                // Inverse of the panel: dark on light themes, light on dark ones; hover eases
+                // the fill towards the panel.
+                let t = if pressed {
+                    0.3
+                } else if hovered {
+                    0.2
+                } else {
+                    0.0
+                };
+                (
+                    theme.ui.text.lerp_to_gamma(theme.ui.panel_bg, t),
+                    theme.ui.panel_bg,
+                )
+            } else if pressed {
+                (widgets.active.bg_fill, theme.ui.text)
+            } else if hovered {
+                (widgets.hovered.bg_fill, theme.ui.text)
+            } else {
+                (Color32::TRANSPARENT, theme.ui.text)
+            };
+            ui.painter().rect_filled(rect, radius, fill);
+            if !self.filled {
+                ui.painter().rect_stroke(
+                    rect,
+                    radius,
+                    egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, rule_color(&theme)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                self.label,
+                egui::FontId::proportional(theme.text.title),
+                text,
+            );
+        }
+
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.label));
+        match self.tooltip {
+            Some(tooltip) => toolbar_tooltip(response, tooltip, None),
+            None => response,
+        }
     }
 }
 

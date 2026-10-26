@@ -69,6 +69,12 @@ impl Default for OnBalanceVolume {
 }
 
 impl Indicator for OnBalanceVolume {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn value_format(&self) -> crate::studies::StudyFormat {
         crate::studies::StudyFormat::Volume
     }

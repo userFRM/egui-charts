@@ -2,14 +2,16 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply, Subscription,
-    SubscriptionId, SymbolDetails, aggregate_trades, resample,
+    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
+    HotlistEntry, HotlistQuery, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow,
+    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
     Tick, Timeframe, TradeSide,
 };
-use egui_charts::services::{Events, Quotes};
+use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
+use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -42,6 +44,7 @@ struct Simulation {
     continuous: bool,
     adjusted: bool,
     subscription: Option<Subscription>,
+    signals: Vec<Events<SignalEvent>>,
     /// The order book of the subscription, around the last price it was shown.
     market: Option<Market>,
 }
@@ -71,6 +74,7 @@ impl LiveFeed {
             continuous: true,
             adjusted: false,
             subscription: None,
+            signals: Vec::new(),
             market: None,
         };
         while sim.next_trade <= now {
@@ -103,6 +107,7 @@ impl LiveFeed {
             continuous: sim.continuous,
             adjusted: sim.adjusted,
             subscription: None,
+            signals: Vec::new(),
             market: None,
         }))
     }
@@ -399,7 +404,7 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
 
 /// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
 /// which stands for the previous close. `None` for symbols outside the catalog.
-fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
     let spec = catalog(symbol)?;
     let tick_size = if spec.start_price < 10.0 {
         0.0001
@@ -543,6 +548,11 @@ impl Simulation {
         )
         .with_id(self.id);
         self.id += 1;
+        self.signals.retain(Events::is_active);
+        for events in &self.signals {
+            events.push(SignalEvent::Upsert(live_signal(trade.ts, trade.price)));
+        }
+
         if let Some(sub) = &self.subscription
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
@@ -621,7 +631,79 @@ impl Simulation {
     }
 }
 
+fn live_signal(time: DateTime<Utc>, price: f64) -> Signal {
+    Signal {
+        id: SignalId("live".into()),
+        shape: SignalShape::Marker {
+            time,
+            price: Some(price),
+            direction: Direction::Neutral,
+        },
+        category: "Live analytics".into(),
+        label: Some("Host tick".into()),
+        tooltip: Some("Synthetic analytics updated by the demo host.".into()),
+    }
+}
+
+impl Signals for LiveFeed {
+    fn subscribe(&self, symbol: &str, timeframe: Timeframe, events: Events<SignalEvent>) {
+        if self.state().symbol != symbol {
+            return;
+        }
+        let bars = self.snapshot(timeframe, BarClock::new(timeframe), false);
+        if let Some(last) = bars.last() {
+            events.push(SignalEvent::Upsert(live_signal(last.time, last.close)));
+            let first = &bars[bars.len().saturating_sub(20)];
+            events.push(SignalEvent::Upsert(Signal {
+                id: SignalId("zone".into()),
+                shape: SignalShape::Zone {
+                    from: first.time,
+                    to: Some(last.time),
+                    low: first.low,
+                    high: first.high,
+                },
+                category: "Zones".into(),
+                label: Some("Host zone".into()),
+                tooltip: Some("A price zone supplied by the demo host.".into()),
+            }));
+            events.push(SignalEvent::Upsert(Signal {
+                id: SignalId("level".into()),
+                shape: SignalShape::Level {
+                    price: first.high,
+                    from: Some(first.time),
+                },
+                category: "Levels".into(),
+                label: Some("Host level".into()),
+                tooltip: Some("A level supplied by the demo host.".into()),
+            }));
+        }
+        self.state().signals.push(events);
+    }
+
+    fn clicked(&self, id: &SignalId) {
+        log::info!("Selected host signal: {}", id.0);
+    }
+}
+
 impl Datafeed for LiveFeed {
+    fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::services::PriceTargets>) {
+        if symbol != "SAMPLE" {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        }
+        let sim = self.state();
+        let close = sim.price_ticks as f64 * sim.tick_size;
+        let published = sim.now.date_naive();
+        reply.send(Ok(egui_charts::services::PriceTargets {
+            high: close * 1.20,
+            average: close * 1.08,
+            low: close * 0.85,
+            analysts: 24,
+            published,
+            horizon: published + TimeDelta::days(365),
+        }));
+    }
+
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         self.set_symbol(symbol);
         reply.send(Ok(self.instrument()));
@@ -688,6 +770,26 @@ impl Datafeed for LiveFeed {
             let (sequence, book) = market.snapshot(sim.now);
             sub.sink.push_depth_snapshot(sequence, book);
         }
+    }
+
+    /// The catalog symbols ranked on their synthetic quotes.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        reply.send(Ok(super::feeds::hotlist(&query, Utc::now())));
+    }
+
+    /// The catalog symbols screened on their synthetic quotes.
+    fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        reply.send(super::feeds::screen(&query, Utc::now()));
+    }
+
+    /// Synthetic releases, earnings, dividends and offerings.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+        reply.send(Ok(super::feeds::calendar(&query, Utc::now())));
+    }
+
+    /// Synthetic stories about the catalog symbols.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        reply.send(Ok(super::feeds::news(&query, Utc::now())));
     }
 
     /// Synthetic statistics and profile derived from the catalog entry of `symbol`.
@@ -766,6 +868,36 @@ mod tests {
             variance.sqrt() / mean > 0.3,
             "arrivals must vary, not only trade sizes"
         );
+    }
+
+    #[test]
+    fn a_subscription_before_the_session_gets_depth_when_trading_starts() {
+        let now = "2026-10-23T14:29:59Z".parse().unwrap();
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        feed.set_view(SessionType::RTH, false);
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("SAMPLE")
+            .with_initial_bars(100)
+            .build();
+        chart.set_extended_hours(false);
+        let ctx = egui::Context::default();
+        let frame = |chart: &mut egui_charts::Chart| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..4 {
+            frame(&mut chart);
+        }
+        assert!(chart.order_book(SeriesId::MAIN).is_none());
+        feed.advance(now + TimeDelta::seconds(3));
+        frame(&mut chart);
+        let book = chart
+            .order_book(SeriesId::MAIN)
+            .expect("the opening trade starts depth");
+        assert!(book.best_bid().is_some() && book.best_ask().is_some());
     }
 
     /// Archiving executions must preserve their price path, volume and the bucket crossing

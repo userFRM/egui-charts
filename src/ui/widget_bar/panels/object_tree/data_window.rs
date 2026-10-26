@@ -15,7 +15,8 @@ use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
 
 impl DataWindowInfo {
-    /// Populates the readout from the hovered rendered bar, falling back to the latest bar.
+    /// Populates the readout from the hovered rendered bar, falling back to the latest bar with a
+    /// value.
     /// Uses the chart's time formatter, instrument precision and visible study plots.
     /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
     pub fn from_chart(chart: &crate::widget::Chart) -> Self {
@@ -25,7 +26,11 @@ impl DataWindowInfo {
             .filter(|index| index.is_finite() && index.round() >= 0.0)
             .map(|index| index.round() as usize)
             .filter(|index| *index < bars.len())
-            .unwrap_or_else(|| bars.len().saturating_sub(1));
+            .unwrap_or_else(|| {
+                bars.iter()
+                    .rposition(|bar| !bar.is_whitespace())
+                    .unwrap_or(bars.len().saturating_sub(1))
+            });
         let mut info = Self::new(chart.symbol())
             .with_timeframe(chart.timeframe().map(|tf| tf.as_str()).unwrap_or_default());
         if let Some(instrument) = chart.instrument() {
@@ -36,10 +41,7 @@ impl DataWindowInfo {
                 .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
                 .with_timestamp(chart.format_time(bar.time))
                 .with_prev_close(
-                    index
-                        .checked_sub(1)
-                        .and_then(|index| bars.get(index))
-                        .map_or(bar.open, |bar| bar.close),
+                    crate::model::last_with_value(&bars[..index]).map_or(bar.open, |bar| bar.close),
                 );
             info.studies = chart.study_values_at(index);
         }

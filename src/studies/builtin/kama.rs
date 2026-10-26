@@ -101,6 +101,12 @@ impl Default for KAMA {
 }
 
 impl Indicator for KAMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         fast_period: length("Fast period", 1, usize::MAX),
@@ -211,6 +217,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
