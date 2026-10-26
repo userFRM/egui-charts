@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use egui::{Modifiers, PointerButton, Pos2, Ui};
 
 /// A chart cursor position with the data a host legend, tooltip or context action reads.
-#[derive(Debug, Clone, PartialEq)]
+/// Identical whitespace slots compare equal, including their colours and host payloads.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
@@ -44,6 +45,41 @@ pub struct ChartPointer {
     pub modifiers: Modifiers,
     /// Device that produced the event.
     pub kind: PointerKind,
+}
+
+impl PartialEq for ChartPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time
+            && self.price == other.price
+            && self.series == other.series
+            && self.index == other.index
+            && self.pos == other.pos
+            && self.pane == other.pane
+            && self.previous_close == other.previous_close
+            && self.studies == other.studies
+            && self.target == other.target
+            && self.modifiers == other.modifiers
+            && self.kind == other.kind
+            && match (&self.bar, &other.bar) {
+                (Some(left), Some(right)) => same_bar(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.series_bars.len() == other.series_bars.len()
+            && self.series_bars.iter().zip(&other.series_bars).all(
+                |((left_id, left), (right_id, right))| left_id == right_id && same_bar(left, right),
+            )
+    }
+}
+
+fn same_bar(left: &Bar, right: &Bar) -> bool {
+    // Empty slots contain NaNs, but do not change while the pointer stays still.
+    left == right
+        || (left.is_whitespace()
+            && right.is_whitespace()
+            && left.time == right.time
+            && left.colors == right.colors
+            && left.payload == right.payload)
 }
 
 /// The object under the pointer of a [`ChartPointer`].
@@ -754,6 +790,36 @@ mod tests {
             )));
         }
         chart.set_pointer_kind(None);
+        let mut empty = bars.clone();
+        empty[70] = Bar::whitespace(bars[70].time);
+        empty[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": "empty" })));
+        chart.set_data(SeriesId::MAIN, empty.clone());
+        chart.set_data(series, empty.clone());
+        frame(&ctx, &mut chart, 3.76, vec![Event::PointerMoved(pos)]);
+        let pointer = chart
+            .drain_events()
+            .find_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                _ => None,
+            })
+            .unwrap();
+        assert!(pointer.bar.as_ref().unwrap().is_whitespace());
+        assert!(pointer.series_bars[0].1.is_whitespace());
+        assert_eq!(pointer.series_bars[0].1.payload, empty[70].payload);
+        assert_eq!(pointer, pointer.clone());
+        frame(&ctx, &mut chart, 3.77, vec![]);
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+        );
+        empty[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": "changed" })));
+        chart.set_data(series, empty);
+        frame(&ctx, &mut chart, 3.78, vec![]);
+        assert!(chart.drain_events().any(|event| matches!(event,
+            ChartEvent::CrosshairMoved(Some(updated)) if updated != pointer
+        )));
+        chart.set_data(SeriesId::MAIN, bars.clone());
         chart.remove_series(series);
         #[cfg(feature = "drawings")]
         chart.drawings_mut().drawings.clear();
