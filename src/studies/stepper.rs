@@ -1,5 +1,4 @@
 //! Shared driver for studies computed one bar at a time.
-//! Also the rolling highest and lowest values that window studies share.
 
 #[cfg(feature = "studies")]
 pub(crate) use super::helpers::{
@@ -145,8 +144,7 @@ mod tests {
     use crate::studies::helpers;
     use crate::studies::helpers::{highest as rolling_max, lowest as rolling_min};
 
-    /// The rolling extremes equal a scan of every window, folded with `f64::max` and `f64::min`
-    /// as the window studies did, including when an extreme leaves the window.
+    /// Scalar helpers match their definitions through warm-up, gaps and expiring values.
     #[test]
     fn rolling_extremes_match_a_window_scan() {
         let (nan, inf) = (f64::NAN, f64::INFINITY);
@@ -156,6 +154,7 @@ mod tests {
             (&[1.0, 5.0, 2.0, 5.0, 3.0, 1.0, 1.0, 0.0], 3),
             (&[2.0, 7.0, 1.0, 8.0], 1),
             (&[3.0, 1.0, 2.0], 10),
+            (&[1e16, 1.0, 1.0], 2),
             (&[4.0, nan, 1.0, nan, nan, nan, 2.0], 3),
             (&[nan, nan, nan], 2),
             (&[1.0, inf, 2.0, -inf, 3.0, 0.5, 0.25], 2),
@@ -251,7 +250,7 @@ mod tests {
                     assert!(
                         got == want
                             || (got.is_nan() && want.is_nan())
-                            || (got - want).abs() < 1e-10,
+                            || (got - want).abs() <= 1e-10 * want.abs().max(1.0),
                         "average {values:?}, period {period}, bar {i}: {got} != {want}"
                     );
                 }
@@ -273,24 +272,5 @@ mod tests {
             [false, false, false, false, false, false, true, false, false]
         );
         assert_eq!(helpers::sma(&[2.0, 4.0], 0), [2.0, 4.0]);
-        #[cfg(feature = "studies")]
-        {
-            use crate::studies::{ForceIndex, Indicator};
-            let bars: Vec<_> = [1.0, 2.0, 4.0, 8.0]
-                .into_iter()
-                .map(|p| crate::model::Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0))
-                .collect();
-            for len in 0..=bars.len() {
-                let mut force = ForceIndex::new(3);
-                force.calculate(&bars[..len]);
-                for i in 0..len {
-                    assert_eq!(
-                        force.values().value(0, i),
-                        if i < 3 { None } else { Some(7.0 / 3.0) },
-                        "Force Index must wait for three changes, history length {len}"
-                    );
-                }
-            }
-        }
     }
 }

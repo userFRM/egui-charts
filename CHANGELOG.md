@@ -279,6 +279,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Scalar rolling sums recover small values after a much larger value leaves the window. ([#545](https://github.com/userFRM/egui-charts/issues/545))
+
 - Force Index waits for a complete seed of price changes, including when the whole history is shorter than its period. It shares the SMA-seeded scalar EMA with the other studies. Envelopes, Guppy averages and the percentage oscillators also use the public scalar helpers while retaining their reference values. ([#545](https://github.com/userFRM/egui-charts/issues/545))
 
 - Waiting for a higher study interval to close treats the latest chart bar as forming. Its scheduled end no longer confirms a source bar early; historical chart bars retain their close-time alignment. ([#175](https://github.com/userFRM/egui-charts/issues/175))

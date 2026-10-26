@@ -16,29 +16,7 @@ pub fn sma(values: &[f64], period: usize) -> Vec<f64> {
 
 /// Sum of each complete trailing window, recovering after missing inputs leave it.
 pub fn sum(values: &[f64], period: usize) -> Vec<f64> {
-    let period = period.max(1);
-    let (mut sum, mut count) = (0.0, 0usize);
-    values
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| {
-            if v.is_finite() {
-                sum += v;
-                count += 1;
-            }
-            if i >= period && values[i - period].is_finite() {
-                sum -= values[i - period];
-                count -= 1;
-            }
-            if !sum.is_finite() {
-                sum = values[(i + 1).saturating_sub(period)..=i]
-                    .iter()
-                    .filter(|v| v.is_finite())
-                    .sum();
-            }
-            if count == period { sum } else { f64::NAN }
-        })
-        .collect()
+    windows(values, period.max(1), |window| window.iter().sum())
 }
 
 /// Exponential average with alpha `2 / (period + 1)`, seeded by the first finite value.

@@ -31,7 +31,6 @@ impl ForceIndex {
         self
     }
 
-    /// Calculate EMA
     /// The values over `data`, every bar of which has a finite close and volume.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
