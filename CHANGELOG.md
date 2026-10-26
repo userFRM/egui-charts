@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Notifications default to the bottom-left corner with a 16-point inset, keeping stacked trade notices clear of the order ticket. Hosts can still select any corner with `NotificationPanel::position`. ([#1009](https://github.com/userFRM/egui-charts/issues/1009))
+
 - Held values show six base rows: time, open, high, low, close and total volume. Change remains in hover readouts; optional study rows can supply additional volume details without inferring a split from OHLC bars. ([#1008](https://github.com/userFRM/egui-charts/issues/1008))
 
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
