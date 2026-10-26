@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `SettingsStore::flush` retries unchanged settings after a failed save. Stored settings advance only after acknowledgement of the exact saved document, independently of pending edits; returning to the stored value while another write is pending still saves the latest choice. Repeated failures remain reported once until a write succeeds. ([#907](https://github.com/userFRM/egui-charts/issues/907))
+
 - The trading account panel retains the most recent 1,000 finished orders, executions, balance changes and journal entries per category in arrival order. Active orders and their cumulative fill quantities survive history eviction; finished-order metadata is released when its history and fills expire. The ticket caches the latest fill for up to 1,000 symbols separately from execution history. Older account history remains host-owned. ([#902](https://github.com/userFRM/egui-charts/issues/902))
 
 - `PaperAccount` checks placement and modification against account-wide equity, position margin, other working-order reservations and commissions. Replacing an order releases its old reservation before checking the new request; a refused modification leaves it intact. Working orders are checked again at the actual price before filling after a gap, and market reductions and position exits remain available when funds are insufficient. Available funds reserve working-order commissions. ([#905](https://github.com/userFRM/egui-charts/issues/905))

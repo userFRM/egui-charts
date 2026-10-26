@@ -134,6 +134,7 @@ impl Chart {
                         }
                     }
                     Received::Failed(error) => store.error = Some(error),
+                    Received::Saved(_) => {}
                 }
             }
         }
