@@ -5,8 +5,7 @@
 //! equity curve. The library computes every metric itself with [`StrategyReport::performance`], with
 //! one definition each, so reports from different sources compare.
 
-use super::Timeframe;
-use crate::model::OrderSide;
+use super::{Bar, OrderSide, Timeframe};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -178,6 +177,15 @@ pub struct StrategyPerformance {
     pub win_rate: Option<f64>,
     /// `net_profit / closed_trades`. `None` without closed trades.
     pub average_trade: Option<f64>,
+    /// Largest positive net profit, or `None` without a winning trade.
+    pub largest_winning_trade: Option<f64>,
+    /// Most negative net profit, or `None` without a losing trade.
+    pub largest_losing_trade: Option<f64>,
+    /// Longest winning run in exit-time order; ties keep input order. Breakeven trades break runs;
+    /// open and invalid trades do not participate.
+    pub max_consecutive_wins: usize,
+    /// Longest losing run, with the same ordering and breaks as `max_consecutive_wins`.
+    pub max_consecutive_losses: usize,
     /// The largest fall of equity from its highest earlier point, in money, over the curve from its
     /// first point. `None` without a usable equity point.
     pub max_drawdown: Option<f64>,
@@ -216,6 +224,40 @@ pub struct StrategyPerformance {
     pub skipped_equity_points: usize,
 }
 
+/// Source-bar comparison of a run, from [`StrategyReport::comparison`].
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct StrategyComparison {
+    /// Fee-free fractional return: last close / first open - 1. Requires a positive first open.
+    pub buy_and_hold_return: Option<f64>,
+    /// Initial capital invested at the first open, marked at each bar close. Times are the source
+    /// bar timestamps, as in a chart. Empty without positive finite capital or a defined return.
+    pub buy_and_hold_equity: Vec<(DateTime<Utc>, f64)>,
+    /// One result per input trade, in input order. `None` for an invalid trade, absent source bars,
+    /// or an invalid bar during the trade. See [`StrategyExcursion`] for the bar-resolution limits.
+    pub excursions: Vec<Option<StrategyExcursion>>,
+    /// Invalid OHLC bars, or all bars when timestamps are not strictly increasing.
+    pub skipped_bars: usize,
+}
+
+/// Largest unrealised loss and gain relative to a trade's entry, before fees.
+///
+/// Both are nonnegative price movements times quantity, for a linear contract with unit point
+/// value. They need conversion for other contracts or currencies. Entry and exit fills participate.
+/// Source highs and lows participate from the bar containing entry through bars opening strictly
+/// before exit; open trades use all remaining bars. At intrabar fills these are whole-bar estimates:
+/// OHLC cannot distinguish movement before entry or after exit. Time bars end after their interval
+/// (calendar months for monthly bars); execution bars end at the next source open, with the final
+/// bar assumed to cover the run's remaining fills. Use fills at bar boundaries for exact spans.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StrategyExcursion {
+    /// Maximum adverse excursion, as a positive loss magnitude.
+    pub adverse: f64,
+    /// Maximum favourable excursion, as a positive gain magnitude.
+    pub favourable: f64,
+}
+
 impl StrategyReport {
     /// A report with no trades, no equity, no properties, no currency and a risk-free rate of 0.
     pub fn new(
@@ -237,8 +279,8 @@ impl StrategyReport {
         }
     }
 
-    /// Computes the metrics of the run. Linear in the number of trades and equity points: call it
-    /// once per report, not once per frame.
+    /// Computes the metrics of the run. Sorts closed trades for streaks; call once per report,
+    /// not once per frame.
     pub fn performance(&self) -> StrategyPerformance {
         let finite = |x: f64| Some(x).filter(|x| x.is_finite());
         let mut p = StrategyPerformance::default();
@@ -257,10 +299,28 @@ impl StrategyReport {
             if exit.profit > 0.0 {
                 p.winning_trades += 1;
                 p.gross_profit += exit.profit;
+                p.largest_winning_trade =
+                    Some(p.largest_winning_trade.unwrap_or(0.0).max(exit.profit));
             } else if exit.profit < 0.0 {
                 p.losing_trades += 1;
                 p.gross_loss -= exit.profit;
+                p.largest_losing_trade =
+                    Some(p.largest_losing_trade.unwrap_or(0.0).min(exit.profit));
             }
+        }
+        let mut exits: Vec<_> = self
+            .trades
+            .iter()
+            .filter(|t| t.is_valid())
+            .filter_map(|t| t.exit.as_ref())
+            .collect();
+        exits.sort_by_key(|e| e.time);
+        let (mut wins, mut losses) = (0, 0);
+        for exit in exits {
+            wins = if exit.profit > 0.0 { wins + 1 } else { 0 };
+            losses = if exit.profit < 0.0 { losses + 1 } else { 0 };
+            p.max_consecutive_wins = p.max_consecutive_wins.max(wins);
+            p.max_consecutive_losses = p.max_consecutive_losses.max(losses);
         }
         let closed = p.closed_trades as f64;
         let capital = self.initial_capital;
@@ -271,17 +331,8 @@ impl StrategyReport {
         p.win_rate = finite(p.winning_trades as f64 / closed);
         p.average_trade = finite(p.net_profit / closed);
 
-        let mut curve: Vec<(DateTime<Utc>, f64)> = self
-            .equity
-            .iter()
-            .copied()
-            .filter(|(_, e)| e.is_finite())
-            .collect();
+        let curve = self.equity_curve();
         p.skipped_equity_points = self.equity.len() - curve.len();
-        if curve.windows(2).any(|w| w[1].0 <= w[0].0) {
-            p.skipped_equity_points = self.equity.len();
-            curve.clear();
-        }
         let (Some(&(start, first)), Some(&(end, _))) = (curve.first(), curve.last()) else {
             return p;
         };
@@ -326,6 +377,113 @@ impl StrategyReport {
             p.sortino_ratio = finite(excess / downside);
         }
         p
+    }
+
+    /// Finite equity points in strictly increasing time order, using the same validation as
+    /// [`Self::performance`]. Empty if the finite points are out of order.
+    pub fn equity_curve(&self) -> Vec<(DateTime<Utc>, f64)> {
+        let curve: Vec<_> = self
+            .equity
+            .iter()
+            .copied()
+            .filter(|(_, e)| e.is_finite())
+            .collect();
+        if curve.windows(2).any(|w| w[1].0 <= w[0].0) {
+            Vec::new()
+        } else {
+            curve
+        }
+    }
+
+    /// Computes buy-and-hold and excursions from the complete source bars of this run's symbol and
+    /// interval, oldest first. The host supplies exactly the run's bars, including every held bar;
+    /// this method neither fetches data nor infers missing sessions. Bar times denote opens.
+    ///
+    /// Non-finite or inverted OHLC bars are skipped and counted. Unordered or duplicate timestamps
+    /// make the whole source unusable. Volume is unused. Buy-and-hold uses the first valid open and
+    /// last valid close, with fractional units, no fees or reinvested dividends. A non-finite
+    /// calculation is unavailable. Excursions require at least one held source bar; invalid held
+    /// bars make that trade's excursion unavailable rather than understating risk.
+    pub fn comparison(&self, bars: &[Bar]) -> StrategyComparison {
+        let mut result = StrategyComparison {
+            excursions: vec![None; self.trades.len()],
+            ..Default::default()
+        };
+        if bars.windows(2).any(|w| w[1].time <= w[0].time) {
+            result.skipped_bars = bars.len();
+            return result;
+        }
+        let valid = |b: &Bar| {
+            [b.open, b.high, b.low, b.close]
+                .iter()
+                .all(|p| p.is_finite())
+                && b.low <= b.open.min(b.close)
+                && b.high >= b.open.max(b.close)
+        };
+        let source: Vec<_> = bars.iter().filter(|b| valid(b)).collect();
+        result.skipped_bars = bars.len() - source.len();
+        if let (Some(first), Some(last)) = (source.first(), source.last()) {
+            let fraction = last.close / first.open - 1.0;
+            if first.open > 0.0 && fraction.is_finite() {
+                result.buy_and_hold_return = Some(fraction);
+                if self.initial_capital.is_finite() && self.initial_capital > 0.0 {
+                    result.buy_and_hold_equity = source
+                        .iter()
+                        .map(|b| (b.time, self.initial_capital * (b.close / first.open)))
+                        .collect();
+                    if result
+                        .buy_and_hold_equity
+                        .iter()
+                        .any(|(_, e)| !e.is_finite())
+                    {
+                        result.buy_and_hold_equity.clear();
+                    }
+                }
+            }
+        }
+        for (i, trade) in self.trades.iter().enumerate().filter(|(_, t)| t.is_valid()) {
+            let mut start = bars.partition_point(|b| b.time < trade.entry_time);
+            if let Some(previous) = start.checked_sub(1).and_then(|i| bars.get(i)) {
+                let close = match self.timeframe {
+                    Timeframe::Month1 => previous.time.checked_add_months(chrono::Months::new(1)),
+                    tf if tf.is_trade_based() => bars.get(start).map(|b| b.time),
+                    tf => previous.time.checked_add_signed(tf.duration()),
+                };
+                if close.is_none_or(|close| trade.entry_time < close) {
+                    start -= 1;
+                }
+            }
+            let end = trade
+                .exit
+                .as_ref()
+                .map_or(bars.len(), |e| bars.partition_point(|b| b.time < e.time));
+            let held = &bars[start..end];
+            if held.is_empty() || held.iter().any(|b| !valid(b)) {
+                continue;
+            }
+            let mut low = trade.entry_price;
+            let mut high = trade.entry_price;
+            for bar in held {
+                low = low.min(bar.low);
+                high = high.max(bar.high);
+            }
+            if let Some(exit) = &trade.exit {
+                low = low.min(exit.price);
+                high = high.max(exit.price);
+            }
+            let (adverse, favourable) = match trade.side {
+                OrderSide::Buy => (trade.entry_price - low, high - trade.entry_price),
+                OrderSide::Sell => (high - trade.entry_price, trade.entry_price - low),
+            };
+            let (adverse, favourable) = (adverse * trade.quantity, favourable * trade.quantity);
+            if adverse.is_finite() && favourable.is_finite() {
+                result.excursions[i] = Some(StrategyExcursion {
+                    adverse,
+                    favourable,
+                });
+            }
+        }
+        result
     }
 
     /// The valid trades as CSV, sorted by entry time (trades entered at the same time keep their
@@ -404,7 +562,8 @@ impl StrategyTrade {
         }
     }
 
-    fn is_valid(&self) -> bool {
+    /// Whether this trade meets the validity rules documented on [`StrategyTrade`].
+    pub fn is_valid(&self) -> bool {
         self.quantity.is_finite()
             && self.quantity > 0.0
             && self.entry_price.is_finite()
@@ -496,6 +655,10 @@ mod tests {
             profit_factor: Some(2.390625),
             win_rate: Some(0.4),
             average_trade: Some(8.9),
+            largest_winning_trade: Some(48.0),
+            largest_losing_trade: Some(-21.0),
+            max_consecutive_wins: 1,
+            max_consecutive_losses: 1,
             max_drawdown: Some(90.0),
             max_drawdown_fraction: Some(0.008928571428571428),
             ..Default::default()
@@ -528,6 +691,8 @@ mod tests {
                 p.losing_trades,
                 p.skipped_trades,
                 p.skipped_equity_points,
+                p.max_consecutive_wins,
+                p.max_consecutive_losses,
             ]
         };
         let sums =
@@ -543,6 +708,8 @@ mod tests {
                 p.sharpe_ratio,
                 p.sortino_ratio,
                 p.periods_per_year,
+                p.largest_winning_trade,
+                p.largest_losing_trade,
             ]
         };
         let same = counts(actual) == counts(expected)
@@ -616,12 +783,57 @@ mod tests {
         trade.exit.as_mut().unwrap().price = f64::NAN;
         non_finite.trades.push(trade);
 
+        // In exit order: ++---0++0+. Sum 8, winners 18, losses 10; runs 2 and 3.
+        // The input order differs, and open/invalid trades do not interrupt a run.
+        let mut streaks = report(10_000.0);
+        let chronological: Vec<_> = [5.0, 3.0, -1.0, -7.0, -2.0, 0.0, 4.0, 4.0, 0.0, 2.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let mut t = closed(p, 0.0);
+                t.exit.as_mut().unwrap().time += TimeDelta::hours(i as i64);
+                t
+            })
+            .collect();
+        streaks.trades = [9, 1, 6, 3, 8, 0, 5, 2, 7, 4]
+            .map(|i| chronological[i].clone())
+            .to_vec();
+        streaks
+            .trades
+            .push(StrategyTrade::new(OrderSide::Buy, 1.0, t0(), 100.0));
+        let mut invalid_streak = closed(99.0, 0.0);
+        invalid_streak.quantity = 0.0;
+        streaks.trades.push(invalid_streak);
+
         let no_curve = StrategyPerformance {
             max_drawdown: None,
             max_drawdown_fraction: None,
             ..expected_a()
         };
         let rows = [
+            (
+                "streaks ordered by exit, with breakevens, open and invalid trades",
+                streaks,
+                StrategyPerformance {
+                    closed_trades: 10,
+                    open_trades: 1,
+                    winning_trades: 5,
+                    losing_trades: 3,
+                    net_profit: 8.0,
+                    net_profit_fraction: Some(0.0008),
+                    gross_profit: 18.0,
+                    gross_loss: 10.0,
+                    profit_factor: Some(1.8),
+                    win_rate: Some(0.5),
+                    average_trade: Some(0.8),
+                    largest_winning_trade: Some(5.0),
+                    largest_losing_trade: Some(-7.0),
+                    max_consecutive_wins: 2,
+                    max_consecutive_losses: 3,
+                    skipped_trades: 1,
+                    ..Default::default()
+                },
+            ),
             ("A", fixture_a(), expected_a()),
             (
                 "A with invalid trades and an infinite equity value",
@@ -717,6 +929,8 @@ mod tests {
                     gross_profit: 5.0,
                     win_rate: Some(1.0),
                     average_trade: Some(5.0),
+                    largest_winning_trade: Some(5.0),
+                    max_consecutive_wins: 1,
                     ..Default::default()
                 },
             ),
@@ -758,6 +972,175 @@ mod tests {
                 &format!("{case}, saved and loaded"),
                 &loaded.performance(),
                 &expected,
+            );
+        }
+    }
+
+    #[test]
+    fn comparison_matches_source_bar_reference() {
+        // Investing 1,000 at 100 buys 10 units: closes 110, 90, 120 give 1,100, 900, 1,200.
+        let bars = [
+            (100.0, 115.0, 95.0, 110.0),
+            (110.0, 112.0, 85.0, 90.0),
+            (90.0, 125.0, 88.0, 120.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            super::super::Bar::new(t0() + TimeDelta::hours(i as i64), o, h, l, c, 1.0)
+        })
+        .collect::<Vec<_>>();
+        let mut r = report(1_000.0);
+        let mut long = StrategyTrade::new(OrderSide::Buy, 2.0, t0(), 100.0);
+        long.exit = Some(StrategyExit::new(t0() + TimeDelta::hours(2), 90.0, -20.0));
+        let mut short = long.clone();
+        short.side = OrderSide::Sell;
+        short.entry_price = 110.0;
+        short.quantity = 3.0;
+        let open = StrategyTrade::new(OrderSide::Buy, 1.0, t0() + TimeDelta::hours(2), 90.0);
+        let mut invalid = long.clone();
+        invalid.quantity = 0.0;
+        r.trades = vec![long, short, open, invalid];
+        let mut sessions = bars.clone();
+        sessions[2].time += TimeDelta::days(3);
+        for (case, source, skipped, expected_return, expected_excursions) in [
+            (
+                "complete",
+                bars.clone(),
+                0,
+                Some(0.2),
+                vec![
+                    Some((30.0, 30.0)),
+                    Some((15.0, 75.0)),
+                    Some((2.0, 35.0)),
+                    None,
+                ],
+            ),
+            (
+                "session gap does not change price-based results",
+                sessions,
+                0,
+                Some(0.2),
+                vec![
+                    Some((30.0, 30.0)),
+                    Some((15.0, 75.0)),
+                    Some((2.0, 35.0)),
+                    None,
+                ],
+            ),
+            ("empty", vec![], 0, None, vec![None; 4]),
+            (
+                "unordered",
+                vec![bars[1].clone(), bars[0].clone()],
+                2,
+                None,
+                vec![None; 4],
+            ),
+            (
+                "duplicate",
+                vec![bars[0].clone(), bars[0].clone()],
+                2,
+                None,
+                vec![None; 4],
+            ),
+        ] {
+            let c = r.comparison(&source);
+            assert_eq!(c.skipped_bars, skipped, "{case}");
+            assert!(
+                match (c.buy_and_hold_return, expected_return) {
+                    (Some(a), Some(b)) => (a - b).abs() < 1e-12,
+                    (a, b) => a == b,
+                },
+                "{case}"
+            );
+            assert_eq!(
+                c.excursions
+                    .iter()
+                    .map(|e| e.as_ref().map(|e| (e.adverse, e.favourable)))
+                    .collect::<Vec<_>>(),
+                expected_excursions,
+                "{case}"
+            );
+            if expected_return.is_some() {
+                assert_eq!(
+                    c.buy_and_hold_equity
+                        .iter()
+                        .map(|p| p.1)
+                        .collect::<Vec<_>>(),
+                    [1100.0, 900.0, 1200.0]
+                );
+            } else {
+                assert!(c.buy_and_hold_equity.is_empty());
+            }
+        }
+        let mut invalid_bars = bars.clone();
+        invalid_bars[1].high = f64::NAN;
+        let c = r.comparison(&invalid_bars);
+        assert_eq!(c.skipped_bars, 1);
+        assert_eq!(c.excursions[0], None); // A missing held bar must not understate risk.
+        for capital in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            r.initial_capital = capital;
+            assert!(r.comparison(&bars).buy_and_hold_equity.is_empty());
+        }
+        let mut zero = bars.clone();
+        zero[0].open = 0.0;
+        zero[0].low = 0.0;
+        assert_eq!(r.comparison(&zero).buy_and_hold_return, None);
+
+        // For two units entered at 100, the first bar's [95, 115] gives MAE/MFE 10/30.
+        // The second bar adds a low of 85, giving 30/30. A fill at its open excludes its range.
+        for (case, entry_minutes, exit_minutes, expected) in [
+            ("intrabar round trip", 30, 45, Some((10.0, 30.0))),
+            ("intrabar entry across bars", 30, 120, Some((30.0, 30.0))),
+            ("exit at the next open", 30, 60, Some((10.0, 30.0))),
+            ("entry at the next open", 60, 120, Some((30.0, 24.0))),
+            ("entry after the source ends", 240, 300, None),
+        ] {
+            let mut r = report(1_000.0);
+            let mut t = StrategyTrade::new(
+                OrderSide::Buy,
+                2.0,
+                t0() + TimeDelta::minutes(entry_minutes),
+                100.0,
+            );
+            t.exit = Some(StrategyExit::new(
+                t0() + TimeDelta::minutes(exit_minutes),
+                100.0,
+                0.0,
+            ));
+            r.trades.push(t);
+            assert_eq!(
+                r.comparison(&bars).excursions[0]
+                    .as_ref()
+                    .map(|e| (e.adverse, e.favourable)),
+                expected,
+                "{case}"
+            );
+        }
+        for (timeframe, entry) in [
+            (Timeframe::Ms500, TimeDelta::milliseconds(250)),
+            (Timeframe::Month1, TimeDelta::days(30)),
+            (
+                Timeframe::Ticks(std::num::NonZeroU64::new(10).unwrap()),
+                TimeDelta::minutes(30),
+            ),
+        ] {
+            let mut r = report(1_000.0);
+            r.timeframe = timeframe;
+            let mut t = StrategyTrade::new(OrderSide::Buy, 2.0, t0() + entry, 100.0);
+            t.exit = Some(StrategyExit::new(
+                t0() + entry + TimeDelta::milliseconds(1),
+                100.0,
+                0.0,
+            ));
+            r.trades.push(t);
+            assert_eq!(
+                r.comparison(&bars[..1]).excursions[0],
+                Some(StrategyExcursion {
+                    adverse: 10.0,
+                    favourable: 30.0,
+                }),
+                "{timeframe} entry bar"
             );
         }
     }

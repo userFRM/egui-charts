@@ -206,7 +206,7 @@ impl Chart {
         let time_scale = self.state.time_scale();
         let coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
-            time_scale.right_offset(),
+            time_scale.right_offset_precise(),
             self.state.shown().len().saturating_sub(1),
             start_idx,
         );

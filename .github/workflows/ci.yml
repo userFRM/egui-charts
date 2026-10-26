@@ -5,7 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
+
+# A newer push to a pull request supersedes its running checks; every main commit keeps its run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,6 +19,7 @@ env:
 
 jobs:
   semver:
+    if: github.event.pull_request.draft != true
     name: Public API compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -31,6 +38,7 @@ jobs:
           baseline-version: ${{ steps.baseline.outputs.version }}
 
   check:
+    if: github.event.pull_request.draft != true
     name: Check
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -74,6 +82,7 @@ jobs:
         run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 
   test:
+    if: github.event.pull_request.draft != true
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -104,6 +113,7 @@ jobs:
         run: cargo test --doc --all-features
 
   wasm-test:
+    if: github.event.pull_request.draft != true
     name: Test (headless Chrome, ${{ matrix.features }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -125,6 +135,7 @@ jobs:
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
 
   bare-chart:
+    if: github.event.pull_request.draft != true
     name: Bare chart size and frame cost
     # Pinned image and compiler: the figures move with the code, the lockfile, the MSRV and the runner.
     runs-on: ubuntu-24.04
@@ -188,7 +199,7 @@ jobs:
 
   performance:
     name: Chart performance regressions
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -225,6 +236,7 @@ jobs:
           bash benches/check-regressions.sh "$base" "$head" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   native-demo:
+    if: github.event.pull_request.draft != true
     name: Native demo (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -252,6 +264,7 @@ jobs:
         run: xvfb-run -a examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
   fmt:
+    if: github.event.pull_request.draft != true
     name: Format
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -265,6 +278,7 @@ jobs:
         run: for m in examples/demo docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
 
   doc:
+    if: github.event.pull_request.draft != true
     name: Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -278,6 +292,7 @@ jobs:
           RUSTDOCFLAGS: -Dwarnings
 
   security:
+    if: github.event.pull_request.draft != true
     name: Security audit
     runs-on: ubuntu-latest
     timeout-minutes: 15

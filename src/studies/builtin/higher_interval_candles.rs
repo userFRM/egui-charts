@@ -380,6 +380,7 @@ mod tests {
                 state.price_scale_mut().options_mut().mode = mode;
                 let transform = state.fit_price_scale_with_series(
                     [&study as &dyn Indicator],
+                    None,
                     false,
                     None,
                     std::iter::empty(),

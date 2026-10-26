@@ -104,7 +104,10 @@ pub use session::{
     find_session_breaks,
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
-pub use strategy::{StrategyExit, StrategyPerformance, StrategyReport, StrategyTrade};
+pub use strategy::{
+    StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
+    StrategyTrade,
+};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};

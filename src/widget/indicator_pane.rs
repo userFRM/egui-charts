@@ -199,7 +199,7 @@ pub struct IndicatorCoordParams {
     /// Bar spacing in pixels
     pub bar_spacing: f32,
     /// Right offset (bars to the right of last data point)
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Base index (index of last data point)
     pub base_idx: usize,
     /// Start index (index of first visible bar)
@@ -211,10 +211,15 @@ impl IndicatorCoordParams {
     ///
     /// These values are typically obtained from the chart after rendering via
     /// [`super::Chart::get_chart_mapping`] or the internal time-scale accessors.
-    pub fn new(bar_spacing: f32, right_offset: f32, base_idx: usize, start_idx: usize) -> Self {
+    pub fn new(
+        bar_spacing: f32,
+        right_offset: impl Into<f64>,
+        base_idx: usize,
+        start_idx: usize,
+    ) -> Self {
         Self {
             bar_spacing,
-            right_offset,
+            right_offset: right_offset.into(),
             base_idx,
             start_idx,
         }

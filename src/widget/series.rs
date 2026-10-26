@@ -413,7 +413,7 @@ impl Chart {
             let appended =
                 bars.len() - bars.partition_point(|bar| clock.bar_open(bar.time) <= tail);
             let time_scale = self.state.time_scale_mut();
-            time_scale.set_right_offset(time_scale.right_offset() - appended as f32);
+            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
         }
         merged
     }

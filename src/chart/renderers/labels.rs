@@ -242,11 +242,9 @@ pub(crate) fn time_axis_marks(
     // Extend range in BOTH directions to ensure grid lines outside visible data
     // still get correct indices (prevents async movement when panning)
     let extra_left = (coords.start_idx as i64).min(10); // Extend left up to 10 bars or to index 0
-    let extra_right = coords
-        .right_offset
-        .ceil()
-        .max(0.0)
-        .min((context.rect.width() / coords.bar_spacing).ceil()) as i64
+    let extra_right = coords.right_offset.ceil().max(0.0).min(f64::from(
+        (context.rect.width() / coords.bar_spacing).ceil(),
+    )) as i64
         + 2;
 
     // Extrapolation stops where chrono's range ends, so a bar near it cannot panic.
@@ -282,18 +280,18 @@ pub(crate) fn time_axis_marks(
 fn time_to_idx(
     time: chrono::DateTime<chrono::Utc>,
     bars: &[(chrono::DateTime<chrono::Utc>, usize)],
-) -> f32 {
+) -> f64 {
     if bars.is_empty() {
         return 0.0;
     }
 
     if time <= bars[0].0 {
-        return bars[0].1 as f32;
+        return bars[0].1 as f64;
     }
 
     let last = bars.len() - 1;
     if time >= bars[last].0 {
-        return bars[last].1 as f32;
+        return bars[last].1 as f64;
     }
 
     let mut lo = 0usize;
@@ -309,14 +307,14 @@ fn time_to_idx(
 
     let (t0, i0) = bars[lo];
     let (t1, i1) = bars[hi];
-    let span_ms = (t1 - t0).num_milliseconds() as f32;
-    if span_ms.abs() < f32::EPSILON {
-        return i0 as f32;
+    let span_ms = (t1 - t0).num_milliseconds() as f64;
+    if span_ms.abs() < f64::EPSILON {
+        return i0 as f64;
     }
 
-    let offset_ms = (time - t0).num_milliseconds() as f32;
+    let offset_ms = (time - t0).num_milliseconds() as f64;
     let frac = (offset_ms / span_ms).clamp(0.0, 1.0);
-    i0 as f32 + frac * (i1 as f32 - i0 as f32)
+    i0 as f64 + frac * (i1 as f64 - i0 as f64)
 }
 
 /// Paints time grid lines from the same calendar marks as the axis labels.
@@ -330,8 +328,10 @@ pub(crate) fn render_time_grid(
 ) {
     for mark in marks {
         let index = time_to_idx(mark.time, points);
-        let delta = coords.base_idx as f32 + coords.right_offset - index;
-        let x = context.rect.right() - (delta + 0.5) * coords.bar_spacing - 1.0;
+        let delta = (coords.base_idx as f64 - index) + coords.right_offset;
+        let x = (f64::from(context.rect.right())
+            - (delta + 0.5) * f64::from(coords.bar_spacing)
+            - 1.0) as f32;
         if x >= context.rect.left() && x <= context.rect.right() {
             crate::chart::rendering::grid::render_grid_line(
                 context.painter,
@@ -382,10 +382,10 @@ pub fn render_time_labels(
         // Use fractional index for smooth label movement during pan
         let index = time_to_idx(mark.time, points);
         // Calculate x using same formula as candle rendering
-        let delta_from_right = coords.base_idx as f32 + coords.right_offset - index;
-        let x = context.rect.min.x + context.rect.width()
-            - (delta_from_right + 0.5) * coords.bar_spacing
-            - 1.0;
+        let delta_from_right = (coords.base_idx as f64 - index) + coords.right_offset;
+        let x = (f64::from(context.rect.min.x) + f64::from(context.rect.width())
+            - (delta_from_right + 0.5) * f64::from(coords.bar_spacing)
+            - 1.0) as f32;
 
         if x < context.rect.min.x || x > context.rect.max.x {
             continue;
