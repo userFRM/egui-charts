@@ -16,6 +16,13 @@ use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
 
+type AxisValue = (
+    f64,
+    (Color32, Color32),
+    PriceMap,
+    Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+);
+
 fn shared_prices(study: &dyn Indicator, range: std::ops::Range<usize>) -> Vec<f64> {
     let mut values = Vec::new();
     for line in 0..study.line_cnt() {
@@ -846,14 +853,7 @@ impl Chart {
         &self,
         key: SeriesScale,
         rect: Rect,
-    ) -> impl Iterator<
-        Item = (
-            f64,
-            (Color32, Color32),
-            PriceMap,
-            Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
-        ),
-    > + '_ {
+    ) -> impl Iterator<Item = AxisValue> + '_ {
         self.main_pane_series()
             .filter(move |item| item.options.scale == key)
             .flat_map(move |item| {

@@ -537,15 +537,14 @@ impl Chart {
                     panel.price_formatter =
                         id.and_then(|id| self.series_label_formatter(id, map.transform().mode));
                 }
-                if let crate::studies::StudyScale::Shared(key) = indicator.scale() {
-                    if let Some((_, axis)) = self
+                if let crate::studies::StudyScale::Shared(key) = indicator.scale()
+                    && let Some((_, axis)) = self
                         .secondary_axes(available, plot)
                         .into_iter()
                         .find(|(scale, _)| *scale == key)
-                    {
-                        panel.axis_rect =
-                            Some(Rect::from_x_y_ranges(axis.x_range(), panel_rect.y_range()));
-                    }
+                {
+                    panel.axis_rect =
+                        Some(Rect::from_x_y_ranges(axis.x_range(), panel_rect.y_range()));
                 }
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = paint_row > 0;
@@ -927,18 +926,16 @@ impl Chart {
                 } else {
                     None
                 };
-                if !collapsed {
-                    if let Some((mut pos, options)) = series_crosshair {
-                        if let Some(index) = hovered {
-                            pos.x = horizontal.idx_to_x(index);
-                        }
-                        crate::chart::renderers::render_crosshair_lines(
-                            &crate::chart::renderers::RenderContext::new(&painter, chart_rect),
-                            pos,
-                            &options,
-                            chart_rect.bottom(),
-                        );
+                if !collapsed && let Some((mut pos, options)) = series_crosshair {
+                    if let Some(index) = hovered {
+                        pos.x = horizontal.idx_to_x(index);
                     }
+                    crate::chart::renderers::render_crosshair_lines(
+                        &crate::chart::renderers::RenderContext::new(&painter, chart_rect),
+                        pos,
+                        &options,
+                        chart_rect.bottom(),
+                    );
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
                     for (id, (value, colors)) in items
