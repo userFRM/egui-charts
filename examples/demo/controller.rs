@@ -324,6 +324,8 @@ pub struct DemoApp {
     keyboard_shortcuts: KeyboardShortcutsDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
+    /// The saved-layout chooser of the Open layout shortcut is open.
+    open_layout: bool,
     copied_drawing: Option<String>,
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
@@ -554,6 +556,7 @@ impl DemoApp {
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             interval_entry: None,
             interval_focus: false,
+            open_layout: false,
             copied_drawing: None,
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
@@ -1000,6 +1003,7 @@ impl DemoApp {
             .keyboard_shortcuts
             .show_with_shortcuts(ctx, self.chart.shortcuts());
         self.show_interval_entry(ctx);
+        self.show_open_layout(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -2791,6 +2795,7 @@ impl DemoApp {
             || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
+            || self.open_layout
             || self.date_picker.is_open
             || self.replay_start.is_open
             || self.replay_selecting
@@ -2827,6 +2832,20 @@ impl DemoApp {
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
                     A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
+                    A::OpenLayout => self.open_layout = true,
+                    A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+                    A::ToggleSession => {
+                        let session = match self.timeframe_toolbar.state.session_type {
+                            SessionType::RTH => SessionType::ETH,
+                            SessionType::ETH => SessionType::RTH,
+                            other => other,
+                        };
+                        if session != self.timeframe_toolbar.state.session_type {
+                            self.timeframe_toolbar.set_session(session);
+                            self.stop_replay();
+                            self.apply_session();
+                        }
+                    }
                     A::CreateAlert => {
                         let mapping = self.chart.get_chart_mapping();
                         if let Some(pos) = ctx

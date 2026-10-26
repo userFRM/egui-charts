@@ -344,6 +344,12 @@ impl super::Chart {
                     .zoom(delta, anchor, rect.left(), rect.width());
             }
             A::ScrollToRealTime => self.scroll_to_real_time(true),
+            A::ScrollToFirstBar => {
+                // A range spans `length() + 1` bars, so its left index becomes 0.
+                let scale = self.state.time_scale();
+                let position = scale.visible_logical_range().length() - scale.base_idx() as f32;
+                self.scroll_to_position(position, true);
+            }
             A::FitContent => {
                 self.pending_scroll_time = None;
                 self.state.time_scale_mut().fit_content();
@@ -571,6 +577,71 @@ mod tests {
                 assert!(chart.state.time_scale().bar_spacing() > before_spacing);
             } else {
                 assert_eq!(chart.state.time_scale().right_offset(), before_offset);
+            }
+        }
+    }
+
+    #[test]
+    fn first_and_last_bar_keys_scroll_and_panel_keys_reach_the_host() {
+        use KeyboardAction as A;
+        let alt_shift = Modifiers::ALT.plus(Modifiers::SHIFT);
+        for (key, modifiers, expected) in [
+            (Key::ArrowLeft, alt_shift, A::ScrollToFirstBar),
+            (Key::Home, Modifiers::NONE, A::ScrollToFirstBar),
+            (Key::ArrowRight, alt_shift, A::ScrollToRealTime),
+            (Key::End, Modifiers::NONE, A::ScrollToRealTime),
+            (Key::Period, Modifiers::NONE, A::OpenLayout),
+            (Key::D, Modifiers::ALT, A::OpenDataWindow),
+            (Key::E, alt_shift, A::ToggleSession),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let latest = chart.state.time_scale().live_edge_offset();
+            for (pass, time) in [0.0, 0.1, 0.2, 0.3, 2.0, 2.1].into_iter().enumerate() {
+                if pass == 2 {
+                    // Zoomed in on the middle of the history, so neither end is in view.
+                    chart.state.time_scale_mut().set_bar_spacing(20.0);
+                    chart.scroll_to_position(-40.0, false);
+                }
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        time: Some(time),
+                        events: if pass == 2 {
+                            vec![Event::Key {
+                                key,
+                                modifiers,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                            }]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response = chart.show(ui);
+                        if pass < 2 {
+                            response.request_focus();
+                        }
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let requests = chart.take_shortcut_requests();
+            match expected {
+                A::ScrollToFirstBar => {
+                    let left = chart.visible_logical_range().unwrap().left;
+                    assert!(left.abs() < 1e-3, "{key:?}: left edge at bar {left}");
+                }
+                A::ScrollToRealTime => {
+                    assert_eq!(chart.state.time_scale().right_offset(), latest, "{key:?}")
+                }
+                _ => assert_eq!(requests, vec![ShortcutRequest::Action(expected)], "{key:?}"),
             }
         }
     }

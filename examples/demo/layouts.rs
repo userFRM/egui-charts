@@ -384,6 +384,31 @@ impl DemoApp {
         }
     }
 
+    /// The saved layouts, for the Open layout shortcut.
+    pub(super) fn show_open_layout(&mut self, ctx: &egui::Context) {
+        if !self.open_layout {
+            return;
+        }
+        let mut open = true;
+        let mut chosen = None;
+        egui_charts::ui_kit::modal::Modal::new("open_layout", "Open layout")
+            .width(320.0)
+            .show(ctx, &mut open, |ui| {
+                if self.top_toolbar.layout_menu.layouts.is_empty() {
+                    ui.label("No saved layouts");
+                }
+                for name in &self.top_toolbar.layout_menu.layouts {
+                    if ui.button(name).clicked() {
+                        chosen = Some(name.clone());
+                    }
+                }
+            });
+        self.open_layout = open && chosen.is_none();
+        if let Some(name) = chosen {
+            self.handle_layout_action(LayoutAction::Open(name));
+        }
+    }
+
     pub(super) fn handle_layout_action(&mut self, action: LayoutAction) {
         match action {
             LayoutAction::SelectGrid(mode) => {

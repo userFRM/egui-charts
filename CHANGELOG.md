@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Alt+Shift+Left and Home scroll the first bar to the left edge and Alt+Shift+Right and End return to the latest bar, keeping the zoom; Home used to return to the latest bar as End does. Period, Alt+D and Alt+Shift+E send `ShortcutRequest::Action` with the new `KeyboardAction::OpenLayout`, `OpenDataWindow` and `ToggleSession`, for the host to open a saved layout, show its data window or switch between the regular and extended sessions; the demo does all three. The keys are bindings of `ShortcutMap`, so hosts rebind or remove them there, and a focused text field keeps them. ([#983](https://github.com/userFRM/egui-charts/issues/983))
+
 - The demo quick search runs a sample backtest on completed synthetic bars, marks equity at their closes and opens the strategy report below the chart. Reports can be replaced or cleared; selecting a trade restores its symbol and interval, scrolls to its bars and highlights its span. Entry and exit markers share the signals service with the API samples, including in newly added chart slots. Trades CSV is saved or downloaded by the host. Strategy execution, market data and storage remain host-owned. ([#225](https://github.com/userFRM/egui-charts/issues/225))
 
 - The documentation site at `/egui-charts/docs/` brings installation, first-chart and feature guides together with the all-feature Rust API reference at `/egui-charts/docs/api/`. Existing guides are included directly, Rust samples compile in CI, and the searchable guide follows system light/dark preferences with responsive navigation, installation steps and feature choices. The demo URLs are unchanged. ([#929](https://github.com/userFRM/egui-charts/issues/929))
