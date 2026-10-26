@@ -11,7 +11,7 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
+    Datafeed, DepthHistory, FeedError, FeedState, HistoryPage, HistoryRequest, Reply, Subscription,
     SubscriptionId, TradePage, TradeRequest,
 };
 use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
@@ -51,6 +51,8 @@ pub(crate) struct FeedLink {
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
     order_book: Option<OrderBook>,
+    /// The order book over time, when the host turned it on.
+    depth_history: Option<DepthHistory>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
 }
@@ -121,6 +123,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             order_book: None,
+            depth_history: None,
             paging_stopped: false,
         });
     }
@@ -166,21 +169,37 @@ impl Chart {
         if symbol != self.symbol {
             self.host_events
                 .push(super::ChartEvent::SymbolChanged(symbol.clone()));
+            #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
-            self.drawings.cancel_curr_drawing();
-            self.drawings.end_drag_handle();
-            self.drawings.deselect();
-            let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
-            next.0.options = self.drawings.options.clone();
-            next.0.tool_defaults = self.drawings.tool_defaults.clone();
-            next.0.active_tool = self.drawings.active_tool;
-            next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
-            next.0.eraser_mode = self.drawings.eraser_mode;
-            next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
-            std::mem::swap(&mut self.drawings, &mut next.0);
-            std::mem::swap(&mut self.marks, &mut next.1);
-            self.symbol_drawings.insert(self.symbol.clone(), next);
-            self.history = Default::default();
+            #[cfg(feature = "drawings")]
+            {
+                self.save_stored_drawings();
+                self.drawings.cancel_curr_drawing();
+                self.drawings.end_drag_handle();
+                self.drawings.deselect();
+                let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+                next.0.registry = self.drawings.registry.clone();
+                next.0.options = self.drawings.options.clone();
+                next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.set_active_tool(self.drawings.active_tool);
+                if let Some(id) = self.drawings.active_custom_tool() {
+                    let _ = next.0.set_custom_tool(id);
+                }
+                next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
+                next.0.eraser_mode = self.drawings.eraser_mode;
+                next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                std::mem::swap(&mut self.drawings, &mut next.0);
+                std::mem::swap(&mut self.marks, &mut next.1);
+                self.symbol_drawings.insert(self.symbol.clone(), next);
+            }
+            #[cfg(not(feature = "drawings"))]
+            {
+                let mut next_marks = self.symbol_markers.remove(&symbol).unwrap_or_default();
+                std::mem::swap(&mut self.marks, &mut next_marks);
+                self.symbol_markers.insert(self.symbol.clone(), next_marks);
+            }
+            self.history.clear();
+            self.history.edits += 1;
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -223,7 +242,10 @@ impl Chart {
         for study in self.studies.indicators_mut() {
             study.set_timeframe(timeframe);
         }
-        self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        #[cfg(feature = "drawings")]
+        {
+            self.drawings.curr_timeframe = timeframe.as_str().into_owned();
+        }
         if changed {
             self.apply_replay_window();
         }
@@ -298,6 +320,35 @@ impl Chart {
             .as_ref()
             .filter(|_| series == SeriesId::MAIN)?;
         link.order_book.as_ref()
+    }
+
+    /// Keeps `history` of the order book the feed sends, sampled from the next update, or stops
+    /// with `None`. The history starts empty and is cleared when the symbol or interval changes.
+    /// It needs the instrument's tick size, and keeps no columns without one or without a feed.
+    /// Columns follow the times of the depth updates: an update stamped more than a minute after
+    /// the feed's time ([`Sink::set_server_time`](crate::data::Sink::set_server_time)) samples
+    /// nothing, so a wrong time cannot hold the history back.
+    /// The chart takes the columns sampled since its last frame when it is drawn: while it is not,
+    /// at most [`columns`](crate::data::DepthHistoryConfig::columns) of them wait, the oldest
+    /// making room for new ones.
+    pub fn set_depth_history(&mut self, history: Option<DepthHistory>) {
+        if let Some(link) = &mut self.feed_link {
+            if let Some(id) = link.subscription {
+                let config = history.as_ref().map(|history| history.config().clone());
+                link.inbox.sample_depth(id, config);
+            }
+            link.depth_history = history;
+        }
+    }
+
+    /// The order book history of `series`, if [`set_depth_history`](Self::set_depth_history)
+    /// turned it on.
+    pub fn depth_history(&self, series: SeriesId) -> Option<&DepthHistory> {
+        let link = self
+            .feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)?;
+        link.depth_history.as_ref()
     }
 
     /// Calendar boundaries selected by the chart, including the resolved exchange or local zone.
@@ -424,6 +475,12 @@ impl Chart {
             };
             link.trades.append(updates.trades, fold);
             link.order_book = updates.depth.or(link.order_book.take());
+            if let Some(history) = &mut link.depth_history {
+                updates
+                    .depth_columns
+                    .into_iter()
+                    .for_each(|c| history.push(c));
+            }
             resnapshot |= updates.resnapshot;
         }
         if resnapshot && let Some(id) = link.subscription {
@@ -481,6 +538,7 @@ impl Chart {
         self.state.price_scale_mut().set_price_precision(None);
         link.trades = Trades::new(TRADE_CAPACITY);
         link.order_book = None;
+        link.depth_history.iter_mut().for_each(DepthHistory::clear);
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -548,9 +606,15 @@ impl Chart {
         if withheld {
             self.request_latest(link);
         }
-        let sink = link
-            .inbox
-            .subscribe(self.symbol.clone(), link.clock.clone(), TRADE_CAPACITY);
+        let tick_size = link.instrument.as_ref().and_then(|i| i.tick_size);
+        let sink = link.inbox.subscribe(
+            self.symbol.clone(),
+            link.clock.clone(),
+            TRADE_CAPACITY,
+            tick_size,
+        );
+        let config = link.depth_history.as_ref().map(|h| h.config().clone());
+        link.inbox.sample_depth(sink.id, config);
         link.subscription = Some(sink.id);
         let subscription = Subscription {
             id: sink.id,
@@ -1286,7 +1350,7 @@ mod tests {
             bids: Vec::new(),
             asks: Vec::new(),
         };
-        feed.sink().push_depth_delta(5, empty);
+        feed.sink().push_depth_delta(5, &empty);
         frames.run(&mut chart);
         assert_eq!(feed.calls(), [Call::Snapshot(id)], "c: snapshot");
         frames.run(&mut chart);

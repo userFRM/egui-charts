@@ -10,7 +10,7 @@ use crate::theme::ThemeExt;
 use egui::Color32;
 
 /// Crosshair mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CrosshairMode {
     /// Normal crosshair (snaps x to the bar center and follows the pointer value)
     #[default]
@@ -30,7 +30,7 @@ impl CrosshairMode {
 }
 
 /// Crosshair visual style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CrosshairStyle {
     /// Full crosshair with vertical and horizontal lines (default)
     #[default]
@@ -47,7 +47,7 @@ pub enum CrosshairStyle {
 }
 
 /// Line style for crosshair rendering (Solid, Dashed, Dotted)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CrosshairLineStyle {
     /// Solid line
     Solid,
@@ -63,7 +63,7 @@ pub enum CrosshairLineStyle {
 }
 
 /// Crosshair options
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,

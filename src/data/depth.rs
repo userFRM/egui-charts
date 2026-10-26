@@ -2,21 +2,28 @@
 
 use crate::model::{OrderBook, OrderBookLevel};
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
 /// Levels per side, and levels of the deltas held while the book waits for a snapshot. A deeper
 /// snapshot is rejected, a delta that makes a side deeper loses the book, and the oldest held
 /// deltas make room beyond it, so a feed cannot grow either count without limit.
 pub(crate) const MAX_LEVELS: usize = 10_000;
 
-/// One side of the book, keyed by [`key`] of the price.
-type Side = BTreeMap<u64, OrderBookLevel>;
+/// One side of the book, ascending by key with the best level last, so that the frequent changes
+/// near the touch shift few levels and reuse the side's capacity instead of allocating. Bids are
+/// keyed by [`key`] of their price and asks by its complement, which orders them the other
+/// way.
+type Side = Vec<(u64, OrderBookLevel)>;
 
 /// A book built from a snapshot and the deltas that follow it. Without a snapshot, or after a
 /// gap, it is empty until the feed pushes a new snapshot, and holds the deltas pushed meanwhile
 /// for that snapshot to apply.
 #[derive(Default)]
 pub(crate) struct Book {
+    /// The instrument's tick size, positive and finite: prices are keyed by the nearest integer
+    /// tick, so prices a feed computed with rounding errors land on one level. `None` keys them
+    /// exactly.
+    tick: Option<f64>,
     /// Sequence of the last snapshot or delta applied. `None` while the book has no snapshot.
     sequence: Option<u64>,
     /// A snapshot was asked for since the book lost its snapshot.
@@ -44,31 +51,39 @@ pub(crate) struct Lost {
 }
 
 impl Book {
+    /// An empty book of an instrument of tick size `tick`, if it is positive and finite.
+    pub(crate) fn new(tick: Option<f64>) -> Self {
+        let tick = tick.filter(|tick| tick.is_finite() && *tick > 0.0);
+        Self {
+            tick,
+            ..Self::default()
+        }
+    }
+
     /// Replaces the book with `book`, numbered `sequence`, and applies the held deltas numbered
     /// above it, so a snapshot fetched while deltas kept arriving heals the book.
     pub(crate) fn snapshot(&mut self, sequence: u64, book: OrderBook) -> Result<(), Lost> {
         if !valid(&book) || book.bids.len().max(book.asks.len()) > MAX_LEVELS {
             return Err(self.lose(true));
         }
-        let side = |levels: Vec<OrderBookLevel>| {
-            let levels = levels.into_iter().filter(|level| level.size > 0.0);
-            levels.map(|level| (key(level.price), level)).collect()
-        };
+        for (side, levels, order) in [
+            (&mut self.bids, book.bids, 0),
+            (&mut self.asks, book.asks, u64::MAX),
+        ] {
+            side.clear();
+            // Reversed so that, after the stable sort, the first of equal keys is the last pushed.
+            let levels = levels.into_iter().rev().filter(|level| level.size > 0.0);
+            side.extend(levels.map(|level| (key(self.tick, level.price) ^ order, level)));
+            side.sort_by_key(|(key, _)| *key);
+            side.dedup_by_key(|(key, _)| *key);
+        }
         let held = std::mem::take(&mut self.held);
-        *self = Self {
-            sequence: Some(sequence),
-            requested: false,
-            changed: true,
-            ts: book.ts,
-            symbol: book.symbol,
-            bids: side(book.bids),
-            asks: side(book.asks),
-            ..Self::default()
-        };
+        (self.sequence, self.requested, self.changed) = (Some(sequence), false, true);
+        (self.ts, self.symbol, self.held_levels) = (book.ts, book.symbol, 0);
         let mut applied = Ok(());
         // Every held delta goes through `delta`, so after a gap among them the rest is held again.
         for (sequence, changes) in held {
-            applied = applied.and(self.delta(sequence, changes));
+            applied = applied.and(self.delta(sequence, &changes));
         }
         applied
     }
@@ -76,12 +91,12 @@ impl Book {
     /// Applies `changes`, the levels that changed with their new size, if `sequence` follows the
     /// last one applied. A replayed delta is ignored; a gap or a delta before any snapshot loses
     /// the book, and the delta is held for the next snapshot.
-    pub(crate) fn delta(&mut self, sequence: u64, changes: OrderBook) -> Result<(), Lost> {
+    pub(crate) fn delta(&mut self, sequence: u64, changes: &OrderBook) -> Result<(), Lost> {
         // A replay is never applied, so its contents cannot lose the book.
         if self.sequence.is_some_and(|last| sequence <= last) {
             return Ok(());
         }
-        if !valid(&changes) {
+        if !valid(changes) {
             return Err(self.lose(true));
         }
         match self.sequence {
@@ -92,15 +107,17 @@ impl Book {
                 return Err(lost);
             }
         }
-        for (side, levels) in [
-            (&mut self.bids, changes.bids),
-            (&mut self.asks, changes.asks),
+        for (side, levels, order) in [
+            (&mut self.bids, &changes.bids, 0),
+            (&mut self.asks, &changes.asks, u64::MAX),
         ] {
             for level in levels {
-                if level.size > 0.0 {
-                    side.insert(key(level.price), level);
-                } else {
-                    side.remove(&key(level.price));
+                let key = key(self.tick, level.price) ^ order;
+                match side.binary_search_by_key(&key, |(key, _)| *key) {
+                    Ok(at) if level.size > 0.0 => side[at].1 = level.clone(),
+                    Ok(at) => _ = side.remove(at),
+                    Err(at) if level.size > 0.0 => side.insert(at, (key, level.clone())),
+                    Err(_) => {}
                 }
             }
         }
@@ -113,17 +130,41 @@ impl Book {
 
     /// The book, bids best first and asks best first, if it changed since the last call.
     pub(crate) fn take_changed(&mut self) -> Option<OrderBook> {
+        let levels = |side: &Side| side.iter().rev().map(|(_, level)| level.clone()).collect();
         std::mem::take(&mut self.changed).then(|| OrderBook {
             ts: self.ts,
             symbol: self.symbol.clone(),
-            bids: self.bids.values().rev().cloned().collect(),
-            asks: self.asks.values().cloned().collect(),
+            bids: levels(&self.bids),
+            asks: levels(&self.asks),
         })
+    }
+
+    /// The best `rows` price rows of each side, bids then asks, each best first, as the row of
+    /// `ticks_per_row` integer ticks the levels fall in, rounding down, and the sum of their
+    /// sizes. `None` for a book without a tick size.
+    pub(crate) fn rows(&self, ticks_per_row: u32, rows: usize) -> Option<[Vec<(i64, f64)>; 2]> {
+        self.tick?;
+        let group = |side: &Side, order: u64| {
+            let mut grouped: Vec<(i64, f64)> = Vec::with_capacity(rows.min(side.len()));
+            for (key, level) in side.iter().rev() {
+                let row = ((key ^ order ^ 1 << 63) as i64).div_euclid(i64::from(ticks_per_row));
+                let full = grouped.len() == rows;
+                match grouped.last_mut() {
+                    Some((last, size)) if *last == row => {
+                        *size = (*size + level.size).min(f64::MAX)
+                    }
+                    _ if full => break,
+                    _ => grouped.push((row, level.size)),
+                }
+            }
+            grouped
+        };
+        Some([group(&self.bids, 0), group(&self.asks, u64::MAX)])
     }
 
     /// Holds `changes` for the next snapshot. A delta that does not extend the held run starts a
     /// new one, since a run with a hole cannot be applied past it; a replayed one is ignored.
-    fn hold(&mut self, sequence: u64, changes: OrderBook) {
+    fn hold(&mut self, sequence: u64, changes: &OrderBook) {
         if let (Some(&(first, _)), Some(&(last, _))) = (self.held.front(), self.held.back()) {
             if (first..=last).contains(&sequence) {
                 return;
@@ -134,8 +175,8 @@ impl Book {
             }
         }
         let levels = |changes: &OrderBook| (changes.bids.len() + changes.asks.len()).max(1);
-        self.held_levels += levels(&changes);
-        self.held.push_back((sequence, changes));
+        self.held_levels += levels(changes);
+        self.held.push_back((sequence, changes.clone()));
         while self.held_levels > MAX_LEVELS
             && let Some((_, oldest)) = self.held.pop_front()
         {
@@ -160,8 +201,12 @@ fn valid(book: &OrderBook) -> bool {
         .all(|level| level.price.is_finite() && level.size.is_finite() && level.size >= 0.0)
 }
 
-/// Orders finite prices like `f64::total_cmp`, with -0.0 and 0.0 as one price.
-fn key(price: f64) -> u64 {
+/// Orders finite prices: by their nearest integer multiple of `tick`, as an `i64` with its sign
+/// bit flipped, or like `f64::total_cmp` without a tick, with -0.0 and 0.0 as one price.
+fn key(tick: Option<f64>, price: f64) -> u64 {
+    if let Some(tick) = tick {
+        return (price / tick).round() as i64 as u64 ^ 1 << 63;
+    }
     let bits = (price + 0.0).to_bits();
     if bits >> 63 == 0 {
         bits | 1 << 63
@@ -272,7 +317,7 @@ mod tests {
                 .into_iter()
                 .map(|push| match push {
                     Snapshot(sequence, book) => depth.snapshot(sequence, book),
-                    Delta(sequence, changes) => depth.delta(sequence, changes),
+                    Delta(sequence, changes) => depth.delta(sequence, &changes),
                 })
                 .collect();
             assert_eq!(got, outcomes, "{name}");

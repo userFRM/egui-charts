@@ -62,7 +62,9 @@ impl Chart {
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
-    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps.
+    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
+    /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
+    /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error>> {
@@ -113,7 +115,11 @@ impl Chart {
         let mut writer = csv::Writer::from_writer(Vec::new());
         writer.write_record(header)?;
         for (index, bar) in bars.iter().enumerate() {
-            let mut row = vec![self.export_time(bar.time)];
+            let mut row = vec![if self.horizontal_scale.is_some() {
+                self.format_time(bar.time)
+            } else {
+                self.export_time(bar.time)
+            }];
             row.extend(
                 [bar.open, bar.high, bar.low, bar.close]
                     .map(|value| number(value, price_precision)),
@@ -300,10 +306,20 @@ impl Chart {
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
         chart.session_provider = self.session_provider.clone();
+        chart.horizontal_scale = self.horizontal_scale.clone();
+        chart.locale = self.locale.clone();
+        chart.date_format = self.date_format.clone();
+        chart.time_formatter = self.time_formatter.clone();
+        chart.price_formatter = self.price_formatter.clone();
+        chart.percentage_formatter = self.percentage_formatter.clone();
         chart.extended_hours = self.extended_hours;
         chart.theme_override = self.theme_override.clone();
-        chart.drawings.drawings = self.drawings.drawings.clone();
-        chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
+        #[cfg(feature = "drawings")]
+        {
+            chart.drawings.registry = self.drawings.registry.clone();
+            chart.drawings.drawings = self.drawings.drawings.clone();
+            chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
+        }
         chart.marks = self.marks.clone();
         chart.marker_options = self.marker_options;
         chart.price_lines = self.price_lines.clone();
@@ -567,6 +583,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn images_apply_options_and_drawing_visibility_without_changing_the_live_view() {
         let ctx = egui::Context::default();
         let mut chart = Chart::new(BarData::new());

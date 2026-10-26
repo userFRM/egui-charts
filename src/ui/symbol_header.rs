@@ -3,7 +3,7 @@
 //! Displays symbol info, the last close and its change, bid/ask prices, and volume
 //! in a horizontal bar at the top of the chart area.
 
-use crate::model::percent_change;
+use crate::model::{Quote, percent_change};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -62,15 +62,6 @@ impl OhlcData {
     pub fn is_bullish(&self) -> bool {
         self.close >= self.open
     }
-}
-
-/// Bid/Ask quote data
-#[derive(Clone, Debug, Default)]
-pub struct QuoteData {
-    /// Best bid price
-    pub bid: f64,
-    /// Best ask price
-    pub ask: f64,
 }
 
 /// Configuration for the symbol header
@@ -147,7 +138,9 @@ impl SymbolHeaderConfig {
 pub struct SymbolHeader {
     pub symbol_info: SymbolInfo,
     pub ohlc: OhlcData,
-    pub quote: QuoteData,
+    /// The symbol's quote, such as the one `WatchlistPanel::quote` holds. Its bid and ask show
+    /// when both are known.
+    pub quote: Option<Quote>,
     pub config: SymbolHeaderConfig,
 }
 
@@ -157,7 +150,7 @@ impl SymbolHeader {
         Self {
             symbol_info,
             ohlc: OhlcData::default(),
-            quote: QuoteData::default(),
+            quote: None,
             config: SymbolHeaderConfig::default(),
         }
     }
@@ -168,9 +161,9 @@ impl SymbolHeader {
         self
     }
 
-    /// Set bid/ask quote data
-    pub fn with_quote(mut self, quote: QuoteData) -> Self {
-        self.quote = quote;
+    /// Set the quote whose bid and ask are shown
+    pub fn with_quote(mut self, quote: Quote) -> Self {
+        self.quote = Some(quote);
         self
     }
 
@@ -289,13 +282,18 @@ impl SymbolHeader {
 
                 // Bid/Ask boxes
                 let mut quote_action = None;
-                if config.show_bid_ask && self.quote.bid > 0.0 {
+                let bid_ask = (self.quote.as_ref())
+                    .and_then(|quote| quote.bid.zip(quote.ask))
+                    .filter(|(bid, ask)| bid.is_finite() && ask.is_finite());
+                if config.show_bid_ask
+                    && let Some((bid, ask)) = bid_ask
+                {
                     // SELL box (red background)
                     let sell = self.draw_quote_box(
                         &painter,
                         x,
                         center_y,
-                        self.quote.bid,
+                        bid,
                         "SELL",
                         config.bearish_color,
                     );
@@ -305,7 +303,7 @@ impl SymbolHeader {
                         &painter,
                         x,
                         center_y,
-                        self.quote.ask,
+                        ask,
                         "BUY",
                         config.bullish_color,
                     );
@@ -440,10 +438,8 @@ mod tests {
                         company_name: "A long company name".into(),
                         ..Default::default()
                     });
-                    header.quote = QuoteData {
-                        bid: 100.0,
-                        ask: 101.0,
-                    };
+                    let quote = Quote::new(100.5, 100.0, Default::default());
+                    header.quote = Some(quote.with_bid_ask(100.0, 101.0));
                     let mut selected = None;
                     let mut target = None;
                     let mut pressed = false;

@@ -187,6 +187,9 @@ fn custom_controls_report_names_roles_and_states() {
                 true,
             );
         }),
+        (Role::Button, "Object type", |ui, _| {
+            super::widget_bar::panels::object_tree::ObjectTreePanel::new().show(ui, None, &mut []);
+        }),
         (Role::TreeItem, "Trend Line", |ui, selected| {
             use super::widget_bar::panels::object_tree::*;
             let item = SourceItem::drawing(
@@ -344,6 +347,63 @@ fn dialogs_expose_titles_and_label_their_fields() {
                 (Role::CheckBox, "Level 1 visible"),
                 (Role::SpinButton, "Level 1 ratio"),
                 (Role::TextInput, "Level 1 label"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(
+                    DrawingId(1),
+                    "Volume Profile".into(),
+                    DrawingProps::default(),
+                );
+                let mut drawing = crate::drawings::Drawing::new(
+                    1,
+                    crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
+                );
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&drawing),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Row layout"),
+                (Role::SpinButton, "Rows"),
+                (Role::SpinButton, "Value area (%)"),
+                (Role::ComboBox, "Volume"),
+            ],
+        ),
+        (
+            "Drawing Properties",
+            |ctx| {
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open(
+                    DrawingId(1),
+                    "Volume Profile".into(),
+                    DrawingProps::default(),
+                );
+                let mut drawing = crate::drawings::Drawing::new(
+                    1,
+                    crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
+                );
+                let mut config = crate::drawings::VolumeProfileConfig::default()
+                    .with_row_size(Some(1.0))
+                    .unwrap();
+                config.display = crate::drawings::ProfileDisplay::UpDown;
+                drawing.volume_profile = Some(config);
+                dialog.props.tool_settings = Some(Box::new(
+                    crate::drawings::DrawingTemplate::from_drawing(&drawing),
+                ));
+                dialog.active_tab = PropertiesTab::Inputs;
+                dialog.show(ctx);
+            },
+            &[
+                (Role::ComboBox, "Row layout"),
+                (Role::SpinButton, "Price height"),
+                (Role::SpinButton, "Value area (%)"),
+                (Role::ComboBox, "Volume"),
             ],
         ),
         (

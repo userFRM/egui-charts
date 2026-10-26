@@ -11,11 +11,11 @@ use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::{format_price, price_decimals};
-use super::watchlist::{HEADER_HEIGHT, WatchlistQuote, signed, weighted};
+use super::watchlist::{HEADER_HEIGHT, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
-use crate::model::Instrument;
+use crate::model::{ExtendedSession, Instrument, Quote};
 use crate::services::{Storage, StoreKind};
 use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
@@ -28,28 +28,6 @@ const PRICE_SIZE: f32 = 24.0;
 const EXTENDED_PRICE_SIZE: f32 = 18.0;
 /// The sections the layout menu shows or hides, in panel order.
 const SECTIONS: [&str; 4] = ["Volume", "Key statistics", "Profile", "Notes"];
-
-/// The session of an extended-hours trade.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExtendedSession {
-    /// Before the regular session opens.
-    PreMarket,
-    /// After the regular session closes.
-    PostMarket,
-}
-
-/// The latest extended-hours trade of the shown symbol, supplied by the host.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ExtendedHoursQuote {
-    /// Whether the trade was before or after the regular session.
-    pub session: ExtendedSession,
-    /// Last traded price. The change is `last` minus the last price of the regular session, the
-    /// one set with [`SymbolDetailsPanel::set_quote`], and the change percent is that difference
-    /// divided by the absolute regular last price, times 100.
-    pub last: f64,
-    /// When `last` traded.
-    pub time: DateTime<Utc>,
-}
 
 #[derive(Serialize, Deserialize)]
 struct NotesDocument {
@@ -76,10 +54,12 @@ enum Request {
 
 /// Details of the chart's symbol, fed by the host's [`Datafeed`] and [`Storage`].
 ///
-/// Keep it on the chart's symbol with [`set_instrument`](Self::set_instrument), its latest
-/// regular-session quote with [`set_quote`](Self::set_quote), its extended-hours trade with
-/// [`set_extended_hours`](Self::set_extended_hours) and its volume with
-/// [`set_volume`](Self::set_volume); update times are shown in the time zone set with
+/// Keep it on the chart's symbol with [`set_instrument`](Self::set_instrument), its latest quote
+/// with [`set_quote`](Self::set_quote), such as the one
+/// [`WatchlistPanel::quote`](super::WatchlistPanel::quote) holds, and its average volume with
+/// [`set_average_volume`](Self::set_average_volume). The quote's last price, change, update time,
+/// extended-hours trade and session volume are shown, the extended-hours change measured from the
+/// regular last price; update times are shown in the time zone set with
 /// [`set_timezone`](Self::set_timezone), UTC by default. The header's layout button shows or
 /// hides sections, the edit button moves to the notes, and a feed that supplies
 /// [`SymbolDetails::url`] gets a link to the instrument beside its name. For each new symbol the
@@ -92,9 +72,9 @@ enum Request {
 #[derive(Default)]
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
-    quote: Option<(WatchlistQuote, DateTime<Utc>)>,
-    extended: Option<ExtendedHoursQuote>,
-    volume: Option<(f64, f64)>,
+    quote: Option<Quote>,
+    /// Average daily volume over the last 30 days.
+    average_volume: Option<f64>,
     timezone: Tz,
     hidden: HashSet<&'static str>,
     details: Option<SymbolDetails>,
@@ -132,16 +112,15 @@ impl SymbolDetailsPanel {
         }
     }
 
-    /// Show `instrument`, such as the chart's. A new symbol clears the quote, extended-hours trade
-    /// and volume and asks for its details and notes; the same symbol only takes the new name,
+    /// Show `instrument`, such as the chart's. A new symbol clears the quote and the average
+    /// volume and asks for its details and notes; the same symbol only takes the new name,
     /// exchange and currency.
     pub fn set_instrument(&mut self, instrument: &Instrument) {
         let new = self.symbol() != Some(instrument.symbol.as_str());
         self.instrument = Some(instrument.clone());
         if new {
             self.quote = None;
-            self.extended = None;
-            self.volume = None;
+            self.average_volume = None;
             self.details = None;
             self.error = None;
             self.request_details(instrument.symbol.clone());
@@ -160,21 +139,16 @@ impl SymbolDetailsPanel {
         }
     }
 
-    /// Sets the latest regular-session quote of the shown symbol and when it was last updated.
-    pub fn set_quote(&mut self, quote: WatchlistQuote, time: DateTime<Utc>) {
-        self.quote = Some((quote, time));
+    /// Sets the latest quote of the shown symbol. Its extended-hours trade shows below the
+    /// regular price while it is set.
+    pub fn set_quote(&mut self, quote: Quote) {
+        self.quote = Some(quote);
     }
 
-    /// Sets the latest extended-hours trade of the shown symbol, or `None` to hide that line,
-    /// such as during the regular session.
-    pub fn set_extended_hours(&mut self, quote: Option<ExtendedHoursQuote>) {
-        self.extended = quote;
-    }
-
-    /// Sets the volume of the shown symbol in its current session and its average daily volume
-    /// over the last 30 days, drawn as a bar split in proportion to the two.
-    pub fn set_volume(&mut self, volume: f64, average: f64) {
-        self.volume = Some((volume, average));
+    /// Sets the average daily volume of the shown symbol over the last 30 days. With the quote's
+    /// session volume, both are drawn as a bar split in proportion to the two.
+    pub fn set_average_volume(&mut self, average: f64) {
+        self.average_volume = Some(average);
     }
 
     /// Shows update times in `timezone`, such as the chart's.
@@ -323,8 +297,7 @@ impl SymbolDetailsPanel {
         let Self {
             instrument,
             quote,
-            extended,
-            volume,
+            average_volume,
             timezone,
             hidden,
             details,
@@ -418,11 +391,9 @@ impl SymbolDetailsPanel {
                         }
                     });
                 }
-                if let Some((quote, time)) = quote {
-                    let decimals = quote
-                        .price_decimals
-                        .or(instrument.price_decimals)
-                        .unwrap_or_else(|| price_decimals(quote.last));
+                if let Some(quote) = quote {
+                    let decimals =
+                        (instrument.price_decimals).unwrap_or_else(|| price_decimals(quote.last));
                     ui.add_space(theme.spacing.md);
                     price_line(
                         ui,
@@ -434,16 +405,12 @@ impl SymbolDetailsPanel {
                         instrument.currency.as_deref(),
                     );
                     ui.label(
-                        RichText::new(update(*time))
+                        RichText::new(update(quote.time))
                             .size(theme.text.small)
                             .color(theme.ui.text_secondary),
                     );
-                    if let Some(extended) = extended {
-                        let from_regular = WatchlistQuote {
-                            last: extended.last,
-                            prev_close: quote.last,
-                            price_decimals: Some(decimals),
-                        };
+                    if let Some(extended) = quote.extended {
+                        let from_regular = Quote::new(extended.last, quote.last, extended.time);
                         ui.add_space(theme.spacing.md);
                         price_line(
                             ui,
@@ -468,7 +435,8 @@ impl SymbolDetailsPanel {
                         });
                     }
                 }
-                if let Some((volume, average)) = *volume
+                if let Some((volume, average)) =
+                    quote.as_ref().and_then(|q| q.volume).zip(*average_volume)
                     && shown("Volume")
                 {
                     ui.add_space(theme.spacing.md);
@@ -809,15 +777,10 @@ mod tests {
     fn extended_hours_change_from_the_regular_last_price() {
         let ctx = egui::Context::default();
         let mut panel = SymbolDetailsPanel::new();
-        panel.set_instrument(&Instrument::new("QQQ"));
+        panel.set_instrument(&Instrument::new("QQQ").with_price_decimals(2));
         panel.set_timezone(chrono_tz::Europe::Berlin);
-        let quote = WatchlistQuote {
-            last: 704.47,
-            prev_close: 725.20,
-            price_decimals: Some(2),
-        };
-        panel.set_quote(quote, "2026-10-22T19:59:00Z".parse().unwrap());
-        panel.set_extended_hours(Some(ExtendedHoursQuote {
+        let quote = Quote::new(704.47, 725.20, "2026-10-22T19:59:00Z".parse().unwrap());
+        panel.set_quote(quote.with_extended(crate::model::ExtendedHoursQuote {
             session: ExtendedSession::PreMarket,
             last: 703.65,
             // Summer time ends in Berlin on October 25.

@@ -34,10 +34,12 @@
 //! # }
 //! ```
 
+#[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
+#[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
 use crate::model::{BarClock, BarData, ChartState, Timeframe};
 use crate::model::{ChartType, ChartTypeParams};
@@ -130,8 +132,16 @@ impl Chart {
             next_series: 2,
             primitives: Vec::new(),
             next_primitive: 0,
+            #[cfg(feature = "drawings")]
             drawings: DrawingManager::new(),
+            #[cfg(feature = "drawings")]
             symbol_drawings: Default::default(),
+            #[cfg(not(feature = "drawings"))]
+            symbol_markers: Default::default(),
+            #[cfg(feature = "drawings")]
+            drawing_store: None,
+            #[cfg(feature = "drawings")]
+            restored_studies: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane_layout::PaneLayout::default(),
             pane_options: Default::default(),
@@ -152,6 +162,12 @@ impl Chart {
             indicator_settings_request: None,
             session_quote: None,
             session_provider: None,
+            horizontal_scale: None,
+            locale: None,
+            date_format: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -167,6 +183,7 @@ impl Chart {
             event_click: None,
             timeframe: None,
             feed_link: None,
+            #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
             main_series_style: crate::model::SeriesStyle::default(),
             last_price_pulse: std::cell::Cell::new(None),
@@ -193,6 +210,14 @@ impl Chart {
             next_price_line: 0,
             #[cfg(feature = "ui")]
             trading_tags: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_outlined: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_bid_ask: false,
+            #[cfg(feature = "ui")]
+            order_quantity: None,
+            #[cfg(feature = "ui")]
+            quantity_clicked: None,
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
@@ -357,6 +382,7 @@ impl Chart {
         if self.chart_type != chart_type {
             self.state.clear_zoom_history();
             self.selection.deselect();
+            #[cfg(feature = "drawings")]
             self.drawings.deselect();
             self.chart_type = chart_type;
         }
@@ -410,6 +436,7 @@ impl Chart {
         if self.chart_type.is_time_independent() && self.chart_type_params != params {
             self.state.clear_zoom_history();
             self.selection.deselect();
+            #[cfg(feature = "drawings")]
             self.drawings.deselect();
         }
         self.chart_type_params = params;
@@ -517,6 +544,8 @@ pub struct ChartBuilder {
     config: ChartConfig,
     chart_options: ChartOptions,
     indicators: Option<IndicatorRegistry>,
+    #[cfg(feature = "drawings")]
+    drawing_registry: crate::drawings::DrawingToolRegistry,
     visible_candles: usize,
     /// Bars asked for in the first page of history.
     initial_bars: usize,
@@ -537,6 +566,8 @@ impl ChartBuilder {
             config: ChartConfig::default(),
             chart_options: ChartOptions::default(),
             indicators: None,
+            #[cfg(feature = "drawings")]
+            drawing_registry: Default::default(),
             visible_candles: 100,
             initial_bars: 1000,
         }
@@ -717,6 +748,14 @@ impl ChartBuilder {
         self
     }
 
+    /// Set host drawing tools and built-in availability before the chart is built.
+    #[cfg(feature = "drawings")]
+    #[must_use]
+    pub fn with_drawing_registry(mut self, registry: crate::drawings::DrawingToolRegistry) -> Self {
+        self.drawing_registry = registry;
+        self
+    }
+
     /// Set the number of bars visible in the initial viewport (default: 100).
     ///
     /// This controls the initial bar spacing so that approximately `count` bars
@@ -820,6 +859,10 @@ impl ChartBuilder {
         chart.set_visible_bars(self.visible_candles);
         chart.set_symbol(self.symbol.unwrap_or_default());
         chart.set_timeframe(self.timeframe);
+        #[cfg(feature = "drawings")]
+        {
+            chart.drawings.registry = self.drawing_registry;
+        }
         if let Some(feed) = self.feed {
             chart.attach_feed(feed, self.initial_bars);
         }
@@ -845,6 +888,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn drawings_keep_times_through_replacement_streaming_and_symbol_switches() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::SeriesId;
@@ -895,7 +939,21 @@ mod tests {
         chart.drawings_mut().stay_in_drawing_mode = true;
         chart.drawings_mut().eraser_mode = true;
         chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
+        chart.drawings_mut().registry.set_availability(
+            DrawingToolType::TrendLine,
+            crate::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
         chart.set_symbol("B");
+        assert!(
+            !chart
+                .drawings()
+                .registry
+                .availability(DrawingToolType::TrendLine)
+                .enabled
+        );
         assert!(chart.drawings().drawings.is_empty());
         assert!(chart.marks.is_empty());
         assert!(chart.drawings().stay_in_drawing_mode);

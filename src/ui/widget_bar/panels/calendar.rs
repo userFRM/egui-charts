@@ -3,12 +3,15 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Days, NaiveTime, Utc};
-use egui::{Label, RichText, Sense, Ui};
+use egui::{RichText, Sense, Ui, vec2};
 
+use super::controls::{cell, dropdown};
+use super::watchlist::ROW_HEIGHT;
 use crate::data::inbox::Inbox;
 use crate::data::{CalendarEvent, CalendarKind, CalendarQuery, Datafeed, FeedError, Importance};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, LoadingIndicator, PanelHeader};
 
@@ -192,21 +195,28 @@ impl CalendarPanel {
                 (CalendarKind::Dividends, "Dividends"),
                 (CalendarKind::Ipos, "IPOs"),
             ] {
-                ui.selectable_value(&mut self.kind, kind, label);
+                if Button::new(label)
+                    .small()
+                    .selected(self.kind == kind)
+                    .show(ui)
+                    .clicked()
+                {
+                    self.kind = kind;
+                }
             }
         });
         ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("calendar_range")
-                .selected_text(self.range.label())
-                .show_ui(ui, |ui| {
-                    for range in CalendarRange::ALL {
-                        ui.selectable_value(&mut self.range, range, range.label());
-                    }
-                });
+            dropdown(ui, "calendar_range", self.range.label(), |ui| {
+                for range in CalendarRange::ALL {
+                    ui.selectable_value(&mut self.range, range, range.label());
+                }
+            });
             if self.kind == CalendarKind::Economic {
-                egui::ComboBox::from_id_salt("calendar_importance")
-                    .selected_text(importance_label(self.importance))
-                    .show_ui(ui, |ui| {
+                dropdown(
+                    ui,
+                    "calendar_importance",
+                    importance_label(self.importance),
+                    |ui| {
                         for importance in [None, Some(Importance::Medium), Some(Importance::High)] {
                             ui.selectable_value(
                                 &mut self.importance,
@@ -214,24 +224,23 @@ impl CalendarPanel {
                                 importance_label(importance),
                             );
                         }
-                    });
-            }
-            if !self.countries.is_empty() {
-                let chosen = self.countries.iter().filter(|(_, on)| *on).count();
-                let text = if chosen == 0 {
-                    "All countries".to_owned()
-                } else {
-                    format!("{chosen} countries")
-                };
-                egui::ComboBox::from_id_salt("calendar_countries")
-                    .selected_text(text)
-                    .show_ui(ui, |ui| {
-                        for (code, on) in &mut self.countries {
-                            ui.checkbox(on, code.as_str());
-                        }
-                    });
+                    },
+                );
             }
         });
+        if !self.countries.is_empty() {
+            let chosen = self.countries.iter().filter(|(_, on)| *on).count();
+            let text = if chosen == 0 {
+                "All countries".to_owned()
+            } else {
+                format!("{chosen} countries")
+            };
+            dropdown(ui, "calendar_countries", &text, |ui| {
+                for (code, on) in &mut self.countries {
+                    ui.checkbox(on, code.as_str());
+                }
+            });
+        }
         if before
             != (
                 self.kind,
@@ -267,6 +276,14 @@ impl CalendarPanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let figures = |rect: egui::Rect| {
+                    let rect = rect.shrink2(vec2(8.0, 0.0));
+                    std::array::from_fn::<_, 3, _>(|i| {
+                        rect.with_min_x(rect.left() + rect.width() * i as f32 / 3.0)
+                            .with_max_x(rect.left() + rect.width() * (i + 1) as f32 / 3.0 - 4.0)
+                    })
+                };
                 let mut day = None;
                 for event in &self.events {
                     if day != Some(event.time.date_naive()) {
@@ -279,70 +296,92 @@ impl CalendarPanel {
                                 .color(theme.ui.text_secondary),
                         );
                         ui.separator();
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(event.time.format("%H:%M").to_string())
-                                .size(theme.text.small)
-                                .color(theme.ui.text_secondary),
+                        let (header, _) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), ROW_HEIGHT),
+                            Sense::hover(),
                         );
-                        if !event.country.is_empty() {
-                            ui.label(RichText::new(&event.country).size(theme.text.small));
+                        for (rect, title) in figures(header)
+                            .into_iter()
+                            .zip(["Actual", "Forecast", "Prior"])
+                        {
+                            cell(ui, rect, title, true, theme.ui.text_secondary);
                         }
-                        if let Some(importance) = event.importance {
-                            let level = importance as usize + 1;
-                            let color = match importance {
-                                Importance::High => theme.ui.error,
-                                Importance::Medium => theme.ui.warning,
-                                Importance::Low => theme.ui.text_secondary,
-                            };
-                            ui.label(
-                                RichText::new("●".repeat(level))
-                                    .size(theme.text.small)
-                                    .color(color),
-                            )
-                            .on_hover_text(match importance {
-                                Importance::Low => "Low importance",
-                                Importance::Medium => "Medium importance",
-                                Importance::High => "High importance",
-                            });
-                        }
-                        let title = match &event.symbol {
-                            Some(symbol) => format!("{symbol} · {}", event.title),
-                            None => event.title.clone(),
+                    }
+                    let sense = if event.symbol.is_some() {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    };
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 2.0 * ROW_HEIGHT), sense);
+                    if response.hovered() {
+                        ui.painter().rect_filled(rect, 0.0, theme.ui.btn_bg_hover);
+                    }
+                    let metadata = rect
+                        .with_max_y(rect.top() + ROW_HEIGHT)
+                        .shrink2(vec2(8.0, 0.0));
+                    let time = metadata.with_max_x(metadata.left() + 42.0);
+                    let country = metadata
+                        .with_min_x(time.right())
+                        .with_max_x(time.right() + 28.0);
+                    let importance = metadata
+                        .with_min_x(country.right())
+                        .with_max_x(country.right() + 32.0);
+                    let title_rect = metadata.with_min_x(importance.right());
+                    cell(
+                        ui,
+                        time,
+                        &event.time.format("%H:%M").to_string(),
+                        false,
+                        theme.ui.text_secondary,
+                    );
+                    cell(ui, country, &event.country, false, theme.ui.text_secondary);
+                    if let Some(level) = event.importance {
+                        let color = match level {
+                            Importance::High => theme.ui.error,
+                            Importance::Medium => theme.ui.warning,
+                            Importance::Low => theme.ui.text_secondary,
                         };
-                        let response =
-                            ui.add(Label::new(RichText::new(title).strong()).truncate().sense(
-                                if event.symbol.is_some() {
-                                    Sense::click()
-                                } else {
-                                    Sense::hover()
-                                },
-                            ));
-                        if let Some(symbol) = &event.symbol
-                            && response
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
+                        cell(
+                            ui,
+                            importance,
+                            &"●".repeat(level as usize + 1),
+                            false,
+                            color,
+                        )
+                        .on_hover_text(match level {
+                            Importance::Low => "Low importance",
+                            Importance::Medium => "Medium importance",
+                            Importance::High => "High importance",
+                        });
+                    }
+                    let title = match &event.symbol {
+                        Some(symbol) => format!("{symbol} · {}", event.title),
+                        None => event.title.clone(),
+                    };
+                    cell(ui, title_rect, &title, false, theme.ui.text);
+                    for (rect, value) in figures(rect.with_min_y(rect.top() + ROW_HEIGHT))
+                        .into_iter()
+                        .zip([&event.actual, &event.forecast, &event.prior])
+                    {
+                        cell(
+                            ui,
+                            rect,
+                            value.as_deref().unwrap_or("-"),
+                            true,
+                            theme.ui.text,
+                        );
+                    }
+                    if let Some(symbol) = &event.symbol {
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &title)
+                        });
+                        if response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
                         {
                             action = CalendarAction::SelectSymbol(symbol.clone());
                         }
-                    });
-                    let figures: Vec<String> = [
-                        ("Actual", &event.actual),
-                        ("Forecast", &event.forecast),
-                        ("Prior", &event.prior),
-                    ]
-                    .into_iter()
-                    .filter_map(|(label, value)| {
-                        value.as_ref().map(|value| format!("{label} {value}"))
-                    })
-                    .collect();
-                    if !figures.is_empty() {
-                        ui.label(
-                            RichText::new(figures.join("   "))
-                                .size(theme.text.small)
-                                .color(theme.ui.text_secondary),
-                        );
                     }
                 }
             });
@@ -361,6 +400,73 @@ fn importance_label(importance: Option<Importance>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Missing figures keep their columns, and event metadata fits on one line.
+    #[test]
+    fn event_figures_align_under_their_headings() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut panel = CalendarPanel::new();
+            let mut event = CalendarEvent::new(
+                "release",
+                CalendarKind::Economic,
+                "2026-10-21T12:30:00Z".parse().unwrap(),
+                "Output",
+            );
+            event.country = "US".into();
+            event.importance = Some(Importance::High);
+            event.actual = Some("1.2%".into());
+            event.prior = Some("10.5%".into());
+            panel.events.push(event);
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(280.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.show(ui);
+                },
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    let egui::Shape::Text(text) = &shape.shape else {
+                        return None;
+                    };
+                    Some((
+                        text.galley.text().to_owned(),
+                        text.visual_bounding_rect().intersect(shape.clip_rect),
+                    ))
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let bounds = |label: &str| {
+                texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+                    .1
+            };
+            for (value, heading) in [("1.2%", "Actual"), ("10.5%", "Prior")] {
+                assert!(
+                    (bounds(value).right() - bounds(heading).right()).abs() < 2.0,
+                    "{texts:?}"
+                );
+            }
+            for label in ["US", "Output"] {
+                assert!(
+                    (bounds(label).center().y - bounds("12:30").center().y).abs() < 2.0,
+                    "{texts:?}"
+                );
+            }
+            assert!(bounds("1.2%").right() < bounds("10.5%").left());
+        }
+    }
 
     /// Guards the days each range asks for: whole UTC days from midnight, weeks from Monday, so a
     /// Sunday belongs to the week that ends with it. Worked by hand from a calendar: 2026-10-21 is

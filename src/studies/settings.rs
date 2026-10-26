@@ -144,6 +144,10 @@ impl Indicator for ConfiguredStudy {
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.study.set_bar_clock(clock)
     }
+    #[cfg(feature = "drawings")]
+    fn drawings(&self) -> &[crate::drawings::Drawing] {
+        self.study.drawings()
+    }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }
@@ -245,6 +249,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
+    }
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+        self.study.volume_profiles(visible)
     }
     fn zones(&self) -> &[super::StudyZone] {
         self.study.zones()
