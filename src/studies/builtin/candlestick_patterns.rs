@@ -613,8 +613,6 @@ impl Default for CandlestickPatterns {
     }
 }
 
-/// SMA of `xs` over `n` values, NaN before the window fills.
-
 impl Indicator for CandlestickPatterns {
     crate::studies::inputs::study_inputs!(self;
         trend: choice("Detect trend based on", [PatternTrend::Sma50, PatternTrend::Sma50Sma200, PatternTrend::NoDetection]),
