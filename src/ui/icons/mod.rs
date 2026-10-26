@@ -16,6 +16,7 @@ pub enum IconSize {
 }
 
 impl IconSize {
+    /// Icon side length in egui logical points.
     pub fn size(&self) -> f32 {
         match self {
             IconSize::Small => DESIGN_TOKENS.sizing.icon_sm,

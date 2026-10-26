@@ -21,6 +21,7 @@ pub enum SettingsTab {
 }
 
 impl SettingsTab {
+    /// Values in display order.
     pub fn all() -> &'static [SettingsTab] {
         &[
             SettingsTab::Symbol,
@@ -33,6 +34,7 @@ impl SettingsTab {
         ]
     }
 
+    /// Display name for this value.
     pub fn name(&self) -> &'static str {
         match self {
             SettingsTab::Symbol => "Symbol",

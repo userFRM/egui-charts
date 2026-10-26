@@ -1,8 +1,8 @@
 //! Indicator factory for dynamic indicator creation by name.
 //!
 //! The [`IndicatorFactory`] provides a registry of constructor functions
-//! keyed by indicator name strings. Every built-in indicator is
-//! pre-registered under its canonical [`Indicator::name`] key and a category,
+//! keyed by indicator name strings. The built-in catalogue is
+//! registered under its canonical [`Indicator::name`] key and a category,
 //! and users can add their own at runtime. It is the catalogue of studies: a
 //! picker lists [`list`](IndicatorFactory::list), describes each entry with
 //! [`Indicator::desc`] and [`category`](IndicatorFactory::category), and
@@ -53,7 +53,7 @@ macro_rules! register_builtins {
 
 /// A factory that creates [`Indicator`] instances by name.
 ///
-/// On construction, every built-in indicator is registered under its canonical
+/// On construction, catalogue studies are registered under their canonical
 /// [`Indicator::name`] (e.g. `"SMA"`, `"RSI"`, `"MACD"`, `"SuperTrend"`) using
 /// its conventional default parameters. Each name selects a distinct calculation
 /// or source range. Additional indicators can be registered at runtime with
@@ -66,7 +66,7 @@ impl IndicatorFactory {
     /// The category of every indicator added with [`register`](Self::register).
     pub const CUSTOM: &'static str = "Custom";
 
-    /// Create a new factory pre-loaded with every built-in indicator.
+    /// Create a factory with the built-in catalogue enabled by the current features.
     pub fn new() -> Self {
         let mut factory = Self {
             constructors: HashMap::new(),

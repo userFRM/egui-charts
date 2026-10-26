@@ -23,6 +23,7 @@ pub struct NewsStory {
     pub id: String,
     /// When the story was published; the panel offers to show the chart at this time.
     pub time: DateTime<Utc>,
+    /// Headline displayed in the news list.
     pub headline: String,
     /// The publisher or provider, shown beside the time. May be empty.
     pub source: String,
@@ -56,7 +57,9 @@ impl NewsStory {
 pub enum CalendarKind {
     /// Economic releases and central bank decisions.
     Economic,
+    /// Company earnings releases.
     Earnings,
+    /// Dividend events.
     Dividends,
     /// Initial public offerings.
     Ipos,
@@ -65,8 +68,11 @@ pub enum CalendarKind {
 /// How much an economic event is expected to move the market.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Importance {
+    /// Low importance.
     Low,
+    /// Medium importance.
     Medium,
+    /// High importance.
     High,
 }
 
@@ -75,6 +81,7 @@ pub enum Importance {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CalendarQuery {
+    /// Calendar category, such as earnings or economic releases.
     pub kind: CalendarKind,
     /// Events at or after this time.
     pub from: DateTime<Utc>,
@@ -96,6 +103,7 @@ pub struct CalendarQuery {
 pub struct CalendarEvent {
     /// Identifies the event among the events of one answer.
     pub id: String,
+    /// Calendar category, such as earnings or economic releases.
     pub kind: CalendarKind,
     /// When the figure is released, the earnings reported, the dividend goes ex or the shares
     /// list.
@@ -106,9 +114,13 @@ pub struct CalendarEvent {
     pub title: String,
     /// The company's symbol, for earnings, dividends and IPOs; the panel offers to open it.
     pub symbol: Option<String>,
+    /// Importance assigned by the host, when applicable.
     pub importance: Option<Importance>,
+    /// Published figure, formatted by the host, when available.
     pub actual: Option<String>,
+    /// Expected figure, formatted by the host, when available.
     pub forecast: Option<String>,
+    /// Previous figure, formatted by the host, when available.
     pub prior: Option<String>,
 }
 
@@ -159,7 +171,9 @@ impl ScreenerColumn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScreenerColumnSet {
+    /// Display name.
     pub name: String,
+    /// Columns offered by this set, in display order.
     pub columns: Vec<ScreenerColumn>,
 }
 
@@ -187,7 +201,9 @@ pub enum ScreenerOp {
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,
+    /// Comparison applied to the selected column.
     pub op: ScreenerOp,
+    /// Comparison threshold.
     pub value: f64,
 }
 
@@ -212,6 +228,7 @@ pub struct ScreenerQuery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScreenerRow {
+    /// Instrument identifier used by the host.
     pub symbol: String,
     /// The values of [`ScreenerQuery::columns`], in that order, already formatted.
     pub values: Vec<String>,
@@ -242,7 +259,9 @@ pub struct HotlistQuery {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HotlistEntry {
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Last traded price.
     pub last: f64,
     /// The change since the previous close in percent, such as `2.5` for 2.5 %.
     pub change_percent: f64,

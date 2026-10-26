@@ -40,7 +40,12 @@ pub enum ContextMenuAction {
     /// Copy price value to clipboard
     CopyPrice(f64),
     /// Add a price alert on a symbol
-    AddAlert { symbol: String, price: f64 },
+    AddAlert {
+        /// Instrument identifier used by the host.
+        symbol: String,
+        /// Price under the pointer when the menu opened.
+        price: f64,
+    },
     /// A limit or stop order at the clicked price, for the user to confirm in the order ticket
     /// ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
     Order(OrderRequest),
@@ -73,17 +78,22 @@ pub enum ContextMenuAction {
 /// The chart, series and drawing menus all build their rows from this type.
 #[derive(Clone)]
 pub struct MenuItem<A = ContextMenuAction> {
+    /// Text displayed by the component.
     pub label: String,
     /// Shown right-aligned, formatted for the platform with [`Context::format_shortcut`].
     pub shortcut: Option<KeyboardShortcut>,
+    /// Glyph displayed by the component.
     pub icon: Option<&'static Icon>,
+    /// Action returned when this entry is activated.
     pub action: A,
+    /// Whether the entry can be activated.
     pub enabled: bool,
     /// Destructive rows paint in the theme's danger colours.
     pub danger: bool,
 }
 
 impl<A> MenuItem<A> {
+    /// Create an enabled menu entry with a label and the action it returns.
     pub fn new(label: impl Into<String>, action: A) -> Self {
         Self {
             label: label.into(),
@@ -95,16 +105,19 @@ impl<A> MenuItem<A> {
         }
     }
 
+    /// Set the keyboard shortcut displayed beside the label.
     pub fn with_shortcut(mut self, shortcut: impl Into<Option<KeyboardShortcut>>) -> Self {
         self.shortcut = shortcut.into();
         self
     }
 
+    /// Set the entry's icon.
     pub fn with_icon(mut self, icon: &'static Icon) -> Self {
         self.icon = Some(icon);
         self
     }
 
+    /// Prevent this entry from being activated.
     pub fn disabled(mut self) -> Self {
         self.enabled = false;
         self
@@ -611,6 +624,7 @@ impl Default for ChartContextMenu {
 }
 
 impl ChartContextMenu {
+    /// Create a closed chart context menu with default options.
     pub fn new() -> Self {
         Self {
             is_open: false,
@@ -632,6 +646,7 @@ impl ChartContextMenu {
         }
     }
 
+    /// Open the menu at `pos`, retaining the clicked `price` for its actions.
     pub fn open(&mut self, pos: Pos2, price: f64) {
         self.is_open = true;
         self.position = pos;
@@ -640,10 +655,12 @@ impl ChartContextMenu {
         self.just_opened = true; // Skip close detection on first frame
     }
 
+    /// Close the menu.
     pub fn close(&mut self) {
         self.is_open = false;
     }
 
+    /// Whether the menu is currently visible.
     pub fn is_open(&self) -> bool {
         self.is_open
     }

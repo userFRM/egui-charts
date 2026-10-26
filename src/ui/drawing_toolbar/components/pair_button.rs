@@ -29,9 +29,13 @@ pub struct PairButtonResponse {
 /// Direction for arrow indicators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDirection {
+    /// An upward direction.
     Up,
+    /// A downward direction.
     Down,
+    /// A leftward direction.
     Left,
+    /// A rightward arrow.
     Right,
 }
 

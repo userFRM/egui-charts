@@ -21,6 +21,7 @@ pub struct LogicalRange {
 }
 
 impl LogicalRange {
+    /// Construct a range from its left and right logical indices.
     pub fn new(left: f32, right: f32) -> Self {
         Self { left, right }
     }

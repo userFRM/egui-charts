@@ -23,13 +23,17 @@ pub struct SemanticTokens {
     pub chart: ChartSemanticTokens,
     /// Brand accent colors.
     pub brand: BrandSemanticTokens,
+    /// Status defaults.
     pub status: StatusSemanticTokens,
+    /// Footprint defaults.
     pub footprint: FootprintSemanticTokens,
+    /// Indicators defaults.
     pub indicators: IndicatorSemanticTokens,
+    /// Drawings defaults.
     pub drawings: DrawingSemanticTokens,
     /// Button variant colors.
     pub buttons: ButtonSemanticTokens,
-    /// Extended flat-access colors - replaces old theme::ui, theme::chart modules
+    /// Additional component color defaults.
     pub extended: ExtendedSemanticTokens,
     /// Alert component colors
     pub alert: AlertSemanticTokens,
@@ -47,29 +51,53 @@ pub struct SemanticTokens {
 /// panel, text, button, icon, border and accent values read by components.
 #[derive(Clone, Debug)]
 pub struct UiSemanticTokens {
+    /// Panel background light color.
     pub panel_bg_light: Color32,
+    /// Panel background secondary light color.
     pub panel_bg_secondary_light: Color32,
+    /// Text light color.
     pub text_light: Color32,
+    /// Text secondary light color.
     pub text_secondary_light: Color32,
+    /// Text muted light color.
     pub text_muted_light: Color32,
+    /// Border light color.
     pub border_light: Color32,
+    /// Border subtle light color.
     pub border_subtle_light: Color32,
+    /// Text muted dark color.
     pub text_muted_dark: Color32,
+    /// Border dark color.
     pub border_dark: Color32,
+    /// Icon light color.
     pub icon_light: Color32,
+    /// Icon hover light color.
     pub icon_hover_light: Color32,
+    /// Icon dark color.
     pub icon_dark: Color32,
+    /// Icon hover dark color.
     pub icon_hover_dark: Color32,
+    /// Icon active color.
     pub icon_active: Color32,
+    /// Button background light color.
     pub btn_bg_light: Color32,
+    /// Button background hover light color.
     pub btn_bg_hover_light: Color32,
+    /// Button background active light color.
     pub btn_bg_active_light: Color32,
+    /// Accent color.
     pub accent: Color32,
+    /// Accent hover color.
     pub accent_hover: Color32,
+    /// Success light color.
     pub success_light: Color32,
+    /// Warning light color.
     pub warning_light: Color32,
+    /// Info light color.
     pub info_light: Color32,
+    /// Success dark color.
     pub success_dark: Color32,
+    /// Error dark color.
     pub error_dark: Color32,
 }
 
@@ -79,44 +107,68 @@ pub struct UiSemanticTokens {
 /// candle/bar colors (bullish/bearish), volume bar alpha, and watermark.
 #[derive(Clone, Debug)]
 pub struct ChartSemanticTokens {
+    /// Background color.
     pub bg: Color32,
+    /// Background axis color.
     pub bg_axis: Color32,
+    /// Grid line color.
     pub grid_line: Color32,
+    /// Grid line major color.
     pub grid_line_major: Color32,
+    /// Axis text color.
     pub axis_text: Color32,
+    /// Axis text secondary color.
     pub axis_text_secondary: Color32,
+    /// Crosshair line color.
     pub crosshair_line: Color32,
+    /// Crosshair label background color.
     pub crosshair_label_bg: Color32,
+    /// Crosshair label text color.
     pub crosshair_label_text: Color32,
+    /// Bullish color.
     pub bullish: Color32,
+    /// Bearish color.
     pub bearish: Color32,
+    /// Volume up alpha, from transparent (0) to opaque (255).
     pub volume_up_alpha: u8,
+    /// Volume down alpha, from transparent (0) to opaque (255).
     pub volume_down_alpha: u8,
+    /// Watermark alpha, from transparent (0) to opaque (255).
     pub watermark_alpha: u8,
+    /// Selection text color.
     pub selection_text: Color32,
 }
 
 /// Brand accent colors (consistent across light/dark themes).
 #[derive(Clone, Debug)]
 pub struct BrandSemanticTokens {
+    /// Accent color.
     pub accent: Color32,
+    /// Accent hover color.
     pub accent_hover: Color32,
+    /// Accent active color.
     pub accent_active: Color32,
 }
 
 /// Status and feedback colors (error, info, disabled, caution).
 #[derive(Clone, Debug)]
 pub struct StatusSemanticTokens {
+    /// Error color.
     pub error: Color32,
+    /// Caution color.
     pub caution: Color32,
 }
 
 /// Footprint (order flow) chart colors.
 #[derive(Clone, Debug)]
 pub struct FootprintSemanticTokens {
+    /// Point of control color.
     pub poc: Color32,
+    /// Value area color.
     pub value_area: Color32,
+    /// Imbalance buy color.
     pub imbalance_buy: Color32,
+    /// Imbalance sell color.
     pub imbalance_sell: Color32,
 }
 
@@ -137,18 +189,29 @@ pub struct TpoSemanticTokens {
     pub letter_default: Color32,
     /// TPO grid line color
     pub grid: Color32,
-    /// Period colors for time-based coloring (12 colors)
+    /// Period colors used cyclically for time-based coloring.
     pub period_1: Color32,
+    /// Period 2 color.
     pub period_2: Color32,
+    /// Period 3 color.
     pub period_3: Color32,
+    /// Period 4 color.
     pub period_4: Color32,
+    /// Period 5 color.
     pub period_5: Color32,
+    /// Period 6 color.
     pub period_6: Color32,
+    /// Period 7 color.
     pub period_7: Color32,
+    /// Period 8 color.
     pub period_8: Color32,
+    /// Period 9 color.
     pub period_9: Color32,
+    /// Period 10 color.
     pub period_10: Color32,
+    /// Period 11 color.
     pub period_11: Color32,
+    /// Period 12 color.
     pub period_12: Color32,
 }
 

@@ -1,7 +1,7 @@
-//! Configuration for drawing toolbar appearance and sizing.
+//! Drawing toolbar and flyout dimensions.
 //!
-//! All colors are sourced from the egui theme system (`ui.style().visuals`).
-//! Fixed desktop dimensions - no responsive behavior.
+//! Use [`DrawingToolbarConfig`] to size the toolbar; colors come from the active
+//! egui visuals and theme.
 
 // =============================================================================
 // Fixed Desktop Constants
@@ -41,9 +41,13 @@ pub struct DrawingToolbarConfig {
     /// Collapsed width: 52px
     pub collapsed_width: f32,
     // Legacy fields kept for compatibility
+    /// Base icon size, in egui logical points.
     pub base_icon_size: f32,
+    /// Base width, in egui logical points.
     pub base_width: f32,
+    /// Base padding, in egui logical points.
     pub base_padding: f32,
+    /// Base submenu width, in egui logical points.
     pub base_submenu_width: f32,
 }
 

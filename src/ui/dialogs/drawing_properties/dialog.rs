@@ -17,12 +17,19 @@ use crate::ui_kit::tab_bar::TabBar;
 
 /// Drawing properties dialog
 pub struct DrawingPropertiesDialog {
+    /// Display and layout options for this component.
     pub config: DrawingPropertiesConfig,
+    /// Whether the dialog is currently visible.
     pub is_open: bool,
+    /// Identifier of the drawing being edited, when open.
     pub drawing_id: Option<DrawingId>,
+    /// Display name of the drawing being edited.
     pub drawing_name: String,
+    /// Currently selected tab.
     pub active_tab: PropertiesTab,
+    /// Editable drawing appearance and tool settings.
     pub props: DrawingProps,
+    /// Editable drawing anchors.
     pub coordinates: CoordinatesState,
     /// Validation error from the most recent Apply attempt.
     pub error: Option<String>,
@@ -35,6 +42,7 @@ impl Default for DrawingPropertiesDialog {
 }
 
 impl DrawingPropertiesDialog {
+    /// Create a [`DrawingPropertiesDialog`] with default settings.
     pub fn new() -> Self {
         Self {
             config: DrawingPropertiesConfig::default(),

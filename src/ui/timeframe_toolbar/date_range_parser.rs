@@ -12,21 +12,27 @@ use thiserror::Error;
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum DateRangeParseError {
     #[error("Invalid date format: {0}")]
+    /// A date could not be parsed; carries the invalid text.
     InvalidDateFormat(String),
 
     #[error("Invalid range format: {0}")]
+    /// The range syntax is invalid; carries the invalid text.
     InvalidRangeFormat(String),
 
     #[error("Invalid number: {0}")]
+    /// A relative duration has an invalid number.
     InvalidNumber(String),
 
     #[error("Invalid time unit: {0}")]
+    /// A relative duration has an unsupported unit.
     InvalidTimeUnit(String),
 
     #[error("End date must not be before start date")]
+    /// The end date precedes the start date.
     InvalidDateOrder,
 
     #[error("Unsupported format: {0}")]
+    /// The input does not match a supported range format.
     UnsupportedFormat(String),
 }
 

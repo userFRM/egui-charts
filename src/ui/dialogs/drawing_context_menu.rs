@@ -18,6 +18,7 @@ pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DrawingContextMenuAction {
+    /// No action requested.
     None,
     /// Open drawing settings dialog
     Edit,

@@ -1,8 +1,7 @@
-//! Component Styles - Pre-computed style defaults for UI components
+//! Theme-derived style values for menus and dialogs.
 //!
-//! This module provides ready-to-use style configurations for common components.
-//! These are derived from the theme's colours and include all styling properties
-//! (colors, spacing, radii, etc.) needed to render a component.
+//! Use these records when rendering custom controls that should share the chart's
+//! colors, spacing and corner radii.
 
 use super::Theme;
 use crate::tokens::DESIGN_TOKENS;

@@ -91,7 +91,9 @@ impl Default for ChartTypeSelectorConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChartTypeAction {
+    /// No action requested.
     None,
+    /// Select the supplied value.
     Select(ChartType),
 }
 
@@ -112,6 +114,7 @@ impl Default for ChartTypeSelector {
 }
 
 impl ChartTypeSelector {
+    /// Create a selector with `initial` as its selected chart type.
     pub fn new(initial: ChartType) -> Self {
         Self {
             current: initial,
@@ -120,6 +123,7 @@ impl ChartTypeSelector {
         }
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: ChartTypeSelectorConfig) -> Self {
         self.config = config;
         self

@@ -1,57 +1,32 @@
-//! Technical analysis indicators (studies) module.
+//! Technical indicators, calculation helpers and study presentation.
 //!
-//! This module provides technical indicators commonly used in financial
-//! charting applications, covering moving averages, momentum oscillators,
-//! volatility measures, volume analysis, trend detection, and more.
+//! Implement [`Indicator`] or use [`CustomIndicator`] for a host-defined study;
+//! [`IndicatorRegistry`] calculates a group of studies without a widget. Enable
+//! `studies` for the built-in catalogue and `IndicatorFactory`. A chart owns the
+//! calculation and rendering lifecycle of studies added through `Chart::add_indicator`.
 //!
-//! # Architecture
+//! # Calculating a study
 //!
-//! Every indicator implements the [`Indicator`] trait, which defines a
-//! uniform lifecycle:
+//! Outputs contain a contiguous column per line. Missing and warm-up results are
+//! NaN; [`IndicatorValues::value`] returns finite results as `Option<f64>`.
 //!
-//! 1. **Construction** -- Create an indicator with its parameters
-//!    (e.g. `SMA::new(20)`, `RSI::new(14)`, `MACD::new(12, 26, 9)`).
-//! 2. **Calculation** -- Call [`Indicator::calculate`] with a slice of [`Bar`]
-//!    data. The indicator computes its output values in one pass.
-//! 3. **Reading results** -- Call [`Indicator::values`] to retrieve [`IndicatorValues`],
-//!    one contiguous `Vec<f64>` per output line. NaN represents missing values, including
-//!    warm-up. [`IndicatorValues::value`] returns finite values as `Option<f64>`.
-//! 4. **Rendering** -- The chart engine reads [`Indicator::is_overlay`] to
-//!    decide whether the indicator is drawn on the main price pane or in a
-//!    separate sub-pane, and uses [`Indicator::colors`] /
-//!    [`Indicator::line_names`] for styling and legends.
-//!
-//! # Module layout
-//!
-//! | Sub-module | Purpose |
-//! |---|---|
-//! | `builtin` | *(feature `studies`)* All built-in indicators (`SMA`, `EMA`, `RSI`, `MACD`, `BollingerBands`, ...) |
-//! | `factory` | *(feature `studies`)* `IndicatorFactory` -- dynamic creation of indicators by name |
-//! | `indicator_trait` | The core [`Indicator`] trait and [`IndicatorValue`] enum |
-//! | `custom` | [`CustomIndicator`] -- define indicators at runtime with closures |
-//!
-//! # Quick start
-//!
-//! ```rust
-//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
-//! use egui_charts::studies::{BollingerBands, Indicator, IndicatorRegistry, RSI, SMA};
-//!
-//! // Create indicators
-//! let mut sma = SMA::new(20);
-//! let mut rsi = RSI::new(14);
-//! let mut bb  = BollingerBands::new(20, 2.0);
-//!
-//! // Calculate on bar data
-//! sma.calculate(&bars);
-//! rsi.calculate(&bars);
-//! bb.calculate(&bars);
-//!
-//! // Or use the registry for batch calculation
-//! let mut registry = IndicatorRegistry::new();
-//! registry.add(Box::new(SMA::new(50)));
-//! registry.add(Box::new(RSI::new(14)));
-//! registry.calculate_all(&bars);
 //! ```
+//! # #[cfg(feature = "studies")] {
+//! use egui_charts::{model::Bar, studies::{Indicator, SMA}};
+//!
+//! let bars = vec![
+//!     Bar::new("2024-01-01T00:00:00Z".parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 10.0),
+//!     Bar::new("2024-01-01T00:01:00Z".parse().unwrap(), 101.0, 103.0, 100.0, 103.0, 20.0),
+//! ];
+//! let mut sma = SMA::new(2);
+//! sma.calculate(&bars);
+//! assert_eq!(sma.values().value(0, 1), Some(102.0));
+//! # }
+//! ```
+//!
+//! [`helpers`] provides scalar calculations for custom studies, and [`Stepper`]
+//! provides incremental calculation state. [`StudyData`] carries auxiliary data
+//! requested from the host's feed.
 
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]

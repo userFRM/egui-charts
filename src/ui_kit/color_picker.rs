@@ -185,6 +185,7 @@ pub struct ColorPickerState {
 }
 
 impl ColorPickerState {
+    /// Create a closed picker with `initial_color` selected.
     pub fn new(initial_color: Color32) -> Self {
         Self {
             is_open: false,
@@ -209,6 +210,7 @@ pub struct ColorPicker<'a> {
 }
 
 impl<'a> ColorPicker<'a> {
+    /// Bind a color picker to persistent state and an egui identity.
     pub fn new(
         state: &'a mut ColorPickerState,
         id_src: impl std::hash::Hash + std::fmt::Debug,
@@ -220,6 +222,7 @@ impl<'a> ColorPicker<'a> {
         }
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: ColorPickerConfig) -> Self {
         self.config = config;
         self

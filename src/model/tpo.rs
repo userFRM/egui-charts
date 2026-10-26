@@ -5,11 +5,10 @@
 //! time periods (typically 30-minute brackets). The resulting profile
 //! reveals key structural levels:
 //!
-//! - **POC** (Point of Control) -- price with the most TPOs (highest volume).
-//! - **Value Area** -- price range containing 70% of TPO activity.
-//! - **Initial Balance** -- range established in the first hour of trading.
-//! - **Single Prints** -- levels with only one TPO, often acting as
-//!   support/resistance.
+//! - **POC** (Point of Control) -- price with the most TPOs.
+//! - **Value Area** -- price range containing the configured share of TPO activity.
+//! - **Initial Balance** -- range established during the configured opening period.
+//! - **Single Prints** -- levels touched during only one TPO period.
 //!
 //! Use [`to_tpo_profiles`] to transform OHLCV bars into per-session
 //! [`TPOProfile`]s.
@@ -55,9 +54,9 @@ pub struct TPOProfile {
     pub price_tpo_count: HashMap<i64, usize>,
     /// Point of Control - price with most TPOs
     pub poc_price: f64,
-    /// Value Area High (70% of volume)
+    /// Upper boundary of the configured TPO-count value area.
     pub value_area_high: f64,
-    /// Value Area Low (70% of volume)
+    /// Lower boundary of the configured TPO-count value area.
     pub value_area_low: f64,
     /// Initial Balance High (first hour)
     pub initial_balance_high: f64,

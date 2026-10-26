@@ -35,15 +35,22 @@ pub enum TimeframeUnit {
     Delta,
     /// One of the model's subsecond presets.
     Millisecond,
+    /// Seconds.
     Second,
+    /// Minutes.
     Minute,
+    /// Hours.
     Hour,
+    /// Days.
     Day,
+    /// Weeks.
     Week,
+    /// Months.
     Month,
 }
 
 impl TimeframeUnit {
+    /// Abbreviated unit label.
     pub fn short_name(&self) -> &'static str {
         match self {
             TimeframeUnit::Tick => "T",
@@ -60,6 +67,7 @@ impl TimeframeUnit {
         }
     }
 
+    /// Display name for this value.
     pub fn name(&self) -> &'static str {
         match self {
             TimeframeUnit::Tick => "ticks",
@@ -211,8 +219,11 @@ impl Default for TimeframeSelectorConfig {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum TimeframeAction {
+    /// No action requested.
     None,
+    /// Select the supplied value.
     Select(Timeframe),
+    /// Toggle the supplied interval's favorite state.
     ToggleFavorite(Timeframe),
 }
 
@@ -397,6 +408,7 @@ impl Default for TimeframeSelector {
 }
 
 impl TimeframeSelector {
+    /// Create an interval selector with `initial` selected and default favorites.
     pub fn new(initial: Timeframe) -> Self {
         let mut favorites = HashSet::new();
         // Default favorites
@@ -454,6 +466,7 @@ impl TimeframeSelector {
         }
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: TimeframeSelectorConfig) -> Self {
         self.config = config;
         self

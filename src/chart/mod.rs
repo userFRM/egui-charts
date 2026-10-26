@@ -1,30 +1,9 @@
-//! Core chart engine for financial charting.
+//! Rendering and geometry helpers for chart composition.
 //!
-//! This module is the heart of the `egui-charts` crate, providing the interactive
-//! financial charting engine built on [`egui`]. It is organized into several sub-modules that
-//! separate concerns cleanly:
-//!
-//! # Architecture
-//!
-//! [`Chart`](crate::widget::Chart) keeps the chart state and data.
-//! [`coords`] maps bar indices and prices to the screen, and the internal `rendering` and
-//! `renderers` modules draw candles, lines, the grid, axes and overlays. Pan, zoom, keyboard
-//! input and drawing input are in the [`widget`](crate::widget) module.
-//!
-//! # Public Modules
-//!
-//! | Module | Purpose |
-//! |--------|---------|
-//! | [`coords`] | Unified coordinate system: the one mapping between bar index or price and the screen |
-//! | [`series`] | Series hit testing, selection and display settings |
-//! | [`overlays`] | Visual overlays: heatmap strips, volume bubbles |
-//! | [`primitives`] | Host drawing attached to a series, and the renderers of custom series |
-//!
-//! # Internal Modules (crate-only)
-//!
-//! The remaining sub-modules (`state`, `hit_test`, `indicators`,
-//! `selection`, `cursor_modes`, `renderers`, `rendering`) are implementation
-//! details and not part of the public API.
+//! Use [`coords`] for coordinate conversions, [`series`] for hit testing and series
+//! settings, [`overlays`] for order flow visualizations and [`primitives`] for custom
+//! rendering. For a chart that manages data, layout and interaction, use
+//! [`Chart`](crate::Chart).
 
 pub mod coords;
 pub mod overlays;

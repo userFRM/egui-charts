@@ -12,10 +12,18 @@ use chrono::{DateTime, Utc};
 /// Connection state for WebSocket or data provider
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
+    /// The host reports an established connection.
     Connected,
+    /// A connection attempt is in progress.
     Connecting,
-    Reconnecting { attempt: u32 },
+    /// The host is retrying the connection.
+    Reconnecting {
+        /// Reconnect attempt number supplied by the host.
+        attempt: u32,
+    },
+    /// The connection is closed.
     Disconnected,
+    /// Connection failure with a host-supplied message.
     Failed(String),
 }
 
@@ -32,7 +40,9 @@ pub use crate::widget::ChartLayoutMode;
 /// UI layout style variant
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutStyle {
+    /// Modern layout styling.
     Modern,
+    /// Classic layout styling.
     Classic,
 }
 
@@ -40,31 +50,43 @@ pub enum LayoutStyle {
 // Replay (toolbar-level types used by replay/toolbar.rs)
 // =============================================================================
 
-/// Command sent to the replay service
+/// Replay command for the host to apply.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReplayCommand {
+    /// Resume playback.
     Resume,
+    /// Pause playback.
     Pause,
+    /// Stop playback.
     Stop,
+    /// Advance playback by one step.
     StepForward,
+    /// Move playback back by one step.
     StepBackward,
+    /// Set the playback speed.
     SetSpeed(PlaybackSpeed),
 }
 
 /// Replay playback state (toolbar-level)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolbarReplayState {
+    /// Playback is advancing.
     Playing,
+    /// Playback is paused.
     Paused,
     #[default]
+    /// No playback session is running.
     Stopped,
+    /// Playback has reached the end of the available data.
     Finished,
+    /// Playback is waiting for data.
     Buffering,
+    /// Playback failed.
     Error,
 }
 
 impl ToolbarReplayState {
-    /// Whether the replay is actively running (playing or buffering)
+    /// Whether a replay session is playing, paused or buffering.
     pub fn is_active(&self) -> bool {
         matches!(self, Self::Playing | Self::Paused | Self::Buffering)
     }
@@ -79,9 +101,13 @@ impl ToolbarReplayState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlaybackSpeed {
     #[default]
+    /// Play at the original speed.
     RealTime,
+    /// Play at four times the original speed.
     Fast,
+    /// Play at ten times the original speed.
     VeryFast,
+    /// Play at one hundred times the original speed.
     UltraFast,
 }
 
@@ -110,15 +136,22 @@ impl PlaybackSpeed {
 /// Progress information for replay (tick-file replay)
 #[derive(Debug, Clone)]
 pub struct ReplayProgress {
+    /// Market time reached by playback.
     pub current_time: DateTime<Utc>,
+    /// Number of bars processed so far.
     pub bars_played: usize,
+    /// Total number of bars available for playback.
     pub total_bars: usize,
+    /// Number of executions processed so far.
     pub ticks_processed: u64,
+    /// Playback progress in percent.
     pub progress_pct: f32,
 }
 
 impl ReplayProgress {
-    /// Get progress as a fraction (0.0 to 1.0)
+    /// Bars played divided by total bars, or zero when the total is zero.
+    ///
+    /// Unlike the `progress_pct` field, this method returns a fraction, not percent.
     pub fn progress_pct(&self) -> f64 {
         if self.total_bars == 0 {
             0.0
@@ -135,10 +168,15 @@ impl ReplayProgress {
 /// An indicator parameter template
 #[derive(Debug, Clone)]
 pub struct IndicatorTemplate {
+    /// Host identifier for this record.
     pub id: String,
+    /// Display name.
     pub name: String,
+    /// Study identifier used by the host for this template.
     pub indicator_type: String,
+    /// Named numeric parameter values supplied by the host.
     pub parameters: Vec<(String, f64)>,
+    /// Host-reported sharing state; the host manages permissions.
     pub is_shared: bool,
 }
 

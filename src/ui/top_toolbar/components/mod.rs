@@ -1,6 +1,6 @@
-//! Upper toolbar components
+//! Symbol search, interval and chart type pickers, study selection and layout controls.
 //!
-//! Individual components for the upper toolbar.
+//! Use these components individually when composing a custom top toolbar.
 
 pub mod chart_grid_selector;
 pub mod chart_type_selector;

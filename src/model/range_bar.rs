@@ -1,12 +1,9 @@
 //! Range-bar chart transformation.
 //!
-//! Range bars have a fixed price range (high minus low) and variable time
-//! duration. A new bar starts only once the previous bar's range is filled.
-//! This normalises volatility, giving each bar equal "importance" in price
-//! terms.
-//!
-//! - [`to_range_bars_from_ticks`] -- build from trades (exact).
-//! - [`to_range_bars_from_ohlc`] -- approximate from OHLCV bars.
+//! Build bars with a configured price range rather than a fixed time interval.
+//! Use [`to_range_bars_from_ticks`] with executions, or
+//! [`to_range_bars_from_ohlc`] for an approximation from existing bars. The newest
+//! output bar can be incomplete.
 
 use super::PriceBuilder;
 use super::Tick;

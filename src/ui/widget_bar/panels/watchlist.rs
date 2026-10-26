@@ -30,12 +30,19 @@ pub(super) const HEADER_HEIGHT: f32 = 40.0;
 /// A colour flag marking a watchlist symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WatchlistFlag {
+    /// Red watchlist flag.
     Red,
+    /// Blue watchlist flag.
     Blue,
+    /// Green watchlist flag.
     Green,
+    /// Orange watchlist flag.
     Orange,
+    /// Purple watchlist flag.
     Purple,
+    /// Cyan watchlist flag.
     Cyan,
+    /// Pink watchlist flag.
     Pink,
 }
 
@@ -70,7 +77,9 @@ impl WatchlistFlag {
 pub enum WatchlistItem {
     /// A symbol, optionally flagged.
     Symbol {
+        /// Instrument identifier used by the host.
         symbol: String,
+        /// Optional user-assigned color flag.
         flag: Option<WatchlistFlag>,
     },
     /// A section title grouping the symbols below it, up to the next section.
@@ -80,7 +89,9 @@ pub enum WatchlistItem {
 /// A named list of symbols and sections, in the order the user arranged them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Watchlist {
+    /// Display name.
     pub name: String,
+    /// Symbols and section headings in display order.
     pub items: Vec<WatchlistItem>,
 }
 
@@ -156,9 +167,13 @@ impl Watchlist {
 /// A sortable watchlist column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchlistColumn {
+    /// Sort by symbol.
     Symbol,
+    /// Sort by last price.
     Last,
+    /// Sort by price change.
     Change,
+    /// Sort by percentage change.
     ChangePercent,
 }
 
@@ -180,7 +195,12 @@ pub enum WatchlistAction {
     Import,
     /// Save `text`, the active list in the [`Watchlist::from_text`] format, to a file the user
     /// chooses.
-    Export { name: String, text: String },
+    Export {
+        /// Display name.
+        name: String,
+        /// Exported watchlist text for the host to save or copy.
+        text: String,
+    },
 }
 
 /// The source list and row index, so separate panels cannot exchange row indices.

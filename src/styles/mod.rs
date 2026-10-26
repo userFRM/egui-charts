@@ -1,46 +1,7 @@
-//! UI styles: the keyboard focus ring and sizing, typography, icon and stroke constants.
+//! UI sizing, typography, icon sizes and keyboard focus helpers.
 //!
-//! Core spacing, rounding, and button sizing are now in `DESIGN_TOKENS`.
-//!
-//! # Architecture
-//!
-//! ```text
-//! styles/
-//! ├── focus.rs       - Keyboard focus ring
-//! ├── sizing.rs      - Chart layout constants
-//! ├── typography.rs  - Font sizes
-//! └── icons.rs       - Icon sizes
-//!
-//! tokens/
-//! └── mod.rs         - DESIGN_TOKENS (spacing, sizing, rounding)
-//! ```
-//!
-//! # Usage
-//!
-//! ```rust
-//! use egui_charts::styles::{sizing, typography};
-//! use egui_charts::tokens::DESIGN_TOKENS;
-//!
-//! // Spacing (from DESIGN_TOKENS)
-//! let gap = DESIGN_TOKENS.spacing.panel_gap;
-//! let padding = DESIGN_TOKENS.spacing.lg;
-//!
-//! // Sizing (fixed desktop constants)
-//! let axis_width = sizing::chart::RIGHT_AXIS_WIDTH;
-//! let btn_size = DESIGN_TOKENS.sizing.button_md;
-//!
-//! // Rounding (from DESIGN_TOKENS)
-//! let corner_radius = DESIGN_TOKENS.rounding.button;
-//!
-//! // Typography
-//! let font_size = typography::MD;
-//! ```
-//!
-//! # Design Philosophy
-//!
-//! - **Single source of truth**: `DESIGN_TOKENS`, defined as Rust constants
-//! - **Semantic naming**: Use `DESIGN_TOKENS.rounding.button` not magic numbers
-//! - **IDE-friendly**: Autocomplete shows available options
+//! Use these constants for chart and control layout, [`crate::tokens::DESIGN_TOKENS`]
+//! for shared design values and the active [`Theme`](crate::theme::Theme) for colors.
 
 pub mod focus;
 pub mod icons;

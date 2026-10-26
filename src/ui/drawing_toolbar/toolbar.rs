@@ -96,6 +96,7 @@ pub struct DrawingToolbar {
 }
 
 impl DrawingToolbar {
+    /// Create a [`DrawingToolbar`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }
@@ -156,32 +157,39 @@ impl DrawingToolbar {
 
     // === State management methods ===
 
+    /// Select the tool if its registry entry is enabled.
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         if self.registry.availability(tool).enabled {
             self.state.select_tool(tool);
         }
     }
 
+    /// Record a tool in the recent selection list.
     pub fn add_to_recent(&mut self, tool: DrawingToolType) {
         self.state.add_to_recent(tool);
     }
 
+    /// Clear the toolbar's selected tool.
     pub fn clear_selection(&mut self) {
         self.state.clear_selection();
     }
 
+    /// Toggle a tool's membership in favorites.
     pub fn toggle_favorite(&mut self, tool: DrawingToolType) {
         self.state.toggle_favorite(tool);
     }
 
+    /// Whether the tool is marked as a favorite.
     pub fn is_favorite(&self, tool: &DrawingToolType) -> bool {
         self.state.is_favorite(tool)
     }
 
+    /// Toggle the toolbar's magnet setting.
     pub fn toggle_magnet(&mut self) {
         self.state.toggle_magnet();
     }
 
+    /// Toggle whether the selected tool stays active after completing a drawing.
     pub fn toggle_stay_in_drawing(&mut self) {
         self.state.toggle_stay_in_drawing();
     }

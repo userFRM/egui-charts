@@ -219,6 +219,7 @@ pub struct DialogFooter {
 }
 
 impl DialogFooter {
+    /// Create a footer with a primary action label.
     pub fn new(primary_label: impl Into<String>) -> Self {
         Self {
             primary_label: primary_label.into(),

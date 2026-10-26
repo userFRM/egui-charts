@@ -9,7 +9,7 @@
 //! the main chart or in a pane below it), so one selection model can express
 //! "whatever the user last clicked" regardless of which layer it lives on.
 
-/// Unique numeric identifier for a chart series.
+/// Identifier shared by bar series, the volume series and studies.
 ///
 /// Well-known constants: [`MAIN`](Self::MAIN) (candlesticks/bars) and
 /// [`VOLUME`](Self::VOLUME).
@@ -34,12 +34,11 @@ impl SeriesId {
 
 /// Identifies any selectable element across the entire chart.
 ///
-/// A single `SelectionState` tracks the one element the user
-/// has clicked, whether it is a series or a study, drawn on the main chart
-/// (SMA, EMA, …) or in a pane below it (RSI, MACD, …).
+/// Read the chart's current selection with [`Chart::selected_element`](crate::Chart::selected_element).
+/// Series and studies can be selected in the main pane or an additional pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChartElementId {
-    /// A price or volume series on the main chart.
+    /// A bar or volume series.
     Series(SeriesId),
     /// A study, identified by the id [`Chart::add_indicator`](crate::Chart::add_indicator)
     /// returned.

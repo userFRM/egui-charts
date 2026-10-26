@@ -46,6 +46,7 @@ pub struct TimeAndSalesConfig {
 /// in the panel: with any filter, only trades matching one are listed, and each filter can ask
 /// for a sound.
 pub struct TimeAndSalesPanel {
+    /// Display and layout options for this component.
     pub config: TimeAndSalesConfig,
     /// A trade is listed when its size reaches the `min_size` of any filter, or always when there
     /// are none.

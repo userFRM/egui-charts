@@ -22,19 +22,34 @@ pub enum IndicatorTemplateAction {
     /// No action taken
     None,
     /// Save current indicator parameters as a new template
-    Save { name: String, description: String },
+    Save {
+        /// Display name.
+        name: String,
+        /// Description displayed to the user.
+        description: String,
+    },
     /// Load a template's parameters into the current indicator
-    Load { template_id: String },
+    Load {
+        /// Host identifier of the template.
+        template_id: String,
+    },
     /// Delete a template
-    Delete { template_id: String },
+    Delete {
+        /// Host identifier of the template.
+        template_id: String,
+    },
     /// Rename a template
     Rename {
+        /// Host identifier of the template.
         template_id: String,
+        /// Replacement display name.
         new_name: String,
     },
     /// Toggle shared/personal visibility
     ToggleShared {
+        /// Host identifier of the template.
         template_id: String,
+        /// Requested sharing state; the host manages permissions.
         is_shared: bool,
     },
 }
@@ -50,7 +65,7 @@ pub struct IndicatorTemplateState {
     pub templates: Vec<IndicatorTemplate>,
     /// Currently selected template (for preview/actions)
     pub selected_template: Option<String>,
-    /// Whether the template list is loading from the API
+    /// Whether the host is loading the template list.
     pub is_loading: bool,
     /// Whether the save form is visible
     pub show_save_form: bool,
@@ -77,7 +92,7 @@ impl IndicatorTemplateState {
         self.pending_delete = None;
     }
 
-    /// Set templates from API response
+    /// Replace the template list supplied by the host and clear the loading state.
     pub fn set_templates(&mut self, templates: Vec<IndicatorTemplate>) {
         self.templates = templates;
         self.is_loading = false;

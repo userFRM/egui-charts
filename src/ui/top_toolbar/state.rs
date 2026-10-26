@@ -1,6 +1,6 @@
-//! State management for top toolbar.
+//! Top toolbar selection, visibility and interaction state.
 //!
-//! Separates mutable state from configuration.
+//! Keep [`TopToolbarState`] across frames when using the toolbar in a host layout.
 
 /// Top toolbar state
 ///

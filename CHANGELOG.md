@@ -830,6 +830,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Crate and module documentation now describe chart integration with host-supplied history and streaming data, with a populated quick start, current feature boundaries and matching README and package description. Public feed records, UI options, icons and design tokens have API descriptions; stale drawing counts, implementation inventories and unsupported capability claims are removed. ([#933](https://github.com/userFRM/egui-charts/issues/933))
+
 - The next release is 0.3.0. Public implementation modules are private, extensible options and output records are non-exhaustive, and growing chart, interval, drawing, study and host-intent enums require fallback matches. The timezone formatter wrapper is crate-private; hosts keep using `TimeFormatterBuilder::with_timezone`. Main stateful types retain their private fields and accessors. Public configuration and data fields remain intentionally editable. CI compares the API with the latest published crate version and also gates release publication. Before 1.0, an incompatible API or exposed egui upgrade requires a new minor release; from 1.0 it requires a major release. The 0.3 line uses egui 0.37; compatible egui patch upgrades may ship in patch releases. ([#253](https://github.com/userFRM/egui-charts/issues/253))
 
   | Old path or construction | New path or construction |

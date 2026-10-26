@@ -1,7 +1,7 @@
-//! Configuration for top toolbar layout.
+//! Top toolbar dimensions and spacing.
 //!
-//! Colors are not stored here: widgets read them from `ui.visuals()` and the active theme.
-//! Fixed desktop dimensions - no responsive behavior.
+//! Use [`TopToolbarConfig`] to size controls; colors come from egui visuals and
+//! the active theme.
 
 // =============================================================================
 // Fixed Desktop Constants (exact dimensions)
@@ -40,9 +40,13 @@ pub struct TopToolbarConfig {
     /// Border radius: 4px
     pub rounding: f32,
     // Legacy fields kept for compatibility
+    /// Base height, in egui logical points.
     pub base_height: f32,
+    /// Base icon size, in egui logical points.
     pub base_icon_size: f32,
+    /// Base button size, in egui logical points.
     pub base_btn_size: f32,
+    /// Base padding, in egui logical points.
     pub base_padding: f32,
 }
 

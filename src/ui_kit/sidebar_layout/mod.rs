@@ -1,7 +1,7 @@
 //! Sidebar + content two-column layout using `egui_extras::StripBuilder`.
 //!
-//! Provides a proportional two-column layout with a fixed-width sidebar,
-//! a 1px vertical separator, and a remainder-width content area.
+//! Use [`SidebarLayout`] for a fixed-width navigation column beside flexible
+//! content, separated by a rule. Sizes use egui logical points.
 //!
 //! # Example
 //! ```
@@ -30,6 +30,7 @@ pub struct SidebarLayout {
 }
 
 impl SidebarLayout {
+    /// Create a layout with a sidebar width in egui logical points.
     pub fn new(sidebar_width: f32) -> Self {
         Self { sidebar_width }
     }
@@ -101,6 +102,7 @@ pub struct SidebarTab<'a> {
 }
 
 impl<'a> SidebarTab<'a> {
+    /// Create a sidebar tab with a label and selection state.
     pub fn new(label: &'a str, is_active: bool) -> Self {
         Self {
             label,
@@ -109,6 +111,7 @@ impl<'a> SidebarTab<'a> {
         }
     }
 
+    /// Set the tab's optional icon.
     pub fn icon(mut self, icon: &'a crate::icons::Icon) -> Self {
         self.icon = Some(icon);
         self

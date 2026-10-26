@@ -1,4 +1,7 @@
-//! Data structures for indicator information and configuration
+//! Study browser entries, saved favorites and editable parameters.
+//!
+//! Use [`IndicatorPreferences`] to retain favorite factory names and
+//! [`IndicatorInfo`] to describe studies in a picker.
 
 use crate::studies::IndicatorFactory;
 
@@ -18,10 +21,15 @@ pub struct IndicatorPreferences {
 pub struct IndicatorInfo {
     /// The name the dialog's [`IndicatorFactory`] creates the study under
     pub id: String,
+    /// Display name.
     pub name: String,
+    /// Description displayed to the user.
     pub desc: String,
+    /// Category label used to group the entry in the browser.
     pub category: String,
+    /// Whether the study draws on the price pane by default.
     pub is_overlay: bool,
+    /// Display flag for a premium entry; access control belongs to the host.
     pub is_premium: bool,
 }
 
@@ -44,7 +52,7 @@ impl IndicatorInfo {
         self
     }
 
-    /// Mark this indicator as premium (requires subscription)
+    /// Mark this entry as premium for display. Access control belongs to the host.
     pub fn premium(mut self) -> Self {
         self.is_premium = true;
         self
@@ -81,25 +89,39 @@ impl IndicatorInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndicatorParams {
     // Moving avgs
+    /// Shared lookback length in bars for the selected study.
     pub period: usize,
     // Keltner Channels
+    /// ATR lookback length in bars for Keltner Channels.
     pub keltner_atr: usize,
+    /// ATR multiplier for the Keltner Channel bands.
     pub keltner_multiplier: f64,
     // Bollinger Bands
+    /// Standard deviation multiplier for Bollinger Bands.
     pub bb_std_dev: f64,
     // MACD
+    /// Fast EMA length in bars.
     pub macd_fast: usize,
+    /// Slow EMA length in bars.
     pub macd_slow: usize,
+    /// MACD signal EMA length in bars.
     pub macd_signal: usize,
     // Stochastic
+    /// Stochastic %K lookback length in bars.
     pub stoch_k: usize,
+    /// Smoothing length in bars for stochastic %K.
     pub stoch_smooth: usize,
+    /// Smoothing length in bars for stochastic %D.
     pub stoch_d: usize,
     // SuperTrend
+    /// ATR multiplier for SuperTrend bands.
     pub supertrend_multiplier: f64,
     // Ichimoku
+    /// Ichimoku conversion line lookback in bars.
     pub ichimoku_tenkan: usize,
+    /// Ichimoku base line lookback in bars.
     pub ichimoku_kijun: usize,
+    /// Ichimoku leading span B lookback in bars.
     pub ichimoku_senkou: usize,
 }
 

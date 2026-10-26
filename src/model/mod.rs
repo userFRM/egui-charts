@@ -1,15 +1,9 @@
-//! Core data models for financial charting
+//! Data types for bars, instruments, chart styles, trading and host analytics.
 //!
-//! Provides fundamental data structures for bars, candles, markers,
-//! symbols, timeframes, and chart state management.
-//!
-//! # Module Organization
-//!
-//! - [`bar`] - Core OHLCV data structures
-//! - `chart_type` - Chart visualization type definitions
-//! - `renko`, `kagi`, `line_break`, etc. - Data transformations
-//! - `markers`, `annotations` - Chart overlays
-//! - `strategy` - A strategy run's trades and equity, and its performance metrics
+//! Start with [`Bar`] and [`BarData`] for price history, [`Instrument`] for symbol
+//! metadata and [`Timeframe`] for bar intervals. The transformation modules build
+//! price-based charts and TPO profiles without rendering; strategy records describe
+//! host-computed runs and provide performance calculations.
 
 /// The most price movement, in sizes, that a Renko or range bar build walks over. A smaller size
 /// on a longer history is built from a later bar; see `renko::work_start`.

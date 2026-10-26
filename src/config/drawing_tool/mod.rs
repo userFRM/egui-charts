@@ -285,11 +285,11 @@ pub enum DrawingToolType {
     FlagNote,
 
     // ============ CONTENT (3 tools - placeholders) ============
-    /// Image embed placeholder (requires external service integration).
+    /// Image embed identifier; built-in rendering draws a frame without loading an image.
     Image,
-    /// Tweet/social media embed placeholder.
+    /// Social post embed identifier; built-in rendering draws a card without fetching content.
     Tweet,
-    /// Idea/note embed placeholder.
+    /// Idea embed identifier; built-in rendering draws a badge without fetching content.
     Idea,
 
     // ============ ICONS (2 tools) ============

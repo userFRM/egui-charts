@@ -1,24 +1,7 @@
-//! Form grid: a two-column grid with standard spacing for label and control rows.
+//! Grid layout for form labels and controls.
 //!
-//! Replaces the repeated `Grid::new("id").num_columns(2).spacing([lg, md])` setup in the
-//! settings, properties and alert dialogs.
-//!
-//! ```
-//! # use egui_charts::ui_kit::FormGrid;
-//! # egui::__run_test_ui(|ui| {
-//! # let mut bg_type = "Solid";
-//! FormGrid::new("canvas_bg").show(ui, |ui| {
-//!     ui.label("Type");
-//!     egui::ComboBox::from_id_salt("bg_type")
-//!         .selected_text(bg_type)
-//!         .show_ui(ui, |ui| {
-//!             ui.selectable_value(&mut bg_type, "Solid", "Solid");
-//!             ui.selectable_value(&mut bg_type, "Gradient", "Gradient");
-//!         });
-//!     ui.end_row();
-//! });
-//! # });
-//! ```
+//! Use [`FormGrid`] for rows with shared spacing; close each row with
+//! [`egui::Ui::end_row`].
 
 use crate::tokens::DESIGN_TOKENS;
 use egui::Ui;
@@ -34,6 +17,7 @@ pub struct FormGrid {
 }
 
 impl FormGrid {
+    /// Create a two-column form grid with a stable egui identity.
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),

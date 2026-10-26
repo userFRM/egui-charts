@@ -56,15 +56,25 @@ impl OhlcData {
 /// Configuration for the symbol header
 #[derive(Clone, Debug)]
 pub struct SymbolHeaderConfig {
+    /// Height, in egui logical points.
     pub height: f32,
+    /// Background color.
     pub bg_color: Color32,
+    /// Text color.
     pub text_color: Color32,
+    /// Label color.
     pub label_color: Color32,
+    /// Bullish color.
     pub bullish_color: Color32,
+    /// Bearish color.
     pub bearish_color: Color32,
+    /// Separator color.
     pub separator_color: Color32,
+    /// Whether to show company name.
     pub show_company_name: bool,
+    /// Whether to show bid ask.
     pub show_bid_ask: bool,
+    /// Whether to show volume.
     pub show_volume: bool,
 }
 
@@ -129,10 +139,12 @@ pub struct SymbolHeader {
     pub instrument: Instrument,
     /// Chart interval label.
     pub timeframe: String,
+    /// Price and volume readout displayed in the header.
     pub ohlc: OhlcData,
     /// The symbol's quote, such as the one `WatchlistPanel::quote` holds. Its bid and ask show
     /// when both are known.
     pub quote: Option<Quote>,
+    /// Display and layout options for this component.
     pub config: SymbolHeaderConfig,
 }
 

@@ -1,20 +1,8 @@
-//! Chart Overlays
+//! Order flow visualizations for the price pane.
 //!
-//! Overlay visualizations that sit on top of the main chart, including:
-//! - Heatmap strips (volume flow visualization)
-//!
-//! # Example
-//!
-//! ```
-//! use egui_charts::chart::overlays::HeatmapStrip;
-//!
-//! # fn example(ui: &mut egui::Ui, strip_rect: egui::Rect, deltas: &[f64], volumes: &[f64], visible_range: (usize, usize), bar_width: f32) {
-//! // Create heatmap strip
-//! let mut heatmap = HeatmapStrip::new();
-//! heatmap.set_data(deltas.iter().enumerate().map(|(i, d)| (i, *d, volumes[i])));
-//! heatmap.render(ui, strip_rect, visible_range, bar_width);
-//! # }
-//! ```
+//! Use the footprint renderer with executed volume at price, [`LiquidityHeatmap`]
+//! with depth history, or [`HeatmapStrip`] with per-bar delta and volume. The chart
+//! also exposes volume bubble configuration through [`VolumeBubblesConfig`].
 
 mod footprint;
 pub use footprint::{

@@ -1,51 +1,8 @@
-//! Object Tree Panel - Object management
+//! Object list and cursor data readout for a chart sidebar.
 //!
-//! A comprehensive panel for managing all chart objects including:
-//! - Data Window: Real-time OHLCV data at cursor position
-//! - Source Tree: Hierarchical view of indicators and drawings
-//! - Full object management: visibility, lock, delete, duplicate, reorder
-//!
-//! # Architecture
-//!
-//! ```text
-//! object_tree/
-//! ├── mod.rs           # Public API
-//! ├── config.rs        # Configuration
-//! ├── state.rs         # State management
-//! ├── types.rs         # Core types (SourceItem, DataWindowInfo, etc.)
-//! ├── actions.rs       # Action enum
-//! ├── panel.rs         # Main widget
-//! ├── data_window.rs   # Data Window section
-//! ├── source_tree.rs   # Source tree rendering
-//! ├── item_row.rs      # Individual item rendering
-//! └── context_menu.rs  # Right-click context menu
-//! ```
-//!
-//! # Example
-//!
-//! ```no_run
-//! use egui_charts::drawings::DrawingToolType;
-//! use egui_charts::ui::widget_bar::panels::object_tree::{
-//!     ObjectTreePanel, ObjectTreeAction, SourceItem, DataWindowInfo
-//! };
-//!
-//! # fn side_panel(ui: &mut egui::Ui, data_window_info: &DataWindowInfo) {
-//! let mut panel = ObjectTreePanel::new();
-//! let mut sources = vec![
-//!     SourceItem::indicator(1, "SMA(20)", egui::Color32::YELLOW),
-//!     SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::BLUE),
-//! ];
-//!
-//! let action = panel.show(ui, Some(data_window_info), &mut sources);
-//! match action {
-//!     ObjectTreeAction::Delete(id) => { /* Handle delete */ }
-//!     ObjectTreeAction::ToggleVisibility(id) => { /* Handle visibility */ }
-//!     _ => {}
-//! }
-//! # }
-//! ```
-//!
-//! Drawing and study operations are applied with `ObjectTreePanel::apply_to_chart`.
+//! Use [`ObjectTreePanel`] with host-supplied [`SourceItem`] records and optional
+//! [`DataWindowInfo`]. Apply drawing and study actions through
+//! [`ObjectTreePanel::apply_to_chart`].
 
 mod actions;
 mod chart_actions;

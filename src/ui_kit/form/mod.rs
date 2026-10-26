@@ -39,6 +39,7 @@ pub struct FormRow<'a> {
 }
 
 impl<'a> FormRow<'a> {
+    /// Create a form row with the supplied label.
     pub fn new(label: &'a str) -> Self {
         Self {
             label,
@@ -47,11 +48,13 @@ impl<'a> FormRow<'a> {
         }
     }
 
+    /// Set explanatory text displayed with the form row.
     pub fn description(mut self, desc: &'a str) -> Self {
         self.description = Some(desc);
         self
     }
 
+    /// Set the label column width in egui logical points.
     pub fn label_width(mut self, width: f32) -> Self {
         self.label_width = width;
         self

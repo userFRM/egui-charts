@@ -276,12 +276,19 @@ impl TextSizes {
     serde(default)
 )]
 pub struct Spacing {
+    /// Extra small, in egui logical points.
     pub xs: f32,
+    /// Small, in egui logical points.
     pub sm: f32,
+    /// Medium, in egui logical points.
     pub md: f32,
+    /// Large, in egui logical points.
     pub lg: f32,
+    /// Extra large, in egui logical points.
     pub xl: f32,
+    /// Double extra large, in egui logical points.
     pub xxl: f32,
+    /// Triple extra large, in egui logical points.
     pub xxxl: f32,
 }
 
@@ -307,10 +314,15 @@ impl Default for Spacing {
     serde(default)
 )]
 pub struct Radii {
+    /// Extra small, in egui logical points.
     pub xs: f32,
+    /// Small, in egui logical points.
     pub sm: f32,
+    /// Medium, in egui logical points.
     pub md: f32,
+    /// Large, in egui logical points.
     pub lg: f32,
+    /// Extra large, in egui logical points.
     pub xl: f32,
 }
 

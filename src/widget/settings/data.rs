@@ -401,7 +401,7 @@ impl Default for AlertsSettings {
     }
 }
 
-/// Comprehensive chart settings state
+/// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
     // Symbol tab

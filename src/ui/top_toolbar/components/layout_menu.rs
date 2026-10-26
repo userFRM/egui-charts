@@ -16,6 +16,7 @@ use std::time::Duration;
 /// Configuration for layout menu
 #[derive(Debug, Clone)]
 pub struct LayoutMenuConfig {
+    /// Menu width, in egui logical points.
     pub menu_width: f32,
 }
 
@@ -29,6 +30,7 @@ impl Default for LayoutMenuConfig {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum LayoutAction {
+    /// No action requested.
     None,
     /// Select a tiled or tabbed chart arrangement.
     SelectGrid(crate::widget::ChartLayoutMode),
@@ -36,7 +38,9 @@ pub enum LayoutAction {
     Save,
     /// Save the current layout under a new name, which becomes current (Save layout as).
     SaveAs(String),
+    /// Request a chart image download.
     DownloadImage,
+    /// Request a new layout.
     CreateNew,
     /// Open the named layout.
     Open(String),

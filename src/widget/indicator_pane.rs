@@ -2,7 +2,7 @@
 //!
 //! This module renders oscillator and multi-line indicators (RSI, MACD, Stochastic,
 //! etc.) in dedicated panels below the main chart. It paints directly through
-//! [`egui::Painter`] to ensure pixel-perfect x-axis alignment with the main
+//! [`egui::Painter`] using the same horizontal coordinate mapping as the main
 //! candlestick chart.
 //!
 //! # Usage

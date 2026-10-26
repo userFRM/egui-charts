@@ -1,9 +1,9 @@
-//! Three-Line Break chart transformation.
+//! Line Break chart transformation.
 //!
-//! A Line Break chart (also called "N-Line Break") draws a new line only
-//! when the closing price exceeds the high or low of the previous *N*
-//! lines. This filters out minor noise while preserving significant
-//! reversals.
+//! A Line Break chart extends the current direction when the selected price
+//! passes the last line's extreme. A reversal requires a break past the opposite
+//! extreme of the configured number of preceding lines. Use
+//! [`to_line_break_lines`] to transform OHLCV bars without rendering.
 //!
 //! - [`to_line_break_lines`] converts OHLCV bars into line-break lines.
 //! - [`detect_signal`] classifies the relationship between the last two
@@ -48,7 +48,9 @@ impl LineBreakConfig {
 /// Direction of a single line in a Line Break chart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineDirection {
+    /// An upward direction.
     Up,
+    /// A downward direction.
     Down,
 }
 

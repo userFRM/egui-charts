@@ -1,7 +1,7 @@
-//! Connection Status Indicator
+//! Connection status icon with an optional text label.
 //!
-//! Displays a small indicator showing the WebSocket connection state.
-//! Used in the top toolbar to show real-time data connectivity.
+//! Pass the host's [`ConnectionState`] to [`ConnectionStatusIndicator`] to display
+//! connectivity independently of the transport used.
 
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
