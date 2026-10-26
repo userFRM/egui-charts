@@ -11,6 +11,7 @@ use crate::chart::selection::ChartElementId;
 use crate::chart::series::calculate_dot_interval;
 use crate::localization as l10n;
 use crate::studies::{CustomIndicator, Indicator};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui};
 
@@ -486,6 +487,16 @@ impl Chart {
             }
             // The crosshair lines of a pane with host series are drawn above their bars.
             let mut series_crosshair = None;
+            let legend_row_height = ui
+                .painter()
+                .layout_no_wrap(
+                    "Ag".into(),
+                    egui::FontId::proportional(ui.active_theme().text.ohlc),
+                    ui.active_theme().ui.text,
+                )
+                .size()
+                .y
+                + ui.active_theme().spacing.md;
             let legend_order = entries.clone();
             entries.sort_by_key(|entry| entry.is_some_and(|(id, _)| Some(id) == on_top));
             for (paint_row, entry) in entries.into_iter().enumerate() {
@@ -549,7 +560,7 @@ impl Chart {
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = paint_row > 0;
 
-                panel.legend_offset = member_row as f32 * 24.0;
+                panel.legend_offset = member_row as f32 * legend_row_height;
                 panel.pane_controls = true;
                 // A series legend reports its value at any bar, the last close without a crosshair.
                 panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
@@ -732,7 +743,7 @@ impl Chart {
                                 .map_or(chart_rect.right() - 42.0, |r| {
                                     r.rect.left().min(chart_rect.right())
                                 }),
-                            (chart_rect.top() + panel.legend_offset + 24.0)
+                            (chart_rect.top() + panel.legend_offset + legend_row_height)
                                 .min(chart_rect.bottom()),
                         ),
                     );

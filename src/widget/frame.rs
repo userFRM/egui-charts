@@ -10,7 +10,6 @@ use crate::data::Footprint;
 use crate::localization as l10n;
 use crate::model::{MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
@@ -994,7 +993,7 @@ impl Chart {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 l10n::text(ui.ctx(), "No data available"),
-                egui::FontId::proportional(typography::LG),
+                egui::FontId::proportional(ui.active_theme().text.title),
                 self.config.text_color,
             );
             return response;

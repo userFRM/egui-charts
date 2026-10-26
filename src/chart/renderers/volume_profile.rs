@@ -1,7 +1,8 @@
 //! Horizontal price-row histograms shared by drawing and study profiles.
 
 use crate::studies::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke, epaint::StrokeKind};
 use std::ops::Range;
@@ -133,7 +134,7 @@ fn draw_volume_profile_lines(
     vah_y: f32,
     val_y: f32,
 ) {
-    let font = egui::FontId::proportional(typography::XS);
+    let font = egui::FontId::proportional(painter.ctx().active_theme().text.tiny);
 
     // Draw POC line (dashed, extends across range)
     let poc_color = DESIGN_TOKENS.semantic.extended.favorite_gold;

@@ -12,6 +12,7 @@ use crate::model::{
 };
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::{Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyFormat};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
@@ -1176,6 +1177,12 @@ impl Chart {
         items: impl Iterator<Item = &'a PriceSeries>,
     ) -> f32 {
         let plot = painter.with_clip_rect(painter.clip_rect().intersect(rect));
+        let font = egui::FontId::proportional(ui.active_theme().text.ohlc);
+        let row_height = painter
+            .layout_no_wrap("Ag".into(), font.clone(), self.config.text_color)
+            .size()
+            .y
+            + ui.active_theme().spacing.sm;
         let main = self.state.shown();
         let mut bottom = top;
         for (row, item) in items.enumerate() {
@@ -1213,7 +1220,7 @@ impl Chart {
                     },
                 );
                 let label = plot.text(
-                    Pos2::new(rect.left() + 8.0, top + row as f32 * 20.0),
+                    Pos2::new(rect.left() + 8.0, top + row as f32 * row_height),
                     egui::Align2::LEFT_TOP,
                     format!(
                         "{}  {}",
@@ -1228,7 +1235,7 @@ impl Chart {
                             ""
                         }
                     ),
-                    egui::FontId::proportional(crate::styles::typography::MD),
+                    font.clone(),
                     item.options.color,
                 );
                 bottom = label.bottom();

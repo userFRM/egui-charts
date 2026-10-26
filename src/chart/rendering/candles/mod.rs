@@ -22,6 +22,7 @@ mod range;
 pub mod tpo;
 pub(crate) mod volume;
 
+use crate::theme::ThemeExt;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
@@ -29,7 +30,6 @@ pub use params::{
 
 use crate::model::{BaselineLevel, ChartType, ChartTypeStyles};
 use crate::scales::PriceMap;
-use crate::styles::typography;
 
 /// The line colour of a line-based chart type at `value`, or `None` for other chart types. The
 /// Baseline chart takes the colour of the side of `baseline` that `value` lies on, in the price
@@ -93,7 +93,7 @@ pub fn render_chart_type(
             price_rect.center(),
             egui::Align2::CENTER_CENTER,
             message,
-            egui::FontId::proportional(typography::LG),
+            egui::FontId::proportional(painter.ctx().active_theme().text.title),
             ctx.colors.text,
         );
         return;

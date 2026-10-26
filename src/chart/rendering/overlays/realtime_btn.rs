@@ -1,7 +1,7 @@
 //! Realtime (Jump to Latest) button rendering
 
 use crate::config::RealtimeButtonPos;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Vec2};
 
 /// Renders "Jump to Latest" button
@@ -38,7 +38,7 @@ pub fn render_realtime_btn(
         btn_rect.center(),
         egui::Align2::CENTER_CENTER,
         text,
-        FontId::proportional(typography::SM_MD),
+        FontId::proportional(painter.ctx().active_theme().text.label),
         text_color,
     );
 }

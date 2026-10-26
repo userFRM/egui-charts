@@ -13,7 +13,6 @@ use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
 };
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
@@ -634,7 +633,7 @@ pub fn render_magnifier_tooltip(
         Pos2::new(center.x, center.y + radius - 12.0),
         egui::Align2::CENTER_BOTTOM,
         &zoom_text,
-        FontId::proportional(typography::TINY),
+        FontId::proportional(context.painter.ctx().active_theme().text.tiny),
         chart.axis_text_secondary,
     );
 }

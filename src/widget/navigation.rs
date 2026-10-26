@@ -195,7 +195,7 @@ impl Chart {
                     response.rect.center(),
                     egui::Align2::CENTER_CENTER,
                     l10n::text(ui.ctx(), text[index]),
-                    egui::FontId::proportional(crate::styles::typography::SM),
+                    egui::FontId::proportional(ui.active_theme().text.small),
                     visuals.text_color(),
                 );
             };

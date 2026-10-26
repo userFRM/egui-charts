@@ -37,7 +37,6 @@ use crate::localization as l10n;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::Indicator;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui};
@@ -1379,10 +1378,10 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         text_color: Color32,
         background: Color32,
+        font_size: f32,
     ) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
-        let format =
-            |color| egui::TextFormat::simple(egui::FontId::proportional(typography::MD), color);
+        let format = |color| egui::TextFormat::simple(egui::FontId::proportional(font_size), color);
         if self.config.show_name {
             job.append(indicator.name(), 0.0, format(text_color));
         }
@@ -1436,14 +1435,23 @@ impl IndicatorPane {
             return None;
         }
         let theme = painter.ctx().active_theme();
-        let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
-        let x =
-            (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
-                .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
-                .max(rect.left());
+        let galley = painter.layout_job(self.legend_job(
+            indicator,
+            theme.ui.text,
+            theme.chart.bg,
+            theme.text.ohlc,
+        ));
+        let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
+            .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
+            .max(rect.left());
         Some(
             Rect::from_min_size(
-                Pos2::new(x, rect.top() + self.legend_offset + 2.0),
+                Pos2::new(
+                    x,
+                    rect.top()
+                        + self.legend_offset
+                        + (galley.size().y + theme.spacing.md - 20.0).max(0.0) / 2.0,
+                ),
                 egui::vec2(80.0, 20.0),
             )
             .intersect(rect),
@@ -1461,15 +1469,16 @@ impl IndicatorPane {
         if !self.config.show_legend {
             return;
         }
+        let theme = painter.ctx().active_theme();
         let galley = painter.layout_job(self.legend_job(
             indicator,
             text_color,
-            painter.ctx().active_theme().chart.bg,
+            theme.chart.bg,
+            theme.text.ohlc,
         ));
         let pos = Pos2::new(
-            rect.left() + DESIGN_TOKENS.spacing.sm,
-            rect.top() + self.legend_offset + 12.0_f32.min(rect.height() / 2.0)
-                - galley.size().y / 2.0,
+            rect.left() + theme.spacing.sm,
+            rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
         );
         painter.galley(pos, galley, text_color);
     }
@@ -1634,7 +1643,12 @@ mod tests {
         ] {
             study.calculate(&bars);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-            let job = pane.legend_job(study.as_ref(), Color32::WHITE, Color32::BLACK);
+            let job = pane.legend_job(
+                study.as_ref(),
+                Color32::WHITE,
+                Color32::BLACK,
+                crate::theme::Theme::default().text.ohlc,
+            );
             assert!(job.text.contains(expected), "{}", job.text);
             let ctx = egui::Context::default();
             let mut study = crate::studies::ConfiguredStudy::new(study);

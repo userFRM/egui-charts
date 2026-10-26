@@ -70,5 +70,25 @@ mod tests {
         frame(&ctx, &mut local, 4.0, vec![]);
         assert_eq!(local.config().background_color, Theme::light().chart.bg);
         assert_eq!(local.config().bullish_wick_color, Some(egui::Color32::BLUE));
+        let mut resized = Theme::light();
+        resized.text.chart_title = 23.0;
+        resized.text.ohlc = 17.0;
+        apply_to_egui(&ctx, &resized);
+        shared.set_symbol("PALETTE");
+        shared.add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("Pane font", |bars| {
+                vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
+            })
+            .with_overlay(false),
+        ));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut shared, 5.0, vec![]);
+        for (prefix, size) in [("PALETTE", 23.0), ("O ", 17.0), ("Pane font", 17.0)] {
+            let matches = painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text().starts_with(prefix)
+                    && text.galley.job.sections.iter()
+                        .filter(|section| !text.galley.text()[section.byte_range.start.0..section.byte_range.end.0].trim().is_empty())
+                        .all(|section| section.format.font_id.size == size)));
+            assert!(matches, "theme text size for {prefix}");
+        }
     }
 }
