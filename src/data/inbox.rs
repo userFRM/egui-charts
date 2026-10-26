@@ -19,6 +19,9 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+/// Maximum undrained bar slots per live subscription, independent of raw trade retention.
+const MAX_PENDING_BARS: usize = 100_000;
+
 /// A `Result<T, FeedError>` answering a request for `T`, or a `T` pushed through an event stream.
 pub(crate) type Answer = Box<dyn Any + Send>;
 
@@ -55,8 +58,17 @@ pub fn aggregate_trades_with_tick_size(
     let inbox = Arc::new(Inbox::default());
     let sink = inbox.subscribe(String::new(), clock.into(), trades.len(), tick_size);
     sink.set_server_time(last.ts);
-    for trade in trades {
-        sink.push_tick(trade.clone());
+    {
+        // A finite historical batch owns its output; only live pushes need the pending limit.
+        let mut state = inbox.state();
+        let live = state
+            .subscriptions
+            .get_mut(&sink.id)
+            .expect("active subscription");
+        let system = Utc::now();
+        for trade in trades {
+            live.tick(trade.clone(), system);
+        }
     }
     let (_, updates) = inbox.drain().updates.pop().expect("active subscription");
     if updates.rejected > 0 || updates.late_ticks > 0 {
@@ -160,13 +172,15 @@ pub(crate) struct Updates {
     pub(crate) symbols_changed: bool,
     pub(crate) status: Option<FeedStatus>,
     pub(crate) error: Option<FeedError>,
-    /// Trades older than the forming bar, dropped.
+    /// Trades older than the last accepted execution or forming bar, dropped.
     pub(crate) late_ticks: u64,
     /// Trades whose id is among those the subscription remembers, dropped.
     pub(crate) repeated_ticks: u64,
     /// Bars and ticks that failed validation or were stamped too far ahead of the feed's clock,
     /// dropped.
     pub(crate) rejected: u64,
+    /// Bar slots evicted before a drain, reported as data loss even after another stream error.
+    dropped_bars: u64,
     /// Depth snapshots and deltas that failed validation, dropped.
     pub(crate) rejected_depth: u64,
 }
@@ -190,6 +204,7 @@ impl Updates {
             late_ticks: 0,
             repeated_ticks: 0,
             rejected: 0,
+            dropped_bars: 0,
             rejected_depth: 0,
         }
     }
@@ -297,6 +312,13 @@ impl Inbox {
             .map(|(id, live)| {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
+                if updates.dropped_bars > 0 {
+                    updates.rejected += updates.dropped_bars;
+                    updates.error = Some(FeedError::InvalidData(format!(
+                        "pending bar limit exceeded: {} bars dropped; reload history",
+                        updates.dropped_bars,
+                    )));
+                }
                 updates.depth = live.book.take_changed();
                 updates.orders_changed = std::mem::take(&mut live.orders_changed);
                 if updates.orders_changed {
@@ -410,6 +432,10 @@ impl<T: Send + 'static> Drop for Reply<T> {
 ///     }
 /// }
 /// ```
+///
+/// Pending bars are capped at 100,000 slots independently of raw trades. Overflow discards
+/// the oldest slots and reports `FeedError::InvalidData` on the next drain; the host reloads
+/// history to recover the missing bars.
 #[derive(Clone)]
 pub struct Sink {
     inbox: Arc<Inbox>,
@@ -481,8 +507,8 @@ impl Sink {
     /// A trade, folded into the bar of its slot and kept for order flow, the oldest trades making
     /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
     /// history page. A feed must therefore not push trades that its history already counts; a feed
-    /// that cannot tell pushes bars instead. Trades older than the forming bar are dropped, and so is
-    /// a trade whose id is among those of the last trades the subscription folded, as many as its
+    /// that cannot tell pushes bars instead. Trades older than the last accepted execution or
+    /// forming bar are dropped, and so is a trade whose id is among those of the last trades the subscription folded, as many as its
     /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
     /// [`Sink::set_server_time`] describes.
     /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
@@ -537,6 +563,7 @@ impl Sink {
             );
             live.forming = Some(open);
             live.empty = true;
+            live.bound_bars();
             true
         });
     }
@@ -703,6 +730,7 @@ impl Sink {
             .push(|state| match state.subscriptions.get_mut(&self.id) {
                 Some(live) => {
                     update(live);
+                    live.bound_bars();
                     true
                 }
                 None => false,
@@ -711,6 +739,13 @@ impl Sink {
 }
 
 impl Live {
+    fn bound_bars(&mut self) {
+        while self.updates.bars.len() > MAX_PENDING_BARS {
+            self.updates.bars.pop_first();
+            self.updates.dropped_bars += 1;
+        }
+    }
+
     /// Whether the slot opening at `open` is too far ahead of the feed's current time, `system`
     /// being the system clock's, by the rule of [`Sink::set_server_time`].
     fn ahead(&self, open: DateTime<Utc>, system: DateTime<Utc>) -> bool {
@@ -774,7 +809,9 @@ impl Live {
             if tick.aggressor_order_id.is_some() || tick.resting_order_id.is_some() {
                 updates.trades.push(tick);
             }
-        } else if live.forming.is_some_and(|forming| open < forming) {
+        } else if live.last_trade.is_some_and(|last| tick.ts < last)
+            || live.forming.is_some_and(|forming| open < forming)
+        {
             updates.late_ticks += 1;
         } else {
             let replace_empty = live.empty && live.forming == Some(open);
@@ -804,6 +841,7 @@ impl Live {
                     ));
                 }
             }
+            live.last_trade = Some(tick.ts);
             live.last_close = Some(price);
             live.empty = false;
             live.forming = Some(open);
@@ -1142,6 +1180,91 @@ mod tests {
                     ],
                     "{count}, group {group}",
                 );
+            }
+        }
+    }
+
+    /// Hidden streams bound bars independently of raw fills and report every evicted slot.
+    #[test]
+    fn undrained_bars_are_bounded_and_overflow_is_reported() {
+        for pushed_bars in [false, true] {
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe(
+                "ES".into(),
+                "1t".parse::<Timeframe>().unwrap().into(),
+                2,
+                None,
+            );
+            sink.set_server_time(at(0, 0));
+            for id in 0..100_002 {
+                if pushed_bars {
+                    let time = at(0, 0) + TimeDelta::nanoseconds(id);
+                    sink.push_bar(Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+                } else {
+                    sink.push_tick(tick(at(0, 0), 100.0, 1.0).with_id(id as u64));
+                }
+            }
+            sink.report_error(FeedError::Network("another failure".into()));
+            let (_, updates) = inbox.drain().updates.pop().unwrap();
+            assert_eq!(updates.bars.len(), 100_000);
+            assert_eq!(
+                updates.bars.first_key_value().unwrap().0,
+                &(at(0, 0) + TimeDelta::nanoseconds(2))
+            );
+            assert!(matches!(updates.error, Some(FeedError::InvalidData(_))));
+            assert_eq!(updates.rejected, 2);
+            sink.push_tick(tick(at(0, 0) + TimeDelta::nanoseconds(100_003), 101.0, 1.0));
+            let (_, next) = inbox.drain().updates.pop().unwrap();
+            assert_eq!(next.bars.len(), 1);
+            assert_eq!(next.error, None);
+            assert_eq!(next.rejected, 0);
+            sink.reset_replay(at(0, 0));
+            sink.push_tick(tick(at(0, 0), 99.0, 1.0));
+            let (_, reset) = inbox.drain().updates.pop().unwrap();
+            assert!(reset.reset);
+            assert_eq!(reset.bars.len(), 1);
+            assert_eq!(reset.error, None);
+        }
+        // An explicit historical batch is not a hidden live queue.
+        let trades = (0..100_002)
+            .map(|id| tick(at(0, 0), 10.0, 1.0).with_id(id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            aggregate_trades(&trades, "1t".parse::<Timeframe>().unwrap())
+                .unwrap()
+                .len(),
+            trades.len()
+        );
+    }
+
+    /// A delayed execution cannot become the close, within a drain or after it.
+    #[test]
+    fn backwards_executions_are_late_even_inside_the_forming_bucket() {
+        for timeframe in [Timeframe::Min1, Timeframe::Hour1, "1t".parse().unwrap()] {
+            for drain in [false, true] {
+                let inbox = Arc::new(Inbox::default());
+                let sink = inbox.subscribe("ES".into(), timeframe.into(), 100, None);
+                let latest = tick(at(0, 50), 110.0, 1.0);
+                let delayed = tick(at(0, 10), 90.0, 1.0);
+                sink.push_tick(latest.clone());
+                if drain {
+                    inbox.drain();
+                }
+                sink.push_tick(delayed.clone());
+                let (_, updates) = inbox.drain().updates.pop().unwrap();
+                assert_eq!(updates.late_ticks, 1, "{timeframe}, drain={drain}");
+                assert!(updates.bars.values().all(|(bar, _)| bar.close == 110.0));
+                assert_eq!(updates.trades.iter().count(), usize::from(!drain));
+                assert!(matches!(
+                    aggregate_trades(&[latest, delayed], timeframe),
+                    Err(FeedError::InvalidData(_))
+                ));
+                // Equal execution times are valid, and a replay seek resets the watermark.
+                sink.push_tick(tick(at(0, 50), 111.0, 1.0));
+                assert_eq!(inbox.drain().updates[0].1.late_ticks, 0);
+                sink.reset_replay(at(0, 0));
+                sink.push_tick(tick(at(0, 10), 90.0, 1.0));
+                assert_eq!(inbox.drain().updates[0].1.late_ticks, 0);
             }
         }
     }

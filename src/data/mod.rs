@@ -478,9 +478,10 @@ pub struct FeedState {
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
     /// the open and close, negative volume, a tick that would overflow its bar's volume, a time
-    /// too far ahead of the feed's clock (see `Sink::set_server_time`).
+    /// too far ahead of the feed's clock (see `Sink::set_server_time`), or pending bar slots
+    /// evicted after overflow (also reported in `last_error`).
     pub rejected_bars: u64,
-    /// Trades older than the forming bar, dropped.
+    /// Trades older than the last accepted execution or forming bar, dropped.
     pub late_ticks: u64,
     /// Trades whose id is among those of the last trades the subscription folded, as many as its
     /// trade store holds, dropped: a feed replaying its last trades after a reconnect.
