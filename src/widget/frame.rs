@@ -1126,6 +1126,7 @@ impl Chart {
             .price_scale()
             .map(transform, price_rect.min.y, price_rect.max.y);
 
+        self.update_shared_study_maps(price_rect);
         let price_formatter = self.price_label_formatter(price_map.transform().mode);
 
         // Store the final price mapping and rects for external use (selection dots, hit testing)
@@ -1434,7 +1435,12 @@ impl Chart {
                     studies
                         .indicators()
                         .iter()
-                        .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
+                        .find(|study| {
+                            study.is_volume()
+                                && study.is_overlay()
+                                && study.is_visible()
+                                && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+                        })
                         .map_or(max_volume.max(1.0), |study| {
                             super::volume::range(
                                 study.as_ref(),
@@ -1486,10 +1492,20 @@ impl Chart {
             .collect();
         let last_bar = self.state.shown().len().saturating_sub(1);
         let secondary_hits = [pointer, response.interact_pointer_pos()].map(|pos| {
-            pos.map(|pos| (pos, self.main_pane_series().rev().find_map(|item| {
-                self.hit_price_series(item, pos, price_rect, self.series_map(item, price_rect))
-                    .map(|bar| (super::ChartElementId::Series(item.id), bar))
-            })))
+            pos.map(|pos| {
+                (
+                    pos,
+                    self.main_pane_series().rev().find_map(|item| {
+                        self.hit_price_series(
+                            item,
+                            pos,
+                            price_rect,
+                            self.series_map(item, price_rect),
+                        )
+                        .map(|bar| (super::ChartElementId::Series(item.id), bar))
+                    }),
+                )
+            })
         });
         let element_at = |pos: Pos2| {
             if let Some(super::PointerTarget::Element(id)) = renderer_hit
@@ -1520,7 +1536,11 @@ impl Chart {
             {
                 return hit;
             }
-            secondary_hits.iter().flatten().find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten()).or(hit)
+            secondary_hits
+                .iter()
+                .flatten()
+                .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten())
+                .or(hit)
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
@@ -1530,6 +1550,15 @@ impl Chart {
             .map(|(id, _)| id);
         let main_on_top = on_top == Some(super::ChartElementId::Series(super::SeriesId::MAIN));
         let paint_overlay = |id: &super::SeriesId| {
+            if let Some(item) = self.main_pane_series().find(|item| item.id == *id) {
+                self.paint_series(
+                    &clipped_painter,
+                    price_rect,
+                    item,
+                    self.series_map(item, price_rect),
+                );
+                return;
+            }
             let Some(study) = self
                 .study_ids
                 .iter()
@@ -1539,7 +1568,10 @@ impl Chart {
             else {
                 return;
             };
-            if study.is_volume() && self.main_series_visible {
+            if study.is_volume()
+                && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+                && self.main_series_visible
+            {
                 let rect = super::volume::overlay_rect(price_rect, &self.config);
                 let (min, max) = super::volume::range(
                     study.as_ref(),
@@ -1577,7 +1609,15 @@ impl Chart {
                     self.config.bearish_color,
                 );
             }
-            if !self.has_renderer(*id) {
+            if self.has_renderer(*id) {
+                let view = self.primitive_view(
+                    *id,
+                    crate::chart::renderers::study_mapping(study.as_ref(), &coords),
+                );
+                for item in self.primitives_of(*id).filter(|item| item.replaces) {
+                    item.draw(&clipped_painter, &view, PrimitivePass::Series);
+                }
+            } else {
                 renderers::IndicatorRenderer::render(
                     &price_ctx,
                     std::slice::from_ref(study),
@@ -1650,7 +1690,12 @@ impl Chart {
             }
         };
         let paint_unhovered = |id: &super::SeriesId| {
-            if on_top != Some(super::ChartElementId::Indicator(*id)) {
+            let element = if self.price_series.iter().any(|item| item.id == *id) {
+                super::ChartElementId::Series(*id)
+            } else {
+                super::ChartElementId::Indicator(*id)
+            };
+            if on_top != Some(element) {
                 paint_overlay(id);
             }
         };
@@ -1660,14 +1705,6 @@ impl Chart {
         }
 
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Normal);
-        self.paint_secondary_series(
-            &painter,
-            price_rect,
-            on_top.and_then(|id| match id {
-                super::ChartElementId::Series(id) => Some(id),
-                _ => None,
-            }),
-        );
 
         if let Some(bubbles) = self
             .feed_link
@@ -2098,7 +2135,7 @@ impl Chart {
                 independent_axis_width =
                     independent_axis_width.max(crate::chart::renderers::render_study_axis(
                         &painter,
-                        study.as_ref(),
+                        &[study.as_ref()],
                         &mapping,
                         axis,
                         self.config.show_indicator_last_val,
@@ -2111,7 +2148,9 @@ impl Chart {
                 .iter()
                 .filter(|study| study.is_overlay())
             {
-                if study.is_volume() {
+                if study.is_volume()
+                    && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+                {
                     if self.main_series_visible {
                         let rect = super::volume::overlay_rect(price_rect, &self.config);
                         let mapping = super::volume::mapping(
@@ -2132,7 +2171,9 @@ impl Chart {
                     }
                     continue;
                 }
-                if study.scale() != crate::studies::StudyScale::Main {
+                if study.scale() != crate::studies::StudyScale::Main
+                    && study.scale() != crate::studies::StudyScale::Shared(self.main_series_scale)
+                {
                     continue;
                 }
                 rendering::axes::render_study_tags(
@@ -3815,12 +3856,14 @@ mod tests {
         chart.chart_options.tooltip.enabled = false;
         let mut study_ids = Vec::new();
         for (level, color) in levels {
-            study_ids.push(chart.add_indicator(Box::new(
-                CustomIndicator::new("Level", move |bars| {
-                    vec![IndicatorValue::Single(level); bars.len()]
-                })
-                .with_color(color),
-            )));
+            study_ids.push(
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("Level", move |bars| {
+                        vec![IndicatorValue::Single(level); bars.len()]
+                    })
+                    .with_color(color),
+                )),
+            );
         }
         let added_color = Color32::from_rgb(1, 1, 201);
         let added = chart.add_series(super::super::SeriesOptions {
@@ -3880,16 +3923,29 @@ mod tests {
             (false, 150.0, [levels[0].1, levels[1].1, added_color]),
             (true, 150.0, [levels[1].1, added_color, levels[0].1]),
             (true, 130.0, [levels[0].1, levels[1].1, added_color]),
-        ].into_iter().enumerate() {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             chart.chart_options.hovered_series_on_top = enabled;
             frame(&ctx, &mut chart, 5.0 + step as f64, vec![]);
             let map = chart.series_price_map(added).unwrap();
-            let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(90), map.price_to_y(price));
-            let painted = shapes(&ctx, &mut chart, 5.1 + step as f64, vec![Event::PointerMoved(pos)]);
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(90),
+                map.price_to_y(price),
+            );
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                5.1 + step as f64,
+                vec![Event::PointerMoved(pos)],
+            );
             let positions = order.map(|color| first(&painted, color).unwrap());
-            assert!(positions.is_sorted(), "pane {enabled} {price}: {positions:?}");
+            assert!(
+                positions.is_sorted(),
+                "pane {enabled} {price}: {positions:?}"
+            );
         }
-
     }
 
     #[test]
@@ -3909,7 +3965,13 @@ mod tests {
             .collect();
         struct MergeProbe(std::sync::Arc<std::sync::Mutex<Vec<std::ops::Range<usize>>>>);
         impl super::super::Primitive for MergeProbe {
-            fn draw_merged(&self, _: &egui::Painter, view: &super::super::PrimitiveView<'_>, pass: super::super::PrimitivePass, factor: usize) {
+            fn draw_merged(
+                &self,
+                _: &egui::Painter,
+                view: &super::super::PrimitiveView<'_>,
+                pass: super::super::PrimitivePass,
+                factor: usize,
+            ) {
                 if pass == super::super::PrimitivePass::Series {
                     *self.0.lock().unwrap() = view.point_groups(factor).collect();
                 }
@@ -3918,7 +3980,9 @@ mod tests {
         let groups = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
-        chart.attach_primitive(super::super::SeriesId::MAIN, MergeProbe(groups.clone())).unwrap();
+        chart
+            .attach_primitive(super::super::SeriesId::MAIN, MergeProbe(groups.clone()))
+            .unwrap();
         let mut options = chart.chart_options().clone();
         options.time_scale.min_bar_spacing = 0.0;
         chart.set_chart_options(options);
@@ -3927,11 +3991,15 @@ mod tests {
         frame(&ctx, &mut chart, 0.1, Vec::new());
         {
             let groups = groups.lock().unwrap();
-            assert!(!groups.is_empty() && groups.len() < 1000, "custom renderer receives pixel groups");
+            assert!(
+                !groups.is_empty() && groups.len() < 1000,
+                "custom renderer receives pixel groups"
+            );
             assert_eq!(groups.first().unwrap().start, 0);
             assert_eq!(groups.last().unwrap().end, 65_536);
             assert!(groups.windows(2).all(|pair| pair[0].end == pair[1].start));
-            let view = chart.primitive_view(super::super::SeriesId::MAIN, chart.get_chart_mapping());
+            let view =
+                chart.primitive_view(super::super::SeriesId::MAIN, chart.get_chart_mapping());
             let mut edge = view.clone();
             edge.visible = 1..7;
             assert_eq!(edge.point_groups(4).collect::<Vec<_>>(), [0..4, 4..8]);

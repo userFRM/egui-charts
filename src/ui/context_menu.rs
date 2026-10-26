@@ -2116,6 +2116,11 @@ mod tests {
             pick(&mut chart, &mut menus, sma, &["Add indicator on SMA"]),
             A::AddIndicator
         );
+        assert_eq!(
+            chart.take_indicator_source_request(),
+            Some(crate::studies::StudySource::Study { id: sma.0, plot: 0 })
+        );
+        assert_eq!(chart.take_indicator_source_request(), None);
         let A::AddToFavorites(name) = pick(
             &mut chart,
             &mut menus,
@@ -2171,6 +2176,18 @@ mod tests {
                 Hour1, Hour4
             ]
         );
+        chart.set_timeframe(Timeframe::Custom(
+            std::num::NonZeroU64::new(7 * 3600).unwrap(),
+        ));
+        assert!(
+            !study(&chart, sma).unwrap().is_visible(),
+            "custom intervals obey the saved lower bound"
+        );
+        chart.set_timeframe(Timeframe::Custom(
+            std::num::NonZeroU64::new(2 * 86400).unwrap(),
+        ));
+        assert!(study(&chart, sma).unwrap().is_visible());
+        chart.set_timeframe(Timeframe::Day1);
         pick(
             &mut chart,
             &mut menus,
@@ -2247,10 +2264,33 @@ mod tests {
             &mut chart,
             &mut menus,
             sma,
-            &["Pin to scale (now no scale)", "Pin to new left scale"],
+            &["Pin to scale (now no scale)", "Pin to new scale"],
         );
-        assert_eq!(study(&chart, sma).unwrap().scale(), StudyScale::Independent);
+        assert_eq!(
+            study(&chart, sma).unwrap().scale(),
+            StudyScale::Shared(crate::model::SeriesScale::Separate(0))
+        );
 
+        let volume = chart
+            .indicators()
+            .find(|(_, study)| study.is_volume())
+            .unwrap()
+            .0;
+        for (label, scale) in [
+            ("Pin to left scale", crate::model::SeriesScale::Left),
+            ("Pin to right scale", crate::model::SeriesScale::Right),
+        ] {
+            let now = if label.contains("left") {
+                "Pin to scale (now no scale)"
+            } else {
+                "Pin to scale (now left)"
+            };
+            pick(&mut chart, &mut menus, volume, &[now, label]);
+            assert_eq!(
+                study(&chart, volume).unwrap().scale(),
+                StudyScale::Shared(scale)
+            );
+        }
         assert_eq!(pick(&mut chart, &mut menus, sma, &["Copy"]), A::Copy);
         pick(&mut chart, &mut menus, sma, &["Hide"]);
         assert!(!study(&chart, sma).unwrap().is_visible());

@@ -78,7 +78,9 @@ mod settings;
 pub(crate) mod table;
 pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use projection::StudyProjection;
-pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
+pub use settings::{
+    ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudyIntervalRange, StudySettings,
+};
 pub use table::{StudyCell, StudyTable};
 mod volume_profile;
 pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};

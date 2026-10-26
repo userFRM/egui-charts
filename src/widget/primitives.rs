@@ -210,8 +210,11 @@ impl Chart {
         } else {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
             let study = self.rendered_studies().indicators().get(idx)?;
-            (study.is_visible() && study.is_overlay() && !study.is_volume())
-                .then(|| crate::chart::renderers::study_mapping(study.as_ref(), coords))?
+            (study.is_visible()
+                && study.is_overlay()
+                && (!study.is_volume()
+                    || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
+            .then(|| crate::chart::renderers::study_mapping(study.as_ref(), coords))?
         };
         Some(self.primitive_view(series, mapping))
     }
@@ -242,7 +245,10 @@ impl Chart {
     }
 
     /// The primitives attached to `series`.
-    pub(super) fn primitives_of(&self, series: SeriesId) -> impl DoubleEndedIterator<Item = &Attached> {
+    pub(super) fn primitives_of(
+        &self,
+        series: SeriesId,
+    ) -> impl DoubleEndedIterator<Item = &Attached> {
         self.primitives
             .iter()
             .filter(move |item| item.series == series)
@@ -290,7 +296,10 @@ impl Chart {
         pass: PrimitivePass,
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
-        for (item, view) in self.main_primitives(coords) {
+        for (item, view) in self
+            .main_primitives(coords)
+            .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
+        {
             item.draw(&painter, &view, pass);
         }
     }

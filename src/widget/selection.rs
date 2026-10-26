@@ -96,7 +96,9 @@ impl Chart {
                 {
                     return;
                 }
-                let volume_coords = indicator.is_volume().then(|| {
+                let volume_coords = (indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
+                .then(|| {
                     super::volume::mapping(
                         coords,
                         super::volume::overlay_rect(coords.rect, &self.config),
@@ -218,7 +220,9 @@ pub(super) fn hit_test_main_chart(
             if behind.contains(&study_ids[idx]) != under_series {
                 continue;
             }
-            let volume_mapping = if indicator.is_volume() {
+            let volume_mapping = if indicator.is_volume()
+                && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+            {
                 if !indicator.is_overlay() || !indicator.is_visible() {
                     continue;
                 }

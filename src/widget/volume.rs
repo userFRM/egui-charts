@@ -152,7 +152,7 @@ pub(super) fn tags(
         return;
     };
     let plot = study.plot_style(2);
-    if !study.is_visible() || !plot.visible {
+    if !study.is_visible() || !plot.visible || study.scale() == crate::studies::StudyScale::None {
         return;
     }
     if let Some(value) = study.values().value(2, bar)
@@ -323,6 +323,24 @@ mod tests {
             .unwrap()
             .0;
         assert_ne!(next, id);
+        // Pinning to the shared right scale includes the million-unit columns in that
+        // range; a shared left scale keeps those units independent of 100..110 prices.
+        for (time, key, shares_prices) in [
+            (4.1, crate::model::SeriesScale::Right, true),
+            (4.2, crate::model::SeriesScale::Left, false),
+        ] {
+            assert!(chart.set_indicator_scale(next, crate::studies::StudyScale::Shared(key)));
+            shapes(&ctx, &mut chart, time, vec![]);
+            assert_eq!(
+                chart.get_chart_mapping().price.range().max >= 1_000_000.0,
+                shares_prices
+            );
+            let study = chart.indicators().find(|(id, _)| *id == next).unwrap().1;
+            let map =
+                crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price;
+            assert!(map.range().min <= 0.0 && map.range().max >= 1_000_000.0);
+            assert!(map.price_to_y(1_000_000.0) < map.price_to_y(0.0));
+        }
         assert!(chart.remove_series(next));
         shapes(&ctx, &mut chart, 5.0, vec![]);
         assert!(!chart.config().show_volume);

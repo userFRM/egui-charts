@@ -579,6 +579,9 @@ impl Chart {
             return false;
         };
         self.record_study(id);
+        if let crate::studies::StudyScale::Shared(key) = scale {
+            self.ensure_series_scale(key);
+        }
         self.studies.indicators_mut()[at].set_scale(scale)
     }
 

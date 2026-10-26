@@ -179,6 +179,7 @@ impl Chart {
             scale_settings_requested: false,
             theme_override: None,
             host_events: Default::default(),
+            indicator_source_request: None,
             events: Vec::new(),
             time_scale_events: Vec::new(),
             event_visibility: Default::default(),

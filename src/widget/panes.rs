@@ -290,7 +290,9 @@ impl Chart {
                     continue;
                 };
                 let study = studies.indicators()[idx].as_ref();
-                if study.is_visible() {
+                if study.is_visible()
+                    && !matches!(study.scale(), crate::studies::StudyScale::Shared(key) if key != if self.config.show_right_axis { crate::model::SeriesScale::Right } else { crate::model::SeriesScale::Left })
+                {
                     let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
                         .calculate_y_range(study, &displayed_range);
                     shared_range.0 = shared_range.0.min(range.0);
@@ -524,10 +526,26 @@ impl Chart {
                 config.height = height;
                 config.show_grid &= paint_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
-                panel.price_map = Some(map);
+                panel.price_map = Some(
+                    if matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)) {
+                        crate::chart::renderers::study_mapping(indicator, &pane_mapping).price
+                    } else {
+                        map
+                    },
+                );
                 if study.is_none() && id.is_some() {
                     panel.price_formatter =
                         id.and_then(|id| self.series_label_formatter(id, map.transform().mode));
+                }
+                if let crate::studies::StudyScale::Shared(key) = indicator.scale() {
+                    if let Some((_, axis)) = self
+                        .secondary_axes(available, plot)
+                        .into_iter()
+                        .find(|(scale, _)| *scale == key)
+                    {
+                        panel.axis_rect =
+                            Some(Rect::from_x_y_ranges(axis.x_range(), panel_rect.y_range()));
+                    }
                 }
                 panel.axis_tags = axis_tags.clone();
                 panel.overlay = paint_row > 0;
@@ -622,7 +640,20 @@ impl Chart {
                     coords,
                     Some(plot.x_range()),
                     collapsed,
-                    if self.config.show_right_axis {
+                    if matches!(
+                        indicator.scale(),
+                        crate::studies::StudyScale::Shared(crate::model::SeriesScale::Overlay(_))
+                    ) {
+                        None
+                    } else if matches!(
+                        indicator.scale(),
+                        crate::studies::StudyScale::Shared(
+                            crate::model::SeriesScale::Left
+                                | crate::model::SeriesScale::Separate(_)
+                        )
+                    ) {
+                        Some(crate::scales::PriceScaleId::Left)
+                    } else if self.config.show_right_axis {
                         Some(crate::scales::PriceScaleId::Right)
                     } else if self.config.show_left_axis {
                         Some(crate::scales::PriceScaleId::Left)

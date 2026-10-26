@@ -287,6 +287,7 @@ pub struct IndicatorPane {
     pub(super) overlay: bool,
     pub(super) legend_offset: f32,
     pub(super) pane_controls: bool,
+    pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
 }
 
@@ -302,6 +303,7 @@ impl IndicatorPane {
             overlay: false,
             legend_offset: 0.0,
             pane_controls: false,
+            axis_rect: None,
             axis_tags: Vec::new(),
         }
     }
@@ -716,6 +718,8 @@ impl IndicatorPane {
                         rect.right(),
                     )
                 };
+                let axis_rect = self.axis_rect.unwrap_or(axis_rect);
+                let axis_edge = self.axis_rect.map_or(axis_edge, |axis| axis.right());
                 let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
                 for item in primitives {
                     let primitive = item.get();
@@ -843,7 +847,9 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
-        if indicator.is_volume() {
+        if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             return super::volume::range(indicator, visible_range, None);
         }
         if let Some((min, max)) = self.config.y_range {
@@ -1179,7 +1185,9 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
     ) {
-        if indicator.is_volume() {
+        if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             let count = visible_range.end.saturating_sub(visible_range.start);
             if count == 0 {
                 return;
@@ -1272,11 +1280,16 @@ impl IndicatorPane {
         } else {
             egui::Align2::LEFT_CENTER
         };
-        let axis_edge = if left {
-            chart_rect.left()
-        } else {
-            full_rect.right()
-        };
+        let axis_edge = self.axis_rect.map_or_else(
+            || {
+                if left {
+                    chart_rect.left()
+                } else {
+                    full_rect.right()
+                }
+            },
+            |axis| axis.right(),
+        );
         let text_color = painter.ctx().active_theme().chart.axis_text;
         let map = self
             .price_map
@@ -1293,7 +1306,9 @@ impl IndicatorPane {
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
         if self.config.show_values {
-            if indicator.is_volume() {
+            if indicator.is_volume()
+                && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+            {
                 super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
             } else {
                 crate::chart::rendering::axes::render_study_tags(
@@ -1301,7 +1316,9 @@ impl IndicatorPane {
                 );
             }
         }
-        let mut width = if indicator.is_volume() {
+        let mut width = if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             0.0
         } else {
             crate::chart::rendering::axes::price_axis_width(
@@ -1319,7 +1336,9 @@ impl IndicatorPane {
             return width;
         }
         let label_x = if left {
-            chart_rect.left() - DESIGN_TOKENS.spacing.sm
+            self.axis_rect
+                .map_or(chart_rect.left(), |axis| axis.right())
+                - DESIGN_TOKENS.spacing.sm
         } else {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };

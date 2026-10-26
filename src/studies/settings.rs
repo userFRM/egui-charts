@@ -63,6 +63,48 @@ pub struct PlotStyle {
     pub visible: bool,
 }
 
+/// Interval visibility evaluated for every interval, including custom and trade-based ones.
+/// Ordered ranges compare nominal duration for time bars and thresholds within the same
+/// trade-based family. Other families are outside the range. `Only` matches the exact interval.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StudyIntervalRange {
+    /// Every interval.
+    #[default]
+    All,
+    /// The chosen interval and longer durations or larger thresholds in its family.
+    AndAbove(Timeframe),
+    /// The chosen interval and shorter durations or smaller thresholds in its family.
+    AndBelow(Timeframe),
+    /// The exact chosen interval.
+    Only(Timeframe),
+}
+
+impl StudyIntervalRange {
+    /// Whether `interval` belongs to this visibility range.
+    pub fn contains(self, interval: Timeframe) -> bool {
+        let current = match self {
+            Self::All => return true,
+            Self::Only(current) => return interval == current,
+            Self::AndAbove(current) | Self::AndBelow(current) => current,
+        };
+        let order = match (interval, current) {
+            (Timeframe::Ticks(a), Timeframe::Ticks(b))
+            | (Timeframe::Volume(a), Timeframe::Volume(b))
+            | (Timeframe::Range(a), Timeframe::Range(b))
+            | (Timeframe::Delta(a), Timeframe::Delta(b)) => Some(a.cmp(&b)),
+            (a, b) if !a.is_trade_based() && !b.is_trade_based() => {
+                Some(a.duration_ms().cmp(&b.duration_ms()))
+            }
+            _ => None,
+        };
+        order.is_some_and(|order| match self {
+            Self::AndAbove(_) => !order.is_lt(),
+            Self::AndBelow(_) => !order.is_gt(),
+            _ => false,
+        })
+    }
+}
+
 /// Host-serializable presentation settings of an applied study.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct StudySettings {
@@ -72,6 +114,10 @@ pub struct StudySettings {
     pub precision: Option<usize>,
     /// Exact intervals on which the study is hidden, including custom intervals.
     pub hidden_intervals: Vec<Timeframe>,
+    /// A range applied in addition to the exact hidden intervals. Older saved settings show
+    /// every interval except those in `hidden_intervals`.
+    #[serde(default)]
+    pub interval_range: StudyIntervalRange,
 }
 
 /// A study with editable presentation, used automatically by the chart.
@@ -85,6 +131,7 @@ pub struct ConfiguredStudy {
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     overlay: Option<bool>,
     scale: Option<super::StudyScale>,
+    scale_mapping: Option<crate::scales::PriceMap>,
     source: Option<super::StudySource>,
     calculation_symbol: String,
     calculation_timeframe: Option<Timeframe>,
@@ -113,6 +160,7 @@ impl ConfiguredStudy {
             formatter: None,
             overlay: None,
             scale: None,
+            scale_mapping: None,
             source: None,
             calculation_symbol: String::new(),
             calculation_timeframe: None,
@@ -521,6 +569,12 @@ impl Indicator for ConfiguredStudy {
         self.settings = settings;
         Ok(())
     }
+    fn scale_mapping(&self) -> Option<crate::scales::PriceMap> {
+        self.scale_mapping
+    }
+    fn set_scale_mapping(&mut self, mapping: Option<crate::scales::PriceMap>) {
+        self.scale_mapping = mapping;
+    }
     fn set_value_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -588,14 +642,16 @@ impl Indicator for ConfiguredStudy {
         true
     }
     fn set_scale(&mut self, scale: super::StudyScale) -> bool {
+        self.scale_mapping = None;
         self.scale = Some(scale);
         true
     }
     fn is_visible(&self) -> bool {
         self.study.is_visible()
-            && self
-                .timeframe
-                .is_none_or(|tf| !self.settings.hidden_intervals.contains(&tf))
+            && self.timeframe.is_none_or(|tf| {
+                !self.settings.hidden_intervals.contains(&tf)
+                    && self.settings.interval_range.contains(tf)
+            })
     }
     fn set_visible(&mut self, visible: bool) {
         self.study.set_visible(visible);
@@ -687,6 +743,41 @@ mod tests {
         study.set_visible(false);
         study.set_timeframe(Timeframe::Day1);
         assert!(!study.is_visible());
+        for (range, interval, visible) in [
+            (
+                StudyIntervalRange::AndAbove(Timeframe::Min5),
+                Timeframe::Custom(std::num::NonZeroU64::new(120).unwrap()),
+                false,
+            ),
+            (
+                StudyIntervalRange::AndAbove(Timeframe::Min5),
+                Timeframe::Custom(std::num::NonZeroU64::new(420).unwrap()),
+                true,
+            ),
+            (
+                StudyIntervalRange::AndBelow(Timeframe::Ticks(
+                    std::num::NonZeroU64::new(100).unwrap(),
+                )),
+                Timeframe::Ticks(std::num::NonZeroU64::new(50).unwrap()),
+                true,
+            ),
+            (
+                StudyIntervalRange::AndBelow(Timeframe::Ticks(
+                    std::num::NonZeroU64::new(100).unwrap(),
+                )),
+                Timeframe::Volume(std::num::NonZeroU64::new(50).unwrap()),
+                false,
+            ),
+        ] {
+            let mut settings = study.settings();
+            settings.interval_range = range;
+            study.apply_settings(&[], settings).unwrap();
+            study.set_visible(true);
+            study.set_timeframe(interval);
+            assert_eq!(study.is_visible(), visible);
+            study.set_visible(false);
+            assert!(!study.is_visible());
+        }
         let saved = serde_json::to_string(&study.settings()).unwrap();
         let restored: StudySettings = serde_json::from_str(&saved).unwrap();
         assert!(!restored.plots[0].visible);

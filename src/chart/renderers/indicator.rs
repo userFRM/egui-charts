@@ -253,7 +253,10 @@ impl IndicatorRenderer {
             }
 
             // Only render overlay indicators
-            if !indicator.is_overlay() || indicator.is_volume() {
+            if !indicator.is_overlay()
+                || (indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
+            {
                 continue;
             }
 

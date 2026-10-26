@@ -205,6 +205,7 @@ pub trait Indicator: Send {
                 .collect(),
             precision: self.precision(),
             hidden_intervals: Vec::new(),
+            interval_range: Default::default(),
         }
     }
 
@@ -256,6 +257,17 @@ pub trait Indicator: Send {
         } else {
             super::StudyScale::Independent
         }
+    }
+
+    /// Price mapping supplied by the chart for a shared scale, independent of pane bounds.
+    /// Custom presentation implementations can retain it to support shared scales.
+    fn scale_mapping(&self) -> Option<crate::scales::PriceMap> {
+        None
+    }
+
+    /// Updates the chart's shared-scale mapping. `None` restores the ordinary pane mapping.
+    fn set_scale_mapping(&mut self, mapping: Option<crate::scales::PriceMap>) {
+        let _ = mapping;
     }
 
     /// Replaces value formatting when supported by the presentation. `None` restores the

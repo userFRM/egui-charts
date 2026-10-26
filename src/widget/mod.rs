@@ -138,7 +138,6 @@ mod change_marks;
 mod clipboard;
 mod crosshair;
 pub mod localization;
-#[cfg(feature = "ui")]
 pub(crate) use crosshair::menu_value;
 mod events;
 mod feed;
@@ -392,6 +391,7 @@ pub struct Chart {
     scale_settings_requested: bool,
     pub(crate) theme_override: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
+    pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
     events: Vec<crate::model::Marker>,
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,

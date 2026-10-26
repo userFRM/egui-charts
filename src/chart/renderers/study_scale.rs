@@ -8,6 +8,15 @@ use egui::{Align2, Painter, Pos2, Rect};
 
 /// Keep independent study units out of the main price map, including hidden scales.
 pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> ChartMapping {
+    if let StudyScale::Shared(_) = study.scale() {
+        return ChartMapping {
+            price: study
+                .scale_mapping()
+                .unwrap_or(coords.price)
+                .with_bounds(coords.rect.top(), coords.rect.bottom()),
+            ..*coords
+        };
+    }
     if study.scale() == StudyScale::Main {
         return *coords;
     }
@@ -72,41 +81,50 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
 /// Paint an independent study axis in its reserved gutter to the left of the plot.
 pub(crate) fn render_study_axis(
     painter: &Painter,
-    study: &dyn Indicator,
+    studies: &[&dyn Indicator],
     coords: &ChartMapping,
     axis: Rect,
     show_values: bool,
 ) -> f32 {
+    let Some(&study) = studies.first() else {
+        return 0.0;
+    };
     let painter = painter.with_clip_rect(axis);
     let theme = painter.ctx().active_theme();
     let font = crate::chart::rendering::axes::axis_font(painter.ctx());
     let x = axis.right() - 8.0;
     let mut width = 0.0_f32;
     let mut labels = Vec::new();
-    if show_values && let Some(bar) = study.values().len().checked_sub(1) {
-        for line in 0..study.line_cnt() {
-            let plot = study.plot_style(line);
+    for &member in studies {
+        if !show_values {
+            continue;
+        }
+        let Some(bar) = member.values().len().checked_sub(1) else {
+            continue;
+        };
+        for line in 0..member.line_cnt() {
+            let plot = member.plot_style(line);
             if plot.visible
                 && !matches!(
                     plot.plot_type,
                     PlotType::BarColor | PlotType::BackgroundColor
                 )
-                && let Some(value) = study.plot_value(line, bar)
+                && let Some(value) = member.plot_value(line, bar)
             {
-                labels.push((value, Some(study.plot_style(line).color)));
+                labels.push((value, Some(member.plot_style(line).color), member));
             }
         }
     }
     let mut occupied = Vec::new();
-    for (value, color) in labels.into_iter().chain(
+    for (value, color, source) in labels.into_iter().chain(
         coords
             .price
             .marks()
             .into_iter()
-            .map(|mark| (mark.price, None)),
+            .map(|mark| (mark.price, None, study)),
     ) {
         let y = coords.price_to_y(value);
-        let label = study.format_value(value);
+        let label = source.format_value(value);
         let galley = painter.layout_no_wrap(
             label,
             font.clone(),
@@ -181,7 +199,7 @@ mod tests {
                 if scale == StudyScale::Independent {
                     render_study_axis(
                         ui.painter(),
-                        indicators[0].as_ref(),
+                        &[indicators[0].as_ref()],
                         &mapping,
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(80.0, 120.0)),
                         true,
