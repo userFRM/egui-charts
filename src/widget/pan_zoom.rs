@@ -742,8 +742,7 @@ mod tests {
                 chart.chart_options.kinetic_scroll.enabled = true;
                 chart.kinetic_scroll.is_active = true;
                 chart.kinetic_scroll.velocity = 120.0;
-                chart.kinetic_scroll.anim_last_time =
-                    Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
+                chart.kinetic_scroll.anim_last_time = Some(web_time::Instant::now());
             }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();
@@ -757,6 +756,7 @@ mod tests {
                 events.push(Event::Zoom(1.5));
             }
             frame(&ctx, &mut chart, 0.06, events);
+            assert!(!chart.kinetic_scroll.is_active);
             let (zoomed, moved) = chart.get_time_scale_state();
             // The existing pinch sensitivity maps a 1.5 gesture to a 10% spacing increase.
             let expected_spacing = if enabled { spacing * 1.1 } else { spacing };
