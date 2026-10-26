@@ -18,5 +18,4 @@ pub use candles::{
     render_chart_type,
 };
 pub use grid::{render_grid, render_vertical_grid};
-pub(crate) use overlays::{realtime_button, realtime_button_rect};
-pub use overlays::{render_box_zoom, render_crosshair_with_options};
+pub use overlays::{render_box_zoom, render_crosshair_with_options, render_realtime_btn};
