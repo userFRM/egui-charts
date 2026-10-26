@@ -295,8 +295,6 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Visible UTC ranges keep viewport arithmetic in double precision before interpolating timestamps, avoiding seconds of rounding drift across session gaps in long histories.
-
 - Replay resets clear remote-symbol, alternate-interval and metric study histories, tick-origin bookkeeping, errors and paging state before merging the new position, and invalidate dependent calculations. ([#900](https://github.com/userFRM/egui-charts/issues/900))
 - Study sources retry recoverable resolve and history failures with exponential backoff capped at 60 seconds, honoring longer rate-limit delays. Retries retain the original page boundary and count, success clears the error, and paused or replaced sources cancel pending recovery. Replies from superseded requests are ignored. ([#908](https://github.com/userFRM/egui-charts/issues/908))
 
