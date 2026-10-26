@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
+
 - `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
 
 - Selecting a drawing in the object tree reveals offscreen anchors by panning while keeping zoom and the price scale's auto/manual state. Double-click and Zoom to object use the same navigation instead of fitting a manual range to one drawing. `Chart::reset_chart_view` restores configured bar spacing and right margin, scrolls to the latest bar, cancels pending view motion and returns every price scale in every pane to auto-scaling. Chart-menu, keyboard, navigation-button and demo resets use this method. ([#935](https://github.com/userFRM/egui-charts/issues/935))
