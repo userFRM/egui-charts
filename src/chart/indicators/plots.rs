@@ -3,59 +3,55 @@
 use crate::studies::{StudyCandle, StudyZone};
 
 #[cfg(feature = "widget")]
-impl StudyZone {
-    pub(crate) fn rect(
-        &self,
-        coords: &crate::chart::coords::ChartMapping,
-        price_to_y: impl Fn(f64) -> f32,
-    ) -> Option<egui::Rect> {
-        let last = self
-            .bars
-            .end
-            .checked_sub(1)
-            .filter(|&l| l >= self.bars.start)?;
-        let rect = egui::Rect::from_two_pos(
-            egui::pos2(coords.idx_to_x(self.bars.start), price_to_y(self.top)),
-            egui::pos2(coords.idx_to_x(last), price_to_y(self.bottom)),
-        );
-        (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
-    }
+pub(crate) fn zone_rect(
+    zone: &StudyZone,
+    coords: &crate::chart::coords::ChartMapping,
+    price_to_y: impl Fn(f64) -> f32,
+) -> Option<egui::Rect> {
+    let last = zone
+        .bars
+        .end
+        .checked_sub(1)
+        .filter(|&l| l >= zone.bars.start)?;
+    let rect = egui::Rect::from_two_pos(
+        egui::pos2(coords.idx_to_x(zone.bars.start), price_to_y(zone.top)),
+        egui::pos2(coords.idx_to_x(last), price_to_y(zone.bottom)),
+    );
+    (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
 
 #[cfg(feature = "widget")]
-impl StudyCandle {
-    pub(crate) fn geometry(
-        &self,
-        coords: &crate::chart::coords::ChartMapping,
-        price_to_y: impl Fn(f64) -> f32,
-    ) -> Option<(egui::Rect, [egui::Pos2; 2])> {
-        use egui::{Pos2, Rect};
-        if self.bars.is_empty() {
-            return None;
-        }
-        let half = coords.bar_spacing * 0.5;
-        let inset = (coords.bar_spacing * 0.1).min(2.0);
-        let left = coords.idx_to_x(self.bars.start) - half + inset;
-        let right = coords.idx_to_x(self.bars.end - 1) + half - inset;
-        let x = (left + right) * 0.5;
-        let (open, close) = (price_to_y(self.bar.open), price_to_y(self.bar.close));
-        let wick = [
-            Pos2::new(x, price_to_y(self.bar.high)),
-            Pos2::new(x, price_to_y(self.bar.low)),
-        ];
-        if ![left, right, open, close, wick[0].y, wick[1].y]
-            .iter()
-            .all(|v| v.is_finite())
-        {
-            return None;
-        }
-        let top = open.min(close);
-        let body = Rect::from_min_max(
-            Pos2::new(left, top),
-            Pos2::new(right, open.max(close).max(top + 1.0)),
-        );
-        Some((body, wick))
+pub(crate) fn candle_geometry(
+    candle: &StudyCandle,
+    coords: &crate::chart::coords::ChartMapping,
+    price_to_y: impl Fn(f64) -> f32,
+) -> Option<(egui::Rect, [egui::Pos2; 2])> {
+    use egui::{Pos2, Rect};
+    if candle.bars.is_empty() {
+        return None;
     }
+    let half = coords.bar_spacing * 0.5;
+    let inset = (coords.bar_spacing * 0.1).min(2.0);
+    let left = coords.idx_to_x(candle.bars.start) - half + inset;
+    let right = coords.idx_to_x(candle.bars.end - 1) + half - inset;
+    let x = (left + right) * 0.5;
+    let (open, close) = (price_to_y(candle.bar.open), price_to_y(candle.bar.close));
+    let wick = [
+        Pos2::new(x, price_to_y(candle.bar.high)),
+        Pos2::new(x, price_to_y(candle.bar.low)),
+    ];
+    if ![left, right, open, close, wick[0].y, wick[1].y]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return None;
+    }
+    let top = open.min(close);
+    let body = Rect::from_min_max(
+        Pos2::new(left, top),
+        Pos2::new(right, open.max(close).max(top + 1.0)),
+    );
+    Some((body, wick))
 }
 
 #[cfg(feature = "widget")]
@@ -77,7 +73,7 @@ pub(crate) fn paint_candles(
         if !style.visible {
             continue;
         }
-        if let Some((body, wick)) = candle.geometry(coords, |p| price.price_to_y(p)) {
+        if let Some((body, wick)) = candle_geometry(candle, coords, |p| price.price_to_y(p)) {
             let stroke = egui::Stroke::new(style.width, style.color);
             painter.line_segment(wick, stroke);
             painter.rect(
@@ -101,8 +97,7 @@ pub(crate) fn paint_zones(
     let clip = painter.clip_rect();
     for zone in study.zones() {
         let style = study.plot_style(zone.plot);
-        let Some(rect) = zone
-            .rect(coords, |p| price.price_to_y(p))
+        let Some(rect) = zone_rect(zone, coords, |p| price.price_to_y(p))
             .filter(|rect| style.visible && rect.intersects(clip.expand(style.width)))
         else {
             continue;

@@ -3,24 +3,21 @@
 use crate::studies::StudyProjection;
 
 #[cfg(feature = "widget")]
-impl StudyProjection {
-    pub(crate) fn rect(
-        &self,
-        coords: &crate::chart::coords::ChartMapping,
-        price_to_y: impl Fn(f64) -> f32,
-    ) -> Option<egui::Rect> {
-        if self.bars.start >= self.bars.end {
-            return None;
-        }
-        let x = |index: f64| {
-            coords.idx_to_x(index as usize) + index.fract() as f32 * coords.bar_spacing
-        };
-        let rect = egui::Rect::from_two_pos(
-            egui::pos2(x(self.bars.start), price_to_y(self.top)),
-            egui::pos2(x(self.bars.end), price_to_y(self.bottom)),
-        );
-        (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
+pub(crate) fn projection_rect(
+    projection: &StudyProjection,
+    coords: &crate::chart::coords::ChartMapping,
+    price_to_y: impl Fn(f64) -> f32,
+) -> Option<egui::Rect> {
+    if projection.bars.start >= projection.bars.end {
+        return None;
     }
+    let x =
+        |index: f64| coords.idx_to_x(index as usize) + index.fract() as f32 * coords.bar_spacing;
+    let rect = egui::Rect::from_two_pos(
+        egui::pos2(x(projection.bars.start), price_to_y(projection.top)),
+        egui::pos2(x(projection.bars.end), price_to_y(projection.bottom)),
+    );
+    (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
 
 #[cfg(feature = "widget")]
@@ -32,8 +29,7 @@ pub(crate) fn paint(
 ) {
     for projection in study.projections() {
         let style = study.plot_style(projection.plot);
-        let Some(rect) = projection
-            .rect(coords, |p| price.price_to_y(p))
+        let Some(rect) = projection_rect(projection, coords, |p| price.price_to_y(p))
             .filter(|rect| style.visible && rect.intersects(painter.clip_rect()))
         else {
             continue;

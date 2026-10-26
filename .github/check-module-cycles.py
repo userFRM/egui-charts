@@ -37,12 +37,17 @@ for owner, single, group in re.findall(r"pub use (\w+)::(?:(\w+)|\{([^}]+)\});",
     for name in (single or group).split(","):
         aliases[name.strip()] = owner
 
+sources = {}
+type_owners = {}
 for path in sorted(root.rglob("*.rs")):
     relative = path.relative_to(root)
     owner = relative.parts[0] if len(relative.parts) > 1 else path.stem
     if owner == "lib":
         continue
     source = code(path.read_text())
+    sources[path] = (owner, source)
+    for name in re.findall(r"\b(?:struct|enum)\s+(\w+)", source):
+        type_owners.setdefault(name, set()).add(owner)
     targets = re.findall(r"crate::(\w+)", source)
     for group in re.findall(r"crate::\{([^;]+)\};", source):
         depth = 0
@@ -57,6 +62,24 @@ for path in sorted(root.rglob("*.rs")):
         target for name in targets
         if (target := aliases.get(name, name)) in nodes and target != owner
     )
+
+# An inherent implementation must stay with its type when modules become crates.
+for path, (owner, source) in sources.items():
+    for signature in re.findall(r"\bimpl\b([^{}]*?)\{", source):
+        if re.search(r"\bfor\b", signature):
+            continue
+        signature = signature.strip()
+        if signature.startswith("<"):
+            depth = 1
+            end = 1
+            while depth and end < len(signature):
+                depth += (signature[end] == "<") - (signature[end] == ">")
+                end += 1
+            signature = signature[end:].strip()
+        name = re.match(r"(?:\w+::)*(\w+)", signature)
+        owners = type_owners.get(name[1], set()) if name else set()
+        if len(owners) == 1 and owner not in owners:
+            raise SystemExit(f"foreign inherent implementation: {path}: {name[1]} belongs to {next(iter(owners))}")
 
 visited = set()
 

@@ -3,6 +3,8 @@
 //! Detects clicks on indicator lines (SMA, EMA, etc.) on the main chart
 //! and on indicator panes (RSI, MACD, etc.).
 
+use super::plots::{candle_geometry, zone_rect};
+use super::projection::projection_rect;
 use crate::chart::coords::ChartMapping;
 use crate::chart::hit_test::{HIT_TOLERANCE, point_to_segment_distance};
 use crate::studies::{Indicator, PlotType};
@@ -107,7 +109,7 @@ where
             .iter()
             .filter(|candle| candle.plot == line_idx)
             .find_map(|candle| {
-                let (body, wick) = candle.geometry(coords, &value_to_y)?;
+                let (body, wick) = candle_geometry(candle, coords, &value_to_y)?;
                 (body.expand(HIT_TOLERANCE).contains(click_pos)
                     || point_to_segment_distance(click_pos, wick[0], wick[1])
                         <= HIT_TOLERANCE + plot.width * 0.5)
@@ -123,7 +125,7 @@ where
         .iter()
         .filter(|zone| zone.plot == line_idx)
         .find(|zone| {
-            zone.rect(coords, &value_to_y)
+            zone_rect(zone, coords, &value_to_y)
                 .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
         })
     {
@@ -138,8 +140,7 @@ where
         .iter()
         .filter(|projection| projection.plot == line_idx)
         .find(|projection| {
-            projection
-                .rect(coords, &value_to_y)
+            projection_rect(projection, coords, &value_to_y)
                 .is_some_and(|rect| rect.expand(HIT_TOLERANCE).contains(click_pos))
         })
     {
