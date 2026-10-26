@@ -33,6 +33,7 @@ use egui::{
 
 /// Action triggered by selecting a context menu item
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ContextMenuAction {
     /// No action
     None,
@@ -909,6 +910,7 @@ impl HostMenuEntry {
 /// action enum. [`ChartMenus::show`] returns this unified value so a host can match a single
 /// type.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ChartContextAction {
     /// A registered host entry, with the original click context.
     Host {

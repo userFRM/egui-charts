@@ -10,9 +10,9 @@ use crate::styles::{icons as icon_sizes, stroke};
 use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use super::TopToolbarConfig;
-use crate::ext::UiExt;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 
 /// Menu glyph with three 18 px bars spanning 14 px on the toolbar's 24 px icon grid.
 pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("menu.svg"));

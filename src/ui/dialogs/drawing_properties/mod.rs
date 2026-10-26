@@ -16,7 +16,7 @@ mod config;
 mod dialog;
 mod tabs;
 
-pub use actions::{DrawingId, DrawingLineStyle, DrawingPropertiesAction, DrawingProps};
+pub use actions::{DrawingId, DrawingPropertiesAction, DrawingProps};
 pub use config::DrawingPropertiesConfig;
 pub use dialog::DrawingPropertiesDialog;
 pub use tabs::{CoordinatePoint, CoordinatesState, PropertiesTab};

@@ -4,7 +4,7 @@
 //! grows with the volume traded there and the colour shows the aggressor side or the delta.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
-use crate::model::{Bar, BarClock, Tick, TradeSide};
+use crate::model::{Bar, BarClock, OrderSide, Tick};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
@@ -186,8 +186,8 @@ impl VolumeBubbles {
         let size = if added { trade.size } else { -trade.size };
         count(&mut bubble.trades, &mut bubble.volume, size, added);
         match trade.side {
-            Some(TradeSide::Buy) => count(&mut bubble.buys, &mut bubble.buy, size, added),
-            Some(TradeSide::Sell) => count(&mut bubble.sells, &mut bubble.sell, size, added),
+            Some(OrderSide::Buy) => count(&mut bubble.buys, &mut bubble.buy, size, added),
+            Some(OrderSide::Sell) => count(&mut bubble.sells, &mut bubble.sell, size, added),
             None => {}
         }
         if bubble.trades == 0 {
@@ -383,7 +383,7 @@ mod tests {
     use chrono::TimeDelta;
 
     /// A trade `second` seconds after 10:00.
-    fn trade(second: i64, price: f64, size: f64, side: Option<TradeSide>) -> Tick {
+    fn trade(second: i64, price: f64, size: f64, side: Option<OrderSide>) -> Tick {
         let ts = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
         Tick::new(ts + TimeDelta::seconds(second), price, size, side)
     }
@@ -395,7 +395,7 @@ mod tests {
     /// residue on a side whose trades all left.
     #[test]
     fn bubbles_sum_the_held_trades_per_bar_and_price_level() {
-        let (buy, sell) = (Some(TradeSide::Buy), Some(TradeSide::Sell));
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
         let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let ten_one = ten + TimeDelta::minutes(1);
         #[rustfmt::skip]

@@ -111,8 +111,8 @@ impl Indicator for VolumeWeightedMACD {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -151,7 +151,7 @@ impl Indicator for VolumeWeightedMACD {
         false // VW-MACD is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

@@ -2,12 +2,13 @@
 
 use super::Chart;
 use crate::localization as l10n;
-use crate::studies::StudyFormat;
+use crate::scales::StudyFormat;
 use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
 
 /// Image options shared by the export dialog and offscreen rendering.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ImageExportOptions {
     /// Output width and height in pixels.
     pub size: [u32; 2],
@@ -40,6 +41,7 @@ impl Default for ImageExportOptions {
 /// This uses its own texture namespace; render with a dedicated egui renderer. Hosts must also
 /// bind any user textures referenced by their image sources before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
+#[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.
     pub size: [u32; 2],
@@ -107,7 +109,7 @@ impl Chart {
             .filter(|(_, study)| study.is_visible())
         {
             let names = study.line_names();
-            for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
+            for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
                 header.push(format!(
                     "{}: {}",
                     study.name(),
@@ -450,7 +452,7 @@ mod tests {
                         })
                         .collect()
                 })
-                .with_line_cnt(3)
+                .with_line_count(3)
                 .with_line_names(vec!["mean".into(), "shifted".into(), "hidden".into()])
                 .with_offsets(vec![0, -1, 0]),
             ));

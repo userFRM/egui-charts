@@ -1,9 +1,9 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
+use crate::data::VolumeProfile;
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::{Bar, SpanCache};
-use crate::studies::VolumeProfile;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Shape, Stroke};
@@ -181,7 +181,7 @@ impl Drawing {
         let Some(profile) = profile.as_ref() else {
             return;
         };
-        crate::chart::renderers::volume_profile::paint_profile(
+        crate::painting::volume_profile::paint_profile(
             painter,
             profile,
             config,
@@ -390,7 +390,7 @@ mod tests {
             ("dense upright", &upright, 400.0, 1000, 0.15),
             ("dense inverted", &inverted, 400.0, 1000, 0.15),
         ] {
-            drawing.volume_profile = crate::studies::VolumeProfileConfig::new(row_count, 0.7);
+            drawing.volume_profile = crate::data::VolumeProfileConfig::new(row_count, 0.7);
             let view = ChartView {
                 instrument: None,
                 bars: &bars,

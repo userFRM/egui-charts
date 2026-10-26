@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 
 /// Actions that can be performed during replay mode
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub enum ReplayAction {
     /// No action
     #[default]

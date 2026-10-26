@@ -19,6 +19,7 @@ pub enum StudySource {
 
 /// A study input's current value.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum InputValue {
     /// A bar count or nonnegative integer parameter.
     Length(usize),
@@ -42,6 +43,7 @@ pub enum InputValue {
 
 /// The accepted values of a study input.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum InputKind {
     /// Inclusive integer bounds.
     Length(usize, usize),

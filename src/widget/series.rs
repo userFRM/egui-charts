@@ -234,7 +234,7 @@ impl Chart {
         let bars = self.bars(series);
         let shown = self.state.shown();
         let (first, last) = (bars.first()?, bars.last()?);
-        let index = |bar: &Bar| super::sync::index_at(shown, bar.time).unwrap_or(f64::NAN);
+        let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
         let left = f64::from(range.left).round();
         let right = f64::from(range.right).round();
         shown.first()?;
@@ -880,7 +880,7 @@ mod tests {
                         })
                         .collect()
                 })
-                .with_line_cnt(if case == "multiple" { 5 } else { 1 })
+                .with_line_count(if case == "multiple" { 5 } else { 1 })
                 .with_overlay(case != "pane")
                 .with_offsets(vec![if case == "displaced_future" { 5 } else { 0 }])
                 .with_scale(match case {

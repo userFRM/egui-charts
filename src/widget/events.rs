@@ -205,7 +205,7 @@ impl Chart {
         let index = scale
             .coord_to_idx_precise(pos.x, plot.left(), plot.width())
             .round();
-        let time = super::sync::time_at(shown, index)?;
+        let time = crate::model::time_at(shown, index)?;
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {
@@ -242,7 +242,7 @@ impl Chart {
                 .map(|index| &self.rendered_studies().indicators()[index])
                 .filter(|study| study.is_visible())
                 .flat_map(|study| {
-                    (0..study.line_cnt())
+                    (0..study.line_count())
                         .filter(|line| {
                             let plot = study.plot_style(*line);
                             plot.visible

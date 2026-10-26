@@ -48,8 +48,8 @@ impl Indicator for BollingerBandsWidth {
         std_dev: number("Std dev", 0.0, f64::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {

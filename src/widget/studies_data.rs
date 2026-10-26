@@ -499,7 +499,8 @@ mod tests {
     #[test]
     fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
         use crate::data::{MetricPoint, MetricSeries};
-        use crate::studies::{MetricStudy, StudyFormat, StudySource};
+        use crate::scales::StudyFormat;
+        use crate::studies::{MetricStudy, StudySource};
         let feed = Arc::new(Feed::default());
         let mut chart = ChartBuilder::new()
             .with_feed(feed.clone())

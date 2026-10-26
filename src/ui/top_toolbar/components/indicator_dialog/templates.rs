@@ -3,11 +3,11 @@
 //! Provides the template panel within the indicator dialog for saving,
 //! loading, and managing indicator parameter templates.
 
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::IndicatorTemplate;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{EmptyState, LoadingIndicator};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
@@ -17,6 +17,7 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
 /// Actions emitted by the indicator template panel
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum IndicatorTemplateAction {
     /// No action taken
     None,

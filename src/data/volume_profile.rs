@@ -608,7 +608,7 @@ mod tests {
                         egui::LayerId::background(),
                         egui::Rect::EVERYTHING,
                     );
-                    crate::chart::renderers::volume_profile::paint_profile(
+                    crate::painting::volume_profile::paint_profile(
                         &painter,
                         &profile,
                         config,

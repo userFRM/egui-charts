@@ -2550,7 +2550,7 @@ impl Chart {
                         axis_edge,
                         None,
                         Some(
-                            crate::studies::StudyFormat::Volume
+                            crate::scales::StudyFormat::Volume
                                 .format(map.y_to_price(pos.y), map.price_precision()),
                         ),
                     );
@@ -2927,7 +2927,7 @@ mod tests {
     fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
         use crate::chart::overlays::{FootprintColor, FootprintConfig};
         use crate::data::Footprint;
-        use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
                 let ctx = egui::Context::default();
@@ -2947,7 +2947,7 @@ mod tests {
                         .time,
                     100.0,
                     2.0,
-                    Some(TradeSide::Buy),
+                    Some(OrderSide::Buy),
                 ))
                 .unwrap();
                 let config = FootprintConfig {
@@ -3615,7 +3615,7 @@ mod tests {
                 });
             }
             chart.config.show_session_breaks = true;
-            chart.config.session_break_style = crate::config::SessionBreakStyle::Solid;
+            chart.config.session_break_style = crate::model::LineStyle::Solid;
             chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
             chart.config.extended_hours_color =
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
@@ -4713,9 +4713,8 @@ mod tests {
         assert_eq!(chart.config.navigation_buttons, Never);
         #[cfg(feature = "ui")]
         assert_eq!(
-            crate::ui::top_toolbar::components::settings_menu::ButtonsSettings::default()
-                .navigation,
-            crate::ui::top_toolbar::components::settings_menu::ButtonVisibility::Hidden,
+            crate::widget::settings::ButtonsSettings::default().navigation,
+            crate::widget::settings::ButtonVisibility::Hidden,
         );
         frame(&ctx, &mut chart, 0.0, Vec::new());
         for (i, (manual, mode, visibility, hover, selected)) in [

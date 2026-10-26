@@ -99,6 +99,7 @@ theme_derived!(TimeframeBarConfig {
 
 /// Action returned by the timeframe bar
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum TimeframeBarAction {
     /// No action taken
     None,

@@ -14,8 +14,8 @@ use super::config::ObjectTreeConfig;
 use super::item_row::render_item_row;
 use super::state::ObjectTreeState;
 use super::types::{SourceItem, SourceType};
-use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 
 /// Render the source tree section
 pub fn render_source_tree(

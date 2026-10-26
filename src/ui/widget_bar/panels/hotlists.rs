@@ -20,6 +20,7 @@ const LIMIT: usize = 50;
 
 /// An action the host performs for the hotlists panel.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum HotlistsAction {
     /// No host action.
     #[default]

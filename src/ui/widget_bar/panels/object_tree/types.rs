@@ -7,6 +7,7 @@
 //! - `DrawingProperties`: Expandable properties for drawings
 
 use crate::drawings::DrawingToolType;
+use crate::model::LineStyle;
 use crate::model::percent_change;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
@@ -43,25 +44,6 @@ impl SourceType {
             Self::Indicator => &embedded_icons::INDICATORS,
             Self::Drawing => &embedded_icons::WIDGET_BAR_LAYERS,
             Self::Template => &embedded_icons::TEMPLATE,
-        }
-    }
-}
-
-/// Line style for drawings
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum LineStyle {
-    #[default]
-    Solid,
-    Dashed,
-    Dotted,
-}
-
-impl LineStyle {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Solid => "Solid",
-            Self::Dashed => "Dashed",
-            Self::Dotted => "Dotted",
         }
     }
 }

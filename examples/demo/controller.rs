@@ -28,7 +28,8 @@ mod storage;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
+use egui_charts::studies::StudyTemplate;
+use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
 #[path = "feeds.rs"]
 mod feeds;
 #[path = "live.rs"]
@@ -38,7 +39,6 @@ mod market;
 
 use eframe::egui;
 use egui_charts::Chart;
-use egui_charts::chart::selection::SeriesId;
 use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
@@ -65,7 +65,6 @@ use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
     IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog,
 };
-use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
 use egui_charts::ui::widget_bar::panels::object_tree::{
@@ -80,6 +79,8 @@ use egui_charts::ui::widget_bar::{
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
+use egui_charts::widget::SeriesId;
+use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::{Arc, mpsc};
 
@@ -383,7 +384,7 @@ pub struct DemoApp {
     // Pending offscreen image options and delivery destination.
     screenshot_requested: Option<(
         ScreenshotTarget,
-        egui_charts::widget::export::ImageExportOptions,
+        egui_charts::widget::ImageExportOptions,
         u64,
     )>,
     // Reopening the dialog must not adopt an earlier readback result.
@@ -465,11 +466,7 @@ impl DemoApp {
         let mut top_toolbar = TopToolbar::new().with_config(
             egui_charts::ui::top_toolbar::TopToolbarConfig::default().with_height(38.0),
         );
-        top_toolbar.timeframe_selector.current =
-            egui_charts::ui::top_toolbar::components::timeframe_selector::Timeframe::new(
-                1,
-                egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute,
-            );
+        top_toolbar.timeframe_selector.current = Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
         let mut menus = ChartMenus::default();
@@ -663,23 +660,13 @@ impl DemoApp {
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
-        let catalog: Vec<_> = DemoSymbol::symbols()
-            .into_iter()
-            .map(|symbol| {
-                let mut instrument = egui_charts::model::Instrument::new(&symbol.name)
-                    .with_description(&symbol.display_name)
-                    .with_exchange(&symbol.exchange);
-                instrument.symbol_type = symbol.symbol_type;
-                instrument
-            })
-            .collect();
-        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(catalog);
+        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(DemoSymbol::symbols());
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
-            .find(|row| row.name == symbol)
+            .find(|row| row.symbol == symbol)
         {
             app.symbol_search.record_symbol(&row);
         }
@@ -766,7 +753,7 @@ impl DemoApp {
     pub(crate) fn switch_symbol(&mut self, symbol: &str) {
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
-            .find(|row| row.name == symbol)
+            .find(|row| row.symbol == symbol)
         {
             self.symbol_search.record_symbol(&row);
         }
@@ -980,9 +967,9 @@ impl DemoApp {
         self.handle_comparison(action);
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
-                self.watchlist.add_symbol(&picked.name);
+                self.watchlist.add_symbol(&picked.symbol);
             } else {
-                self.switch_symbol(&picked.name);
+                self.switch_symbol(&picked.symbol);
             }
         }
         self.watchlist_search &= self.symbol_search.is_open();
@@ -991,6 +978,7 @@ impl DemoApp {
         match self.alert_dialog.show(ctx) {
             AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
+            _ => {}
         }
 
         // Series settings.
@@ -1000,6 +988,7 @@ impl DemoApp {
                     .user_action(|chart| chart.apply_series_settings(&settings));
             }
             SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
+            _ => {}
         }
 
         // Drawing properties.
@@ -1011,6 +1000,7 @@ impl DemoApp {
             }
             DrawingPropertiesAction::Clone(id) => self.clone_drawing(id.0),
             DrawingPropertiesAction::Cancel | DrawingPropertiesAction::None => {}
+            _ => {}
         }
 
         // Keyboard shortcuts help.
@@ -1030,6 +1020,7 @@ impl DemoApp {
             DatePickerAction::GoToDate(date) => self.go_to_date(date),
             DatePickerAction::SetRange(start, end) => self.set_date_range(start, end),
             DatePickerAction::Cancel | DatePickerAction::None => {}
+            _ => {}
         }
     }
 
@@ -1598,6 +1589,7 @@ impl DemoApp {
             | TopToolbarAction::ToggleTrading
             | TopToolbarAction::Host(_)
             | TopToolbarAction::None => {}
+            _ => {}
         }
     }
 
@@ -1806,6 +1798,7 @@ impl DemoApp {
             | DrawingToolbarAction::ToggleValuesTooltip
             | DrawingToolbarAction::ZoomIn
             | DrawingToolbarAction::ZoomOut => {}
+            _ => {}
         }
     }
 
@@ -1952,6 +1945,7 @@ impl DemoApp {
             NewsAction::ShowOnChart(time) => self.chart.scroll_to_time(time),
             NewsAction::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             NewsAction::None => {}
+            _ => {}
         }
     }
 
@@ -2174,6 +2168,7 @@ impl DemoApp {
             WatchlistAction::Import => self.watchlist_import = Some(String::new()),
             WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
+            _ => {}
         }
     }
 
@@ -2222,6 +2217,7 @@ impl DemoApp {
                 });
             }
             AlertPanelAction::None => {}
+            _ => {}
         }
     }
 
@@ -2351,6 +2347,7 @@ impl DemoApp {
                 self.apply_session();
             }
             TimeframeToolbarAction::None => {}
+            _ => {}
         }
     }
 
@@ -2581,6 +2578,7 @@ impl DemoApp {
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
             ChartContextAction::Drawing(a) => self.handle_drawing_context(a),
+            _ => {}
         }
     }
 
@@ -2669,6 +2667,7 @@ impl DemoApp {
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::None => {}
+            _ => {}
         }
     }
 
@@ -2716,6 +2715,7 @@ impl DemoApp {
                 self.replay_control.dismiss();
             }
             ReplayControlAction::None => return,
+            _ => {}
         }
         self.push_replay_window_to_chart();
     }
@@ -2834,6 +2834,7 @@ impl DemoApp {
                     }
                     _ => {}
                 },
+                _ => {}
             }
         }
     }
@@ -3026,7 +3027,8 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::ui::dialogs::{DrawingLineStyle, DrawingProps};
+    use egui_charts::model::LineStyle;
+    use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
     #[test]
@@ -3735,11 +3737,7 @@ mod tests {
         assert_eq!(app.state.timeframe, Timeframe::Min15);
         assert_eq!(app.state.timeframe.duration_ms(), 900_000);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min15));
-        assert_eq!(app.top_toolbar.timeframe_selector.current.value, 15);
-        assert_eq!(
-            app.top_toolbar.timeframe_selector.current.unit,
-            egui_charts::ui::top_toolbar::components::timeframe_selector::TimeframeUnit::Minute
-        );
+        assert_eq!(app.top_toolbar.timeframe_selector.current, Timeframe::Min15);
         let original = app.chart.config().background_color;
         let mut settings = app.settings_state.clone();
         settings.chart_basic_styles.background_color = egui::Color32::RED;
@@ -4265,10 +4263,8 @@ mod tests {
 
     #[test]
     fn display_settings_apply_styles_and_read_back() {
-        use egui_charts::config::{BackgroundStyle, CrosshairLineStyle};
-        use egui_charts::ui::top_toolbar::components::settings_menu::{
-            BackgroundType, PrecisionMode, WatermarkMode,
-        };
+        use egui_charts::config::BackgroundStyle;
+        use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         let mut state = app.settings_state.clone();
@@ -4276,8 +4272,7 @@ mod tests {
         state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
         state.chart_basic_styles.background_gradient_bottom = egui::Color32::BLUE;
         state.crosshair.line_width = 3.0;
-        state.crosshair.line_style =
-            egui_charts::ui::top_toolbar::components::settings_menu::LineStyle::Solid;
+        state.crosshair.line_style = LineStyle::Solid;
         state.crosshair.color = egui::Color32::GREEN;
         state.precision = PrecisionMode::Decimals5;
         state.watermark.mode = WatermarkMode::Symbol;
@@ -4286,7 +4281,7 @@ mod tests {
         state.margins.top_percent = 12.5;
         state.margins.bottom_percent = 7.5;
         state.margins.right_bars = 17;
-        state.trading.show_poss = false;
+        state.trading.show_positions = false;
         state.trading.show_orders = false;
         state.trading.show_executions = false;
         state.trading.show_execution_labels = true;
@@ -4301,11 +4296,11 @@ mod tests {
         );
         assert_eq!(
             app.chart.chart_options().crosshair.vert_line_style,
-            CrosshairLineStyle::Solid
+            LineStyle::Solid
         );
         assert_eq!(
             app.chart.chart_options().crosshair.horz_line_style,
-            CrosshairLineStyle::Solid
+            LineStyle::Solid
         );
         assert_eq!(app.chart.chart_options().crosshair.horz_line_width, 3.0);
         assert_eq!(
@@ -5031,7 +5026,7 @@ mod tests {
     /// reflects locks changed through other drawing controls rather than an optimistic toggle.
     #[test]
     fn drawing_controls_round_trip_visibility_fill_fonts_and_locks() {
-        use egui_charts::drawings::{Drawing, DrawingToolType, LineStyle, TimeframeVisibility};
+        use egui_charts::drawings::{Drawing, DrawingToolType, TimeframeVisibility};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
@@ -5053,7 +5048,7 @@ mod tests {
             [51, 102, 153, 85]
         );
         assert_eq!(props.font_size, 24.0);
-        assert!(matches!(props.line_style, DrawingLineStyle::Dotted));
+        assert!(matches!(props.line_style, LineStyle::Dotted));
         assert!(props.extend_left);
         assert!(
             DrawingProps {
@@ -5121,9 +5116,9 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(!app.drawing_toolbar.state.lock_all);
+        use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
             FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
-            VolumeProfileConfig,
         };
         for tool in [
             DrawingToolType::FibonacciRetracement,
@@ -5415,7 +5410,7 @@ mod tests {
         for (_, theme) in egui_charts::theme::presets() {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-            let mut config = theme.apply_to_config(app.chart.config().clone());
+            let mut config = app.chart.config().clone().with_theme(&theme);
             config.show_quote_boxes = false;
             config.show_left_axis = true;
             config.show_right_axis = false;
@@ -5482,7 +5477,7 @@ mod tests {
                     vec![IndicatorValue::Multiple(vec![f64::NAN, 42.125]); bars.len()]
                 })
                 .with_overlay(false)
-                .with_line_cnt(2)
+                .with_line_count(2)
                 .with_line_names(vec!["Missing".into(), "Hidden plot".into()]),
             ));
             let study = app.chart.indicator_mut(gap).unwrap();

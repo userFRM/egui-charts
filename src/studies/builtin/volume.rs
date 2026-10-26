@@ -175,7 +175,7 @@ impl Indicator for Volume {
         PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: if line < 2 {
                 PlotType::Histogram
             } else {

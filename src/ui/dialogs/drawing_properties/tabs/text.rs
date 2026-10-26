@@ -3,10 +3,10 @@
 use crate::localization as l10n;
 use egui::Ui;
 
-use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 
 /// Font sizes
 const FONT_SIZES: &[f32] = &[8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0];

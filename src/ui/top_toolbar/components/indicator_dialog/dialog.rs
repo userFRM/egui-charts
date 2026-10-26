@@ -870,6 +870,7 @@ impl IndicatorDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scales::StudyFormat;
 
     #[test]
     fn metric_catalog_ignores_old_symbols_and_creates_host_studies() {

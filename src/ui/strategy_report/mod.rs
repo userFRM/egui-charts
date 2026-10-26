@@ -6,7 +6,7 @@ mod tests;
 
 use crate::localization as l10n;
 use crate::model::{
-    Bar, StrategyComparison, StrategyPerformance, StrategyReport, StrategySide, Timeframe,
+    Bar, OrderSide, StrategyComparison, StrategyPerformance, StrategyReport, Timeframe,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::{
@@ -21,6 +21,7 @@ use egui_extras::{Column, TableBuilder};
 /// A trade to reveal on the chart. The host switches symbol and interval, scrolls to the entry and
 /// highlights the span; an open trade has no exit boundary.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StrategyTradeSelection {
     /// Index into the report's original `trades`, independent of display sorting or invalid rows.
     pub trade_index: usize,
@@ -410,8 +411,8 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                             l10n::text(
                                 &ctx,
                                 match t.side {
-                                    StrategySide::Long => "Long",
-                                    StrategySide::Short => "Short",
+                                    OrderSide::Buy => "Long",
+                                    OrderSide::Sell => "Short",
                                 },
                             )
                             .to_string(),

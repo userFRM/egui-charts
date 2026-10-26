@@ -5,13 +5,13 @@
 //! Narrow bars keep date ranges in a menu beside the clock and session controls.
 
 use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
-use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::styles::{icons as icon_sizes, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::toolbar::ResponsiveToolbar;
 use egui::{Color32, FontId, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;

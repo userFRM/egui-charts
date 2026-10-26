@@ -1,7 +1,7 @@
 //! Trade volume at integer price levels. No volume or side is inferred from OHLC bars.
 
 use super::FeedError;
-use crate::model::{BarClock, Tick, TradeSide};
+use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 
@@ -288,11 +288,11 @@ impl Footprint {
             ..Default::default()
         });
         match trade.side {
-            Some(TradeSide::Buy) => {
+            Some(OrderSide::Buy) => {
                 row.ask += trade.size;
                 bar.ask += trade.size;
             }
-            Some(TradeSide::Sell) => {
+            Some(OrderSide::Sell) => {
                 row.bid += trade.size;
                 bar.bid += trade.size;
             }
@@ -320,11 +320,11 @@ mod tests {
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         // Running delta: 0, -3, 5, 3, 3, 7. Total volume 24, bid 5, ask 12, unknown 7.
         for (i, price, size, side) in [
-            (0, 100.0, 3.0, Some(TradeSide::Sell)),
-            (1, 100.25, 8.0, Some(TradeSide::Buy)),
-            (2, 100.0, 2.0, Some(TradeSide::Sell)),
+            (0, 100.0, 3.0, Some(OrderSide::Sell)),
+            (1, 100.25, 8.0, Some(OrderSide::Buy)),
+            (2, 100.0, 2.0, Some(OrderSide::Sell)),
             (3, 100.5, 7.0, None),
-            (4, 100.75, 4.0, Some(TradeSide::Buy)),
+            (4, 100.75, 4.0, Some(OrderSide::Buy)),
         ] {
             flow.push(&Tick::new(start + TimeDelta::seconds(i), price, size, side))
                 .unwrap();

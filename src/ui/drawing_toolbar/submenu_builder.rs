@@ -28,12 +28,12 @@
 //! ```
 
 use super::actions::DrawingToolbarAction;
-use crate::ext::UiExt;
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::styles::{focus::focus_ring_color, icons as icon_sizes};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{
     Align2, FontId, Frame, Id, Key, Modifiers, Popup, PopupCloseBehavior, Pos2, Rect, RectAlign,
     Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,

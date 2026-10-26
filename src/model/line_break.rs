@@ -16,12 +16,12 @@ use chrono::{DateTime, Utc};
 
 /// Configuration for the Line Break chart transformation.
 ///
-/// The `line_cnt` parameter (typically 3) controls how many prior lines
+/// The `line_count` parameter (typically 3) controls how many prior lines
 /// must be exceeded for a reversal to register.
 #[derive(Debug, Clone)]
 pub struct LineBreakConfig {
     /// Number of lines to look back for reversal
-    pub line_cnt: usize,
+    pub line_count: usize,
     /// Price input; high/low gives continuation priority when a bar crosses both thresholds.
     pub source: PriceBasedSource,
 }
@@ -29,7 +29,7 @@ pub struct LineBreakConfig {
 impl Default for LineBreakConfig {
     fn default() -> Self {
         Self {
-            line_cnt: 3,
+            line_count: 3,
             source: PriceBasedSource::Close,
         }
     }
@@ -37,9 +37,9 @@ impl Default for LineBreakConfig {
 
 impl LineBreakConfig {
     /// Create a Line Break config with the given look-back count.
-    pub fn new(line_cnt: usize) -> Self {
+    pub fn new(line_count: usize) -> Self {
         Self {
-            line_cnt,
+            line_count,
             source: PriceBasedSource::Close,
         }
     }
@@ -107,7 +107,7 @@ pub(crate) const MAX_LINES: usize = 10_000;
 /// Builds Line Break lines bar by bar.
 #[derive(Clone)]
 pub(crate) struct LineBreakBuilder {
-    line_cnt: usize,
+    line_count: usize,
     source: PriceBasedSource,
     lines: Vec<LineBreakLine>,
 }
@@ -115,7 +115,7 @@ pub(crate) struct LineBreakBuilder {
 impl LineBreakBuilder {
     pub(crate) fn new(config: &LineBreakConfig) -> Self {
         Self {
-            line_cnt: config.line_cnt,
+            line_count: config.line_count,
             source: config.source,
             lines: Vec::new(),
         }
@@ -173,7 +173,7 @@ impl PriceBuilder for LineBreakBuilder {
                 }
                 // For a reversal, close must break below the low of the last N lines
                 else {
-                    let lookback = self.line_cnt.min(lines.len());
+                    let lookback = self.line_count.min(lines.len());
                     let reversal_low = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.low())
@@ -199,7 +199,7 @@ impl PriceBuilder for LineBreakBuilder {
                 }
                 // For a reversal, close must exceed the high of the last N lines
                 else {
-                    let lookback = self.line_cnt.min(lines.len());
+                    let lookback = self.line_count.min(lines.len());
                     let reversal_high = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.high())
@@ -216,8 +216,8 @@ impl PriceBuilder for LineBreakBuilder {
         };
         self.lines.extend(new_line);
 
-        // Bound memory by dropping the oldest lines; only the last `line_cnt` are read.
-        let keep = MAX_LINES.max(self.line_cnt);
+        // Bound memory by dropping the oldest lines; only the last `line_count` are read.
+        let keep = MAX_LINES.max(self.line_count);
         if self.lines.len() >= keep.saturating_mul(2) {
             self.lines.drain(..self.lines.len() - keep);
         }
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn test_config_creation() {
         let config = LineBreakConfig::new(3);
-        assert_eq!(config.line_cnt, 3);
+        assert_eq!(config.line_count, 3);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! keeping the main dialog module focused on core structure.
 
 use crate::localization as l10n;
+use crate::model::LineStyle;
 use egui::{Color32, FontId, RichText, Ui};
 
 use super::SettingsDialog;
@@ -12,12 +13,12 @@ use crate::ui_kit::ColorPicker;
 
 use crate::styles::typography;
 
-use super::super::data::{LineStyle, TradingNotifications};
-use super::super::types::{
-    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
-};
 use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::settings::TradingNotifications;
+use crate::widget::settings::{
+    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
+};
 
 impl SettingsDialog {
     pub(super) fn draw_canvas_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {
@@ -690,8 +691,8 @@ impl SettingsDialog {
         self.draw_section_header(ui, "APPEARANCE", style);
         let trading = &mut self.settings.trading;
         styled_checkbox(ui, &mut trading.bid_ask_labels, "Bid and ask labels", text);
-        styled_checkbox(ui, &mut trading.show_poss, "Positions", text);
-        ui.add_enabled_ui(trading.show_poss, |ui| {
+        styled_checkbox(ui, &mut trading.show_positions, "Positions", text);
+        ui.add_enabled_ui(trading.show_positions, |ui| {
             let unit = &mut trading.position_pnl_unit;
             let shown = trading.position_pnl;
             trading_option(

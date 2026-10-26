@@ -40,10 +40,13 @@ pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSu
 )]
 pub(crate) mod merge;
 mod options_volume;
+mod order_flow;
 mod orders;
 mod recording;
 mod replay;
 mod resample;
+mod targets;
+mod volume_profile;
 pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub use market::{
@@ -61,13 +64,16 @@ pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
+pub use order_flow::{OrderFlowInput, OrderFlowKind};
 pub use orders::{OrderEvent, OrderQueue, RestingOrder};
 pub use recording::{RecordingReader, RecordingWriter};
 pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
+pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, combine_trades};
+pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
 #[cfg(not(target_arch = "wasm32"))]
@@ -184,7 +190,7 @@ pub trait Datafeed: MaybeSend + 'static {
 
     /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
     /// which leaves the chart without targets and shows no error.
-    fn price_targets(&self, symbol: &str, reply: Reply<crate::services::PriceTargets>) {
+    fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
     }
