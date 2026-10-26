@@ -476,19 +476,30 @@ mod tests {
                 if let Some(action) = action {
                     chart.apply_keyboard_action(action, chart.get_rendered_price_rect());
                 } else {
-                    chart.reset_chart_view();
+                    chart.user_action(|chart| chart.reset_chart_view());
                 }
-                frame(&ctx, &mut chart, 0.1, vec![]);
-                assert_eq!(chart.get_time_scale_state(), (spacing, expected_offset));
-                assert!(!chart.state.price_scale().is_manual());
-                assert!(!chart.series_price_scale(id).unwrap().is_manual());
-                assert!(
-                    chart
-                        .pane_layout
-                        .panes
-                        .iter()
-                        .all(|pane| !pane.scale.is_manual())
-                );
+                for step in 0..3 {
+                    if step == 1 {
+                        assert!(chart.undo());
+                    } else if step == 2 {
+                        assert!(chart.redo());
+                    }
+                    frame(&ctx, &mut chart, 0.1 + step as f64 * 0.1, vec![]);
+                    let manual = step == 1;
+                    if step == 0 {
+                        assert_eq!(chart.get_time_scale_state(), (spacing, expected_offset));
+                    }
+                    assert_eq!(chart.state.price_scale().is_manual(), manual);
+                    assert_eq!(chart.series_price_scale(id).unwrap().is_manual(), manual);
+                    assert!(
+                        chart
+                            .pane_layout
+                            .panes
+                            .iter()
+                            .skip(1)
+                            .all(|pane| pane.scale.is_manual() == manual)
+                    );
+                }
             }
         }
     }
