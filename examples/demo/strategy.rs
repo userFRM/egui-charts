@@ -316,6 +316,8 @@ mod tests {
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
                 app.theme = theme.clone();
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
+                // Use the session that symbol navigation restores, including outside market hours.
+                app.switch_symbol("SAMPLE");
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
