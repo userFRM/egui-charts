@@ -32,6 +32,23 @@ impl Chart {
         scale.scroll_to_realtime();
     }
 
+    /// Restores the configured bar spacing and right margin, scrolls to the latest bar and
+    /// returns every price scale in every pane to auto-scaling. Scale modes and inversion stay.
+    /// Pending scrolls, animations and requested visible-bar counts are cancelled.
+    pub fn reset_chart_view(&mut self) {
+        self.apply_visible_bars_once = false;
+        self.desired_visible_bars = None;
+        self.tracking_mode_active = false;
+        self.reset_time_scale();
+        self.state.price_scale_mut().reset();
+        for scale in self.series_scales.values_mut() {
+            scale.reset();
+        }
+        for pane in &mut self.pane_layout.panes {
+            pane.scale.reset();
+        }
+    }
+
     /// Scrolls to the latest bar with the configured right offset, keeping the zoom.
     ///
     /// Unlike [`Chart::enable_tracking_mode`], the view does not keep returning to the latest
@@ -209,7 +226,7 @@ impl Chart {
     }
 
     /// Ends pending scrolls, animations and momentum, so a programmatic view replaces them.
-    fn cancel_view_motion(&mut self) {
+    pub(super) fn cancel_view_motion(&mut self) {
         self.pending_scroll_time = None;
         self.pending_start_idx = None;
         self.scroll_animation = None;

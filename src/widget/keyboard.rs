@@ -351,14 +351,7 @@ impl super::Chart {
                 self.pending_scroll_time = None;
                 self.state.time_scale_mut().fit_content();
             }
-            A::ResetChart | A::ResetZoom => {
-                self.pending_scroll_time = None;
-                self.state
-                    .time_scale_mut()
-                    .set_bar_spacing(self.chart_options.time_scale.bar_spacing);
-                self.state.time_scale_mut().scroll_to_realtime();
-                self.state.price_scale_mut().reset();
-            }
+            A::ResetChart | A::ResetZoom => self.reset_chart_view(),
             A::ToggleLogScale | A::TogglePercentageScale => {
                 let mode = if action == A::ToggleLogScale {
                     PriceScaleMode::Logarithmic
@@ -437,6 +430,60 @@ mod tests {
     use crate::scales::PriceScaleMode;
     use crate::widget::test_frames::chart;
     use egui::{Key, Modifiers, RawInput};
+
+    #[test]
+    fn reset_chart_restores_time_and_every_price_scale() {
+        use crate::model::SeriesScale;
+        use crate::widget::test_frames::frame;
+        for action in [
+            Some(KeyboardAction::ResetChart),
+            Some(KeyboardAction::ResetZoom),
+            None,
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            let id = chart.add_series(crate::widget::SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            let pane = chart.add_pane();
+            chart.set_preserve_empty_pane(pane, true);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(20.0);
+            chart.state.time_scale_mut().set_right_offset(-30.0);
+            chart.price_scale_mut().set_range(150.0, 150.4);
+            chart
+                .series_price_scale_mut(id)
+                .unwrap()
+                .set_range(2.0, 3.0);
+            chart
+                .pane_layout
+                .panes
+                .last_mut()
+                .unwrap()
+                .scale
+                .set_range(40.0, 50.0);
+            chart.set_visible_bars(5);
+            chart.scroll_to_position(-50.0, true);
+            chart.scroll_to_time(chart.state.shown()[10].time);
+            if let Some(action) = action {
+                chart.apply_keyboard_action(action, chart.get_rendered_price_rect());
+            } else {
+                chart.reset_chart_view();
+            }
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            assert_eq!(chart.get_time_scale_state(), (6.0, 2.5));
+            assert!(!chart.state.price_scale().is_manual());
+            assert!(!chart.series_price_scale(id).unwrap().is_manual());
+            assert!(
+                chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .all(|pane| !pane.scale.is_manual())
+            );
+        }
+    }
 
     #[test]
     fn modified_arrows_pan_one_page_or_zoom_without_plain_panning() {

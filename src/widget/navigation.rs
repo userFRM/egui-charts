@@ -106,13 +106,7 @@ impl Chart {
                             -page
                         });
                     }
-                    4 => {
-                        self.state
-                            .time_scale_mut()
-                            .set_bar_spacing(self.chart_options.time_scale.bar_spacing);
-                        self.state.time_scale_mut().scroll_to_realtime();
-                        self.state.price_scale_mut().reset();
-                    }
+                    4 => self.reset_chart_view(),
                     5 => {
                         let price = self.state.price_scale_mut();
                         if price.is_manual() {

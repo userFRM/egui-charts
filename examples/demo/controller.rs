@@ -2662,10 +2662,7 @@ impl DemoApp {
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
-            ContextMenuAction::ResetChart => {
-                self.chart.apply_synced_time_scale(6.1, 64.0 / 6.1 - 0.5);
-                self.chart.enable_tracking_mode();
-            }
+            ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
             ContextMenuAction::CopyPrice(price) => {
                 log::info!("[demo] copy price {price}");
@@ -5515,10 +5512,11 @@ mod tests {
         assert!(app.chart.redo());
         assert_eq!(app.chart.drawings().drawings.len(), 4);
         assert!(app.chart.undo());
+        let spacing = app.chart.get_time_scale_state().0;
+        let manual = app.chart.state().price_scale().is_manual();
         app.handle_object_tree(ObjectTreeAction::ZoomTo(ids[0]), &sources);
-        // Prices 100..200 with ten percent on either side give 90..210.
-        assert_eq!(app.chart.state().price_scale().range().min, 90.0);
-        assert_eq!(app.chart.state().price_scale().range().max, 210.0);
+        assert_eq!(app.chart.get_time_scale_state().0, spacing);
+        assert_eq!(app.chart.state().price_scale().is_manual(), manual);
         let study = app
             .chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));

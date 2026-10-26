@@ -67,6 +67,79 @@ impl Chart {
         Ok(())
     }
 
+    /// Reveals an offscreen drawing by panning, retaining zoom and the auto/manual scale state.
+    pub(crate) fn reveal_drawing(&mut self, id: usize) {
+        let Some(drawing) = self.drawings.drawings.iter().find(|d| d.id == id) else {
+            return;
+        };
+        if !drawing.selectable || drawing.screen_anchor.is_some() || self.state.shown().is_empty() {
+            return;
+        }
+        let pane = self.pane_layout.panes.iter().position(|pane| {
+            drawing.pane == Some(pane.id.0)
+                || pane.members.iter().any(|id| drawing.pane == Some(id.0))
+        });
+        let price = match pane {
+            Some(at) => &self.pane_layout.panes[at].scale,
+            None => self.state.price_scale(),
+        };
+        let transform = price.transform();
+        let bounds = drawing
+            .chart_points
+            .iter()
+            .filter_map(|point| {
+                let price = transform.to_scale(point.price);
+                (point.bar_idx.is_finite() && price.is_finite()).then_some((point.bar_idx, price))
+            })
+            .fold(None, |bounds, (bar, price)| {
+                Some(match bounds {
+                    None => (bar, bar, price, price),
+                    Some((left, right, low, high)) => (
+                        bar.min(left),
+                        bar.max(right),
+                        price.min(low),
+                        price.max(high),
+                    ),
+                })
+            });
+        let Some((left, right, low, high)) = bounds else {
+            return;
+        };
+        let range = self.state.time_scale().visible_logical_range();
+        let padding = ((range.right - range.left) * 0.05).clamp(0.0, 2.0);
+        let shift = if right < range.left {
+            right - range.left - padding
+        } else if left > range.right {
+            left - range.right + padding
+        } else {
+            0.0
+        };
+        if shift != 0.0 {
+            self.cancel_view_motion();
+            self.tracking_mode_active = false;
+            let scale = self.state.time_scale_mut();
+            scale.set_right_offset(scale.right_offset_precise() + f64::from(shift));
+        }
+        let scale = match pane {
+            Some(at) => &mut self.pane_layout.panes[at].scale,
+            None => self.state.price_scale_mut(),
+        };
+        if scale.is_manual() {
+            let range = scale.range();
+            let padding = (range.max - range.min) * 0.05;
+            let shift = if high < range.min {
+                high - range.min - padding
+            } else if low > range.max {
+                low - range.max + padding
+            } else {
+                0.0
+            };
+            if shift != 0.0 && (range.min + shift).is_finite() && (range.max + shift).is_finite() {
+                scale.set_range(range.min + shift, range.max + shift);
+            }
+        }
+    }
+
     fn map_drawing_points(
         &self,
         points: &[(DateTime<Utc>, f64)],

@@ -305,6 +305,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Selecting a drawing in the object tree reveals offscreen anchors by panning while keeping zoom and the price scale's auto/manual state. Double-click and Zoom to object use the same navigation instead of fitting a manual range to one drawing. `Chart::reset_chart_view` restores configured bar spacing and right margin, scrolls to the latest bar, cancels pending view motion and returns every price scale in every pane to auto-scaling. Chart-menu, keyboard, navigation-button and demo resets use this method. ([#935](https://github.com/userFRM/egui-charts/issues/935))
+
 - The study rotation regression checks that every study gets a refresh with both fast and slow recomputes, without assuming an exact count tied to the runner's speed. ([#927](https://github.com/userFRM/egui-charts/issues/927))
 - Replay resets clear remote-symbol, alternate-interval and metric study histories, tick-origin bookkeeping, errors and paging state before merging the new position, and invalidate dependent calculations. ([#900](https://github.com/userFRM/egui-charts/issues/900))
 - Study sources retry recoverable resolve and history failures with exponential backoff capped at 60 seconds, honoring longer rate-limit delays. Retries retain the original page boundary and count, success clears the error, and paused or replaced sources cancel pending recovery. Replies from superseded requests are ignored. ([#908](https://github.com/userFRM/egui-charts/issues/908))
