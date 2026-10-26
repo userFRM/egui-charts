@@ -426,7 +426,6 @@ impl DemoApp {
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
-        options.crosshair.style = egui_charts::config::CrosshairStyle::Arrow;
         options.tooltip.on_long_press = true;
         options.tooltip.show_time = false;
         options.tooltip.font_size = 14.0;
@@ -734,6 +733,10 @@ impl DemoApp {
         self.copied_drawing = None;
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
+        if matches!(tf, Timeframe::Range(_)) {
+            self.state.chart_type = ChartType::Range;
+            self.chart.set_chart_type(ChartType::Range);
+        }
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         self.refresh_interval_control();
@@ -783,15 +786,20 @@ impl DemoApp {
     /// The sizes of the price-based charts are in price units: take them from the bars on show.
     fn size_price_based_charts(&mut self) {
         let chart = &mut self.chart;
+        let mut params = chart.chart_type_params().clone();
         let size = RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 0.5).brick_size;
         if size > 0.0 && size.is_finite() {
-            let mut params = chart.chart_type_params().clone();
             params.renko_brick_size = size;
             params.kagi_reversal = size;
             params.range_size = size;
             params.pnf_box_size = size;
-            chart.set_chart_type_params(params);
         }
+        if let Timeframe::Range(ticks) = self.state.timeframe {
+            let tick_size = self.live.instrument().tick_size.unwrap_or(0.01);
+            params.range_size = ticks.get() as f64 * tick_size;
+            params.range_size_method = egui_charts::model::BoxSizeMethod::Fixed;
+        }
+        chart.set_chart_type_params(params);
     }
 
     fn apply_session(&mut self) {
@@ -2616,6 +2624,18 @@ impl DemoApp {
                     context.target
                 ));
             }
+            ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)) => {
+                use egui_charts::scales::PriceFormatter;
+                let decimals = self
+                    .chart
+                    .instrument()
+                    .and_then(egui_charts::scales::instrument_price_precision)
+                    .unwrap_or(2);
+                ctx.copy_text(
+                    egui_charts::scales::DefaultPriceFormatter::with_precision(decimals as usize)
+                        .format(price),
+                );
+            }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
@@ -2676,9 +2696,6 @@ impl DemoApp {
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
-            ContextMenuAction::CopyPrice(price) => {
-                log::info!("[demo] copy price {price}");
-            }
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
@@ -4716,6 +4733,15 @@ mod tests {
             })
             .drop_without_applying_deltas();
         };
+        assert_eq!(
+            app.chart.chart_options().crosshair.style,
+            CrosshairStyle::Full
+        );
+        frame(&mut app);
+        assert_eq!(
+            app.drawing_toolbar.state.current_cursor_type,
+            CursorType::Cross
+        );
         for (style, cursor, magnet) in [
             (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
@@ -5932,6 +5958,22 @@ mod tests {
                 );
             }
         }
+        for interval in ["10r", "25r"] {
+            let timeframe = interval.parse().unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(timeframe));
+            assert_eq!(app.chart.chart_type(), ChartType::Range);
+            assert_eq!(app.state.chart_type, ChartType::Range);
+            assert_eq!(app.chart.timeframe(), Some(timeframe));
+            let ticks = if interval == "10r" { 10.0 } else { 25.0 };
+            assert!((app.chart.chart_type_params().range_size - ticks * tick_size).abs() < 1e-10);
+            app.chart.set_data(SeriesId::MAIN, Vec::new());
+            let mut params = app.chart.chart_type_params().clone();
+            params.range_size = 1.0;
+            app.chart.set_chart_type_params(params);
+            app.size_price_based_charts();
+            assert!((app.chart.chart_type_params().range_size - ticks * tick_size).abs() < 1e-10);
+        }
+        app.switch_timeframe(Timeframe::Min1);
         let minute = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
         app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Sec1));
         for _ in 0..3 {
@@ -6051,6 +6093,32 @@ mod tests {
             assert!(
                 *delay <= Duration::from_secs(1),
                 "frame {index} asked for {delay:?}, more than the countdown's second"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_price_uses_the_selected_instruments_precision() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        for (symbol, price, expected) in [
+            ("AAPL", 123.45678, "123.46"),
+            ("AAPL", -0.001, "0.00"),
+            ("EURUSD", 1.12345678, "1.1235"),
+        ] {
+            app.switch_symbol(symbol);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                app.handle_context_action(
+                    ui.ctx(),
+                    ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)),
+                );
+            });
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            assert!(
+                commands.iter().any(|command| matches!(command,
+                egui::OutputCommand::CopyText(text) if text == expected)),
+                "{symbol}: {commands:?}"
             );
         }
     }
