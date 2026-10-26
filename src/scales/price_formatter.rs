@@ -11,6 +11,18 @@
 use crate::model::{Instrument, percent_change};
 use std::sync::Arc;
 
+// Inspect the rounded digits so rounding ties and very large precisions follow Rust's formatter.
+pub(super) fn format_decimal(value: f64, precision: usize) -> String {
+    let mut formatted = format!("{value:.precision$}");
+    if formatted
+        .strip_prefix('-')
+        .is_some_and(|digits| digits.bytes().all(|b| b == b'0' || b == b'.'))
+    {
+        formatted.remove(0);
+    }
+    formatted
+}
+
 /// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
 /// Invalid tick sizes are ignored; explicit decimals take precedence.
 pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
@@ -91,10 +103,10 @@ impl PriceFormatter for DefaultPriceFormatter {
     fn format(&self, price: f64) -> String {
         if self.min_precision > 0 {
             // Fixed precision
-            format!("{:.prec$}", price, prec = self.precision)
+            format_decimal(price, self.precision)
         } else {
             // Auto precision - remove trailing zeros
-            let formatted = format!("{:.prec$}", price, prec = self.precision);
+            let formatted = format_decimal(price, self.precision);
             if self.precision == 0 {
                 return formatted;
             }
@@ -134,7 +146,9 @@ impl PriceFormatter for PercentageFormatter {
         // A zero base has no defined percentage: percent_change gives a neutral 0%
         // rather than "inf%"/"NaN%" on the axis.
         let percentage = percent_change(self.base_val, price);
-        format!("{:+.prec$}%", percentage, prec = self.precision)
+        let formatted = format_decimal(percentage, self.precision);
+        let sign = if formatted.starts_with('-') { "" } else { "+" };
+        format!("{sign}{formatted}%")
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
@@ -212,7 +226,7 @@ impl PriceFormatter for CurrencyFormatter {
         let val_str = if let Some(sep) = self.thousands_sep {
             self.format_with_separator(price, sep)
         } else {
-            format!("{:.prec$}", price, prec = self.precision)
+            format_decimal(price, self.precision)
         };
 
         let space = if self.add_space { " " } else { "" };
@@ -236,7 +250,7 @@ impl PriceFormatter for CurrencyFormatter {
 
 impl CurrencyFormatter {
     fn format_with_separator(&self, price: f64, separator: char) -> String {
-        let formatted = format!("{:.prec$}", price, prec = self.precision);
+        let formatted = format_decimal(price, self.precision);
         let mut parts = formatted.splitn(2, '.');
 
         let integer = parts.next().unwrap_or("");
@@ -296,7 +310,7 @@ impl PriceFormatter for VolumeFormatter {
         } else if abs_val >= 1_000.0 {
             format!("{:.prec$}K", value / 1_000.0, prec = self.precision)
         } else {
-            format!("{:.prec$}", value, prec = self.precision)
+            format_decimal(value, self.precision)
         }
     }
 
@@ -320,6 +334,7 @@ impl Default for ScientificFormatter {
 
 impl PriceFormatter for ScientificFormatter {
     fn format(&self, price: f64) -> String {
+        let price = if price == 0.0 { 0.0 } else { price };
         format!("{:.prec$e}", price, prec = self.precision)
     }
 
@@ -446,6 +461,24 @@ mod tests {
         let formatter = DefaultPriceFormatter::default();
         assert_eq!(formatter.format(123.456), "123.46");
         assert_eq!(formatter.format(123.0), "123");
+        for value in [-0.0, -0.001] {
+            assert_eq!(formatter.format(value), "0");
+            assert_eq!(
+                DefaultPriceFormatter::with_precision(2).format(value),
+                "0.00"
+            );
+            for unit in [
+                super::super::StudyFormat::Price,
+                super::super::StudyFormat::Fixed(2),
+            ] {
+                assert_eq!(unit.format(value, None), "0.00");
+            }
+            assert_eq!(
+                super::super::StudyFormat::Percent.format(value, None),
+                "0.00%"
+            );
+        }
+        assert_eq!(formatter.format(-0.006), "-0.01");
     }
 
     #[test]
@@ -465,6 +498,8 @@ mod tests {
         let formatter = PercentageFormatter::default();
         assert_eq!(formatter.format(105.0), "+5.00%");
         assert_eq!(formatter.format(95.0), "-5.00%");
+        assert_eq!(formatter.format(99.999), "+0.00%");
+        assert_eq!(formatter.format(99.994), "-0.01%");
 
         // A negative base (a spread) reads with the sign of the change.
         let spread = PercentageFormatter {
@@ -510,6 +545,21 @@ mod tests {
             (CurrencyFormatter::new("CHF", 1), -1234.5, "-CHF1,234.5"),
             (CurrencyFormatter::usd(), -0.5, "-$0.50"),
             (CurrencyFormatter::usd(), 0.0, "$0.00"),
+            (CurrencyFormatter::usd(), -0.0, "$0.00"),
+            (CurrencyFormatter::usd(), -0.001, "$0.00"),
+            (CurrencyFormatter::usd(), -0.006, "-$0.01"),
+            (CurrencyFormatter::new("JPY", 0), -0.1, "JPY0"),
+            (CurrencyFormatter::new("JPY", 0), -0.6, "-JPY1"),
+            (CurrencyFormatter::btc(), -0.000000001, "0.00000000 ₿"),
+            (CurrencyFormatter::eur(), -0.001, "0.00 €"),
+            (
+                CurrencyFormatter {
+                    thousands_sep: None,
+                    ..CurrencyFormatter::usd()
+                },
+                -0.001,
+                "$0.00",
+            ),
             (CurrencyFormatter::usd(), 123.45, "$123.45"),
             // Symbol after the value keeps the sign on the number itself.
             (CurrencyFormatter::btc(), -1234.5, "-1,234.50000000 ₿"),
@@ -526,6 +576,11 @@ mod tests {
         assert_eq!(formatter.format(2_500_000.0), "2.50M");
         assert_eq!(formatter.format(3_500.0), "3.50K");
         assert_eq!(formatter.format(500.0), "500.00");
+        for value in [-0.0, -0.001] {
+            assert_eq!(formatter.format(value), "0.00");
+        }
+        assert_eq!(formatter.format(-0.006), "-0.01");
+        assert_eq!(formatter.format(-3_500.0), "-3.50K");
     }
 
     #[test]
@@ -533,6 +588,8 @@ mod tests {
         let formatter = ScientificFormatter::default();
         let result = formatter.format(0.000123);
         assert!(result.contains("e"));
+        assert_eq!(formatter.format(-0.0), "0.000e0");
+        assert_eq!(formatter.format(-0.001), "-1.000e-3");
     }
 
     #[test]

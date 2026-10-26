@@ -1,5 +1,6 @@
 //! Study value units and scale placement.
 
+use super::price_formatter::format_decimal;
 use crate::scales::{PriceFormatter, VolumeFormatter};
 
 /// Units used in study legends, axes, tooltips and data windows.
@@ -34,8 +35,8 @@ impl StudyFormat {
                 precision: decimals,
             }
             .format(value),
-            Self::Percent => format!("{value:.decimals$}%"),
-            Self::Price | Self::Fixed(_) => format!("{value:.decimals$}"),
+            Self::Percent => format!("{}%", format_decimal(value, decimals)),
+            Self::Price | Self::Fixed(_) => format_decimal(value, decimals),
         }
     }
 }
