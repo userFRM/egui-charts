@@ -203,6 +203,7 @@ impl Chart {
                 let zoom_scale = (zoom_delta - 1.0) * 2.0;
                 self.pending_scroll_time = None;
                 self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
 
                 // Use hover position or center of chart as zoom anchor
                 let zoom_point_x = self.zoom_anchor(
@@ -701,12 +702,13 @@ mod tests {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_and_contact_pinch_keep_the_zoom_anchor() {
-        for (contacts, native, enabled, tracking) in [
-            (false, true, true, false),
-            (true, false, true, false),
-            (true, true, true, false),
-            (false, true, false, false),
-            (false, true, true, true),
+        for (contacts, native, enabled, tracking, kinetic) in [
+            (false, true, true, false, false),
+            (true, false, true, false, false),
+            (true, true, true, false, false),
+            (false, true, false, false, false),
+            (false, true, true, true, false),
+            (false, true, true, false, true),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
@@ -735,6 +737,13 @@ mod tests {
             }
             if tracking {
                 chart.enable_tracking_mode();
+            }
+            if kinetic {
+                chart.chart_options.kinetic_scroll.enabled = true;
+                chart.kinetic_scroll.is_active = true;
+                chart.kinetic_scroll.velocity = 120.0;
+                chart.kinetic_scroll.anim_last_time =
+                    Some(web_time::Instant::now() - std::time::Duration::from_secs(1));
             }
             let (spacing, offset) = chart.get_time_scale_state();
             let mut events = Vec::new();

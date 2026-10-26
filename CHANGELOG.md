@@ -297,7 +297,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Studies sourced from another study continue refreshing during continuous ticks, within the existing full-recompute budget. ([#911](https://github.com/userFRM/egui-charts/issues/911))
 
-- Native trackpad pinches zoom around the pointer and exit tracking mode. Contact input takes precedence when both are reported, and wheel zoom remains applied once. ([#918](https://github.com/userFRM/egui-charts/issues/918))
+- Native trackpad pinches zoom around the pointer and stop tracking and kinetic scrolling. Contact input takes precedence when both are reported, and wheel zoom remains applied once. ([#918](https://github.com/userFRM/egui-charts/issues/918))
 
 - Touch panning respects its horizontal and vertical permissions independently of mouse dragging and pinch scaling, including two-finger translation and the transition back to one finger. Price and time axis drags use their own scaling permissions even when plot panning is disabled and retain the gesture after leaving the axis; disabled axis gestures do not pan the plot. ([#919](https://github.com/userFRM/egui-charts/issues/919), [#920](https://github.com/userFRM/egui-charts/issues/920))
 
