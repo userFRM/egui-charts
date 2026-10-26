@@ -273,5 +273,24 @@ mod tests {
             [false, false, false, false, false, false, true, false, false]
         );
         assert_eq!(helpers::sma(&[2.0, 4.0], 0), [2.0, 4.0]);
+        #[cfg(feature = "studies")]
+        {
+            use crate::studies::{ForceIndex, Indicator};
+            let bars: Vec<_> = [1.0, 2.0, 4.0, 8.0]
+                .into_iter()
+                .map(|p| crate::model::Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0))
+                .collect();
+            for len in 0..=bars.len() {
+                let mut force = ForceIndex::new(3);
+                force.calculate(&bars[..len]);
+                for i in 0..len {
+                    assert_eq!(
+                        force.values().value(0, i),
+                        if i < 3 { None } else { Some(7.0 / 3.0) },
+                        "Force Index must wait for three changes, history length {len}"
+                    );
+                }
+            }
+        }
     }
 }
