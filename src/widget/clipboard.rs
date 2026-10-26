@@ -100,7 +100,8 @@ impl Chart {
     /// Paste study clipboard text from [`Self::copy_indicator`], on this chart or another, as
     /// one undoable addition, and return the new study's id. `factory` creates the study by its
     /// name. Rejects other text, a name `factory` does not know, and inputs or styles the study
-    /// does not accept, before changing the chart.
+    /// does not accept, before changing the chart. Study output references need host remapping
+    /// and are rejected; hosts restore those inputs through [`Self::add_indicator`].
     #[cfg(feature = "studies")]
     pub fn paste_indicator(
         &mut self,
@@ -113,6 +114,16 @@ impl Chart {
             .strip_prefix(STUDY_PREFIX)
             .ok_or_else(|| serde_json::Error::custom("not a study clipboard"))?;
         let copied: CopiedStudy = serde_json::from_str(json)?;
+        if copied.inputs.iter().any(|(_, value)| {
+            matches!(
+                value,
+                InputValue::Source(crate::studies::StudySource::Study { .. })
+            )
+        }) {
+            return Err(serde_json::Error::custom(
+                "study output references need host remapping before paste",
+            ));
+        }
         let mut study = crate::studies::ConfiguredStudy::new(
             factory
                 .create(&copied.name)
@@ -175,5 +186,24 @@ mod tests {
         assert!(!pasted.is_overlay());
         assert_eq!(pasted.scale(), StudyScale::None);
         assert!(target.can_undo());
+        let parent = source.add_indicator(Box::new(crate::studies::RSI::new(2)));
+        source
+            .set_indicator_source(
+                id,
+                crate::studies::StudySource::Study {
+                    id: parent.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        let text = source.copy_indicator(id).unwrap();
+        let unrelated = target.add_indicator(Box::new(crate::studies::EMA::new(2)));
+        assert_eq!(unrelated.0, parent.0);
+        let before: Vec<_> = target.indicators().map(|(id, _)| id).collect();
+        assert!(target.paste_indicator(&text, &factory).is_err());
+        assert_eq!(
+            target.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+            before
+        );
     }
 }

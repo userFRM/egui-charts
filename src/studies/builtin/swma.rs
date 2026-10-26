@@ -68,6 +68,12 @@ impl SWMA {
 }
 
 impl Indicator for SWMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn name(&self) -> &str {
         "SWMA"
     }

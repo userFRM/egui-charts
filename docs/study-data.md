@@ -12,29 +12,29 @@ only finite prices in that range contribute to the arithmetic mean. The resultin
 price remains available to the legend and last-value label when the latest bar is outside
 the viewport.
 
-Up/Down Volume needs actual intrabars from the host. Its `lower_timeframe` request uses one
+Up/Down Volume needs actual intrabars from the host. Its `data_requests` declaration uses one
 second on second charts, one minute on minute and hour charts, five minutes on daily charts
 and one hour on longer intervals. A custom interval that cannot contain whole candles of
 that size uses one-second intrabars. Subsecond and tick-count charts have no request. Supply
 the same symbol and session as the chart. Read the request again after a symbol or interval change:
 
 ```rust,ignore
-let requests: Vec<_> = chart.indicators()
-    .filter_map(|(id, study)| study.lower_timeframe().map(|interval| (id, interval)))
-    .collect();
-for (id, interval) in requests {
-    // The host obtains a sorted, duplicate-free snapshot, including the developing intrabar.
-    let bars = host_history_and_stream_snapshot(interval);
-    chart.indicator_mut(id).unwrap().set_lower_timeframe_bars(interval, bars)?;
+for request in chart.study_data_requests() {
+    // The host obtains a snapshot, including the developing intrabar.
+    let bars = host_history_and_stream_snapshot(&request);
+    chart.set_study_data(request, bars, instrument.clone());
 }
 ```
 
-A response replaces the prior snapshot atomically. Include the earlier intrabar when its
-close is needed to classify a doji. Empty history clears the values; missing parent intervals
-remain unavailable, while supplied zero volume produces zero. A stale interval, duplicate or
-unordered timestamps, non-finite open/close/volume or negative volume returns an error and
-retains the accepted snapshot. Accounts, feed selection, retrieval, subscriptions and retries
-belong to the host. No split is inferred from a parent candle's direction or total volume.
+A response replaces the prior snapshot. The chart sorts, deduplicates and validates it through
+its shared study-data path; a connected `Datafeed` loads and subscribes automatically.
+Direct callers supply `StudyData` to `Indicator::update_data` with sorted, unique bars;
+invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
+An unavailable or stale interval leaves gaps. Include the earlier intrabar when its close is
+needed to classify a doji. Empty history clears the values; missing parent intervals remain
+unavailable, while supplied zero volume produces zero. Accounts, feed selection, retrieval,
+subscriptions and retries belong to the host. No split is inferred from a parent candle's
+direction or total volume.
 
 `Indicator::table` exposes labelled percentages independently of plots, including Performance's
 six periods and Seasonality's years and summary rows. The shared chart renderer paints them

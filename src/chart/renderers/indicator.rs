@@ -284,9 +284,26 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
+        #[cfg(feature = "drawings")]
+        if !indicator.drawings().is_empty() {
+            crate::studies::plots::paint_drawings(context, indicator, price_scale, coords);
+            return;
+        }
         if !indicator.candles().is_empty() {
             crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
             return;
+        }
+        let visible = super::volume_profile::profile_range(coords);
+        for plot in indicator.volume_profiles(visible) {
+            super::volume_profile::paint_profile(
+                &context.painter.with_clip_rect(context.rect),
+                &plot.profile,
+                plot.config,
+                plot.color,
+                super::volume_profile::profile_span(&plot, coords),
+                plot.right_aligned,
+                &|price| price_scale.price_to_y(price),
+            );
         }
         let values = indicator.values();
         let painter = context.painter.with_clip_rect(context.rect);
@@ -571,6 +588,13 @@ impl IndicatorRenderer {
         }
         if let [(point, _)] = points {
             painter.circle_filled(*point, DESIGN_TOKENS.stroke.thick, color);
+            return;
+        }
+        if style.rising.is_none() && style.falling.is_none() && style.fill.is_none() {
+            painter.add(egui::Shape::line(
+                points.iter().map(|(point, _)| *point).collect(),
+                Stroke::new(style.width, color),
+            ));
             return;
         }
         let mut segment_color = color;
@@ -860,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_lines_use_one_point_strokes_and_study_colours() {
+    fn overlay_lines_use_joined_one_point_strokes_and_keep_gaps_and_study_colours() {
         let blue = Color32::from_rgb(41, 98, 255);
         let orange = Color32::from_rgb(255, 167, 38);
         let custom = Color32::from_rgb(10, 200, 90);
@@ -868,7 +892,7 @@ mod tests {
         recoloured.set_colors(vec![custom]);
         let mut sma = SMA::default();
         sma.set_colors(vec![custom]);
-        let cases: [(Box<dyn Indicator>, Vec<Color32>); 4] = [
+        let cases: [(Box<dyn Indicator>, Vec<Color32>); 5] = [
             (
                 Box::new(BollingerBands::default()),
                 vec![blue, orange, blue],
@@ -881,6 +905,25 @@ mod tests {
                     Color32::from_rgb(156, 39, 176),
                     Color32::from_rgb(120, 123, 134),
                 ],
+            ),
+            (
+                Box::new(
+                    crate::studies::CustomIndicator::new("Gaps", |bars| {
+                        bars.iter()
+                            .enumerate()
+                            .map(|(i, bar)| {
+                                if (40..60).contains(&i) {
+                                    crate::studies::IndicatorValue::None
+                                } else {
+                                    crate::studies::IndicatorValue::Single(bar.close)
+                                }
+                            })
+                            .collect()
+                    })
+                    .with_color(custom)
+                    .with_overlay(true),
+                ),
+                vec![custom],
             ),
         ];
         for (study, colours) in cases {
@@ -898,10 +941,15 @@ mod tests {
                 );
             }
             let strokes: Vec<_> = painted
-                .into_iter()
+                .iter()
                 .filter_map(|shape| match shape {
-                    Shape::LineSegment { stroke, .. } if colours.contains(&stroke.color) => {
-                        Some(stroke)
+                    Shape::Path(path) if path.points.len() > 2 => {
+                        let egui::epaint::ColorMode::Solid(color) = path.stroke.color else {
+                            return None;
+                        };
+                        colours
+                            .contains(&color)
+                            .then_some(Stroke::new(path.stroke.width, color))
                     }
                     _ => None,
                 })
@@ -916,6 +964,25 @@ mod tests {
                     strokes.iter().any(|stroke| stroke.color == colour),
                     "{name}: missing {colour:?}"
                 );
+            }
+            if name == "Gaps" {
+                assert_eq!(
+                    strokes.len(),
+                    2,
+                    "one joined stroke on each side of the gap"
+                );
+                let gap = chart.index_to_x(50.0).unwrap();
+                for shape in &painted {
+                    if let Shape::Path(path) = shape
+                        && path.stroke.color == egui::epaint::ColorMode::Solid(custom)
+                    {
+                        assert!(
+                            path.points
+                                .windows(2)
+                                .all(|pair| { !(pair[0].x < gap && pair[1].x > gap) })
+                        );
+                    }
+                }
             }
         }
     }
@@ -1022,11 +1089,12 @@ mod tests {
                         .collect();
                     assert!(
                         shapes.iter().any(|clipped| matches!(
-                            clipped.shape,
-                            Shape::LineSegment { points, stroke }
-                                if stroke.color == Color32::BLUE
-                                    && points[0].x == coords.idx_to_x(0)
-                                    && points[1].x == coords.idx_to_x(1)
+                            &clipped.shape,
+                            Shape::Path(path)
+                                if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::BLUE)
+                                    && path.points.windows(2).any(|points|
+                                        points[0].x == coords.idx_to_x(0)
+                                            && points[1].x == coords.idx_to_x(1))
                         )),
                         "the segment entering the visible price range must survive"
                     );

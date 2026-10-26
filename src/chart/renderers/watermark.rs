@@ -1,6 +1,6 @@
 //! Host watermarks: lines of text and an image, aligned anywhere in the price pane.
 
-use crate::drawings::FontWeight;
+use crate::config::FontWeight;
 use egui::{Align2, Color32, FontId, Painter, Rect, Shape, Ui, Vec2};
 
 /// One line of text of a [`Watermark`].

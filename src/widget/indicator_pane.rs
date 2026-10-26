@@ -564,6 +564,13 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::GraphicsObject,
+                response.enabled(),
+                format!("{} pane", indicator.name()),
+            )
+        });
 
         if !ui.is_rect_visible(rect) {
             return None;
@@ -869,6 +876,11 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for plot in indicator.volume_profiles(visible_range.clone()) {
+            min_val = min_val.min(plot.profile.low());
+            max_val = max_val.max(plot.profile.high());
+        }
+
         for zone in indicator.zones().iter().filter(|zone| {
             zone.bars.end > visible_range.start
                 && zone.bars.start < visible_range.end
@@ -885,6 +897,12 @@ impl IndicatorPane {
         }) {
             min_val = min_val.min(projection.bottom);
             max_val = max_val.max(projection.top);
+        }
+
+        #[cfg(feature = "drawings")]
+        for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
         }
 
         if min_val != f64::MAX

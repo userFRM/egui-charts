@@ -60,31 +60,36 @@ impl Indicator for TimePriceOpportunity {
         "Market Profile of each session beside its bars"
     }
     fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = TPOConfig::default();
         vec![
             StudyInput::new(
                 "period",
                 "Period (minutes)",
                 InputValue::Length(self.config.period_minutes as usize),
                 InputKind::Length(1, 1440),
-            ),
+            )
+            .with_default(InputValue::Length(30)),
             StudyInput::new(
                 "row_ticks",
                 "Ticks per row (0 for auto)",
                 InputValue::Length(self.row_ticks),
                 InputKind::Length(0, 100_000),
-            ),
+            )
+            .with_default(InputValue::Length(0)),
             StudyInput::new(
                 "value_area",
                 "Value area (%)",
                 InputValue::Number(self.config.value_area_pct * 100.0),
                 InputKind::Number(1.0, 100.0),
-            ),
+            )
+            .with_default(InputValue::Number(defaults.value_area_pct * 100.0)),
             StudyInput::new(
                 "split_sessions",
                 "Split extended hours",
                 InputValue::Toggle(self.config.split_sessions),
                 InputKind::Toggle,
-            ),
+            )
+            .with_default(InputValue::Toggle(defaults.split_sessions)),
             StudyInput::new(
                 "display",
                 "Display",
@@ -92,13 +97,19 @@ impl Indicator for TimePriceOpportunity {
                     self.config.display_mode == TPODisplayMode::Blocks,
                 )),
                 InputKind::Choice(vec!["Letters".into(), "Blocks".into()]),
-            ),
+            )
+            .with_default(InputValue::Choice(usize::from(
+                defaults.display_mode == TPODisplayMode::Blocks,
+            ))),
             StudyInput::new(
                 "sessions",
                 "Sessions",
                 InputValue::Choice(usize::from(self.config.latest_session_only)),
                 InputKind::Choice(vec!["Visible".into(), "Latest".into()]),
-            ),
+            )
+            .with_default(InputValue::Choice(usize::from(
+                defaults.latest_session_only,
+            ))),
         ]
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {

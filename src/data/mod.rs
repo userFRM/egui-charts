@@ -6,11 +6,12 @@
 //! feed on the UI thread and never waits for it: the feed answers each request once through a
 //! [`Reply`] and pushes live bars, trades, depth and status into the [`Sink`] of each
 //! [`Subscription`], from any thread, runtime or browser task. Best bid/ask quotes use
-//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`].
+//! [`Sink::push_quote`]; executions read through `Chart::trades` can feed [`Footprint`], and
+//! `Chart::depth_history` keeps the order book over time in a [`DepthHistory`].
 //!
 //! Symbol search is not part of the feed: it is the separate
-//! [`SymbolSearch`](crate::services::SymbolSearch) service. Until an application wires it into
-//! the symbol dialogs, they list the symbols the application passes them.
+//! [`SymbolSearch`](crate::services::SymbolSearch) service. Connect it to the symbol dialogs,
+//! which otherwise search their supplied list.
 //!
 //! [`resample`] aggregates bars into a longer timeframe.
 
@@ -23,6 +24,11 @@ use std::fmt;
 use std::time::Duration;
 
 pub(crate) mod depth;
+#[cfg_attr(
+    not(feature = "widget"),
+    expect(dead_code, reason = "only the chart widget keeps a depth history")
+)]
+mod depth_history;
 mod footprint;
 #[cfg_attr(
     not(any(test, feature = "widget")),
@@ -36,6 +42,7 @@ mod market;
 )]
 pub(crate) mod merge;
 mod resample;
+pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
 pub use footprint::{Footprint, FootprintBar, FootprintLevel};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
@@ -130,6 +137,13 @@ pub trait Datafeed: MaybeSend + 'static {
     /// `None`, so order flow survives a reload. The default answers [`FeedError::NotSupported`].
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
+    /// which leaves the chart without targets and shows no error.
+    fn price_targets(&self, symbol: &str, reply: Reply<crate::services::PriceTargets>) {
+        let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
     }
 

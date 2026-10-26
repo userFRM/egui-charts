@@ -9,6 +9,7 @@ use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, NewsQuery, NewsStory};
 use crate::icons::icons;
 use crate::theme::ThemeExt;
+use crate::ui_kit::buttons::Button;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 use crate::ui_kit::{EmptyState, IconButton, LoadingIndicator, PanelHeader};
 
@@ -193,11 +194,11 @@ impl NewsPanel {
                         ui.add_space(theme.spacing.sm);
                     }
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Show on chart").clicked() {
+                        if Button::new("Show on chart").show(ui).clicked() {
                             action = NewsAction::ShowOnChart(story.time);
                         }
                         if let Some(url) = &story.url
-                            && ui.button("Open story").clicked()
+                            && Button::new("Open story").show(ui).clicked()
                         {
                             action = NewsAction::OpenUrl(url.clone());
                         }
@@ -217,12 +218,37 @@ impl NewsPanel {
                 .clicked();
         });
         let market = self.market;
-        ui.horizontal(|ui| {
-            if let Some(symbol) = &self.symbol {
-                ui.selectable_value(&mut self.market, false, symbol.as_str());
-            }
-            ui.selectable_value(&mut self.market, true, "Market");
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 24.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if Button::new("Market")
+                    .small()
+                    .selected(self.market)
+                    .show(ui)
+                    .clicked()
+                {
+                    self.market = true;
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(symbol) = &self.symbol
+                        && ui
+                            .add(
+                                egui::Button::new(symbol)
+                                    .frame_when_inactive(!self.market)
+                                    .stroke(egui::Stroke::NONE)
+                                    .selected(!self.market)
+                                    .min_size(egui::vec2(0.0, 24.0))
+                                    .truncate(),
+                            )
+                            .on_hover_text(symbol)
+                            .clicked()
+                    {
+                        self.market = false;
+                    }
+                });
+            },
+        );
         if refresh || market != self.market {
             self.refresh();
         }
@@ -252,21 +278,41 @@ impl NewsPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for story in &self.stories {
-                    ui.label(
-                        RichText::new(meta(story))
-                            .size(theme.text.small)
-                            .color(theme.ui.text_secondary),
-                    );
-                    let headline = ui
-                        .add(
-                            Label::new(RichText::new(&story.headline).strong())
-                                .sense(Sense::click()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if self.highlights && !story.body.is_empty() {
-                        ui.label(&story.body);
-                    }
-                    if headline.clicked() {
+                    let response = ui
+                        .scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                            let hovered = ui.response().hovered();
+                            egui::Frame::new()
+                                .fill(if hovered {
+                                    theme.ui.btn_bg_hover
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                })
+                                .inner_margin(egui::Margin::symmetric(8, 0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.set_min_height(26.0);
+                                    ui.style_mut().interaction.selectable_labels = false;
+                                    ui.label(
+                                        RichText::new(meta(story))
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                    ui.add(
+                                        Label::new(RichText::new(&story.headline).strong()).wrap(),
+                                    );
+                                    if self.highlights && !story.body.is_empty() {
+                                        ui.label(&story.body);
+                                    }
+                                });
+                        })
+                        .response;
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &story.headline)
+                    });
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
                         self.open = Some(story.id.clone());
                     }
                     ui.separator();

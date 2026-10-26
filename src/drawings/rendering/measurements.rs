@@ -142,7 +142,7 @@ impl Drawing {
             );
 
             let info = self
-                .measurement_label(view.bars, view.instrument)
+                .measurement_label(view.bars, view.instrument, view.time_axis)
                 .unwrap_or_default();
 
             // Draw info box at the top-left corner of rect
@@ -226,7 +226,7 @@ impl Drawing {
         );
 
         let info = self
-            .measurement_label(&[], view.instrument)
+            .measurement_label(&[], view.instrument, view.time_axis)
             .unwrap_or_default();
 
         painter.text(
@@ -293,7 +293,7 @@ impl Drawing {
         );
 
         let info = self
-            .measurement_label(view.bars, view.instrument)
+            .measurement_label(view.bars, view.instrument, view.time_axis)
             .unwrap_or_default();
 
         painter.text(
@@ -342,7 +342,7 @@ impl Drawing {
         );
 
         let info = self
-            .measurement_label(view.bars, view.instrument)
+            .measurement_label(view.bars, view.instrument, view.time_axis)
             .unwrap_or_default();
         painter.text(
             rect.center(),
@@ -373,7 +373,8 @@ impl Drawing {
         painter.circle_filled(start, DESIGN_TOKENS.rounding.md, color);
         painter.circle_filled(end, DESIGN_TOKENS.rounding.md, color);
 
-        let Some(info_text) = self.measurement_label(view.bars, view.instrument) else {
+        let Some(info_text) = self.measurement_label(view.bars, view.instrument, view.time_axis)
+        else {
             return;
         };
         let is_positive = self.chart_points[1].price >= self.chart_points[0].price;
@@ -436,14 +437,15 @@ impl Drawing {
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
     /// Label of the measuring tools: the price change from the first anchor to the second and
-    /// its percentage, the bars between them and the time they span, the volume traded over them,
-    /// and for the info line the angle of the line on screen. Each anchor counts at its nearest
-    /// bar: anchors N bars apart span N bars of time and the volume of the N + 1 bars from one to
-    /// the other, both included.
+    /// its percentage, the bars between them and, on a `time_axis`, the time they span, the
+    /// volume traded over them, and for the info line the angle of the line on screen. Each
+    /// anchor counts at its nearest bar: anchors N bars apart span N bars of time and the volume
+    /// of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
         &self,
         bars: &[Bar],
         instrument: Option<&crate::model::Instrument>,
+        time_axis: bool,
     ) -> Option<String> {
         let [a, b, ..] = &self.chart_points[..] else {
             return None;
@@ -468,7 +470,7 @@ impl Drawing {
         let change = change_label;
         let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
         let mut span = format!("{} bars", (to - from).abs() as i64);
-        if let Some(ms) = elapsed_ms(bars, from, to) {
+        if let Some(ms) = elapsed_ms(bars, from, to).filter(|_| time_axis) {
             span = format!("{span}, {}", format_duration(ms));
         }
         let volume = bars_between(bars, from, to)
@@ -705,13 +707,18 @@ mod tests {
             let mut drawing = Drawing::new(1, tool);
             drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
             drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
-            let got = drawing.measurement_label(&bars, None);
+            let got = drawing.measurement_label(&bars, None, true);
             if got.as_deref() != Some(want) {
                 wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
             }
         }
         let mut drawing = Drawing::new(0, DrawingToolType::Measure);
         drawing.chart_points = vec![ChartPoint::new(1.0, 1.1000), ChartPoint::new(4.0, 1.0995)];
+        // On a horizontal scale other than time the bar times are keys, not times.
+        assert_eq!(
+            drawing.measurement_label(&bars, None, false).as_deref(),
+            Some("-0.0005 (-0.05%)\n3 bars\nVol 900.00")
+        );
         for (tick, pip, want) in [
             (Some(0.00001), Some(0.0001), "-50.00 ticks  -5.00 pips"),
             (Some(0.0), Some(f64::NAN), ""),
@@ -721,7 +728,9 @@ mod tests {
             let mut instrument = crate::model::Instrument::new("PAIR");
             instrument.tick_size = tick;
             instrument.pip_size = pip;
-            let label = drawing.measurement_label(&bars, Some(&instrument)).unwrap();
+            let label = drawing
+                .measurement_label(&bars, Some(&instrument), true)
+                .unwrap();
             if want.is_empty() {
                 assert!(!label.contains("ticks") && !label.contains("pips"));
             } else {

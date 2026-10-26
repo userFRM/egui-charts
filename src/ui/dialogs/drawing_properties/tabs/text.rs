@@ -19,22 +19,25 @@ impl TextTab {
 
         FormGrid::new("text_grid").show(ui, |ui| {
             // Label text
-            ui.label("Label");
+            let label = ui.label("Label");
             ui.add(
                 egui::TextEdit::multiline(&mut props.label)
                     .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
                     .desired_rows(3),
-            );
+            )
+            .labelled_by(label.id);
             ui.end_row();
 
             // Font size
-            ui.label("Font size");
-            ui.combo_select(
-                "font_size",
-                &mut props.font_size,
-                FONT_SIZES.iter().copied(),
-                |v| format!("{}px", *v as i32),
-            );
+            let label = ui.label("Font size");
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "font_size",
+                    &mut props.font_size,
+                    FONT_SIZES.iter().copied(),
+                    |v| format!("{}px", *v as i32),
+                );
+            });
             ui.end_row();
         });
     }

@@ -115,6 +115,12 @@ impl Default for PringsSpecialK {
 }
 
 impl Indicator for PringsSpecialK {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         signal_lengths[0]: length("Signal length 1", 1, usize::MAX),
         signal_lengths[1]: length("Signal length 2", 1, usize::MAX)

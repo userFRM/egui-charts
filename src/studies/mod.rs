@@ -56,13 +56,15 @@
 #[cfg(feature = "studies")]
 mod builtin;
 mod custom;
+mod data;
+pub use data::{StudyData, StudyDataRequest};
 #[cfg(feature = "studies")]
 pub mod factory;
 mod format;
 mod indicator_trait;
 pub use format::{StudyFormat, StudyScale};
 mod inputs;
-pub use inputs::{InputKind, InputValue, StudyInput};
+pub use inputs::{InputKind, InputValue, StudyInput, StudySource};
 pub(crate) mod plots;
 pub(crate) mod projection;
 mod settings;
@@ -71,9 +73,11 @@ pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use projection::StudyProjection;
 pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
 pub use table::{StudyCell, StudyTable};
+mod volume_profile;
+pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 mod values;
 pub use values::IndicatorValues;
-#[cfg(any(feature = "studies", feature = "widget"))]
+#[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;

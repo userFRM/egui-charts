@@ -19,23 +19,26 @@ impl ScalesTab {
 
         FormGrid::new("scales_price_grid").show(ui, |ui| {
             // Scale mode
-            ui.label("Scale mode");
-            ui.combo_select(
-                "scale_mode",
-                &mut settings.price_scale_mode,
-                [
-                    PriceScaleMode::Normal,
-                    PriceScaleMode::Logarithmic,
-                    PriceScaleMode::Percentage,
-                    PriceScaleMode::IndexedTo100,
-                ],
-                |v| Self::scale_mode_label(*v).to_string(),
-            );
+            let label = ui.label("Scale mode");
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "scale_mode",
+                    &mut settings.price_scale_mode,
+                    [
+                        PriceScaleMode::Normal,
+                        PriceScaleMode::Logarithmic,
+                        PriceScaleMode::Percentage,
+                        PriceScaleMode::IndexedTo100,
+                    ],
+                    |v| Self::scale_mode_label(*v).to_string(),
+                );
+            });
             ui.end_row();
 
             // Invert scale
-            ui.label("Invert scale");
-            ui.checkbox(&mut settings.invert_scale, "");
+            let label = ui.label("Invert scale");
+            ui.checkbox(&mut settings.invert_scale, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
 
@@ -48,13 +51,15 @@ impl ScalesTab {
 
         FormGrid::new("scales_lines_grid").show(ui, |ui| {
             // Show price line
-            ui.label("Show last price line");
-            ui.checkbox(&mut settings.show_price_line, "");
+            let label = ui.label("Show last price line");
+            ui.checkbox(&mut settings.show_price_line, "")
+                .labelled_by(label.id);
             ui.end_row();
 
             // Show previous close line
-            ui.label("Show previous close line");
-            ui.checkbox(&mut settings.show_prev_close_line, "");
+            let label = ui.label("Show previous close line");
+            ui.checkbox(&mut settings.show_prev_close_line, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
     }

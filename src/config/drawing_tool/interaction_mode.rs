@@ -2,7 +2,7 @@
 //!
 //! Defines how mouse/pointer input is translated into point capture for each
 //! drawing tool type. The [`DrawingInteractionMode`] determines the UX flow
-//! for creating a drawing, and the [`DrawingManager`](crate::drawings::DrawingManager)
+//! for creating a drawing, and the drawing manager
 //! uses it to decide when a drawing is considered complete.
 
 /// How a drawing tool captures points from mouse/pointer input.
@@ -16,7 +16,7 @@
 /// # Example
 ///
 /// ```
-/// use egui_charts::drawings::{DrawingToolType, DrawingInteractionMode};
+/// use egui_charts::config::{DrawingToolType, DrawingInteractionMode};
 ///
 /// assert_eq!(
 ///     DrawingToolType::TrendLine.interaction_mode(),
@@ -32,7 +32,7 @@ pub enum DrawingInteractionMode {
     /// Click once to place (e.g., `HorizontalLine`, `TextLabel`, arrow markers).
     ///
     /// The drawing is created and completed with a single click. Only one
-    /// [`ChartPoint`](crate::drawings::ChartPoint) is captured.
+    /// `ChartPoint` is captured.
     SingleClick,
     /// Click to set the first point, move, then click to set the second point
     /// (e.g., `TrendLine`, `Ray`, `ExtendedLine`).
@@ -58,6 +58,6 @@ pub enum DrawingInteractionMode {
     /// (e.g., `CrossCursor`, `Eraser`).
     ///
     /// These tools modify the cursor or provide utility functions but do not
-    /// create [`Drawing`](crate::drawings::Drawing) objects.
+    /// create `Drawing` objects.
     NotDrawing,
 }

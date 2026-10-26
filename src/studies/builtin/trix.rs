@@ -148,6 +148,12 @@ impl Default for TRIX {
 }
 
 impl Indicator for TRIX {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         signal_period: length("Signal period", 1, usize::MAX)

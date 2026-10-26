@@ -28,7 +28,7 @@ To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (
 
 ### A new drawing tool
 
-Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/drawings/domain/tool_type/`](src/drawings/domain/tool_type), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
+Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/config/drawing_tool/`](src/config/drawing_tool), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
 
 To add one: add a variant to `DrawingToolType`, slot it into the right category in `categories.rs`, define its interaction behavior in `behavior.rs` (interaction mode and required points), and implement its rendering in the matching file under `src/drawings/rendering/`.
 
@@ -93,6 +93,8 @@ A second table prints the first frame and the median and 95th percentile of stea
 
 `benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
 
+`benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
+
 To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
 
 ```sh
@@ -141,10 +143,11 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 
 The default build includes the chart widget, the icons, the built-in studies and the application-level UI components. An application that only shows charts uses `default-features = false, features = ["widget"]`. With `default-features = false` alone the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui.
 
-- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `drawings`, `config`, `theme`, `styles`, `widget`). Required by `icons` and `ui`.
+- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `config`, `theme`, `styles`, `widget`). Required by `drawings`, `icons` and `ui`.
+- `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
-- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons` and `studies`.
+- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow

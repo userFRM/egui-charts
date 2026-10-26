@@ -54,9 +54,8 @@ macro_rules! register_builtins {
 ///
 /// On construction, every built-in indicator is registered under its canonical
 /// [`Indicator::name`] (e.g. `"SMA"`, `"RSI"`, `"MACD"`, `"SuperTrend"`) using
-/// its conventional default parameters. Each name is a distinct study: names
-/// that computed the same values as another under their defaults are not
-/// registered. Additional indicators can be registered at runtime with
+/// its conventional default parameters. Each name selects a distinct calculation
+/// or source range. Additional indicators can be registered at runtime with
 /// [`register`](Self::register).
 pub struct IndicatorFactory {
     constructors: HashMap<String, (&'static str, IndicatorConstructor)>,
@@ -80,7 +79,7 @@ impl IndicatorFactory {
     ///
     /// The list below is the single registration site for built-ins: adding a
     /// new indicator type here makes it constructible by name with zero further
-    /// wiring. Each entry is instantiated via its [`Default`] implementation.
+    /// wiring. Types use their defaults; automatic drawings also select a construction kind.
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
@@ -216,6 +215,10 @@ impl IndicatorFactory {
                 KlingerOscillator,
                 VolProfileVisible,
                 VolProfileFixed,
+                VolProfileSession,
+                VolProfilePeriodic,
+                VolProfileAnchored,
+                VolProfileAutoAnchored,
                 TimePriceOpportunity,
                 NetVolume,
                 VolumePriceTrend,
@@ -262,10 +265,26 @@ impl IndicatorFactory {
                 TradingSessions,
                 Gaps,
             ],
+            "Market breadth" => [
+                AdvanceDeclineRatio,
+                AdvanceDeclineLine,
+                CumulativeVolumeIndex,
+            ],
             "Patterns" => [
                 CandlestickPatterns,
             ],
         );
+        #[cfg(feature = "drawings")]
+        for kind in AutoDrawingKind::ALL {
+            let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Support and resistance",
+                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10))),
+                ),
+            );
+        }
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
@@ -478,17 +497,40 @@ mod tests {
     #[test]
     fn up_down_volume_uses_host_intrabar_directions() {
         use crate::model::{BarClock, Timeframe};
+        use crate::studies::{StudyData, StudyDataRequest};
+        let requested_interval = |study: &dyn Indicator| {
+            study
+                .data_requests()
+                .first()
+                .and_then(|request| request.timeframe)
+        };
+        let update = |study: &mut dyn Indicator, data: &[Bar], timeframe, bars: &[Bar]| {
+            study.update_data(
+                data,
+                0,
+                &[StudyData {
+                    request: StudyDataRequest {
+                        symbol: String::new(),
+                        timeframe: Some(timeframe),
+                    },
+                    bars,
+                    clock: BarClock::new(timeframe),
+                    instrument: None,
+                    timeframe,
+                }],
+            );
+        };
         let mut study = ConfiguredStudy::new(
             IndicatorFactory::new()
                 .create("Up/Down Volume")
                 .expect("Up/Down Volume study"),
         );
         study.set_timeframe(Timeframe::Day1);
-        assert_eq!(study.lower_timeframe(), Some(Timeframe::Min5));
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min5));
         study.set_bar_clock(&BarClock::new(Timeframe::Min5));
-        assert_eq!(study.lower_timeframe(), Some(Timeframe::Min1));
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min1));
         study.set_bar_clock(&BarClock::new(Timeframe::Ms100));
-        assert_eq!(study.lower_timeframe(), None);
+        assert_eq!(requested_interval(&study), None);
         study.set_bar_clock(&BarClock::new(Timeframe::Min5));
         let bars: Vec<_> = [0, 5, 10, 15]
             .into_iter()
@@ -523,10 +565,7 @@ mod tests {
             )
         })
         .collect();
-        study
-            .set_lower_timeframe_bars(Timeframe::Min1, intrabars.clone())
-            .unwrap();
-        study.calculate(&bars);
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
         // First parent: up=10+30, down=-20, delta=20. Next: -40+50=10.
         for (i, want) in [
             [Some(40.0), Some(-20.0), Some(20.0)],
@@ -545,36 +584,41 @@ mod tests {
                 );
             }
         }
-        // Invalid responses must retain the accepted data. A correction replaces it atomically.
-        assert!(
-            study
-                .set_lower_timeframe_bars(Timeframe::Min5, intrabars.clone())
-                .is_err()
-        );
-        let mut invalid = intrabars.clone();
-        invalid[1].time = invalid[0].time;
-        assert!(
-            study
-                .set_lower_timeframe_bars(Timeframe::Min1, invalid)
-                .is_err()
-        );
+        // A stale interval is unavailable; malformed snapshots leave the accepted values intact.
+        update(&mut study, &bars, Timeframe::Min5, &intrabars);
+        assert_eq!(study.values().value(0, 0), None);
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
+        for invalid in [
+            {
+                let mut invalid = intrabars.clone();
+                invalid[1].time = invalid[0].time;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].volume = -1.0;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].open = f64::NAN;
+                invalid
+            },
+        ] {
+            update(&mut study, &bars, Timeframe::Min1, &invalid);
+            assert_eq!(study.values().value(2, 0), Some(20.0));
+        }
         let mut corrected = intrabars;
         corrected[0].volume = 15.0;
-        study
-            .set_lower_timeframe_bars(Timeframe::Min1, corrected)
-            .unwrap();
-        study.update(&bars, 0);
+        update(&mut study, &bars, Timeframe::Min1, &corrected);
         assert_eq!(study.values().value(2, 0), Some(25.0));
-        study
-            .set_lower_timeframe_bars(Timeframe::Min1, Vec::new())
-            .unwrap();
-        study.calculate(&bars);
+        update(&mut study, &bars, Timeframe::Min1, &[]);
         assert_eq!(study.values().value(0, 0), None);
         // Custom intervals must nest their intrabars without rounding long bars to dates.
         for (seconds, lower) in [(90, Timeframe::Sec1), (90_000, Timeframe::Hour1)] {
             let timeframe = Timeframe::Custom(std::num::NonZeroU64::new(seconds).unwrap());
             study.set_timeframe(timeframe);
-            assert_eq!(study.lower_timeframe(), Some(lower));
+            assert_eq!(requested_interval(&study), Some(lower));
             let bar = |second| {
                 Bar::new(
                     Utc.timestamp_opt(second, 0).unwrap(),
@@ -586,15 +630,12 @@ mod tests {
                 )
             };
             let seconds = seconds as i64;
-            study
-                .set_lower_timeframe_bars(
-                    lower,
-                    [0, seconds - lower.duration_ms() / 1000, seconds]
-                        .map(bar)
-                        .to_vec(),
-                )
-                .unwrap();
-            study.calculate(&[bar(0), bar(seconds)]);
+            update(
+                &mut study,
+                &[bar(0), bar(seconds)],
+                lower,
+                &[0, seconds - lower.duration_ms() / 1000, seconds].map(bar),
+            );
             assert_eq!(study.values().value(0, 0), Some(2.0));
             assert_eq!(study.values().value(0, 1), Some(1.0));
         }
@@ -605,13 +646,11 @@ mod tests {
             let mut chart = Chart::new(BarData::from_bars(bars.clone()));
             chart.set_timeframe(Timeframe::Min5);
             chart.set_instrument(Some(Instrument::new("OLD")));
-            let id = chart.add_indicator(Box::new(UpDownVolume::new()));
+            chart.add_indicator(Box::new(UpDownVolume::new()));
             chart.set_instrument(Some(Instrument::new("NEW")));
-            chart
-                .indicator_mut(id)
-                .unwrap()
-                .set_lower_timeframe_bars(Timeframe::Min1, vec![bars[0].clone()])
-                .unwrap();
+            let request = chart.study_data_requests().pop().unwrap();
+            assert_eq!(request.symbol, "NEW");
+            chart.set_study_data(request, vec![bars[0].clone()], Some(Instrument::new("NEW")));
             frame(&egui::Context::default(), &mut chart, 0.0, Vec::new());
             assert_eq!(
                 chart.indicators().next().unwrap().1.values().value(0, 0),
@@ -804,7 +843,7 @@ mod tests {
     }
 
     /// Each registered name is a study of its own: on one series, no two names give the same
-    /// values on every bar, even with their lines in another order.
+    /// values on every bar, even with their lines in another order. Fixed profiles use a saved end.
     #[test]
     fn no_two_names_compute_the_same_study() {
         use crate::model::Bar;
@@ -839,12 +878,31 @@ mod tests {
         let mut duplicates = Vec::new();
         for name in names {
             let mut study = factory.create(&name).unwrap();
+            // External series have no values until the host supplies their distinct inputs.
+            if !study.data_requests().is_empty() {
+                continue;
+            }
+            // Fixed and anchored profiles include all history until a range is chosen.
+            if name == "Vol Profile FR" {
+                study
+                    .set_input(
+                        "end_time",
+                        InputValue::Number(bars[599].time.timestamp_millis() as f64),
+                    )
+                    .unwrap();
+            }
             study.calculate(&bars);
             // Studies that draw only shapes differ by their zones or profile.
             let shapes = vec![
                 format!("{:?}", study.zones()),
                 study.tpo().is_some().to_string(),
+                format!("{:?}", study.volume_profiles(200..400)),
             ];
+            #[cfg(feature = "drawings")]
+            let shapes = shapes
+                .into_iter()
+                .chain(std::iter::once(format!("{:?}", study.drawings())))
+                .collect();
             let lines: Vec<Vec<String>> = std::iter::once(shapes)
                 .chain(study.values().to_rows().iter().map(|v| {
                     let mut xs = match v {
@@ -1001,6 +1059,10 @@ mod tests {
             Box::new(CVD::new()),
             Box::new(VolProfileVisible::new(l(0))),
             Box::new(VolProfileFixed::new(l(0))),
+            Box::new(VolProfileSession::new(l(0))),
+            Box::new(VolProfilePeriodic::new(l(0))),
+            Box::new(VolProfileAnchored::new(l(0))),
+            Box::new(VolProfileAutoAnchored::new(l(0))),
             Box::new(TimePriceOpportunity::default()),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
@@ -1013,6 +1075,28 @@ mod tests {
             Box::new(Volume24h::new()),
             Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::ParallelChannel,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciRetracement,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciExtension,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
             Box::new(WilliamsFractals::new(l(0))),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
@@ -1047,6 +1131,9 @@ mod tests {
             Box::new(ChaikinOscillator::new(l(0), l(1))),
             Box::new(BullBearPower::new(l(0))),
             Box::new(AdvanceDeclineRatioBars::new(l(0))),
+            Box::new(AdvanceDeclineRatio::default()),
+            Box::new(AdvanceDeclineLine::default()),
+            Box::new(CumulativeVolumeIndex::default()),
             Box::new(UlcerIndex::new(l(0))),
             Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
             Box::new(TradingSessions::new()),
@@ -1284,8 +1371,7 @@ mod tests {
         }
 
         // Every value has one entry per declared line and every line a name; a study of
-        // several lines never emits `Single`. The volume profiles emit a histogram per bar
-        // instead of lines (#167).
+        // several lines never emits `Single`.
         let fits = |v: &IndicatorValue, lines: usize| match v {
             IndicatorValue::Single(_) => lines == 1,
             IndicatorValue::Multiple(xs) => xs.len() == lines,
@@ -1308,7 +1394,6 @@ mod tests {
                             study.name(),
                             bars.len()
                         )),
-                        Ok(_) if study.name().starts_with("Vol Profile") => {}
                         Ok(_) => {
                             let lines = study.line_cnt();
                             if study.line_names().len() != lines {
@@ -1383,11 +1468,17 @@ mod tests {
             IndicatorValue::None => 0,
         };
         // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
-        for (study, conventional) in bottom
-            .iter()
-            .zip(&conventional)
-            .filter(|(study, _)| study.name() != "ZigZag")
-        {
+        for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
+            !matches!(
+                study.name(),
+                "ZigZag"
+                    | "Auto Trend Line"
+                    | "Auto Parallel Channel"
+                    | "Auto Fibonacci Retracement"
+                    | "Auto Fibonacci Extension"
+                    | "Auto Pitchfork"
+            )
+        }) {
             let lost = study
                 .values()
                 .to_rows()

@@ -235,7 +235,7 @@ pub(super) fn screen(
         let quote = super::live::watchlist_quote(spec.symbol, now)?;
         Some(match column {
             "price" => quote.last,
-            "change_percent" => (quote.last - quote.prev_close) / quote.prev_close * 100.0,
+            "change_percent" => quote.change_percent(),
             "volume" => 0.5e6 + (spec.seed % 10) as f64 * 0.35e6,
             "market_cap" => spec.start_price * (spec.seed as f64 + 1.0) * 1.0e8,
             _ => return None,
@@ -259,7 +259,7 @@ pub(super) fn screen(
             })
         })
         .map(|spec| {
-            let decimals = if spec.start_price < 10.0 { 4 } else { 2 };
+            let decimals = usize::from(super::live::price_decimals(spec.symbol).unwrap());
             let values = query
                 .columns
                 .iter()
@@ -311,9 +311,9 @@ pub(super) fn hotlist(query: &HotlistQuery, now: DateTime<Utc>) -> Vec<HotlistEn
         .iter()
         .filter_map(|spec| {
             let quote = super::live::watchlist_quote(spec.symbol, now)?;
-            let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
+            let change = quote.change_percent();
             let mut entry = HotlistEntry::new(spec.symbol, quote.last, change);
-            entry.price_decimals = quote.price_decimals;
+            entry.price_decimals = super::live::price_decimals(spec.symbol);
             Some(entry)
         })
         .collect();
@@ -415,4 +415,22 @@ impl Chats for DemoChats {
         state.0.push(message);
         reply.send(Ok(()));
     }
+}
+
+/// Synthetic weights for a host-supplied market heatmap, with live quote changes filled later.
+pub(super) fn heatmap() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapEntry> {
+    DemoSymbol::catalog()
+        .iter()
+        .map(|spec| egui_charts::ui::widget_bar::MarketHeatmapEntry {
+            symbol: spec.symbol.into(),
+            group: match spec.symbol {
+                "AAPL" | "MSFT" | "NVDA" => "Technology",
+                "TSLA" => "Consumer",
+                _ => spec.exchange,
+            }
+            .into(),
+            value: (spec.seed % 4 + 1) as f64,
+            change_percent: 0.0,
+        })
+        .collect()
 }

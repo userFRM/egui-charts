@@ -4,8 +4,9 @@
 
 use crate::icons::icons;
 use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
-use egui::{Frame, RichText, Ui, Vec2, vec2};
+use egui::{Frame, RichText, Ui, vec2};
 
+use super::super::controls::dropdown;
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
 use super::context_menu::handle_keyboard_shortcuts;
@@ -248,35 +249,34 @@ impl ObjectTreePanel {
     /// Render filter controls
     fn show_filter_controls(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            let combo_width = 108.0;
+            let type_width = 108.0;
             let field_width =
-                (ui.available_width() - combo_width - ui.spacing().item_spacing.x).max(0.0);
+                (ui.available_width() - type_width - ui.spacing().item_spacing.x).max(0.0);
             ui.allocate_ui(vec2(field_width, 28.0), |ui| {
                 ui.spacing_mut().interact_size.y = 28.0;
                 filter_input(ui, &mut self.state.filter_text);
             });
             ui.spacing_mut().interact_size.y = 28.0;
-            egui::ComboBox::from_id_salt("object_tree_type_filter")
-                .width(combo_width)
-                .selected_text(self.state.filter_type.map_or("All", |t| t.display_name()))
-                .icon(|ui, rect, visuals, _| {
-                    icons::CHEVRON_DOWN
-                        .as_image_tinted(Vec2::splat(12.0), visuals.fg_stroke.color)
-                        .paint_at(ui, rect);
-                })
-                .show_ui(ui, |ui| {
-                    ui.set_min_width(combo_width - 2.0 * ui.spacing().menu_margin.leftf());
-                    for source_type in [
-                        None,
-                        Some(SourceType::DataSource),
-                        Some(SourceType::Indicator),
-                        Some(SourceType::Drawing),
-                        Some(SourceType::Template),
-                    ] {
-                        let label = source_type.map_or("All", |t| t.display_name());
-                        ui.selectable_value(&mut self.state.filter_type, source_type, label);
-                    }
-                });
+            ui.allocate_ui(vec2(type_width, 28.0), |ui| {
+                dropdown(
+                    ui,
+                    "object_tree_type_filter",
+                    self.state.filter_type.map_or("All", |t| t.display_name()),
+                    |ui| {
+                        for source_type in [
+                            None,
+                            Some(SourceType::DataSource),
+                            Some(SourceType::Indicator),
+                            Some(SourceType::Drawing),
+                            Some(SourceType::Template),
+                        ] {
+                            let label = source_type.map_or("All", |t| t.display_name());
+                            ui.selectable_value(&mut self.state.filter_type, source_type, label);
+                        }
+                    },
+                )
+                .accessible_name("Object type");
+            });
         });
     }
 
@@ -381,9 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn filter_controls_have_equal_height_and_footer_stays_inside_a_narrow_panel() {
-        for width in [220.0, 280.0] {
+    fn filter_controls_align_and_footer_stays_inside_a_narrow_panel() {
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 220.0),
+            (crate::theme::Theme::light(), 280.0),
+            (crate::theme::Theme::dark(), 220.0),
+            (crate::theme::Theme::dark(), 280.0),
+        ] {
             let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
             let mut panel = ObjectTreePanel::new();
             let mut sources: Vec<_> = (0..30)
                 .map(|id| SourceItem::indicator(id, "SMA", egui::Color32::BLUE))
@@ -416,9 +422,23 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert!(controls.len() >= 2, "{controls:?}");
+                assert!(!controls.is_empty(), "{controls:?}");
                 assert_eq!(controls[0].height(), 28.0, "filter at {width}");
-                assert_eq!(controls[1].height(), 28.0, "combo at {width}");
+                let dropdown = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "All" => {
+                            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    (dropdown.center().y - controls[0].center().y).abs() < 2.0,
+                    "dropdown and filter must align at {width}"
+                );
+                assert!(dropdown.right() <= width, "dropdown at {width}");
                 let footer = output
                     .shapes
                     .iter()

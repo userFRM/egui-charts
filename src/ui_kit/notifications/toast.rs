@@ -53,6 +53,21 @@ impl ToastKind {
     }
 }
 
+/// Structured details of an order notification, rendered as symbol and side chips.
+#[derive(Clone, Debug)]
+pub struct TradingToast {
+    /// Instrument identifier.
+    pub symbol: String,
+    /// Buy or sell.
+    pub side: crate::model::OrderSide,
+    /// Filled or placed quantity.
+    pub quantity: f64,
+    /// Price formatted at the instrument's precision.
+    pub price: String,
+    /// Executed orders have a check; placements have a side chevron.
+    pub executed: bool,
+}
+
 /// A toast notification
 #[derive(Clone, Debug)]
 pub struct Toast {
@@ -64,6 +79,8 @@ pub struct Toast {
     pub message: String,
     /// Optional title
     pub title: Option<String>,
+    /// Optional structured order details.
+    pub trading: Option<TradingToast>,
     /// Duration in seconds (0 = permanent until dismissed)
     pub duration: f32,
     /// Timestamp when the toast was created (in seconds since app start)
@@ -80,6 +97,7 @@ impl Toast {
             kind,
             message: message.into(),
             title: None,
+            trading: None,
             duration: 5.0, // Default 5 seconds
             created_at: 0.0,
             dismissible: true,

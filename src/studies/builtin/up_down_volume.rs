@@ -5,8 +5,11 @@
 //! down. Up volume is positive, down volume negative and delta their sum. Missing intrabar
 //! history has no value; the parent candle's volume is never substituted for it.
 
-use crate::model::{Bar, BarClock, Instrument, Timeframe};
-use crate::studies::{Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyFormat};
+use crate::model::{Bar, BarClock, Timeframe};
+use crate::studies::{
+    Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyData, StudyDataRequest,
+    StudyFormat,
+};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
@@ -14,45 +17,27 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct UpDownVolume {
     clock: BarClock,
-    intrabars: Vec<Bar>,
     values: IndicatorValues,
     colors: [Color32; 3],
-    symbol: Option<String>,
     visible: bool,
 }
 
 impl UpDownVolume {
     /// One-minute intrabars on a one-minute chart until the chart supplies its interval.
-    /// Hosts read [`Indicator::lower_timeframe`] and supply that interval's history.
+    /// Hosts answer [`Indicator::data_requests`] through the chart or `update_data`.
     pub fn new() -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
-            intrabars: Vec::new(),
             values: IndicatorValues::new(),
             colors: [
                 DESIGN_TOKENS.semantic.chart.bullish.gamma_multiply(0.35),
                 DESIGN_TOKENS.semantic.chart.bearish.gamma_multiply(0.35),
                 DESIGN_TOKENS.semantic.extended.gray,
             ],
-            symbol: None,
             visible: true,
         }
     }
-}
 
-impl Default for UpDownVolume {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for UpDownVolume {
-    fn name(&self) -> &str {
-        "Up/Down Volume"
-    }
-    fn desc(&self) -> &str {
-        "Up and down volume from lower-timeframe candles supplied by the host"
-    }
     fn lower_timeframe(&self) -> Option<Timeframe> {
         let tf = self.clock.timeframe()?;
         if matches!(tf, Timeframe::Ticks(_)) || tf.duration_ms() < Timeframe::Sec1.duration_ms() {
@@ -73,50 +58,7 @@ impl Indicator for UpDownVolume {
             Timeframe::Sec1
         })
     }
-    fn set_lower_timeframe_bars(
-        &mut self,
-        timeframe: Timeframe,
-        bars: Vec<Bar>,
-    ) -> Result<(), &'static str> {
-        if self.lower_timeframe() != Some(timeframe) {
-            return Err("unexpected lower timeframe");
-        }
-        if bars.windows(2).any(|pair| pair[0].time >= pair[1].time) {
-            return Err("intrabar times must be strictly increasing");
-        }
-        if bars.iter().any(|bar| {
-            !bar.open.is_finite()
-                || !bar.close.is_finite()
-                || !bar.volume.is_finite()
-                || bar.volume < 0.0
-        }) {
-            return Err("invalid intrabar price or volume");
-        }
-        self.intrabars = bars;
-        self.values.clear();
-        Ok(())
-    }
-    fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-        let symbol = instrument.map(|instrument| instrument.symbol.clone());
-        let changed = self.symbol != symbol;
-        if changed {
-            self.intrabars.clear();
-        }
-        self.symbol = symbol;
-        changed
-    }
-    fn set_timeframe(&mut self, timeframe: Timeframe) {
-        self.set_bar_clock(&self.clock.for_timeframe(timeframe));
-    }
-    fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
-        let changed = self.clock != *clock;
-        if self.clock.timeframe() != clock.timeframe() {
-            self.intrabars.clear();
-        }
-        self.clock = clock.clone();
-        changed
-    }
-    fn calculate(&mut self, data: &[Bar]) {
+    fn calculate_intrabars(&mut self, data: &[Bar], intrabars: &[Bar]) {
         self.values = IndicatorValues::missing(data.len());
         let Some(tf) = self
             .clock
@@ -149,7 +91,7 @@ impl Indicator for UpDownVolume {
                 self.clock.bar_open(bar.time)
             };
             let (mut up, mut down, mut count) = (0.0, 0.0, 0);
-            while let Some(intrabar) = self.intrabars.get(at).filter(|b| key(b) <= parent) {
+            while let Some(intrabar) = intrabars.get(at).filter(|b| key(b) <= parent) {
                 let rising = intrabar.close > intrabar.open
                     || (intrabar.close == intrabar.open
                         && previous.is_none_or(|close| intrabar.close >= close));
@@ -170,6 +112,67 @@ impl Indicator for UpDownVolume {
                 }
             }
         }
+    }
+}
+
+impl Default for UpDownVolume {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for UpDownVolume {
+    fn name(&self) -> &str {
+        "Up/Down Volume"
+    }
+    fn desc(&self) -> &str {
+        "Up and down volume from lower-timeframe candles supplied by the host"
+    }
+    fn data_requests(&self) -> Vec<StudyDataRequest> {
+        self.lower_timeframe()
+            .map(|timeframe| StudyDataRequest {
+                symbol: String::new(),
+                timeframe: Some(timeframe),
+            })
+            .into_iter()
+            .collect()
+    }
+    fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[StudyData<'_>]) {
+        let request = self.data_requests().pop();
+        let source = sources
+            .iter()
+            .find(|source| Some(&source.request) == request.as_ref());
+        let intrabars = if let Some(source) = source {
+            if Some(source.timeframe) != self.lower_timeframe()
+                || source
+                    .bars
+                    .windows(2)
+                    .any(|pair| pair[0].time >= pair[1].time)
+                || source.bars.iter().any(|bar| {
+                    !bar.open.is_finite()
+                        || !bar.close.is_finite()
+                        || !bar.volume.is_finite()
+                        || bar.volume < 0.0
+                })
+            {
+                return;
+            }
+            source.bars
+        } else {
+            &[]
+        };
+        self.calculate_intrabars(data, intrabars);
+    }
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.set_bar_clock(&self.clock.for_timeframe(timeframe));
+    }
+    fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
+        let changed = self.clock != *clock;
+        self.clock = clock.clone();
+        changed
+    }
+    fn calculate(&mut self, data: &[Bar]) {
+        self.calculate_intrabars(data, &[]);
     }
     fn is_overlay(&self) -> bool {
         false

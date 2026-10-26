@@ -13,7 +13,6 @@
 //! ```text
 //! src/drawings/
 //! ├── domain/          # Pure types, zero external dependencies
-//! │   ├── tool_type/   # DrawingToolType enum, interaction modes
 //! │   ├── drawing      # Drawing struct with ChartPoint
 //! │   ├── coordinates  # ChartPoint, coordinate conversions
 //! │   └── options      # LineStyle, ArrowStyle, FibConfig
@@ -29,6 +28,7 @@
 //! │   └── *            # Category-specific renderers (lines, fibonacci, etc.)
 //! ├── categories.rs    # Static toolbar category definitions (8 groups)
 //! ├── persistence.rs   # Serializable StoredDrawing / DrawingStorage types
+//! ├── registry.rs      # Host tools and built-in availability
 //! ├── repositories.rs  # Repository pattern for tool data access
 //! └── manager.rs       # DrawingManager -- thin coordinator over services
 //! ```
@@ -107,6 +107,7 @@
 //! selection.select(drawing.id);
 //! ```
 
+mod api;
 /// Static category and toolbar grouping definitions for the drawing tools.
 pub mod categories;
 /// Pure domain types with minimal dependencies: `Drawing`, `ChartPoint`,
@@ -117,6 +118,8 @@ pub(crate) mod glyphs;
 pub mod manager;
 /// JSON-based serialization and storage for drawings via `DrawingStorage`.
 pub mod persistence;
+/// Host-defined drawing tools and built-in availability.
+pub mod registry;
 /// Rendering implementations for all drawing tool types, dispatched per-category.
 pub mod rendering;
 /// Repository pattern for tool metadata access (categories, search).
@@ -128,9 +131,10 @@ pub mod services;
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
     DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos, LineStyle,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
-    TimeframeVisibility, VolumeProfileConfig,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, ProfileDisplay,
+    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
 };
 
 // Re-export manager types
 pub use manager::{DrawingManager, DrawingManagerOptions, DrawingState};
+pub use registry::{DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool, ToolAvailability};

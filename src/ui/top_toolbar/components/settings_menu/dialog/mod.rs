@@ -32,7 +32,8 @@ use std::collections::HashSet;
 
 /// Modal settings dialog with tabbed interface.
 ///
-/// Edits chart display settings, event category visibility and host alert-overlay preferences.
+/// Edits chart display settings, event category visibility and the host trading and
+/// alert-overlay preferences.
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -54,6 +55,11 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    /// The sounds the host can play for fills, by name, offered on the Trading tab. The host
+    /// plays the chosen one; see
+    /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
+    /// Without any, the tab offers no choice.
+    pub execution_sounds: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -130,6 +136,7 @@ impl SettingsDialog {
             ],
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
+            execution_sounds: Vec::new(),
         }
     }
 
@@ -309,6 +316,7 @@ impl SettingsDialog {
                                     self.draw_scales_and_lines_tab(ui, style)
                                 }
                                 SettingsTab::Canvas => self.draw_canvas_tab(ui, style),
+                                SettingsTab::Trading => self.draw_trading_tab(ui, style),
                                 SettingsTab::Alerts => self.draw_alerts_tab(ui, style),
                                 SettingsTab::Events => self.draw_events_tab(ui, style),
                             }
@@ -453,8 +461,9 @@ impl SettingsDialog {
 
     fn draw_save_as_button(&mut self, ui: &mut Ui, mut action: SettingsAction) -> SettingsAction {
         if let Some(name) = &mut self.save_name {
-            ui.label("Template name");
-            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()));
+            let label = ui.label("Template name");
+            ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()))
+                .labelled_by(label.id);
             let name = name.trim().to_owned();
             let label = if self.templates.entries().contains_key(&name) {
                 "Replace"
@@ -732,9 +741,7 @@ mod tests {
                         }
                         _ => None,
                     });
-                    let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Trading"));
                     output.drop_without_applying_deltas();
-                    assert!(!inactive, "inactive settings must not be offered");
                     assert_eq!(dialog.settings, settings);
                     assert_eq!(
                         dialog.color_picker_states.background.sel_color,

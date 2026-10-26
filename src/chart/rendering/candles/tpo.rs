@@ -157,20 +157,33 @@ fn whole_sessions(
                     .is_none()
             })
     };
-    let composite = |i: usize| {
-        let open = &full[start_of(i)].time;
-        config.composites.iter().find(|range| range.contains(open))
-    };
     let (mut start, mut end) = if config.latest_session_only {
         (start_of(full.len() - 1), full.len())
     } else {
         (start_of(visible.start), end_of(visible.end - 1))
     };
-    if let Some(range) = composite(start) {
-        start = start_of(full.partition_point(|bar| bar.time < *range.start()));
-    }
-    if let Some(range) = composite(end - 1) {
-        end = end_of(full.partition_point(|bar| bar.time <= *range.end()) - 1);
+    // A split profile can open inside a day, so intersect the whole day's span, not just its open.
+    loop {
+        let before = start..end;
+        for range in &config.composites {
+            if range.is_empty()
+                || *range.end() < full[start].time
+                || *range.start() > full[end - 1].time
+            {
+                continue;
+            }
+            let first = full
+                .partition_point(|bar| bar.time < *range.start())
+                .min(full.len() - 1);
+            let last = full
+                .partition_point(|bar| bar.time <= *range.end())
+                .saturating_sub(1);
+            start = start.min(start_of(first));
+            end = end.max(end_of(last));
+        }
+        if before == (start..end) {
+            break;
+        }
     }
     start..end
 }
@@ -205,15 +218,18 @@ fn cached_profiles(
     };
     let mut ends = Vec::new();
     let mut open = 0;
-    let breaks = sessions.session_breaks(bars).into_iter().map(|(i, _)| i);
+    let starts = crate::model::tpo::session_starts(bars, sessions, config.split_sessions);
+    let mut profile_open = starts.first().copied().unwrap_or(0);
+    let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
         if bars.get(end).is_some_and(|next| {
-            composite(&bars[open]).is_some_and(|group| composite(next) == Some(group))
+            composite(&bars[profile_open]).is_some_and(|group| composite(next) == Some(group))
         }) {
             continue;
         }
         ends.push(end - open);
         open = end;
+        profile_open = end;
     }
     PROFILE_CACHE.with_borrow_mut(|cache| {
         let mut profiles = Vec::new();
@@ -292,17 +308,9 @@ pub fn render_live_tpo(
         return;
     }
 
-    let (range, transform) = (price_map.range(), price_map.transform());
-    let price_range = (transform.to_price(range.max) - transform.to_price(range.min)).abs();
-    if !price_range.is_finite() || price_range <= 0.0 {
+    let Some(config) = row_config(base_config, price_map) else {
         return;
-    }
-
-    // Derive a readable bin size from the visible range unless one was pinned.
-    let mut config = base_config.clone();
-    if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
-        config.tick_size = derive_tick_size(price_range, TARGET_ROWS);
-    }
+    };
 
     let sessions = clock.sessions();
     let bars = whole_sessions(full_data, visible, &sessions, &config);
@@ -316,12 +324,53 @@ pub fn render_live_tpo(
         &sessions,
     );
     let render_config = TpoRenderConfig::default();
-    let units = if config.latest_session_only {
-        &units[units.len().saturating_sub(1)..]
-    } else {
-        &units[..]
-    };
+    place_profiles(
+        &units,
+        full_data,
+        price_rect,
+        &config,
+        &sessions,
+        |i| idx_to_coord(i, chart_rect_min_x),
+        |profile, anchor_x, column_width| {
+            draw_session_profile(
+                painter,
+                price_rect,
+                price_map,
+                profile,
+                &config,
+                &render_config,
+                anchor_x,
+                column_width,
+                bullish_color,
+                bearish_color,
+            );
+        },
+    );
+}
 
+fn row_config(base_config: &TPOConfig, price_map: &PriceMap) -> Option<TPOConfig> {
+    let (range, transform) = (price_map.range(), price_map.transform());
+    let price_range = (transform.to_price(range.max) - transform.to_price(range.min)).abs();
+    if !price_range.is_finite() || price_range <= 0.0 {
+        return None;
+    }
+    let mut config = base_config.clone();
+    if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
+        config.tick_size = derive_tick_size(price_range, TARGET_ROWS);
+    }
+    Some(config)
+}
+
+/// Visit profiles at the same anchors and column widths for painting and hit testing.
+fn place_profiles(
+    units: &[(usize, usize, Rc<Vec<TPOProfile>>)],
+    full_data: &[Bar],
+    price_rect: Rect,
+    config: &TPOConfig,
+    sessions: &ExchangeSessionProvider,
+    idx_to_coord: impl Fn(usize) -> f32,
+    mut visit: impl FnMut(&TPOProfile, f32, f32),
+) {
     // Each profile with its left edge, its session's width and whether it starts out of view.
     let mut placed = Vec::new();
     for (first, len, profiles) in units {
@@ -333,14 +382,24 @@ pub fn render_live_tpo(
             .chain([first + len])
             .collect();
         for (profile, span) in profiles.iter().zip(anchors.windows(2)) {
+            // A composite can start on an older day but still cover the latest one.
+            if config.latest_session_only
+                && profile.letters.last().is_some_and(|letter| {
+                    sessions
+                        .session_break_between(&letter.ts, &full_data.last().unwrap().time)
+                        .is_some()
+                })
+            {
+                continue;
+            }
             // The forming session has the empty space after the last bar to grow into.
             let end_x = if span[1] == full_data.len() {
                 f32::INFINITY
             } else {
-                idx_to_coord(span[1], chart_rect_min_x)
+                idx_to_coord(span[1])
             };
             // A session that opened left of the plot keeps its profile at the plot's edge.
-            let open_x = idx_to_coord(span[0], chart_rect_min_x);
+            let open_x = idx_to_coord(span[0]);
             let anchor_x = open_x.max(price_rect.left());
             let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
             if end_x > anchor_x && widest > 0 {
@@ -357,19 +416,57 @@ pub fn render_live_tpo(
         .map(|&(_, _, fit, _)| fit)
         .fold(PERIOD_COLUMN_PX, f32::min);
     for (profile, anchor_x, fit, _) in placed {
-        draw_session_profile(
-            painter,
-            price_rect,
-            price_map,
-            profile,
-            &config,
-            &render_config,
-            anchor_x,
-            column.min(fit).max(1.0),
-            bullish_color,
-            bearish_color,
-        );
+        visit(profile, anchor_x, column.min(fit).max(1.0));
     }
+}
+
+/// The displayed profile at a menu click, including a profile anchored at the plot's edge.
+#[cfg(feature = "ui")]
+pub(crate) fn profile_at(
+    full_data: &[Bar],
+    visible: Range<usize>,
+    revision: u64,
+    base_config: &TPOConfig,
+    clock: &BarClock,
+    mapping: &crate::chart::coords::ChartMapping,
+    pos: Pos2,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !mapping.rect.contains(pos) || visible.is_empty() || visible.end > full_data.len() {
+        return None;
+    }
+    let config = row_config(base_config, &mapping.price)?;
+    let sessions = clock.sessions();
+    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let units = cached_profiles(
+        &full_data[bars.clone()],
+        revision,
+        bars.start,
+        &config,
+        clock,
+        &sessions,
+    );
+    let mut hit = None;
+    place_profiles(
+        &units,
+        full_data,
+        mapping.rect,
+        &config,
+        &sessions,
+        |i| mapping.idx_to_x(i),
+        |profile, anchor, column| {
+            let price = mapping.y_to_price(pos.y);
+            let row = (price / profile.tick_size).round() * profile.tick_size;
+            let count = if config.show_value_area && profile.is_in_value_area(row) {
+                profile.price_tpo_count.values().max().copied().unwrap_or(0)
+            } else {
+                profile.tpo_count_at(row, profile.tick_size)
+            };
+            if pos.x >= anchor && pos.x < anchor + count as f32 * column {
+                hit = Some(profile.session_date);
+            }
+        },
+    );
+    hit
 }
 
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
@@ -696,6 +793,19 @@ mod tests {
             (5..6, false, vec![day(0)..=day(1)], 0..8),
             (1..2, false, vec![day(0)..=day(2)], 0..12),
             (1..2, true, vec![day(1)..=day(2)], 4..12),
+            (
+                1..2,
+                false,
+                vec![day(0) + Duration::minutes(90)..=day(1)],
+                0..8,
+            ),
+            (
+                5..6,
+                false,
+                vec![day(0) + Duration::minutes(90)..=day(1)],
+                0..8,
+            ),
+            (5..6, false, vec![day(-1)..=day(3)], 0..12),
         ];
         for (visible, latest_session_only, composites, expected) in cases {
             let config = TPOConfig {
@@ -708,6 +818,76 @@ mod tests {
                 expected,
                 "{visible:?}, {config:?}"
             );
+        }
+    }
+
+    #[test]
+    fn cached_profiles_draw_intraday_splits_and_cross_day_composites() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, TimeZone, Weekday::*};
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let days = [Mon, Tue, Wed, Thu, Fri];
+        let clock = BarClock::new(Timeframe::Min30).with_session(
+            TimezoneId::named("America/New_York").unwrap(),
+            Session::new([SessionWindow::new(days, at(9, 30), at(16, 0))]).with_extended_windows([
+                SessionWindow::new(days, at(4, 0), at(9, 30)),
+                SessionWindow::new(days, at(16, 0), at(20, 0)),
+            ]),
+            true,
+        );
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 13, 0, 0).unwrap();
+        let bars: Vec<_> = (0..38)
+            .map(|i| {
+                Bar::new(
+                    start + Duration::minutes(i / 19 * 1440 + i % 19 * 30),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        // Each day has 3 pre-market, 13 regular and 3 post-market half-hour periods.
+        for (range, latest_session_only, expected) in [
+            (Some((480, 1440)), false, vec![3, 13, 6, 13, 3]),
+            (Some((90, 1530)), false, vec![3, 32, 3]),
+            (None, true, vec![3, 13, 3]),
+            (Some((480, 1440)), true, vec![6, 13, 3]),
+            (Some((90, 1530)), true, vec![32, 3]),
+        ] {
+            let config = TPOConfig {
+                split_sessions: true,
+                latest_session_only,
+                composites: range
+                    .into_iter()
+                    .map(|(first, last)| {
+                        start + Duration::minutes(first)..=start + Duration::minutes(last)
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config);
+            assert_eq!(span, if range.is_none() { 19..38 } else { 0..38 });
+            let cached = cached_profiles(
+                &bars[span.clone()],
+                1,
+                span.start,
+                &config,
+                &clock,
+                &clock.sessions(),
+            );
+            let mut counts = Vec::new();
+            place_profiles(
+                &cached,
+                &bars,
+                Rect::from_x_y_ranges(-1.0..=1000.0, 0.0..=1000.0),
+                &config,
+                &clock.sessions(),
+                |i| i as f32 * 10.0,
+                |profile, _, _| counts.push(profile.tpo_count_at(100.0, profile.tick_size)),
+            );
+            assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
         }
     }
 

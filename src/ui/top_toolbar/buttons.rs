@@ -244,6 +244,9 @@ impl TextButton {
             ui.visuals().text_color(),
         );
 
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &self.text)
+        });
         if let Some(tooltip) = self.tooltip {
             toolbar_tooltip(response, tooltip, None)
         } else {

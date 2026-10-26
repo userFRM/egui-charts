@@ -24,6 +24,7 @@ pub struct StudyTemplate {
 
 impl StudyTemplate {
     /// Capture the current calculation inputs and presentation, without computed values.
+    /// Hosts remap chart-local study source ids when saving or restoring a set of studies.
     pub fn from_study(study: &dyn Indicator) -> Self {
         Self {
             name: study.name().into(),

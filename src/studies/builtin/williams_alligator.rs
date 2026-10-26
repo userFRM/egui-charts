@@ -91,6 +91,12 @@ impl Default for WilliamsAlligator {
 }
 
 impl Indicator for WilliamsAlligator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         jaw_length: length("Jaw length", 1, usize::MAX),
         teeth_length: length("Teeth length", 1, usize::MAX),

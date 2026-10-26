@@ -318,7 +318,16 @@ impl<'a> ReplayToolbar<'a> {
                 DESIGN_TOKENS.sizing.replay.progress_bar_width / 2.0,
                 theme.spacing.sm,
             );
-            let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+            let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+            response.widget_info(|| {
+                let mut info = egui::WidgetInfo::labeled(
+                    egui::Role::ProgressIndicator,
+                    response.enabled(),
+                    "Replay progress",
+                );
+                info.value = Some(f64::from(pct) * 100.0);
+                info
+            });
 
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter();
