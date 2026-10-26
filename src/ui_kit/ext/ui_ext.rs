@@ -149,7 +149,7 @@ pub trait UiExt {
     /// Returns `true` if the value changed.
     ///
     /// ```
-    /// # use egui_charts::ext::UiExt;
+    /// # use egui_charts::ui_kit::ext::UiExt;
     /// # egui::__run_test_ui(|ui| {
     /// let mut theme = "dark";
     /// let names = egui_charts::theme::presets().map(|(name, _)| name);
@@ -177,7 +177,7 @@ pub trait UiExt {
     /// Combo box for selecting a `String` value from `&str` options.
     ///
     /// ```
-    /// # use egui_charts::ext::UiExt;
+    /// # use egui_charts::ui_kit::ext::UiExt;
     /// # egui::__run_test_ui(|ui| {
     /// # let mut condition = String::from("Crossing");
     /// let changed = ui.combo_str_select("condition", &mut condition, &["Crossing", "Greater Than", "Less Than"]);
@@ -477,7 +477,7 @@ impl UiExt for Ui {
         let size = DESIGN_TOKENS.sizing.button_md;
         let icon_size = icons::MEDIUM;
         let (rect, response) = self.allocate_exact_size(Vec2::splat(size), Sense::click());
-        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(self, &response, self.active_theme().radius.sm);
 
         if self.is_rect_visible(rect) {
             let visuals = &self.style().visuals;
@@ -490,7 +490,7 @@ impl UiExt for Ui {
             };
 
             self.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.button, bg_color);
+                .rect_filled(rect, self.active_theme().radius.sm, bg_color);
 
             let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
             let icon_color = if response.hovered() {
@@ -526,7 +526,7 @@ impl UiExt for Ui {
 
         let button = egui::Button::new(RichText::new(text).color(fg))
             .fill(bg)
-            .corner_radius(DESIGN_TOKENS.rounding.button);
+            .corner_radius(self.active_theme().radius.sm);
 
         let response = self.add(button);
         if response.clicked() {
@@ -554,7 +554,7 @@ impl UiExt for Ui {
             Vec2::new(total_width, DESIGN_TOKENS.sizing.button_md),
             Sense::click(),
         );
-        crate::styles::focus::draw_focus_ring(self, &response, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(self, &response, self.active_theme().radius.sm);
 
         if self.is_rect_visible(rect) {
             let visuals = self.style().visuals.clone();
@@ -569,11 +569,15 @@ impl UiExt for Ui {
             };
 
             self.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.button, bg_color);
+                .rect_filled(rect, self.active_theme().radius.sm, bg_color);
 
             // Icon
             let icon_rect = Rect::from_min_size(
-                rect.min + Vec2::new(DESIGN_TOKENS.spacing.sm, (rect.height() - icon_size) / 2.0),
+                rect.min
+                    + Vec2::new(
+                        self.active_theme().spacing.sm,
+                        (rect.height() - icon_size) / 2.0,
+                    ),
                 Vec2::splat(icon_size),
             );
             let icon_color = if selected {
@@ -586,7 +590,7 @@ impl UiExt for Ui {
 
             // Text
             let text_pos = egui::pos2(
-                icon_rect.right() + DESIGN_TOKENS.spacing.sm,
+                icon_rect.right() + self.active_theme().spacing.sm,
                 rect.center().y - self.text_style_height(&egui::TextStyle::Body) / 2.0,
             );
             let text_color = if selected {
@@ -737,7 +741,7 @@ impl UiExt for Ui {
 
     fn panel_content(&mut self, add_contents: impl FnOnce(&mut Ui)) {
         egui::Frame::new()
-            .inner_margin(egui::Margin::same(DESIGN_TOKENS.spacing.md as i8))
+            .inner_margin(egui::Margin::same(self.active_theme().spacing.md as i8))
             .show(self, |ui| {
                 add_contents(ui);
             });
@@ -745,21 +749,20 @@ impl UiExt for Ui {
 
     fn section_header(&mut self, text: impl Into<String>) {
         let text = l10n::text(self.ctx(), Into::<String>::into(text));
-        self.add_space(DESIGN_TOKENS.spacing.lg);
+        self.add_space(self.active_theme().spacing.lg);
         self.label(
             RichText::new(text)
                 .strong()
-                .size(DESIGN_TOKENS.typography.md),
+                .size(self.active_theme().text.body),
         );
-        self.add_space(DESIGN_TOKENS.spacing.sm);
+        self.add_space(self.active_theme().spacing.sm);
     }
 
     fn section_label(&mut self, text: impl Into<String>) -> Response {
-        use crate::styles::typography;
         let color = self.visuals().widgets.noninteractive.fg_stroke.color;
         self.label(
             RichText::new(l10n::text(self.ctx(), Into::<String>::into(text)))
-                .size(typography::TINY)
+                .size(self.active_theme().text.marker)
                 .strong()
                 .color(color),
         )
@@ -792,7 +795,7 @@ impl UiExt for Ui {
 
     fn list(&mut self, add_contents: impl FnOnce(&mut Ui)) {
         self.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = DESIGN_TOKENS.spacing.xs;
+            ui.spacing_mut().item_spacing.y = ui.active_theme().spacing.xs;
             add_contents(ui);
         });
     }
@@ -804,9 +807,9 @@ impl UiExt for Ui {
     }
 
     fn spaced_separator(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.sm);
+        self.add_space(self.active_theme().spacing.sm);
         self.separator();
-        self.add_space(DESIGN_TOKENS.spacing.sm);
+        self.add_space(self.active_theme().spacing.sm);
     }
 
     fn themed_separator(&mut self) {
@@ -818,11 +821,11 @@ impl UiExt for Ui {
             y,
             egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, stroke_color),
         );
-        self.add_space(DESIGN_TOKENS.spacing.hairline);
+        self.add_space(DESIGN_TOKENS.stroke.hairline);
     }
 
     fn toolbar_separator(&mut self) {
-        let padding = DESIGN_TOKENS.spacing.xl; // 12px
+        let padding = self.active_theme().spacing.xl; // 12px
         let sep_width = DESIGN_TOKENS.sizing.toolbar.separator_width;
         let sep_height = DESIGN_TOKENS.sizing.toolbar.separator_height;
         self.add_space(padding);
@@ -846,27 +849,27 @@ impl UiExt for Ui {
     // ==========================================================================
 
     fn space_xs(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.xs);
+        self.add_space(self.active_theme().spacing.xs);
     }
 
     fn space_sm(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.sm);
+        self.add_space(self.active_theme().spacing.sm);
     }
 
     fn space_md(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.md);
+        self.add_space(self.active_theme().spacing.md);
     }
 
     fn space_lg(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.lg);
+        self.add_space(self.active_theme().spacing.lg);
     }
 
     fn space_xl(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.xl);
+        self.add_space(self.active_theme().spacing.xl);
     }
 
     fn space_xxl(&mut self) {
-        self.add_space(DESIGN_TOKENS.spacing.xxl);
+        self.add_space(self.active_theme().spacing.xxl);
     }
 
     // Legacy aliases
@@ -1007,9 +1010,9 @@ impl UiExt for Ui {
 
     fn pnl_color(&self, value: f64) -> Color32 {
         if value > 0.0 {
-            DESIGN_TOKENS.semantic.extended.bullish
+            self.active_theme().chart.candle_up
         } else if value < 0.0 {
-            DESIGN_TOKENS.semantic.extended.bearish
+            self.active_theme().chart.candle_down
         } else {
             self.style().visuals.text_color()
         }

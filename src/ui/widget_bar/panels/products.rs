@@ -20,6 +20,7 @@ pub struct Product {
 
 /// An action the host performs for the products launcher.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum ProductsAction {
     /// No host action.
     #[default]

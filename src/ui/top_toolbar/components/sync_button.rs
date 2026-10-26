@@ -5,7 +5,6 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::multi_chart::ChartSyncOptions;
@@ -66,7 +65,7 @@ impl SyncButton {
             if ui.input(|i| i.pointer.any_click())
                 && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
             {
-                let dropdown_rect = self.dropdown_rect(btn_rect);
+                let dropdown_rect = self.dropdown_rect(ui, btn_rect);
                 if !btn_rect.contains(pos) && !dropdown_rect.contains(pos) {
                     self.is_open = false;
                 }
@@ -100,7 +99,7 @@ impl SyncButton {
                 &translated_label,
             )
         });
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         // Background - highlight if sync is enabled
         let bg_color = if self.is_open || response.hovered() {
@@ -111,10 +110,10 @@ impl SyncButton {
             Color32::TRANSPARENT
         };
         ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(rect, ui.active_theme().radius.md, bg_color);
         ui.painter().rect_stroke(
             rect,
-            DESIGN_TOKENS.rounding.md,
+            ui.active_theme().radius.md,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
             StrokeKind::Outside,
         );
@@ -136,13 +135,16 @@ impl SyncButton {
         response.on_hover_text(l10n::text(ui.ctx(), "Chart Sync Options"))
     }
 
-    fn dropdown_rect(&self, btn_rect: Rect) -> Rect {
+    fn dropdown_rect(&self, ui: &Ui, btn_rect: Rect) -> Rect {
         let item_height = DESIGN_TOKENS.sizing.button_md;
         let item_count = 5; // 5 sync options
-        let dropdown_height = item_count as f32 * item_height + DESIGN_TOKENS.spacing.md * 2.0;
+        let dropdown_height = item_count as f32 * item_height + ui.active_theme().spacing.md * 2.0;
         let dropdown_width = 180.0;
         Rect::from_min_size(
-            Pos2::new(btn_rect.min.x, btn_rect.max.y + DESIGN_TOKENS.spacing.xs),
+            Pos2::new(
+                btn_rect.min.x,
+                btn_rect.max.y + ui.active_theme().spacing.xs,
+            ),
             Vec2::new(dropdown_width, dropdown_height),
         )
     }
@@ -156,22 +158,22 @@ impl SyncButton {
         let colors = ui.active_theme().ui;
         let (accent_color, check_color) = (colors.accent, colors.accent_text);
 
-        let dropdown_rect = self.dropdown_rect(btn_rect);
+        let dropdown_rect = self.dropdown_rect(ui, btn_rect);
 
         // Shadow
         let shadow_rect = dropdown_rect.translate(Vec2::splat(DESIGN_TOKENS.shadow.offset_sm));
         ui.painter().rect_filled(
             shadow_rect,
-            DESIGN_TOKENS.rounding.md,
+            ui.active_theme().radius.md,
             Color32::from_black_alpha(60),
         );
 
         // Background
         ui.painter()
-            .rect_filled(dropdown_rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(dropdown_rect, ui.active_theme().radius.md, bg_color);
         ui.painter().rect_stroke(
             dropdown_rect,
-            DESIGN_TOKENS.rounding.md,
+            ui.active_theme().radius.md,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
             StrokeKind::Outside,
         );
@@ -179,7 +181,7 @@ impl SyncButton {
         let mut changed = false;
         let mut new_options = self.options.clone();
         let item_height = DESIGN_TOKENS.sizing.button_md;
-        let mut y = dropdown_rect.min.y + DESIGN_TOKENS.spacing.sm;
+        let mut y = dropdown_rect.min.y + ui.active_theme().spacing.sm;
 
         // Render each sync option as a checkbox row
         let sync_items = [
@@ -192,9 +194,9 @@ impl SyncButton {
 
         for (label, enabled, idx) in sync_items {
             let item_rect = Rect::from_min_size(
-                Pos2::new(dropdown_rect.min.x + DESIGN_TOKENS.spacing.sm, y),
+                Pos2::new(dropdown_rect.min.x + ui.active_theme().spacing.sm, y),
                 Vec2::new(
-                    dropdown_rect.width() - DESIGN_TOKENS.spacing.md * 2.0,
+                    dropdown_rect.width() - ui.active_theme().spacing.md * 2.0,
                     item_height,
                 ),
             );
@@ -209,19 +211,19 @@ impl SyncButton {
                     &translated_label,
                 )
             });
-            crate::styles::focus::draw_focus_ring(ui, &item_response, DESIGN_TOKENS.rounding.sm);
+            crate::styles::focus::draw_focus_ring(ui, &item_response, ui.active_theme().radius.sm);
 
             // Highlight on hover
             if item_response.hovered() {
                 ui.painter()
-                    .rect_filled(item_rect, DESIGN_TOKENS.rounding.sm, hover_color);
+                    .rect_filled(item_rect, ui.active_theme().radius.sm, hover_color);
             }
 
             // Checkbox
             let checkbox_size = 14.0;
             let checkbox_rect = Rect::from_min_size(
                 Pos2::new(
-                    item_rect.min.x + DESIGN_TOKENS.spacing.sm,
+                    item_rect.min.x + ui.active_theme().spacing.sm,
                     item_rect.center().y - checkbox_size / 2.0,
                 ),
                 Vec2::splat(checkbox_size),
@@ -250,14 +252,14 @@ impl SyncButton {
             ui.painter().text(
                 Pos2::new(
                     item_rect.min.x
-                        + DESIGN_TOKENS.spacing.sm
+                        + ui.active_theme().spacing.sm
                         + checkbox_size
-                        + DESIGN_TOKENS.spacing.sm,
+                        + ui.active_theme().spacing.sm,
                     item_rect.center().y,
                 ),
                 egui::Align2::LEFT_CENTER,
                 l10n::text(ui.ctx(), label),
-                egui::FontId::proportional(typography::SM),
+                egui::FontId::proportional(ui.active_theme().text.small),
                 text_color,
             );
 

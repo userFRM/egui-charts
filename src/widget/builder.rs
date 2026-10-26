@@ -41,9 +41,10 @@ use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
-use crate::model::{BarClock, BarData, ChartState, Timeframe};
+use crate::model::{BarClock, BarData, Timeframe};
 use crate::model::{ChartType, ChartTypeParams};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
+use crate::studies::ChartState;
 use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
 
@@ -170,6 +171,8 @@ impl Chart {
             time_formatter: None,
             price_formatter: None,
             percentage_formatter: None,
+            volume_formatter: None,
+            series_formatters: Default::default(),
             extended_hours: false,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -177,7 +180,9 @@ impl Chart {
             axis_hover: None,
             scale_settings_requested: false,
             theme_override: None,
+            inherited_theme: None,
             host_events: Default::default(),
+            indicator_source_request: None,
             events: Vec::new(),
             time_scale_events: Vec::new(),
             event_visibility: Default::default(),
@@ -545,7 +550,7 @@ pub struct ChartBuilder {
     feed: Option<Arc<dyn Datafeed>>,
     symbol: Option<String>,
     timeframe: Timeframe,
-    theme: Theme,
+    theme: Option<Theme>,
     chart_type: ChartType,
     config: ChartConfig,
     chart_options: ChartOptions,
@@ -567,7 +572,7 @@ impl ChartBuilder {
             feed: None,
             symbol: None,
             timeframe: Timeframe::Min1,
-            theme: Theme::dark(),
+            theme: None,
             chart_type: ChartType::Candles,
             config: ChartConfig::default(),
             chart_options: ChartOptions::default(),
@@ -705,14 +710,14 @@ impl ChartBuilder {
         self
     }
 
-    /// Set the visual theme (default: `Theme::dark()`).
+    /// Set a per-chart theme. Without one the chart follows the active egui theme.
     ///
     /// Applies colours to the [`ChartConfig`] and retains a per-chart override for text sizes,
     /// axes, legends and overlays. It leaves egui and sibling charts unchanged.
     /// Use [`Chart::set_theme_override`] to replace or clear it on a persistent chart.
     #[must_use]
     pub fn with_theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
+        self.theme = Some(theme);
         self
     }
 
@@ -855,13 +860,14 @@ impl ChartBuilder {
     /// blocks and calls no feed method: with a feed and a symbol, the chart's
     /// first [`show`](Chart::show) asks the feed for the instrument and history.
     pub fn build(mut self) -> Chart {
-        // Apply theme to config
-        self.config = self.theme.apply_to_config(self.config);
+        if let Some(theme) = &self.theme {
+            self.config = self.config.with_theme(theme);
+        }
 
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
 
-        chart.theme_override = Some(self.theme);
+        chart.theme_override = self.theme;
         chart.set_chart_type(self.chart_type);
         chart.set_visible_bars(self.visible_candles);
         chart.set_symbol(self.symbol.unwrap_or_default());

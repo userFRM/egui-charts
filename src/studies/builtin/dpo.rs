@@ -32,9 +32,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Detrended Price Oscillator, aligned with the current bar or centred on the average.
@@ -54,7 +54,7 @@ impl DetrendedPriceOscillator {
             period: period.max(1),
             centered: false,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple,
+            color: palette::DEEP_PURPLE,
             visible: true,
         }
     }
@@ -118,8 +118,8 @@ impl Indicator for DetrendedPriceOscillator {
         }
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {

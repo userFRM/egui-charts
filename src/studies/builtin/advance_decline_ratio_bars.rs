@@ -24,8 +24,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Up bars over down bars within a window.
@@ -43,7 +43,7 @@ impl AdvanceDeclineRatioBars {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info,
+            color: palette::BLUE,
             visible: true,
         }
     }

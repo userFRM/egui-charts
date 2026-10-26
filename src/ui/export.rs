@@ -29,11 +29,11 @@
 //! # }
 //! ```
 
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_frame, title_row};
+use crate::ui_kit::ext::UiExt;
 use egui::{Context, Id, Key, Modifiers, RichText};
 use std::path::PathBuf;
 
@@ -114,7 +114,7 @@ pub struct ExportConfig {
     /// Export format (PNG, CSV or Clipboard)
     pub format: ExportFormat,
     /// Size, header and background options for PNG and clipboard exports.
-    pub image: crate::widget::export::ImageExportOptions,
+    pub image: crate::widget::ImageExportOptions,
 }
 
 impl Default for ExportConfig {
@@ -275,7 +275,7 @@ impl ExportDialog {
         // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
         // pivot, so the window grows downwards as its content changes instead of around its centre.
         let r = ctx.content_rect();
-        let frame = dialog_frame(&ctx.global_style());
+        let frame = dialog_frame(ctx);
         egui::Window::new("Export Chart")
             .title_bar(false)
             .resizable(false)

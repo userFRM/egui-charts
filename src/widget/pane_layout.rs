@@ -224,10 +224,22 @@ impl Chart {
             .filter(|(_, study)| study.is_overlay())
             .map(|(id, _)| *id)
             .collect();
+        let series: Vec<_> = self.main_pane_series().map(|item| item.id).collect();
         let main = &mut self.pane_layout.main;
-        main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id));
+        main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id) || series.contains(id));
         if !main.contains(&SeriesId::MAIN) {
             main.insert(0, SeriesId::MAIN);
+        }
+        let mut after = main
+            .iter()
+            .position(|id| *id == SeriesId::MAIN)
+            .unwrap_or(0)
+            + 1;
+        for id in series {
+            if !main.contains(&id) {
+                main.insert(after.min(main.len()), id);
+            }
+            after = main.iter().position(|member| *member == id).unwrap_or(0) + 1;
         }
         for id in overlays {
             if !main.contains(&id) {

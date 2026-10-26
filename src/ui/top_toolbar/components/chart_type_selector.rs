@@ -76,7 +76,8 @@ impl Default for ChartTypeSelectorConfig {
         // ui.style().visuals at render time for proper theme support.
         Self {
             btn_width: 0.0,
-            dropdown_width: DESIGN_TOKENS.sizing.dialog.submenu_width + DESIGN_TOKENS.spacing.xxl,
+            dropdown_width: DESIGN_TOKENS.sizing.dialog.submenu_width
+                + crate::theme::Theme::default().spacing.xxl,
             item_height: DESIGN_TOKENS.sizing.button_lg,
             bg_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,
@@ -89,6 +90,7 @@ impl Default for ChartTypeSelectorConfig {
 
 /// Action from chart type selector
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChartTypeAction {
     None,
     Select(ChartType),

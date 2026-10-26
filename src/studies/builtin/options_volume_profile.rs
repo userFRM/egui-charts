@@ -1,10 +1,9 @@
 //! Options turnover supplied by a host, independent of the underlying's bar volume.
 
 use crate::data::{Datafeed, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSource};
+use crate::data::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 use crate::model::{Bar, Instrument};
-use crate::studies::{
-    Indicator, IndicatorValues, ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig,
-};
+use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 use std::cell::RefCell;
 use std::ops::Range;

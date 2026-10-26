@@ -1,9 +1,9 @@
 //! Canvas tab - background and grid settings.
 
 use crate::chart::series::SeriesSettings;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Canvas tab renderer

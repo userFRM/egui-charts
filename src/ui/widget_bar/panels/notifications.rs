@@ -18,6 +18,7 @@ const KEPT: usize = 1_000;
 
 /// An action the host performs for the notifications panel.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum NotificationsAction {
     /// No host action.
     #[default]

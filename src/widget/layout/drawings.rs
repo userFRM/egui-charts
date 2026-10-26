@@ -1,10 +1,8 @@
 //! Propagate drawing changes without consuming the host's persistence queue.
 
 use crate::drawings::{ChartPoint, Drawing};
-use crate::widget::{
-    Chart,
-    sync::{index_at, time_at},
-};
+use crate::model::{index_at, time_at};
+use crate::widget::Chart;
 use std::collections::{HashMap, HashSet};
 
 type Key = (usize, usize);

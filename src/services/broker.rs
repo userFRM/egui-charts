@@ -26,8 +26,7 @@ use crate::model::{
 /// use chrono::Utc;
 /// use egui_charts::data::{FeedError, Reply};
 /// use egui_charts::model::{
-///     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-///     OrderType, Position,
+///     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Position,
 /// };
 /// use egui_charts::services::{AccountEvent, Broker, Events};
 /// use std::sync::Mutex;

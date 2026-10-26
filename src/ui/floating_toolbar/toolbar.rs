@@ -2,15 +2,17 @@
 //!
 //! Floating toolbar for object customization.
 
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
 /// Action that can be triggered from the floating toolbar
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum FloatingToolbarAction {
     /// Change a color slot (index, new color)
     ChangeColor(usize, Color32),
@@ -129,7 +131,7 @@ impl FloatingSelectionToolbar {
         if let Some(pointer_pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
             if ui.ctx().input(|i| i.pointer.any_pressed()) && self.drag_offset.is_none() {
                 // Check if clicking on drag handle area (first 24px)
-                let toolbar_rect = Rect::from_min_size(self.position, self.toolbar_size());
+                let toolbar_rect = Rect::from_min_size(self.position, self.toolbar_size(ui));
                 let drag_handle_rect = Rect::from_min_size(
                     toolbar_rect.min,
                     Vec2::new(
@@ -156,7 +158,7 @@ impl FloatingSelectionToolbar {
         // Clamp position to viewport bounds. `min` then `max` (not `f32::clamp`, which panics
         // when min > max) places the toolbar at the viewport's min edge on an axis it does not fit.
         let screen_rect = ui.ctx().input(|i| i.viewport_rect());
-        let toolbar_size = self.toolbar_size();
+        let toolbar_size = self.toolbar_size(ui);
         self.position.x = self
             .position
             .x
@@ -185,14 +187,14 @@ impl FloatingSelectionToolbar {
             .interactable(true)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
-                    .corner_radius(DESIGN_TOKENS.rounding.md)
+                    .corner_radius(ui.active_theme().radius.md)
                     .inner_margin(egui::Margin::symmetric(
-                        DESIGN_TOKENS.spacing.md as i8,
-                        DESIGN_TOKENS.spacing.sm as i8,
+                        ui.active_theme().spacing.md as i8,
+                        ui.active_theme().spacing.sm as i8,
                     ))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.sm;
+                            ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
 
                             let mut inner_action: Option<FloatingToolbarAction> = None;
 
@@ -323,7 +325,7 @@ impl FloatingSelectionToolbar {
         area_response.inner
     }
 
-    fn toolbar_size(&self) -> Vec2 {
+    fn toolbar_size(&self, ui: &Ui) -> Vec2 {
         // Approximate size based on content
         let color_count = self.color_slots.len();
         let button_size = DESIGN_TOKENS.sizing.floating_toolbar.button_size;
@@ -331,13 +333,13 @@ impl FloatingSelectionToolbar {
         let sep_count = 4;
         let sep_width = DESIGN_TOKENS.sizing.floating_toolbar.separator_width;
         let drag_handle = DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_height;
-        let padding = DESIGN_TOKENS.spacing.xl;
+        let padding = ui.active_theme().spacing.xl;
         let icon_buttons = 5; // settings, duplicate, lock, visibility, delete
 
         Vec2::new(
             drag_handle
-                + (color_count as f32 * (color_size + DESIGN_TOKENS.spacing.sm))
-                + (icon_buttons as f32 * (button_size + DESIGN_TOKENS.spacing.sm))
+                + (color_count as f32 * (color_size + ui.active_theme().spacing.sm))
+                + (icon_buttons as f32 * (button_size + ui.active_theme().spacing.sm))
                 + (sep_count as f32 * sep_width)
                 + padding,
             DESIGN_TOKENS.sizing.floating_toolbar.height,
@@ -346,7 +348,7 @@ impl FloatingSelectionToolbar {
 
     fn render_drag_handle(ui: &mut Ui) {
         let size = Vec2::new(
-            DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.md,
+            ui.active_theme().spacing.lg + ui.active_theme().spacing.md,
             DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_height,
         );
         let (rect, _response) = ui.allocate_exact_size(size, Sense::hover());
@@ -372,7 +374,7 @@ impl FloatingSelectionToolbar {
     fn render_separator(ui: &mut Ui) {
         let height = DESIGN_TOKENS.sizing.floating_toolbar.separator_height;
         let (rect, _) = ui.allocate_exact_size(
-            Vec2::new(DESIGN_TOKENS.spacing.hairline, height),
+            Vec2::new(DESIGN_TOKENS.stroke.hairline, height),
             Sense::hover(),
         );
         let painter = ui.painter();

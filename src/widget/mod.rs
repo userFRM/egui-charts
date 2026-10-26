@@ -93,8 +93,8 @@
 //!
 //! # Sub-modules
 //!
-//! - [`builder`] -- Constructor and configuration methods for [`Chart`]
-//! - [`indicator_pane`] -- Separate indicator panels (RSI, MACD, Stochastic)
+//! - [`ChartBuilder`] -- Constructor and configuration methods for [`Chart`]
+//! - [`IndicatorPane`] -- Separate indicator panels (RSI, MACD, Stochastic)
 
 #[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
@@ -105,21 +105,22 @@ use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
-use crate::model::ChartState;
 use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
+use crate::studies::ChartState;
 
 use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
-pub mod indicator_pane;
+mod indicator_pane;
 pub use crate::chart::renderers::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, Watermark, WatermarkLine,
 };
 pub use crate::chart::selection::{ChartElementId, SeriesId};
 pub use builder::ChartBuilder;
 use egui::{Pos2, Rect, Vec2};
+pub use export::{ChartImage, ImageExportOptions};
 pub use indicator_pane::{
     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction,
 };
@@ -131,14 +132,12 @@ mod accessibility;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod anchors;
-pub mod builder;
+mod builder;
 mod change_marks;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod clipboard;
 mod crosshair;
-pub mod localization;
-#[cfg(feature = "ui")]
 pub(crate) use crosshair::menu_value;
 mod events;
 mod feed;
@@ -147,13 +146,14 @@ mod merge;
 mod signals;
 mod targets;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
-pub mod export;
+mod export;
 mod frame;
 mod history;
 pub(crate) mod interaction;
-pub mod keyboard;
-pub mod layout;
+pub(crate) mod keyboard;
+mod layout;
 mod navigation;
+mod palette;
 pub(crate) mod pan_zoom;
 mod pane_layout;
 pub use pane_layout::{PaneId, PaneOptions};
@@ -165,6 +165,8 @@ mod readout;
 mod replay;
 mod selection;
 mod series;
+/// Shared display settings used by the chart and its host controls.
+pub mod settings;
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 mod snapshot;
@@ -172,6 +174,10 @@ mod snapshot;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod stored_drawings;
 mod studies;
+
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod drawing_api;
 mod studies_data;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
@@ -381,6 +387,9 @@ pub struct Chart {
     time_formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
     price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     percentage_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    volume_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    series_formatters:
+        std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     pub(crate) measured_axis_width: f32,
     /// Last usable widget width and its first frame, including discarded sizing passes.
@@ -389,7 +398,9 @@ pub struct Chart {
     axis_hover: Option<(Pos2, Rect)>,
     scale_settings_requested: bool,
     pub(crate) theme_override: Option<crate::theme::Theme>,
+    inherited_theme: Option<crate::theme::Theme>,
     host_events: events::HostEvents,
+    pub(crate) indicator_source_request: Option<crate::studies::StudySource>,
     events: Vec<crate::model::Marker>,
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
@@ -467,7 +478,7 @@ pub struct Chart {
     /// Chart-wide click selection, shared by series, overlay indicators, and
     /// pane indicators. Populated by click hit testing during rendering and
     /// readable by host apps via [`Chart::selected_element`].
-    pub(crate) selection: SelectionState<ChartElementId>,
+    pub(crate) selection: SelectionState,
     /// Right-click hit result captured during the last frame, drained by the
     /// host via [`Chart::take_right_click`] (or by `ChartMenus` with the `ui`
     /// feature). Holds no UI types so the core widget builds without the `ui`
@@ -494,6 +505,7 @@ pub struct Chart {
 /// surface right-clicks even when built without the `ui` feature; the host
 /// (or `ChartMenus` with the `ui` feature) maps it to a concrete menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum RightClickTarget {
     /// A series or overlay/pane indicator line was hit.
     Element {
@@ -532,6 +544,7 @@ pub enum RightClickTarget {
 ///
 /// Retrieve with [`Chart::get_rendered_indicator_panes`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RenderedIndicatorPane {
     /// Position of the study in [`Chart::indicators`] when the pane was drawn. After a pane's
     /// close button removed its study, that pane stays in the list until the next frame, and it
@@ -557,6 +570,7 @@ pub struct RenderedIndicatorPane {
 /// widget area. They are useful for external hit-testing (e.g., determining
 /// whether a click landed on the price area, volume area, or legend).
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct ChartLayoutRects {
     /// The overall widget rect (entire chart area including axes and padding).
     pub widget_rect: Rect,
@@ -901,8 +915,8 @@ impl Chart {
 
     /// Returns a mutable reference to the chart's visual configuration.
     ///
-    /// Use this to apply settings produced by a dialog in place, e.g.
-    /// `settings.apply_to_config(chart.config_mut())`, without rebuilding the
+    /// Use this to edit visual options in place, e.g.
+    /// `chart.config_mut().show_grid = false`, without rebuilding the
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame. Wrap a host UI
     /// submission in [`Self::user_action`] to include it in chart history.
     pub fn config_mut(&mut self) -> &mut ChartConfig {
@@ -911,10 +925,12 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context keep their configured series colours until updated.
+    /// Other charts sharing the context follow the active theme on their next frame, keeping
+    /// colours the host has edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
-        self.config = theme.apply_to_config(self.config.clone());
+        self.config = self.config.clone().with_theme(theme);
         self.theme_override = None;
+        self.inherited_theme = Some(theme.clone());
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
@@ -923,10 +939,11 @@ impl Chart {
     ///
     /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
     /// configuration edits made afterwards are kept. `None` follows the host's palette again,
-    /// retaining configured series colours. `set_theme` clears this override and themes egui.
+    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
-            self.config = theme.apply_to_config(self.config.clone());
+            self.config = self.config.clone().with_theme(theme);
+            self.inherited_theme = Some(theme.clone());
         }
         self.theme_override = theme;
     }

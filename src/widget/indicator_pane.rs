@@ -11,7 +11,9 @@
 //! they can also be used standalone:
 //!
 //! ```rust
-//! use egui_charts::widget::indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+//! use egui_charts::widget::{
+//!     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig
+//! };
 //!
 //! # fn example(
 //! #     ui: &mut egui::Ui,
@@ -32,12 +34,11 @@
 //! right offset, and base index so that indicator panes draw their data points
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
-use crate::chart::rendering::draw_dashed_line;
 use crate::localization as l10n;
 use crate::model::Bar;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::Indicator;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui};
@@ -250,6 +251,7 @@ impl IndicatorCoordParams {
 /// Returned by [`IndicatorPane::show_aligned_interactive`]. Besides the rects
 /// and y-axis range used for click hit-testing, it carries the [`Response`] for
 /// the legend's close "x" so the host can offer one-click pane removal.
+#[non_exhaustive]
 pub struct PaneInteraction {
     /// Full panel rect, including the y-axis label gutter.
     pub panel_rect: Rect,
@@ -292,6 +294,7 @@ pub struct IndicatorPane {
     pub(super) overlay: bool,
     pub(super) legend_offset: f32,
     pub(super) pane_controls: bool,
+    pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
 }
 
@@ -307,6 +310,7 @@ impl IndicatorPane {
             overlay: false,
             legend_offset: 0.0,
             pane_controls: false,
+            axis_rect: None,
             axis_tags: Vec::new(),
         }
     }
@@ -636,7 +640,7 @@ impl IndicatorPane {
         let draw = |painter: &egui::Painter, pass| {
             if let Some(view) = &view {
                 for item in primitives {
-                    item.get().draw(painter, view, pass);
+                    item.draw(painter, view, pass);
                 }
             }
         };
@@ -648,7 +652,7 @@ impl IndicatorPane {
                     && let Some(value) = crate::chart::renderers::snap_to_values(
                         pos.y,
                         &mapping.price,
-                        (0..indicator.line_cnt())
+                        (0..indicator.line_count())
                             .filter(|line| {
                                 let plot = indicator.plot_style(*line);
                                 plot.visible
@@ -721,6 +725,8 @@ impl IndicatorPane {
                         rect.right(),
                     )
                 };
+                let axis_rect = self.axis_rect.unwrap_or(axis_rect);
+                let axis_edge = self.axis_rect.map_or(axis_edge, |axis| axis.right());
                 let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
                 for item in primitives {
                     let primitive = item.get();
@@ -848,7 +854,9 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,
     ) -> (f64, f64) {
-        if indicator.is_volume() {
+        if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             return super::volume::range(indicator, visible_range, None);
         }
         if let Some((min, max)) = self.config.y_range {
@@ -859,7 +867,7 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for line in (0..indicator.line_cnt()).filter(|line| {
+        for line in (0..indicator.line_count()).filter(|line| {
             let plot = indicator.plot_style(*line);
             plot.visible
                 && !matches!(
@@ -914,7 +922,7 @@ impl IndicatorPane {
         }
 
         if min_val != f64::MAX
-            && (0..indicator.line_cnt()).any(|line| {
+            && (0..indicator.line_count()).any(|line| {
                 let plot = indicator.plot_style(line);
                 plot.visible
                     && matches!(
@@ -1184,7 +1192,9 @@ impl IndicatorPane {
         y_min: f64,
         y_max: f64,
     ) {
-        if indicator.is_volume() {
+        if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             let count = visible_range.end.saturating_sub(visible_range.start);
             if count == 0 {
                 return;
@@ -1277,11 +1287,16 @@ impl IndicatorPane {
         } else {
             egui::Align2::LEFT_CENTER
         };
-        let axis_edge = if left {
-            chart_rect.left()
-        } else {
-            full_rect.right()
-        };
+        let axis_edge = self.axis_rect.map_or_else(
+            || {
+                if left {
+                    chart_rect.left()
+                } else {
+                    full_rect.right()
+                }
+            },
+            |axis| axis.right(),
+        );
         let text_color = painter.ctx().active_theme().chart.axis_text;
         let map = self
             .price_map
@@ -1298,7 +1313,9 @@ impl IndicatorPane {
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
         if self.config.show_values {
-            if indicator.is_volume() {
+            if indicator.is_volume()
+                && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+            {
                 super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
             } else {
                 crate::chart::rendering::axes::render_study_tags(
@@ -1306,7 +1323,9 @@ impl IndicatorPane {
                 );
             }
         }
-        let mut width = if indicator.is_volume() {
+        let mut width = if indicator.is_volume()
+            && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+        {
             0.0
         } else {
             crate::chart::rendering::axes::price_axis_width(
@@ -1324,7 +1343,9 @@ impl IndicatorPane {
             return width;
         }
         let label_x = if left {
-            chart_rect.left() - DESIGN_TOKENS.spacing.sm
+            self.axis_rect
+                .map_or(chart_rect.left(), |axis| axis.right())
+                - DESIGN_TOKENS.spacing.sm
         } else {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
@@ -1365,10 +1386,10 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
         text_color: Color32,
         background: Color32,
+        font_size: f32,
     ) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
-        let format =
-            |color| egui::TextFormat::simple(egui::FontId::proportional(typography::MD), color);
+        let format = |color| egui::TextFormat::simple(egui::FontId::proportional(font_size), color);
         if self.config.show_name {
             job.append(indicator.name(), 0.0, format(text_color));
         }
@@ -1383,7 +1404,8 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            for line in
+                (0..indicator.line_count()).filter(|line| indicator.plot_style(*line).visible)
             {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
@@ -1422,14 +1444,23 @@ impl IndicatorPane {
             return None;
         }
         let theme = painter.ctx().active_theme();
-        let galley = painter.layout_job(self.legend_job(indicator, theme.ui.text, theme.chart.bg));
-        let x =
-            (rect.left() + DESIGN_TOKENS.spacing.sm + galley.size().x + DESIGN_TOKENS.spacing.md)
-                .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
-                .max(rect.left());
+        let galley = painter.layout_job(self.legend_job(
+            indicator,
+            theme.ui.text,
+            theme.chart.bg,
+            theme.text.ohlc,
+        ));
+        let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
+            .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
+            .max(rect.left());
         Some(
             Rect::from_min_size(
-                Pos2::new(x, rect.top() + self.legend_offset + 2.0),
+                Pos2::new(
+                    x,
+                    rect.top()
+                        + self.legend_offset
+                        + (galley.size().y + theme.spacing.md - 20.0).max(0.0) / 2.0,
+                ),
                 egui::vec2(80.0, 20.0),
             )
             .intersect(rect),
@@ -1447,15 +1478,16 @@ impl IndicatorPane {
         if !self.config.show_legend {
             return;
         }
+        let theme = painter.ctx().active_theme();
         let galley = painter.layout_job(self.legend_job(
             indicator,
             text_color,
-            painter.ctx().active_theme().chart.bg,
+            theme.chart.bg,
+            theme.text.ohlc,
         ));
         let pos = Pos2::new(
-            rect.left() + DESIGN_TOKENS.spacing.sm,
-            rect.top() + self.legend_offset + 12.0_f32.min(rect.height() / 2.0)
-                - galley.size().y / 2.0,
+            rect.left() + theme.spacing.sm,
+            rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
         );
         painter.galley(pos, galley, text_color);
     }
@@ -1597,7 +1629,8 @@ mod tests {
 
     #[test]
     fn volume_units_reach_pane_axes_and_legends() {
-        use crate::studies::{OnBalanceVolume, StudyFormat};
+        use crate::scales::StudyFormat;
+        use crate::studies::OnBalanceVolume;
         let bars: Vec<_> = [10.0, 11.0, 12.0]
             .into_iter()
             .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))
@@ -1620,7 +1653,12 @@ mod tests {
         ] {
             study.calculate(&bars);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-            let job = pane.legend_job(study.as_ref(), Color32::WHITE, Color32::BLACK);
+            let job = pane.legend_job(
+                study.as_ref(),
+                Color32::WHITE,
+                Color32::BLACK,
+                crate::theme::Theme::default().text.ohlc,
+            );
             assert!(job.text.contains(expected), "{}", job.text);
             let ctx = egui::Context::default();
             let mut study = crate::studies::ConfiguredStudy::new(study);
@@ -1676,7 +1714,7 @@ mod tests {
                 vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
             })
             .with_colors(colors.clone())
-            .with_line_cnt(3);
+            .with_line_count(3);
             study.calculate(&[]);
             let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {

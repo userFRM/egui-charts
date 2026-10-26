@@ -42,8 +42,8 @@
 //! ```
 
 use crate::model::{Bar, BarClock, ExchangeSessionProvider, Instrument, Session, TimezoneId};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, NaiveDate};
 use egui::Color32;
 
@@ -115,10 +115,7 @@ impl RelativeVolumeAtTime {
             instrument: None,
             daily: false,
             values: IndicatorValues::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.chart.bullish,
-                DESIGN_TOKENS.semantic.chart.bearish,
-            ],
+            colors: [palette::UP, palette::DOWN],
             visible: true,
         }
     }
@@ -217,7 +214,7 @@ impl Indicator for RelativeVolumeAtTime {
         crate::studies::PlotStyle {
             color: self.colors[0],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }

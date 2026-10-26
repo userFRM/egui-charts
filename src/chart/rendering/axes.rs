@@ -1,7 +1,7 @@
 //! Price and time axis rendering
 
-use crate::chart::rendering::draw_dashed_line;
 use crate::model::PriceLine;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
@@ -138,7 +138,7 @@ pub(crate) fn render_study_tags(
         return;
     };
     let transform = map.transform();
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let plot_style = study.plot_style(line);
         let Some(value) = study.plot_value(line, bar) else {
             continue;
@@ -153,7 +153,7 @@ pub(crate) fn render_study_tags(
         {
             continue;
         }
-        let label = if study.value_format() == crate::studies::StudyFormat::Price {
+        let label = if study.value_format() == crate::scales::StudyFormat::Price {
             transform.label(
                 transform.to_scale(value),
                 study
@@ -347,6 +347,7 @@ pub fn render_quote_tags(
 ) -> [Option<Rect>; 3] {
     render_quote_tags_with_countdown(
         painter, price_rect, price_map, close, session, volume, axis_right, None, None, 0.0, None,
+        None,
     )
 }
 
@@ -363,6 +364,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     volume_precision: Option<u8>,
     reserved_top: f32,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
+    volume_formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> [Option<Rect>; 3] {
     use crate::scales::{PriceFormatter, VolumeFormatter};
     let mut tags = [None; 3];
@@ -429,10 +431,15 @@ pub(crate) fn render_quote_tags_with_countdown(
         rows.push((
             2,
             price_rect.bottom() - height / 2.0,
-            VolumeFormatter {
-                precision: usize::from(volume_precision.unwrap_or(2)),
-            }
-            .format(value),
+            volume_formatter.map_or_else(
+                || {
+                    VolumeFormatter {
+                        precision: usize::from(volume_precision.unwrap_or(2)),
+                    }
+                    .format(value)
+                },
+                |formatter| formatter.format(value),
+            ),
             color,
         ));
     }
@@ -694,112 +701,123 @@ mod tests {
     #[test]
     fn quote_tags_separate_colliding_prices_and_volume() {
         use crate::model::quote::SessionQuote;
-        for (close, session_price, font_size, pane_height, show_close, slots, countdown) in [
-            (704.61, 704.64, 12.0, 100.0, true, [true, true, true], None),
-            (709.99, 709.99, 12.0, 100.0, true, [true, true, true], None),
-            (700.01, 700.01, 12.0, 100.0, true, [true, true, true], None),
-            (704.61, 704.64, 24.0, 100.0, true, [true, true, true], None),
-            (709.99, 700.01, 12.0, 100.0, true, [true, true, true], None),
-            (720.0, 704.64, 12.0, 100.0, true, [false, true, true], None),
-            (
-                704.61,
-                704.64,
-                12.0,
-                100.0,
-                false,
-                [false, true, true],
-                None,
-            ),
-            (704.61, 704.64, 12.0, 25.0, true, [true, false, false], None),
-            (
-                704.61,
-                704.64,
-                12.0,
-                100.0,
-                true,
-                [true, true, true],
-                Some("00:15"),
-            ),
-        ] {
-            for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-                let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, pane_height));
-                let map = PriceMap::new(
-                    PriceTransform::default(),
-                    PriceRange::new(700.0, 710.0),
-                    0.0,
-                    pane_height,
+        let host =
+            crate::scales::CustomPriceFormatter::new(|value| format!("{value:.0} contracts"));
+        for host_volume in [false, true] {
+            let volume_formatter =
+                host_volume.then_some(&host as &dyn crate::scales::PriceFormatter);
+            for (close, session_price, font_size, pane_height, show_close, slots, countdown) in [
+                (704.61, 704.64, 12.0, 100.0, true, [true, true, true], None),
+                (709.99, 709.99, 12.0, 100.0, true, [true, true, true], None),
+                (700.01, 700.01, 12.0, 100.0, true, [true, true, true], None),
+                (704.61, 704.64, 24.0, 100.0, true, [true, true, true], None),
+                (709.99, 700.01, 12.0, 100.0, true, [true, true, true], None),
+                (720.0, 704.64, 12.0, 100.0, true, [false, true, true], None),
+                (
+                    704.61,
+                    704.64,
+                    12.0,
+                    100.0,
                     false,
-                )
-                .with_price_precision(Some(2));
-                let session = SessionQuote::new(session_price, "EXT");
-                let ctx = Context::default();
-                theme.text.label = font_size;
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let mut tags = [None; 3];
-                let mut width = 0.0;
-                let text = [
-                    countdown.map_or_else(
-                        || format!("{close:.2}"),
-                        |time| format!("{close:.2}\n{time}"),
-                    ),
-                    format!("EXT {session_price:.2}"),
-                    "1.59M".into(),
-                ];
-                let output = ctx.run_ui(RawInput::default(), |ui| {
-                    width = price_axis_width(
-                        ui.painter(),
-                        &map,
-                        &text.iter().map(String::as_str).collect::<Vec<_>>(),
-                        None,
-                    );
-                    tags = render_quote_tags_with_countdown(
-                        ui.painter(),
-                        pane,
-                        &map,
-                        &PriceLine::new(close, Color32::RED).with_axis_label(show_close),
-                        Some((&session, Color32::from_rgb(251, 142, 1))),
-                        Some((1_590_000.0, Color32::RED)),
-                        pane.right() + width,
-                        countdown,
-                        None,
+                    [false, true, true],
+                    None,
+                ),
+                (704.61, 704.64, 12.0, 25.0, true, [true, false, false], None),
+                (
+                    704.61,
+                    704.64,
+                    12.0,
+                    100.0,
+                    true,
+                    [true, true, true],
+                    Some("00:15"),
+                ),
+            ] {
+                for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                    let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, pane_height));
+                    let map = PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(700.0, 710.0),
                         0.0,
-                        None,
+                        pane_height,
+                        false,
+                    )
+                    .with_price_precision(Some(2));
+                    let session = SessionQuote::new(session_price, "EXT");
+                    let ctx = Context::default();
+                    theme.text.label = font_size;
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut tags = [None; 3];
+                    let mut width = 0.0;
+                    let text = [
+                        countdown.map_or_else(
+                            || format!("{close:.2}"),
+                            |time| format!("{close:.2}\n{time}"),
+                        ),
+                        format!("EXT {session_price:.2}"),
+                        if host_volume {
+                            "1590000 contracts".into()
+                        } else {
+                            "1.59M".into()
+                        },
+                    ];
+                    let output = ctx.run_ui(RawInput::default(), |ui| {
+                        width = price_axis_width(
+                            ui.painter(),
+                            &map,
+                            &text.iter().map(String::as_str).collect::<Vec<_>>(),
+                            None,
+                        );
+                        tags = render_quote_tags_with_countdown(
+                            ui.painter(),
+                            pane,
+                            &map,
+                            &PriceLine::new(close, Color32::RED).with_axis_label(show_close),
+                            Some((&session, Color32::from_rgb(251, 142, 1))),
+                            Some((1_590_000.0, Color32::RED)),
+                            pane.right() + width,
+                            countdown,
+                            None,
+                            0.0,
+                            None,
+                            volume_formatter,
+                        );
+                    });
+                    let labels: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            Shape::Text(text) => Some(text.galley.text().to_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    assert_eq!(tags.map(|tag| tag.is_some()), slots);
+                    let rects: Vec<_> = tags.into_iter().flatten().collect();
+                    assert!(
+                        rects
+                            .iter()
+                            .all(|rect| rect.top() >= 0.0 && rect.bottom() <= pane_height)
                     );
-                });
-                let labels: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        Shape::Text(text) => Some(text.galley.text().to_owned()),
-                        _ => None,
-                    })
-                    .collect();
-                output.drop_without_applying_deltas();
-                assert_eq!(tags.map(|tag| tag.is_some()), slots);
-                let rects: Vec<_> = tags.into_iter().flatten().collect();
-                assert!(
-                    rects
-                        .iter()
-                        .all(|rect| rect.top() >= 0.0 && rect.bottom() <= pane_height)
-                );
-                assert!(
-                    rects
-                        .iter()
-                        .all(|rect| rect.left() >= pane.right() && rect.width() + 5.0 <= width)
-                );
-                assert!(
-                    rects.iter().enumerate().all(|(i, a)| rects
-                        .iter()
-                        .skip(i + 1)
-                        .all(|b| a.bottom() <= b.top() || b.bottom() <= a.top())),
-                    "{rects:?}"
-                );
-                let expected: Vec<_> = text
-                    .into_iter()
-                    .zip(slots)
-                    .filter_map(|(text, shown)| shown.then_some(text))
-                    .collect();
-                assert_eq!(labels, expected);
+                    assert!(
+                        rects
+                            .iter()
+                            .all(|rect| rect.left() >= pane.right() && rect.width() + 5.0 <= width)
+                    );
+                    assert!(
+                        rects.iter().enumerate().all(|(i, a)| rects
+                            .iter()
+                            .skip(i + 1)
+                            .all(|b| a.bottom() <= b.top() || b.bottom() <= a.top())),
+                        "{rects:?}"
+                    );
+                    let expected: Vec<_> = text
+                        .into_iter()
+                        .zip(slots)
+                        .filter_map(|(text, shown)| shown.then_some(text))
+                        .collect();
+                    assert_eq!(labels, expected);
+                }
             }
         }
     }

@@ -5,7 +5,7 @@
 //! equity curve. The library computes every metric itself with [`StrategyReport::performance`], with
 //! one definition each, so reports from different sources compare.
 
-use super::{Bar, Timeframe};
+use super::{Bar, OrderSide, Timeframe};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -37,7 +37,7 @@ fn curve_null_as_nan<'de, D: Deserializer<'de>>(
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
-/// use egui_charts::model::{StrategyExit, StrategyReport, StrategySide, StrategyTrade, Timeframe};
+/// use egui_charts::model::{StrategyExit, StrategyReport, OrderSide, StrategyTrade, Timeframe};
 ///
 /// let hour = |h| Utc.with_ymd_and_hms(2024, 1, 2, h, 0, 0).unwrap();
 /// let mut report = StrategyReport::new("SMA cross", "AAPL", Timeframe::Hour1, 10_000.0);
@@ -45,7 +45,7 @@ fn curve_null_as_nan<'de, D: Deserializer<'de>>(
 /// report.properties.push(("Fast length".into(), "10".into()));
 ///
 /// // The host computes each trade's net profit: here (190 - 185) * 10 shares less 2 of fees.
-/// let mut trade = StrategyTrade::new(StrategySide::Long, 10.0, hour(1), 185.0);
+/// let mut trade = StrategyTrade::new(OrderSide::Buy, 10.0, hour(1), 185.0);
 /// trade.fees = 2.0;
 /// trade.exit = Some(StrategyExit::new(hour(3), 190.0, 48.0));
 /// report.trades.push(trade);
@@ -103,7 +103,7 @@ pub struct StrategyReport {
 #[non_exhaustive]
 pub struct StrategyTrade {
     /// Long or short.
-    pub side: StrategySide,
+    pub side: OrderSide,
     /// Size of the position: positive and finite.
     #[serde(deserialize_with = "null_as_nan")]
     pub quantity: f64,
@@ -137,15 +137,6 @@ pub struct StrategyExit {
     /// library does not model point values, inverse contracts or currency conversion.
     #[serde(deserialize_with = "null_as_nan")]
     pub profit: f64,
-}
-
-/// The direction of a strategy's position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StrategySide {
-    /// Bought first, profits when the price rises.
-    Long,
-    /// Sold first, profits when the price falls.
-    Short,
 }
 
 /// Metrics of a [`StrategyReport`], from [`StrategyReport::performance`].
@@ -259,6 +250,7 @@ pub struct StrategyComparison {
 /// (calendar months for monthly bars); execution bars end at the next source open, with the final
 /// bar assumed to cover the run's remaining fills. Use fills at bar boundaries for exact spans.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StrategyExcursion {
     /// Maximum adverse excursion, as a positive loss magnitude.
     pub adverse: f64,
@@ -480,8 +472,8 @@ impl StrategyReport {
                 high = high.max(exit.price);
             }
             let (adverse, favourable) = match trade.side {
-                StrategySide::Long => (trade.entry_price - low, high - trade.entry_price),
-                StrategySide::Short => (high - trade.entry_price, trade.entry_price - low),
+                OrderSide::Buy => (trade.entry_price - low, high - trade.entry_price),
+                OrderSide::Sell => (high - trade.entry_price, trade.entry_price - low),
             };
             let (adverse, favourable) = (adverse * trade.quantity, favourable * trade.quantity);
             if adverse.is_finite() && favourable.is_finite() {
@@ -530,8 +522,8 @@ impl StrategyReport {
                 None => Default::default(),
             };
             let side = match trade.side {
-                StrategySide::Long => "long",
-                StrategySide::Short => "short",
+                OrderSide::Buy => "long",
+                OrderSide::Sell => "short",
             };
             csv.write_record([
                 (i + 1).to_string(),
@@ -554,7 +546,7 @@ impl StrategyReport {
 impl StrategyTrade {
     /// An open trade with no fees and no label.
     pub fn new(
-        side: StrategySide,
+        side: OrderSide,
         quantity: f64,
         entry_time: DateTime<Utc>,
         entry_price: f64,
@@ -620,7 +612,7 @@ mod tests {
     }
 
     fn closed(profit: f64, fees: f64) -> StrategyTrade {
-        let mut trade = StrategyTrade::new(StrategySide::Long, 1.0, t0(), 100.0);
+        let mut trade = StrategyTrade::new(OrderSide::Buy, 1.0, t0(), 100.0);
         trade.fees = fees;
         trade.exit = Some(StrategyExit::new(t0() + TimeDelta::hours(1), 101.0, profit));
         trade
@@ -636,7 +628,7 @@ mod tests {
             .zip(fees)
             .map(|(&p, f)| closed(p, f))
             .collect();
-        let mut open = StrategyTrade::new(StrategySide::Short, 2.0, t0(), 100.0);
+        let mut open = StrategyTrade::new(OrderSide::Sell, 2.0, t0(), 100.0);
         open.fees = 3.0;
         r.trades.push(open);
         r.equity = curve(
@@ -808,7 +800,7 @@ mod tests {
             .to_vec();
         streaks
             .trades
-            .push(StrategyTrade::new(StrategySide::Long, 1.0, t0(), 100.0));
+            .push(StrategyTrade::new(OrderSide::Buy, 1.0, t0(), 100.0));
         let mut invalid_streak = closed(99.0, 0.0);
         invalid_streak.quantity = 0.0;
         streaks.trades.push(invalid_streak);
@@ -999,13 +991,13 @@ mod tests {
         })
         .collect::<Vec<_>>();
         let mut r = report(1_000.0);
-        let mut long = StrategyTrade::new(StrategySide::Long, 2.0, t0(), 100.0);
+        let mut long = StrategyTrade::new(OrderSide::Buy, 2.0, t0(), 100.0);
         long.exit = Some(StrategyExit::new(t0() + TimeDelta::hours(2), 90.0, -20.0));
         let mut short = long.clone();
-        short.side = StrategySide::Short;
+        short.side = OrderSide::Sell;
         short.entry_price = 110.0;
         short.quantity = 3.0;
-        let open = StrategyTrade::new(StrategySide::Long, 1.0, t0() + TimeDelta::hours(2), 90.0);
+        let open = StrategyTrade::new(OrderSide::Buy, 1.0, t0() + TimeDelta::hours(2), 90.0);
         let mut invalid = long.clone();
         invalid.quantity = 0.0;
         r.trades = vec![long, short, open, invalid];
@@ -1106,7 +1098,7 @@ mod tests {
         ] {
             let mut r = report(1_000.0);
             let mut t = StrategyTrade::new(
-                StrategySide::Long,
+                OrderSide::Buy,
                 2.0,
                 t0() + TimeDelta::minutes(entry_minutes),
                 100.0,
@@ -1135,7 +1127,7 @@ mod tests {
         ] {
             let mut r = report(1_000.0);
             r.timeframe = timeframe;
-            let mut t = StrategyTrade::new(StrategySide::Long, 2.0, t0() + entry, 100.0);
+            let mut t = StrategyTrade::new(OrderSide::Buy, 2.0, t0() + entry, 100.0);
             t.exit = Some(StrategyExit::new(
                 t0() + entry + TimeDelta::milliseconds(1),
                 100.0,
@@ -1156,8 +1148,7 @@ mod tests {
     #[test]
     fn trades_csv_writes_valid_trades_in_entry_order() {
         let mut r = report(10_000.0);
-        let mut late =
-            StrategyTrade::new(StrategySide::Short, 2.0, t0() + TimeDelta::hours(5), 101.5);
+        let mut late = StrategyTrade::new(OrderSide::Sell, 2.0, t0() + TimeDelta::hours(5), 101.5);
         late.label = Some("Breakout, short".into());
         let mut first = closed(-1.25, 0.25);
         first.entry_time = t0() + TimeDelta::hours(1);

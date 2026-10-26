@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{ADX, ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Commodity Selection Index (CSI), J. Welles Wilder, New Concepts in Technical Trading Systems (1978).
@@ -33,7 +33,7 @@ impl CommoditySelectionIndex {
             margin: 1.0,
             commission: 0.0,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.brown, // Brown
+            color: palette::BROWN, // Brown
             visible: true,
         }
     }
@@ -171,7 +171,7 @@ impl TrendDetectionIndex {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Indigo (using INFO blue as closest match)
+            color: palette::BLUE, // Indigo (using INFO blue as closest match)
             visible: true,
         }
     }

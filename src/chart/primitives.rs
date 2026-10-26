@@ -95,6 +95,23 @@ pub struct PrimitiveView<'a> {
 }
 
 impl PrimitiveView<'_> {
+    /// Aligned source ranges for a custom renderer's merge hook. Groups start at multiples
+    /// of `factor`, include the visible range's edge groups and never exceed `bars`.
+    /// A factor of zero is treated as one. Merge values in source order so open/close and
+    /// extrema keep their meaning; host payload aggregation belongs to the renderer.
+    pub fn point_groups(&self, factor: usize) -> impl Iterator<Item = Range<usize>> {
+        let factor = factor.max(1);
+        let end = self.visible.end.min(self.bars.len());
+        let start = if self.visible.start >= end {
+            end
+        } else {
+            self.visible.start / factor * factor
+        };
+        (start..end)
+            .step_by(factor)
+            .map(move |start| start..start.saturating_add(factor).min(self.bars.len()))
+    }
+
     /// The x of a fractional bar index, the centre of bar `index` when it is whole.
     pub fn index_to_x(&self, index: f64) -> f32 {
         self.mapping.idx_to_x(0) + index as f32 * self.mapping.bar_spacing
@@ -103,7 +120,7 @@ impl PrimitiveView<'_> {
     /// The x of a UTC time, interpolated between bars and extrapolated into whitespace as
     /// [`Chart::time_to_index`](crate::widget::Chart::time_to_index) does. `None` without bars.
     pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
-        crate::widget::sync::index_at(self.bars, time).map(|index| self.index_to_x(index))
+        crate::model::index_at(self.bars, time).map(|index| self.index_to_x(index))
     }
 }
 
@@ -138,6 +155,22 @@ pub trait Primitive: Send {
     /// Draws in `pass` with `painter`, clipped to the plot area of the pane.
     fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
         let _ = (painter, view, pass);
+    }
+
+    /// Draws with `factor` consecutive source slots per physical pixel group, one while
+    /// zoomed in. Override this for custom point aggregation; use
+    /// [`PrimitiveView::point_groups`] to visit the aligned ranges. Cache aggregates in
+    /// [`data_changed`](Self::data_changed) when visiting all source values would be costly.
+    /// The default preserves [`draw`](Self::draw) for existing renderers.
+    fn draw_merged(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        let _ = factor;
+        self.draw(painter, view, pass);
     }
 
     /// Labels for the price axis of the pane, placed at their prices next to the chart's own

@@ -5,12 +5,13 @@
 //! down. Up volume is positive, down volume negative and delta their sum. Missing intrabar
 //! history has no value; the parent candle's volume is never substituted for it.
 
+use crate::model::LineStyle;
 use crate::model::{Bar, BarClock, Timeframe};
+use crate::scales::StudyFormat;
+use crate::studies::palette;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyData, StudyDataRequest,
-    StudyFormat,
+    Indicator, IndicatorValues, PlotStyle, PlotType, StudyData, StudyDataRequest,
 };
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Up and down volume from intrabars supplied by the host, in a separate pane.
@@ -30,9 +31,9 @@ impl UpDownVolume {
             clock: BarClock::new(Timeframe::Min1),
             values: IndicatorValues::new(),
             colors: [
-                DESIGN_TOKENS.semantic.chart.bullish.gamma_multiply(0.35),
-                DESIGN_TOKENS.semantic.chart.bearish.gamma_multiply(0.35),
-                DESIGN_TOKENS.semantic.extended.gray,
+                palette::UP.gamma_multiply(0.35),
+                palette::DOWN.gamma_multiply(0.35),
+                palette::GRAY,
             ],
             visible: true,
         }
@@ -185,7 +186,7 @@ impl Indicator for UpDownVolume {
         PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: PlotPattern::Solid,
+            pattern: LineStyle::Solid,
             plot_type: if line == 2 {
                 PlotType::Crosses
             } else {

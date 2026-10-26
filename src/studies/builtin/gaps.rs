@@ -49,9 +49,9 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValues, StudyZone};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Most gaps a chart shows.
@@ -110,8 +110,8 @@ impl Gaps {
             trail_length: 300,
             values: IndicatorValues::new(),
             zones: Vec::new(),
-            up_color: DESIGN_TOKENS.semantic.extended.success,
-            down_color: DESIGN_TOKENS.semantic.extended.error,
+            up_color: palette::GREEN,
+            down_color: palette::RED,
             visible: true,
         }
     }
@@ -323,7 +323,7 @@ mod tests {
             .collect();
         let mut gaps = Gaps::default();
         gaps.calculate(&bars);
-        let mut state = crate::model::ChartState::new(crate::model::BarData::from_bars(bars));
+        let mut state = crate::studies::ChartState::new(crate::model::BarData::from_bars(bars));
         state.time_scale_mut().set_width(80.0);
         state.time_scale_mut().set_bar_spacing(8.0);
         let transform = state.fit_price_scale([&gaps as &dyn Indicator]);

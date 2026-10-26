@@ -20,8 +20,8 @@ pub mod templates;
 pub use alert_dialog::{AlertDialog, AlertDialogAction, AlertDialogConfig};
 pub use drawing_context_menu::{DrawingContextMenu, DrawingContextMenuAction};
 pub use drawing_properties::{
-    DrawingId, DrawingLineStyle, DrawingPropertiesAction, DrawingPropertiesConfig,
-    DrawingPropertiesDialog, DrawingProps, PropertiesTab,
+    DrawingId, DrawingPropertiesAction, DrawingPropertiesConfig, DrawingPropertiesDialog,
+    DrawingProps, PropertiesTab,
 };
 pub use keyboard_shortcuts::{KeyboardShortcutsAction, KeyboardShortcutsDialog};
 pub use series_context_menu::{SeriesContextMenu, SeriesContextMenuAction};

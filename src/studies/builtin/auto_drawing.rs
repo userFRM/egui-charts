@@ -391,7 +391,7 @@ mod tests {
         let prices: Vec<_> = crate::studies::plots::drawing_prices(&extension, 10..12).collect();
         // C + 2.618*(B-A) = 118 + 2.618*(100-113) = 83.966.
         assert!(prices.iter().any(|p| (p - 83.966).abs() < 1e-4));
-        let mut state = crate::model::ChartState::new(crate::model::BarData::from_bars(data));
+        let mut state = crate::studies::ChartState::new(crate::model::BarData::from_bars(data));
         state.time_scale_mut().set_width(400.0);
         let transform = state.fit_price_scale([&extension as &dyn Indicator]);
         let range = state.price_scale().range();

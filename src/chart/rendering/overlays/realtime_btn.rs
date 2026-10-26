@@ -2,7 +2,6 @@
 
 use crate::config::{ChartConfig, RealtimeButtonPos};
 use crate::localization as l10n;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, Pos2, Rect, Response, Stroke, Ui, Vec2};
 
@@ -54,7 +53,7 @@ pub(crate) fn realtime_button(
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect(
         rect,
-        4.0,
+        theme.radius.sm,
         bg,
         Stroke::new(1.0, theme.ui.border),
         egui::StrokeKind::Inside,
@@ -64,7 +63,7 @@ pub(crate) fn realtime_button(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             text,
-            FontId::proportional(typography::SM_MD),
+            FontId::proportional(theme.text.label),
             ink,
         );
     } else {
@@ -80,7 +79,7 @@ pub(crate) fn realtime_button(
             ));
         }
     }
-    crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
+    crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
     let label = l10n::text(ui.ctx(), "Scroll to the most recent bar");
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     response
@@ -139,6 +138,11 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
+            let mut theme = crate::theme::Theme::light();
+            theme.text.label = 19.0;
+            theme.radius.sm = 7.0;
+            chart.set_theme(&ctx, &theme);
+            chart.config_mut().realtime_button_text = Some("Latest".into());
             let fill = Color32::from_rgb(29, 71, 123);
             let hover = Color32::from_rgb(39, 81, 133);
             chart.config_mut().realtime_button_pos = position;
@@ -174,6 +178,21 @@ mod tests {
                         10.0 + anchor.1 * (pane.height() - 20.0 - size.1),
                     ),
                 Vec2::new(size.0, size.1),
+            );
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == "Latest"
+                        && text.galley.job.sections.iter()
+                            .all(|section| section.format.font_id.size == theme.text.label)
+                )),
+                "custom text uses the active theme"
+            );
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    Shape::Rect(rect) if rect.fill == fill
+                        && rect.corner_radius == egui::CornerRadius::from(theme.radius.sm)
+                )),
+                "button radius uses the active theme"
             );
             assert_eq!(button(painted, fill), Some(expected), "{position:?}");
             let pos = expected.center();

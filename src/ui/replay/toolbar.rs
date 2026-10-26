@@ -3,7 +3,6 @@
 //! Provide playback controls for market replay functionality including
 //! play/pause/stop buttons, speed selector, progress bar, and time display.
 
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
@@ -12,6 +11,7 @@ use crate::ui::model::{
     PlaybackSpeed, ReplayCommand, ReplayProgress, ToolbarReplayState as ReplayState,
 };
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{Response, Ui, Vec2, Widget};
 use std::sync::mpsc::Sender;
 
@@ -77,6 +77,7 @@ impl ReplayToolbarState {
 
 /// Action emitted by the replay toolbar
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ReplayToolbarAction {
     /// Play was clicked
     Play,
@@ -133,7 +134,7 @@ impl<'a> ReplayToolbar<'a> {
     pub fn show(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
         let action = ui
             .horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.sm;
+                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
 
                 let mut action = None;
 
@@ -336,13 +337,13 @@ impl<'a> ReplayToolbar<'a> {
                 let (bg, fg) = (theme.chart.bg, theme.ui.accent);
 
                 // Background
-                painter.rect_filled(rect, DESIGN_TOKENS.rounding.xs, bg);
+                painter.rect_filled(rect, ui.active_theme().radius.xs, bg);
 
                 // Progress fill
                 let fill_width = rect.width() * pct;
                 let fill_rect =
                     egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
-                painter.rect_filled(fill_rect, DESIGN_TOKENS.rounding.xs, fg);
+                painter.rect_filled(fill_rect, ui.active_theme().radius.xs, fg);
             }
 
             // Beside the bar, never over the fill.

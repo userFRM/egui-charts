@@ -23,6 +23,7 @@ const LIMIT: usize = 200;
 
 /// An action the host performs for the screener.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum ScreenerAction {
     /// No host action.
     #[default]

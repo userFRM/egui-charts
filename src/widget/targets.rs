@@ -2,10 +2,10 @@
 
 use super::Chart;
 use crate::chart::coords::ChartMapping;
+use crate::data::PriceTargets;
 use crate::data::{FeedError, inbox::Inbox};
 use crate::localization as l10n;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, PriceScaleMode};
-use crate::services::PriceTargets;
 use crate::theme::ThemeExt;
 use egui::{FontId, Pos2, Sense, Stroke, Vec2};
 use std::sync::Arc;
@@ -151,7 +151,7 @@ impl Chart {
         });
         let mut label_bottom = label_top.max(coords.rect.top());
         let mut lines = Vec::new();
-        let formatter = self.price_label_formatter(PriceScaleMode::Normal);
+        let formatter = self.series_label_formatter(super::SeriesId::MAIN, PriceScaleMode::Normal);
         for (position, (name, price)) in levels.into_iter().enumerate() {
             let end = Pos2::new(end_x, coords.price.price_to_y(price));
             if !end.is_finite() || !origin.is_finite() {

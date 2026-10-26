@@ -1,9 +1,8 @@
 use crate::chart::renderers::{ChartMapping, RenderContext};
 use crate::model::Bar;
+use crate::model::LineStyle;
 use crate::scales::PriceMap;
-use crate::studies::{
-    CrossDirection, Indicator, IndicatorLineStyle, PlotPattern, PlotStyle, PlotType,
-};
+use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle, PlotStyle, PlotType};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke};
 
@@ -102,14 +101,14 @@ pub(crate) fn paint_study_plot(
         }
         PlotType::BarColor => {}
         PlotType::Line => match plot.pattern {
-            PlotPattern::Solid => {
+            LineStyle::Solid => {
                 painter.add(egui::Shape::line(
                     points.to_vec(),
                     Stroke::new(plot.width, plot.color),
                 ));
             }
-            PlotPattern::Dashed | PlotPattern::LargeDashed => {
-                let scale = if plot.pattern == PlotPattern::Dashed {
+            LineStyle::Dashed | LineStyle::LargeDashed => {
+                let scale = if plot.pattern == LineStyle::Dashed {
                     1.0
                 } else {
                     2.0
@@ -121,8 +120,8 @@ pub(crate) fn paint_study_plot(
                     4.0 * scale,
                 ));
             }
-            PlotPattern::Dotted | PlotPattern::SparseDotted => {
-                let spacing = if plot.pattern == PlotPattern::Dotted {
+            LineStyle::Dotted | LineStyle::SparseDotted => {
+                let spacing = if plot.pattern == LineStyle::Dotted {
                     4.0
                 } else {
                     8.0
@@ -203,7 +202,8 @@ fn paint_fills(
     for fill in study.fills() {
         let value = |boundary, bar| match boundary {
             FillBoundary::Level(value) => value.is_finite().then_some(value),
-            FillBoundary::Plot(line) => (line < study.line_cnt() && study.plot_style(line).visible)
+            FillBoundary::Plot(line) => (line < study.line_count()
+                && study.plot_style(line).visible)
                 .then(|| study.plot_value(line, bar))
                 .flatten(),
         };
@@ -253,7 +253,10 @@ impl IndicatorRenderer {
             }
 
             // Only render overlay indicators
-            if !indicator.is_overlay() || indicator.is_volume() {
+            if !indicator.is_overlay()
+                || (indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
+            {
                 continue;
             }
 
@@ -286,16 +289,21 @@ impl IndicatorRenderer {
     ) {
         #[cfg(feature = "drawings")]
         if !indicator.drawings().is_empty() {
-            crate::studies::plots::paint_drawings(context, indicator, price_scale, coords);
+            crate::chart::indicators::plots::paint_drawings(
+                context,
+                indicator,
+                price_scale,
+                coords,
+            );
             return;
         }
         if !indicator.candles().is_empty() {
-            crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
+            crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
             return;
         }
         let visible = super::volume_profile::profile_range(coords);
         for plot in indicator.volume_profiles(visible) {
-            super::volume_profile::paint_profile(
+            crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
                 plot.config,
@@ -318,13 +326,13 @@ impl IndicatorRenderer {
             price_scale,
             coords,
         );
-        crate::studies::plots::paint_zones(&painter, indicator, price_scale, coords);
-        crate::studies::projection::paint(&painter, indicator, coords, price_scale);
+        crate::chart::indicators::plots::paint_zones(&painter, indicator, price_scale, coords);
+        crate::chart::indicators::projection::paint(&painter, indicator, coords, price_scale);
 
         // Handle multi-line indicators
-        let line_cnt = indicator.line_cnt();
+        let line_count = indicator.line_count();
 
-        for line_idx in 0..line_cnt {
+        for line_idx in 0..line_count {
             let mut plot = indicator.plot_style(line_idx);
             if matches!(
                 plot.plot_type,
@@ -458,7 +466,7 @@ impl IndicatorRenderer {
                         let price = pb + (pb - pa) * ((x - b.x) / (b.x - a.x)) as f64;
                         let point = Pos2::new(x, price_scale.price_to_y(price));
                         if point.y.is_finite() && previous.y.is_finite() {
-                            if plot.pattern == PlotPattern::Solid {
+                            if plot.pattern == LineStyle::Solid {
                                 painter.line_segment(
                                     [previous, point],
                                     Stroke::new(style.width, color),
@@ -469,7 +477,7 @@ impl IndicatorRenderer {
                         }
                         previous = point;
                     }
-                    if plot.pattern != PlotPattern::Solid {
+                    if plot.pattern != LineStyle::Solid {
                         paint_study_plot(&painter, &extension, plot, price_scale.price_to_y(0.0));
                     }
                 }
@@ -545,7 +553,7 @@ impl IndicatorRenderer {
         for marker in indicator
             .markers()
             .iter()
-            .filter(|_| (0..line_cnt).any(|line| indicator.plot_style(line).visible))
+            .filter(|_| (0..line_count).any(|line| indicator.plot_style(line).visible))
         {
             if marker.bar < display_start || marker.bar >= display_end || !marker.value.is_finite()
             {
@@ -581,7 +589,7 @@ impl IndicatorRenderer {
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
         let plot = PlotStyle { color, ..plot };
-        if plot.plot_type != PlotType::Line || plot.pattern != PlotPattern::Solid {
+        if plot.plot_type != PlotType::Line || plot.pattern != LineStyle::Solid {
             let positions: Vec<_> = points.iter().map(|(point, _)| *point).collect();
             paint_study_plot(&painter, &positions, plot, baseline);
             return;
@@ -653,17 +661,17 @@ mod tests {
         let color = Color32::from_rgb(17, 71, 191);
         let points = [Pos2::new(10.0, 15.0), Pos2::new(20.0, 5.0)];
         for (plot_type, pattern) in [
-            (PlotType::Histogram, PlotPattern::Solid),
-            (PlotType::Columns, PlotPattern::Solid),
-            (PlotType::StepLine, PlotPattern::Solid),
-            (PlotType::Crosses, PlotPattern::Solid),
-            (PlotType::TriangleUp, PlotPattern::Solid),
-            (PlotType::TriangleDown, PlotPattern::Solid),
-            (PlotType::Area, PlotPattern::Solid),
-            (PlotType::BackgroundColor, PlotPattern::Solid),
-            (PlotType::Circles, PlotPattern::Solid),
-            (PlotType::Line, PlotPattern::Dashed),
-            (PlotType::Line, PlotPattern::Dotted),
+            (PlotType::Histogram, LineStyle::Solid),
+            (PlotType::Columns, LineStyle::Solid),
+            (PlotType::StepLine, LineStyle::Solid),
+            (PlotType::Crosses, LineStyle::Solid),
+            (PlotType::TriangleUp, LineStyle::Solid),
+            (PlotType::TriangleDown, LineStyle::Solid),
+            (PlotType::Area, LineStyle::Solid),
+            (PlotType::BackgroundColor, LineStyle::Solid),
+            (PlotType::Circles, LineStyle::Solid),
+            (PlotType::Line, LineStyle::Dashed),
+            (PlotType::Line, LineStyle::Dotted),
         ] {
             let mut output = Context::default().run_ui(RawInput::default(), |ui| {
                 paint_study_plot(
@@ -708,7 +716,7 @@ mod tests {
                     );
                     assert_eq!(circles.count(), 2);
                 }
-                PlotType::Line if pattern == PlotPattern::Dashed => {
+                PlotType::Line if pattern == LineStyle::Dashed => {
                     assert!(painted.iter().any(|s| {
                         matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == color && stroke.width == 4.0)
                     }));
@@ -755,7 +763,7 @@ mod tests {
                     IndicatorValue::Multiple(vec![2.0, 0.0]),
                 ]
             })
-            .with_line_cnt(2)
+            .with_line_count(2)
             .with_offsets(vec![2, 2])
             .with_fills(vec![StudyFill {
                 first: FillBoundary::Plot(0),

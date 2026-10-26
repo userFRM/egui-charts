@@ -4,6 +4,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
 
@@ -13,6 +14,7 @@ pub struct PaneId(pub usize);
 
 /// Actions from pane controls
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum PaneControlAction {
     /// No action taken
     None,
@@ -46,11 +48,11 @@ impl Default for PaneControlsConfig {
     fn default() -> Self {
         Self {
             button_size: DESIGN_TOKENS.sizing.button_sm,
-            button_gap: DESIGN_TOKENS.spacing.xs,
-            padding: DESIGN_TOKENS.spacing.xs,
-            rounding: DESIGN_TOKENS.rounding.sm,
-            offset_x: DESIGN_TOKENS.spacing.sm,
-            offset_y: DESIGN_TOKENS.spacing.sm,
+            button_gap: crate::theme::Theme::default().spacing.xs,
+            padding: crate::theme::Theme::default().spacing.xs,
+            rounding: crate::theme::Theme::default().radius.sm,
+            offset_x: crate::theme::Theme::default().spacing.sm,
+            offset_y: crate::theme::Theme::default().spacing.sm,
         }
     }
 }
@@ -94,6 +96,25 @@ impl PaneControls {
             return PaneControlAction::None;
         }
 
+        let theme = ui.active_theme();
+        let defaults = PaneControlsConfig::default();
+        let mut config = self.config.clone();
+        for (value, default, themed) in [
+            (
+                &mut config.button_gap,
+                defaults.button_gap,
+                theme.spacing.xs,
+            ),
+            (&mut config.padding, defaults.padding, theme.spacing.xs),
+            (&mut config.rounding, defaults.rounding, theme.radius.sm),
+            (&mut config.offset_x, defaults.offset_x, theme.spacing.sm),
+            (&mut config.offset_y, defaults.offset_y, theme.spacing.sm),
+        ] {
+            if *value == default {
+                *value = themed;
+            }
+        }
+
         let mut action = PaneControlAction::None;
 
         // Get colors from theme
@@ -129,15 +150,15 @@ impl PaneControls {
         ];
 
         let num_buttons = buttons.len() as f32;
-        let bar_width = (self.config.button_size * num_buttons)
-            + (self.config.button_gap * (num_buttons - 1.0))
-            + (self.config.padding * 2.0);
-        let bar_height = self.config.button_size + (self.config.padding * 2.0);
+        let bar_width = (config.button_size * num_buttons)
+            + (config.button_gap * (num_buttons - 1.0))
+            + (config.padding * 2.0);
+        let bar_height = config.button_size + (config.padding * 2.0);
 
         // Position at top-right of pane
         let bar_pos = Pos2::new(
-            pane_rect.max.x - bar_width - self.config.offset_x,
-            pane_rect.min.y + self.config.offset_y,
+            pane_rect.max.x - bar_width - config.offset_x,
+            pane_rect.min.y + config.offset_y,
         );
         let bar_rect = Rect::from_min_size(bar_pos, Vec2::new(bar_width, bar_height));
 
@@ -149,20 +170,20 @@ impl PaneControls {
         // Draw bar background
         ui.painter().rect(
             bar_rect,
-            self.config.rounding,
+            config.rounding,
             bg_color,
             border_stroke,
             egui::StrokeKind::Inside,
         );
 
-        let mut x = bar_rect.min.x + self.config.padding;
+        let mut x = bar_rect.min.x + config.padding;
         let center_y = bar_rect.center().y;
         let icon_size = 14.0;
 
         for (icon, tooltip, action_fn) in buttons {
             let btn_rect = Rect::from_center_size(
-                Pos2::new(x + self.config.button_size / 2.0, center_y),
-                Vec2::splat(self.config.button_size),
+                Pos2::new(x + config.button_size / 2.0, center_y),
+                Vec2::splat(config.button_size),
             );
 
             let btn_response = ui.allocate_rect(btn_rect, Sense::click());
@@ -174,14 +195,14 @@ impl PaneControls {
                     &translated_label,
                 )
             });
-            crate::styles::focus::draw_focus_ring(ui, &btn_response, DESIGN_TOKENS.rounding.sm);
+            crate::styles::focus::draw_focus_ring(ui, &btn_response, ui.active_theme().radius.sm);
             let is_hovered = btn_response.hovered();
             let was_clicked = btn_response.clicked();
 
             // Button background on hover
             if is_hovered {
                 ui.painter()
-                    .rect_filled(btn_rect, DESIGN_TOKENS.rounding.sm, btn_hover_bg);
+                    .rect_filled(btn_rect, ui.active_theme().radius.sm, btn_hover_bg);
             }
 
             // Icon
@@ -200,7 +221,7 @@ impl PaneControls {
                 action = action_fn(pane_id);
             }
 
-            x += self.config.button_size + self.config.button_gap;
+            x += config.button_size + config.button_gap;
         }
 
         action

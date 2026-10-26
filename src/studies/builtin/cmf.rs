@@ -25,8 +25,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Chaikin Money Flow indicator
@@ -48,8 +48,8 @@ impl ChaikinMoneyFlow {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            positive_color: DESIGN_TOKENS.semantic.extended.success,
-            negative_color: DESIGN_TOKENS.semantic.extended.error,
+            positive_color: palette::GREEN,
+            negative_color: palette::RED,
             visible: true,
         }
     }
@@ -169,7 +169,7 @@ impl Indicator for ChaikinMoneyFlow {
         false // CMF is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

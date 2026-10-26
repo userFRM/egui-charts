@@ -53,7 +53,7 @@ pub(super) fn range(
     groups: Option<&super::merge::Groups>,
 ) -> (f64, f64) {
     let values = study.values();
-    let max = (0..study.line_cnt())
+    let max = (0..study.line_count())
         .map(|line| (line, study.plot_style(line)))
         .filter(|(_, plot)| plot.visible)
         .map(
@@ -91,7 +91,7 @@ pub(super) fn paint(
     let groups = groups.filter(|groups| groups.factor() > 1);
     let factor = groups.map_or(1, super::merge::Groups::factor);
     let x = |bar| coords.idx_to_x(bar);
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let mut plot = study.plot_style(line);
         if !plot.visible {
             continue;
@@ -152,7 +152,7 @@ pub(super) fn tags(
         return;
     };
     let plot = study.plot_style(2);
-    if !study.is_visible() || !plot.visible {
+    if !study.is_visible() || !plot.visible || study.scale() == crate::studies::StudyScale::None {
         return;
     }
     if let Some(value) = study.values().value(2, bar)
@@ -177,7 +177,7 @@ impl super::Chart {
             study.is_volume()
                 && study.is_overlay()
                 && study.is_visible()
-                && (0..study.line_cnt()).any(|line| study.plot_style(line).visible)
+                && (0..study.line_count()).any(|line| study.plot_style(line).visible)
         }) || (!cfg!(feature = "studies") && self.config.show_volume);
         self.main_series_visible && self.chart_type.supports_volume() && visible
     }
@@ -323,6 +323,24 @@ mod tests {
             .unwrap()
             .0;
         assert_ne!(next, id);
+        // Pinning to the shared right scale includes the million-unit columns in that
+        // range; a shared left scale keeps those units independent of 100..110 prices.
+        for (time, key, shares_prices) in [
+            (4.1, crate::model::SeriesScale::Right, true),
+            (4.2, crate::model::SeriesScale::Left, false),
+        ] {
+            assert!(chart.set_indicator_scale(next, crate::studies::StudyScale::Shared(key)));
+            shapes(&ctx, &mut chart, time, vec![]);
+            assert_eq!(
+                chart.get_chart_mapping().price.range().max >= 1_000_000.0,
+                shares_prices
+            );
+            let study = chart.indicators().find(|(id, _)| *id == next).unwrap().1;
+            let map =
+                crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price;
+            assert!(map.range().min <= 0.0 && map.range().max >= 1_000_000.0);
+            assert!(map.price_to_y(1_000_000.0) < map.price_to_y(0.0));
+        }
         assert!(chart.remove_series(next));
         shapes(&ctx, &mut chart, 5.0, vec![]);
         assert!(!chart.config().show_volume);

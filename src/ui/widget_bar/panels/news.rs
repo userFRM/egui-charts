@@ -19,6 +19,7 @@ const LIMIT: usize = 50;
 
 /// An action the host performs for the news panel.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum NewsAction {
     /// No host action.
     #[default]

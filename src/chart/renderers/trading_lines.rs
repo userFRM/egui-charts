@@ -13,6 +13,7 @@ use crate::theme::ThemeExt;
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
 /// broker.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum TradingLineAction {
     /// Cancel the working order.
     Cancel(Order),
@@ -401,7 +402,7 @@ fn show_position(
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
-    let font = FontId::proportional(crate::styles::typography::MD);
+    let font = FontId::proportional(ui.ctx().active_theme().text.ohlc);
     let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
     let width = |galley: &egui::Galley| galley.size().x + 2.0 * PADDING;
     // The result the position makes when the price moves by `gain` in its favour.
@@ -754,7 +755,7 @@ impl Label<'_> {
         }
         // A tick can snap beyond the pane; keep its drag target reachable until release.
         let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
-        let font = FontId::proportional(crate::styles::typography::MD);
+        let font = FontId::proportional(ui.ctx().active_theme().text.ohlc);
         let painter = ui.painter().clone();
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
         let body = (self.body)(staged.unwrap_or(line.price));

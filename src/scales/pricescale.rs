@@ -389,7 +389,7 @@ impl PriceScale {
     /// Shows `min..max` and switches to manual.
     ///
     /// The bounds are in the units of the transform the last fit returned
-    /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
+    /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
         if let Some(ratio) = &mut self.bar_ratio {
             let span = self.range.max - self.range.min;
@@ -501,6 +501,13 @@ impl PriceMap {
             price_precision: None,
             tick_marks: PriceMarkGeneratorConfig::default(),
         }
+    }
+
+    /// Uses the same scale, orientation and formatting in a different vertical plot area.
+    pub fn with_bounds(mut self, top: f32, bottom: f32) -> Self {
+        self.top = top;
+        self.bottom = bottom;
+        self
     }
 
     /// Sets the price precision for this frame.

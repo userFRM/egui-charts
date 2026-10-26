@@ -15,6 +15,7 @@ use crate::widget::ShortcutMap;
 
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyboardShortcutsAction {
     /// No action
     None,

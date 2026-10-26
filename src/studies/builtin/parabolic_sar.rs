@@ -28,8 +28,8 @@
 
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Parabolic SAR indicator
@@ -61,8 +61,8 @@ impl ParabolicSAR {
             af_step: clamp_param(af_step, 0.001, 1.0),
             max_af: clamp_param(max_af, initial_af, 1.0),
             values: IndicatorValues::new(),
-            bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
-            bearish_color: DESIGN_TOKENS.semantic.extended.bearish,
+            bullish_color: palette::UP,
+            bearish_color: palette::DOWN,
             visible: true,
         }
     }
@@ -204,7 +204,7 @@ impl Indicator for ParabolicSAR {
         crate::studies::PlotStyle {
             color: self.colors()[line],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Circles,
             visible: true,
         }

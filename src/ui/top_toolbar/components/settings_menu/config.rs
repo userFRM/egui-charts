@@ -1,7 +1,7 @@
 //! Configuration types for the settings dialog and quick settings menu.
 
-use super::types::ScaleMode;
 use crate::model::ChartType;
+use crate::scales::PriceScaleMode;
 use egui::Color32;
 
 // ============================================================================
@@ -43,7 +43,7 @@ impl Default for SettingsDialogConfig {
 /// Simplified chart settings for the quick settings popup menu
 #[derive(Debug, Clone)]
 pub struct ChartSettings {
-    pub scale_mode: ScaleMode,
+    pub scale_mode: PriceScaleMode,
     pub chart_type: ChartType,
     pub show_horizontal_grid: bool,
     pub show_vertical_grid: bool,
@@ -63,7 +63,7 @@ pub struct ChartSettings {
 impl Default for ChartSettings {
     fn default() -> Self {
         Self {
-            scale_mode: ScaleMode::Auto,
+            scale_mode: PriceScaleMode::Normal,
             chart_type: ChartType::Candles,
             show_horizontal_grid: true,
             show_vertical_grid: true,

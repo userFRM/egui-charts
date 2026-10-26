@@ -75,7 +75,7 @@ pub struct HeikinAshiCache {
 
 impl HeikinAshiCache {
     /// Returns the full transformed history at `revision`, following
-    /// [`ChartState::revision`](crate::model::ChartState::revision)'s contract.
+    /// [`ChartState::revision`](crate::studies::ChartState::revision)'s contract.
     pub(crate) fn bars(&self, full_data: &[Bar], revision: u64) -> Ref<'_, [Bar]> {
         {
             let mut entry = self.entry.borrow_mut();
@@ -166,7 +166,8 @@ mod tests {
 
     #[test]
     fn streaming_updates_retain_the_prefix_and_match_a_fresh_transform() {
-        use crate::model::{BarData, ChartState};
+        use crate::model::BarData;
+        use crate::studies::ChartState;
         let mut state = ChartState::new(BarData::new());
         let cache = HeikinAshiCache::default();
         let check = |state: &ChartState| {

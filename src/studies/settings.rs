@@ -1,27 +1,13 @@
 //! Applied study presentation and transactional input edits.
 
 use super::{Indicator, IndicatorLineStyle, IndicatorValues, InputValue};
+use crate::model::LineStyle;
 use crate::model::{Bar, Instrument, Timeframe};
 use egui::Color32;
 
-/// Stroke pattern for a study plot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PlotPattern {
-    /// A continuous stroke.
-    #[default]
-    Solid,
-    /// Equally spaced dashes.
-    Dashed,
-    /// Equally spaced dots.
-    Dotted,
-    /// Dashes twice as long as `Dashed`, with twice the gap.
-    LargeDashed,
-    /// Dots with twice the spacing of `Dotted`.
-    SparseDotted,
-}
-
 /// Geometry for one output line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum PlotType {
     /// Connected values, broken at missing bars.
     #[default]
@@ -56,11 +42,53 @@ pub struct PlotStyle {
     /// Stroke width in logical pixels, from 0.5 to 10.
     pub width: f32,
     /// Stroke pattern for line plots.
-    pub pattern: PlotPattern,
+    pub pattern: LineStyle,
     /// Plot geometry.
     pub plot_type: PlotType,
     /// Whether the plot participates in rendering, hit testing and scaling.
     pub visible: bool,
+}
+
+/// Interval visibility evaluated for every interval, including custom and trade-based ones.
+/// Ordered ranges compare nominal duration for time bars and thresholds within the same
+/// trade-based family. Other families are outside the range. `Only` matches the exact interval.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StudyIntervalRange {
+    /// Every interval.
+    #[default]
+    All,
+    /// The chosen interval and longer durations or larger thresholds in its family.
+    AndAbove(Timeframe),
+    /// The chosen interval and shorter durations or smaller thresholds in its family.
+    AndBelow(Timeframe),
+    /// The exact chosen interval.
+    Only(Timeframe),
+}
+
+impl StudyIntervalRange {
+    /// Whether `interval` belongs to this visibility range.
+    pub fn contains(self, interval: Timeframe) -> bool {
+        let current = match self {
+            Self::All => return true,
+            Self::Only(current) => return interval == current,
+            Self::AndAbove(current) | Self::AndBelow(current) => current,
+        };
+        let order = match (interval, current) {
+            (Timeframe::Ticks(a), Timeframe::Ticks(b))
+            | (Timeframe::Volume(a), Timeframe::Volume(b))
+            | (Timeframe::Range(a), Timeframe::Range(b))
+            | (Timeframe::Delta(a), Timeframe::Delta(b)) => Some(a.cmp(&b)),
+            (a, b) if !a.is_trade_based() && !b.is_trade_based() => {
+                Some(a.duration_ms().cmp(&b.duration_ms()))
+            }
+            _ => None,
+        };
+        order.is_some_and(|order| match self {
+            Self::AndAbove(_) => !order.is_lt(),
+            Self::AndBelow(_) => !order.is_gt(),
+            _ => false,
+        })
+    }
 }
 
 /// Host-serializable presentation settings of an applied study.
@@ -72,6 +100,10 @@ pub struct StudySettings {
     pub precision: Option<usize>,
     /// Exact intervals on which the study is hidden, including custom intervals.
     pub hidden_intervals: Vec<Timeframe>,
+    /// A range applied in addition to the exact hidden intervals. Older saved settings show
+    /// every interval except those in `hidden_intervals`.
+    #[serde(default)]
+    pub interval_range: StudyIntervalRange,
 }
 
 /// A study with editable presentation, used automatically by the chart.
@@ -82,8 +114,10 @@ pub struct ConfiguredStudy {
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
+    formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     overlay: Option<bool>,
     scale: Option<super::StudyScale>,
+    scale_mapping: Option<crate::scales::PriceMap>,
     source: Option<super::StudySource>,
     calculation_symbol: String,
     calculation_timeframe: Option<Timeframe>,
@@ -109,8 +143,10 @@ impl ConfiguredStudy {
             settings,
             timeframe: None,
             instrument_precision: None,
+            formatter: None,
             overlay: None,
             scale: None,
+            scale_mapping: None,
             source: None,
             calculation_symbol: String::new(),
             calculation_timeframe: None,
@@ -339,7 +375,7 @@ impl Indicator for ConfiguredStudy {
                 source.output_at(close, !self.wait_for_close && at + 1 == data.len())
             });
             self.aligned_bars.push(output);
-            let values: Vec<_> = (0..self.study.line_cnt())
+            let values: Vec<_> = (0..self.study.line_count())
                 .map(|line| {
                     output
                         .and_then(|at| self.study.values().value(line, at))
@@ -350,7 +386,7 @@ impl Indicator for ConfiguredStudy {
         }
         self.aligned = Some(aligned);
     }
-    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
         self.study.order_flow_input()
     }
 
@@ -505,7 +541,7 @@ impl Indicator for ConfiguredStudy {
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
-        if settings.plots.len() != edited.line_cnt() {
+        if settings.plots.len() != edited.line_count() {
             return Err("one style is required per study plot");
         }
         edited.set_colors(settings.plots.iter().map(|plot| plot.color).collect());
@@ -519,7 +555,29 @@ impl Indicator for ConfiguredStudy {
         self.settings = settings;
         Ok(())
     }
-    fn value_format(&self) -> super::StudyFormat {
+    fn scale_mapping(&self) -> Option<crate::scales::PriceMap> {
+        self.scale_mapping
+    }
+    fn set_scale_mapping(&mut self, mapping: Option<crate::scales::PriceMap>) {
+        self.scale_mapping = mapping;
+    }
+    fn set_value_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> bool {
+        self.formatter = formatter;
+        true
+    }
+    fn format_value(&self, value: f64) -> String {
+        self.formatter
+            .as_ref()
+            .filter(|_| value.is_finite())
+            .map_or_else(
+                || self.value_format().format(value, self.precision()),
+                |formatter| formatter.format(value),
+            )
+    }
+    fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()
     }
     fn scale(&self) -> super::StudyScale {
@@ -530,13 +588,13 @@ impl Indicator for ConfiguredStudy {
             .precision
             .or_else(|| self.study.precision())
             .or_else(|| {
-                (self.value_format() == super::StudyFormat::Price)
+                (self.value_format() == crate::scales::StudyFormat::Price)
                     .then_some(self.instrument_precision.map(usize::from))
                     .flatten()
             })
     }
-    fn line_cnt(&self) -> usize {
-        self.study.line_cnt()
+    fn line_count(&self) -> usize {
+        self.study.line_count()
     }
     fn line_names(&self) -> Vec<String> {
         self.study.line_names()
@@ -544,7 +602,7 @@ impl Indicator for ConfiguredStudy {
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
     }
-    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
         self.study.volume_profiles(visible)
     }
     fn zones(&self) -> &[super::StudyZone] {
@@ -570,14 +628,16 @@ impl Indicator for ConfiguredStudy {
         true
     }
     fn set_scale(&mut self, scale: super::StudyScale) -> bool {
+        self.scale_mapping = None;
         self.scale = Some(scale);
         true
     }
     fn is_visible(&self) -> bool {
         self.study.is_visible()
-            && self
-                .timeframe
-                .is_none_or(|tf| !self.settings.hidden_intervals.contains(&tf))
+            && self.timeframe.is_none_or(|tf| {
+                !self.settings.hidden_intervals.contains(&tf)
+                    && self.settings.interval_range.contains(tf)
+            })
     }
     fn set_visible(&mut self, visible: bool) {
         self.study.set_visible(visible);
@@ -620,7 +680,7 @@ mod tests {
             (
                 Box::new(
                     super::super::CustomIndicator::new("Small", |_| Vec::new())
-                        .with_value_format(super::super::StudyFormat::Fixed(4)),
+                        .with_value_format(crate::scales::StudyFormat::Fixed(4)),
                 ),
                 Some(4),
             ),
@@ -669,6 +729,41 @@ mod tests {
         study.set_visible(false);
         study.set_timeframe(Timeframe::Day1);
         assert!(!study.is_visible());
+        for (range, interval, visible) in [
+            (
+                StudyIntervalRange::AndAbove(Timeframe::Min5),
+                Timeframe::Custom(std::num::NonZeroU64::new(120).unwrap()),
+                false,
+            ),
+            (
+                StudyIntervalRange::AndAbove(Timeframe::Min5),
+                Timeframe::Custom(std::num::NonZeroU64::new(420).unwrap()),
+                true,
+            ),
+            (
+                StudyIntervalRange::AndBelow(Timeframe::Ticks(
+                    std::num::NonZeroU64::new(100).unwrap(),
+                )),
+                Timeframe::Ticks(std::num::NonZeroU64::new(50).unwrap()),
+                true,
+            ),
+            (
+                StudyIntervalRange::AndBelow(Timeframe::Ticks(
+                    std::num::NonZeroU64::new(100).unwrap(),
+                )),
+                Timeframe::Volume(std::num::NonZeroU64::new(50).unwrap()),
+                false,
+            ),
+        ] {
+            let mut settings = study.settings();
+            settings.interval_range = range;
+            study.apply_settings(&[], settings).unwrap();
+            study.set_visible(true);
+            study.set_timeframe(interval);
+            assert_eq!(study.is_visible(), visible);
+            study.set_visible(false);
+            assert!(!study.is_visible());
+        }
         let saved = serde_json::to_string(&study.settings()).unwrap();
         let restored: StudySettings = serde_json::from_str(&saved).unwrap();
         assert!(!restored.plots[0].visible);

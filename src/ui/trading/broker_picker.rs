@@ -291,7 +291,7 @@ impl BrokerPicker {
                             theme.ui.panel_bg_floating,
                         ))
                         .fill(theme.ui.text)
-                        .corner_radius(6),
+                        .corner_radius(ui.active_theme().radius.md),
                     );
                     if connect.clicked() {
                         action = Some(BrokerPickerAction::Connect(tile.id.clone()));

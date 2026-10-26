@@ -4,6 +4,7 @@ use crate::model::Alert;
 
 /// Dialog result; only a submitted alert reaches the host service.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum AlertDialogAction {
     /// No change.
     None,

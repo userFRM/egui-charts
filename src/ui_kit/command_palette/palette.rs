@@ -169,7 +169,7 @@ impl CommandPalette {
         crate::ui_kit::modal::Modal::new("command_palette", "Search actions")
             .width(480.0)
             .height(680.0)
-            .rounding(8.0)
+            .rounding(ctx.active_theme().radius.lg)
             .show(ctx, open, |ui| {
                 ui.add_space(12.0);
                 ui.separator();
@@ -273,10 +273,10 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
     let painter = ui.painter();
     painter.rect_filled(
         rect.shrink2(Vec2::new(theme.spacing.sm, 0.0)),
-        DESIGN_TOKENS.rounding.sm,
+        ui.active_theme().radius.sm,
         fill,
     );
-    crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
+    crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
     // Every row reserves the icon slot, so labels line up.
     let icon_size = DESIGN_TOKENS.sizing.icon_sm;

@@ -4,20 +4,10 @@
 //! It tracks which bars are visible, manages price auto-scaling, and maintains
 //! a zoom-history stack for undo/redo.
 
-use super::{Bar, BarData, TimeScale};
+use crate::model::{Bar, BarData, TimeScale, next_revision};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::Indicator;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Source of [`ChartState::revision`] values, so that no two chart states or
-/// histories ever share one.
-static REVISIONS: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn next_revision() -> u64 {
-    REVISIONS.fetch_add(1, Ordering::Relaxed)
-}
-
 /// A snapshot of zoom parameters, used for undo/redo of zoom operations.
 ///
 /// The chart maintains a stack of these snapshots so the user can press
@@ -42,7 +32,8 @@ pub struct ZoomState {
 /// # Example
 ///
 /// ```
-/// use egui_charts::model::{BarData, ChartState};
+/// use egui_charts::model::BarData;
+/// use egui_charts::studies::ChartState;
 ///
 /// let data = BarData::new();
 /// let state = ChartState::new(data);
@@ -333,6 +324,7 @@ impl ChartState {
             None,
             true,
             None,
+            None,
             std::iter::empty(),
             std::iter::empty(),
         )
@@ -340,14 +332,15 @@ impl ChartState {
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
-    /// `series_values` are already in scale units. `main_bars` supplies the transformed visible
-    /// bars when the chart type draws different OHLC values from its source.
+    /// `series_values` are already in scale units. `main_bars` supplies transformed visible
+    /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_bars: Option<&[Bar]>,
         main_visible: bool,
-        autoscale: Option<&super::AutoscaleProvider>,
+        autoscale: Option<&crate::model::AutoscaleProvider>,
+        main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
@@ -379,7 +372,7 @@ impl ChartState {
                     study,
                     study_start.max(start)..study_end.max(end),
                 );
-                (0..study.line_cnt())
+                (0..study.line_count())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
                         plot.visible
@@ -449,21 +442,23 @@ impl ChartState {
             });
         let main = main_visible
             .then(|| {
-                let range = visible
-                    .iter()
-                    .flat_map(|bar| [bar.low, bar.high])
-                    .chain(
-                        visible
-                            .iter()
-                            .flat_map(|bar| [bar.open, bar.close])
-                            .filter(|_| mode == PriceScaleMode::Logarithmic),
-                    )
-                    .filter(|value| transform.to_scale(*value).is_finite())
-                    .fold(None, |range: Option<(f64, f64)>, value| {
-                        Some(range.map_or((value, value), |(min, max)| {
-                            (min.min(value), max.max(value))
-                        }))
-                    });
+                let range = main_range.or_else(|| {
+                    visible
+                        .iter()
+                        .flat_map(|bar| [bar.low, bar.high])
+                        .chain(
+                            visible
+                                .iter()
+                                .flat_map(|bar| [bar.open, bar.close])
+                                .filter(|_| mode == PriceScaleMode::Logarithmic),
+                        )
+                        .filter(|value| transform.to_scale(*value).is_finite())
+                        .fold(None, |range: Option<(f64, f64)>, value| {
+                            Some(range.map_or((value, value), |(min, max)| {
+                                (min.min(value), max.max(value))
+                            }))
+                        })
+                });
                 match autoscale {
                     Some(provider) => provider.range(visible, range),
                     None => range,

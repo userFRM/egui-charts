@@ -4,7 +4,7 @@
 
 use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Ui, Vec2};
 
 /// Icon button with theme-aware styling
@@ -105,7 +105,7 @@ impl<'a> IconButton<'a> {
 
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
@@ -117,7 +117,7 @@ impl<'a> IconButton<'a> {
             };
             ui.painter().rect_filled(
                 rect,
-                DESIGN_TOKENS.rounding.button,
+                ui.active_theme().radius.sm,
                 variant.bg_color(ui, hovered, pressed),
             );
 

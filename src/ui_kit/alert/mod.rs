@@ -167,7 +167,7 @@ impl Alert {
                     let mut message_color = theme.ui.text;
                     if let Some(title) = &self.title {
                         ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
-                        ui.add_space(DESIGN_TOKENS.spacing.xs);
+                        ui.add_space(ui.active_theme().spacing.xs);
                         message_color = theme.ui.text_secondary;
                     }
                     ui.label(

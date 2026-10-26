@@ -4,6 +4,7 @@
 //! providing clear visual hierarchy for different action types.
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Color32, Rect, Response, Sense, TextStyle, Ui, Vec2, Widget, pos2};
 
 use super::{ButtonSize, ButtonVariant, finish};
@@ -215,7 +216,7 @@ impl<'a> Widget for Button<'a> {
             );
         }
 
-        let tokens = &DESIGN_TOKENS;
+        let theme = ui.active_theme();
         let height = self.size.pixels();
         let icon_size = self.size.icon_pixels(self.icon_scale);
         let galley = self.text.as_ref().map(|text| {
@@ -229,8 +230,8 @@ impl<'a> Widget for Button<'a> {
 
         // Content is laid out text, so the padding is the same for every label.
         let (padding, gap) = match (self.icon.is_some(), galley.is_some()) {
-            (true, true) => (tokens.spacing.xl, tokens.spacing.sm),
-            (false, true) => (tokens.spacing.xl, 0.0),
+            (true, true) => (theme.spacing.xl, theme.spacing.sm),
+            (false, true) => (theme.spacing.xl, 0.0),
             _ => (0.0, 0.0),
         };
         let content_width = self.icon.map_or(0.0, |_| icon_size)
@@ -239,7 +240,7 @@ impl<'a> Widget for Button<'a> {
         let width = (content_width + 2.0 * padding).max(height);
 
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
@@ -254,7 +255,7 @@ impl<'a> Widget for Button<'a> {
             } else {
                 ui.style().interact(&response).fg_stroke.color
             };
-            let rounding = tokens.rounding.button;
+            let rounding = theme.radius.sm;
 
             ui.painter()
                 .rect_filled(rect, rounding, variant.bg_color(ui, hovered, pressed));
@@ -262,7 +263,7 @@ impl<'a> Widget for Button<'a> {
                 ui.painter().rect_stroke(
                     rect,
                     rounding,
-                    egui::Stroke::new(tokens.stroke.hairline, border),
+                    egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, border),
                     egui::epaint::StrokeKind::Inside,
                 );
             }
@@ -364,7 +365,7 @@ mod tests {
                     .size()
                     .x;
                 let width = Button::new(label).show(ui).rect.width();
-                assert_eq!(width, text_width + 2.0 * DESIGN_TOKENS.spacing.xl);
+                assert_eq!(width, text_width + 2.0 * ctx.active_theme().spacing.xl);
             });
         })
         .drop_without_applying_deltas();
@@ -372,7 +373,12 @@ mod tests {
 
     #[test]
     fn focus_ring_follows_the_button_corners_and_stays_within_two_pixels() {
-        for (_, theme) in crate::theme::presets() {
+        let mut custom = crate::theme::Theme::light();
+        custom.radius.sm = 9.0;
+        for (_, theme) in crate::theme::presets()
+            .into_iter()
+            .chain([("custom", custom)])
+        {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut id = egui::Id::NULL;
@@ -401,7 +407,7 @@ mod tests {
             assert_eq!(rings[0].stroke_kind, egui::epaint::StrokeKind::Inside);
             assert_eq!(
                 rings[0].corner_radius,
-                egui::CornerRadius::from(DESIGN_TOKENS.rounding.button + 2.0)
+                egui::CornerRadius::from(ctx.active_theme().radius.sm + 2.0)
             );
         }
     }

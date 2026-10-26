@@ -292,9 +292,7 @@ pub(super) fn draw_styled_line(painter: &Painter, points: Vec<Pos2>, style: &Lin
     }
     let stroke = Stroke::new(style.width, style.color);
     if let Some((dash, gap)) = style.style.dash_pattern() {
-        crate::chart::rendering::dashed_line::draw_dashed_polyline(
-            painter, &points, stroke, dash, gap,
-        );
+        crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
     } else {
         painter.add(Shape::line(points, stroke));
     }

@@ -7,14 +7,14 @@ use egui_kittest::{Harness, kittest::Queryable};
 fn report_replacement_selection_export_and_clear() {
     let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::milliseconds(250);
     let mut report = StrategyReport::new("First run", "FIRST", Timeframe::Min1, 1000.0);
-    let mut closed = StrategyTrade::new(StrategySide::Long, 1.0, start, 0.00001234);
+    let mut closed = StrategyTrade::new(OrderSide::Buy, 1.0, start, 0.00001234);
     closed.exit = Some(StrategyExit::new(
         start + chrono::TimeDelta::minutes(1),
         98.92959251407622,
         10.0,
     ));
     let open = StrategyTrade::new(
-        StrategySide::Short,
+        OrderSide::Sell,
         2.0,
         start + chrono::TimeDelta::minutes(2),
         110.0,

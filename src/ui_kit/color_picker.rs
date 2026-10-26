@@ -152,13 +152,13 @@ impl Default for ColorPickerConfig {
         // ui.style().visuals at render time for proper theme support.
         Self {
             swatch_size: 20.0,
-            swatch_spacing: 4.0,
-            row_spacing: 4.0,
-            swatch_rounding: 3.0,
+            swatch_spacing: crate::theme::Spacing::default().sm,
+            row_spacing: crate::theme::Spacing::default().sm,
+            swatch_rounding: crate::theme::Radii::default().sm,
             bg_color: Color32::TRANSPARENT,
             border_color: Color32::TRANSPARENT,
             sel_border_color: Color32::TRANSPARENT,
-            padding: 12.0,
+            padding: crate::theme::Spacing::default().xl,
         }
     }
 }
@@ -228,6 +228,31 @@ impl<'a> ColorPicker<'a> {
     /// Show a color swatch button that opens the picker when clicked
     /// Returns the picked colour, if changed, and the colour well's response.
     pub fn show(mut self, ui: &mut Ui) -> egui::InnerResponse<Option<Color32>> {
+        let theme = ui.active_theme();
+        let defaults = ColorPickerConfig::default();
+        for (value, default, themed) in [
+            (
+                &mut self.config.swatch_spacing,
+                defaults.swatch_spacing,
+                theme.spacing.sm,
+            ),
+            (
+                &mut self.config.row_spacing,
+                defaults.row_spacing,
+                theme.spacing.sm,
+            ),
+            (
+                &mut self.config.swatch_rounding,
+                defaults.swatch_rounding,
+                theme.radius.sm,
+            ),
+            (&mut self.config.padding, defaults.padding, theme.spacing.xl),
+        ] {
+            if *value == default {
+                *value = themed;
+            }
+        }
+
         let mut color_changed = None;
 
         // Get colors from theme
@@ -249,7 +274,7 @@ impl<'a> ColorPicker<'a> {
         // Draw dark background then blend color on top
         // This avoids the "checkered pattern" look for semi-transparent colors
         ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(btn_rect, ui.active_theme().radius.md, bg_color);
 
         // Keep the surface border separate from the colour, including white and black.
         ui.painter()
@@ -265,12 +290,12 @@ impl<'a> ColorPicker<'a> {
         };
         ui.painter().rect_stroke(
             btn_rect,
-            DESIGN_TOKENS.rounding.md,
+            ui.active_theme().radius.md,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
             StrokeKind::Inside,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, ui.active_theme().radius.md);
 
         if btn_res.clicked() {
             self.state.is_open = !self.state.is_open;
@@ -343,7 +368,7 @@ impl<'a> ColorPicker<'a> {
                             color_changed = Some(color);
                         }
 
-                        ui.add_space(DESIGN_TOKENS.spacing.lg);
+                        ui.add_space(ui.active_theme().spacing.lg);
 
                         // Separator
                         let sep_rect = ui.available_rect_before_wrap();
@@ -352,7 +377,7 @@ impl<'a> ColorPicker<'a> {
                             sep_rect.min.y,
                             Stroke::new(DESIGN_TOKENS.stroke.hairline, separator_color),
                         );
-                        ui.add_space(DESIGN_TOKENS.spacing.lg);
+                        ui.add_space(ui.active_theme().spacing.lg);
 
                         // Color variations
                         for row in &COLOR_VARIATIONS {
@@ -361,7 +386,7 @@ impl<'a> ColorPicker<'a> {
                             }
                         }
 
-                        ui.add_space(DESIGN_TOKENS.spacing.lg);
+                        ui.add_space(ui.active_theme().spacing.lg);
 
                         // Separator
                         let sep_rect = ui.available_rect_before_wrap();
@@ -370,20 +395,20 @@ impl<'a> ColorPicker<'a> {
                             sep_rect.min.y,
                             Stroke::new(DESIGN_TOKENS.stroke.hairline, separator_color),
                         );
-                        ui.add_space(DESIGN_TOKENS.spacing.lg);
+                        ui.add_space(ui.active_theme().spacing.lg);
 
                         // Custom color button
                         self.draw_custom_color_btn(ui);
 
                         // If custom mode is active, show color editor
                         if self.state.custom_mode {
-                            ui.add_space(DESIGN_TOKENS.spacing.lg);
+                            ui.add_space(ui.active_theme().spacing.lg);
                             let mut custom = self.state.custom_color;
                             if ui.color_edit_button_srgba(&mut custom).changed() {
                                 self.state.custom_color = custom;
                                 color_changed = Some(custom);
                             }
-                            ui.add_space(DESIGN_TOKENS.spacing.sm);
+                            ui.add_space(ui.active_theme().spacing.sm);
                             if ui.small_button(l10n::text(ui.ctx(), "Apply")).clicked() {
                                 color_changed = Some(self.state.custom_color);
                                 self.state.is_open = false;
@@ -504,11 +529,11 @@ impl<'a> ColorPicker<'a> {
         } else {
             visuals.window_stroke.color
         };
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
         let painter = ui.painter();
         painter.rect_stroke(
             rect,
-            DESIGN_TOKENS.rounding.sm,
+            ui.active_theme().radius.sm,
             Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
             StrokeKind::Inside,
         );
@@ -516,12 +541,12 @@ impl<'a> ColorPicker<'a> {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let label_color = visuals.widgets.noninteractive.fg_stroke.color;
         let value_color = visuals.widgets.hovered.fg_stroke.color;
-        let gap = DESIGN_TOKENS.spacing.sm;
+        let gap = ui.active_theme().spacing.sm;
         let y = rect.center().y;
         let opacity = format!("{}%", (f32::from(self.state.sel_color.a()) / 2.55).round());
 
         let label = painter.text(
-            egui::pos2(rect.left() + DESIGN_TOKENS.spacing.lg, y),
+            egui::pos2(rect.left() + ui.active_theme().spacing.lg, y),
             egui::Align2::LEFT_CENTER,
             l10n::text(ui.ctx(), "Hex"),
             font.clone(),
@@ -535,7 +560,7 @@ impl<'a> ColorPicker<'a> {
             value_color,
         );
         let value = painter.text(
-            egui::pos2(rect.right() - DESIGN_TOKENS.spacing.lg, y),
+            egui::pos2(rect.right() - ui.active_theme().spacing.lg, y),
             egui::Align2::RIGHT_CENTER,
             l10n::text(ui.ctx(), opacity),
             font.clone(),

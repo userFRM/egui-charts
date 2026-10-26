@@ -3,6 +3,7 @@
 //! A dialog with a text input field.
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Context, Id, TextEdit, Widget};
 
 use crate::tokens::DESIGN_TOKENS;
@@ -128,7 +129,7 @@ impl PromptDialog {
             .show(ctx, open, |ui| {
                 if let Some(msg) = &self.message {
                     ui.label(l10n::text(ui.ctx(), msg));
-                    ui.add_space(DESIGN_TOKENS.spacing.sm);
+                    ui.add_space(ctx.active_theme().spacing.sm);
                 }
 
                 let text_edit = if self.multiline {

@@ -1,8 +1,8 @@
 use super::clamp_param;
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Accumulation Swing Index (ASI)
@@ -24,7 +24,7 @@ impl AccumulationSwingIndex {
         Self {
             limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            color: palette::UP, // Teal
             visible: true,
         }
     }

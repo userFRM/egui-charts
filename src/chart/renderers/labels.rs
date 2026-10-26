@@ -2,6 +2,7 @@ use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
+use crate::scales::price_decimals;
 use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
@@ -325,22 +326,18 @@ pub(crate) fn render_time_grid(
     color: Color32,
     style: crate::model::LineStyle,
 ) {
-    for mark in marks {
+    let lines = marks.iter().filter_map(|mark| {
         let index = time_to_idx(mark.time, points);
         let delta = (coords.base_idx as f64 - index) + coords.right_offset;
         let x = (f64::from(context.rect.right())
             - (delta + 0.5) * f64::from(coords.bar_spacing)
             - 1.0) as f32;
-        if x >= context.rect.left() && x <= context.rect.right() {
-            crate::chart::rendering::grid::render_grid_line(
-                context.painter,
-                Pos2::new(x, context.rect.top()),
-                Pos2::new(x, context.rect.bottom()),
-                egui::Stroke::new(0.5, color),
-                style,
-            );
-        }
-    }
+        (x >= context.rect.left() && x <= context.rect.right()).then_some([
+            Pos2::new(x, context.rect.top()),
+            Pos2::new(x, context.rect.bottom()),
+        ])
+    });
+    crate::chart::rendering::grid::render_grid_lines(context.painter, lines, color, style);
 }
 
 /// Paints the time labels of `marks`, placed by the keys of `points` as [`time_axis_marks`]
@@ -433,17 +430,6 @@ pub fn render_time_labels(
     context.painter.set(slot, labels);
 }
 
-/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
-pub(crate) fn price_decimals(price: f64) -> usize {
-    if price.abs() >= 100.0 {
-        2
-    } else if price.abs() >= 1.0 {
-        4
-    } else {
-        6
-    }
-}
-
 #[path = "legend/mod.rs"]
 mod legend;
 pub(crate) use legend::study_controls;
@@ -471,7 +457,7 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = chart(&[100.0], &[110.0]);
-            *chart.config_mut() = theme.apply_to_config(chart.config().clone());
+            *chart.config_mut() = chart.config().clone().with_theme(&theme);
             chart.config_mut().show_symbol_last_val = false;
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
@@ -803,7 +789,7 @@ mod tests {
                         ]
                     })
                     .with_overlay(overlay)
-                    .with_line_cnt(4)
+                    .with_line_count(4)
                     .with_colors(vec![
                         colors[0],
                         colors[1],
@@ -1208,7 +1194,7 @@ mod tests {
                 let ctx = Context::default();
                 apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[200.0]);
-                chart.config = theme.apply_to_config(chart.config.clone());
+                chart.config = chart.config.clone().with_theme(&theme);
                 if let Some(custom) = custom {
                     chart.config.text_color = custom;
                 }

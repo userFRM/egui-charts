@@ -27,7 +27,7 @@
 //!
 //! # Default colour
 //!
-//! Blue (from the design-token `indicators.ema`).
+//! Blue from [`palette::BLUE`](crate::studies::palette::BLUE).
 //!
 //! # Example
 //!
@@ -40,9 +40,9 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Exponential Moving Average indicator.
@@ -69,7 +69,7 @@ impl EMA {
             period: period.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: DESIGN_TOKENS.semantic.indicators.ema, // Blue
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }

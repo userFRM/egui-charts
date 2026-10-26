@@ -177,7 +177,7 @@ impl NotificationPanel {
         } else {
             side_color
         };
-        let font = FontId::proportional(crate::styles::typography::LG);
+        let font = FontId::proportional(ui.active_theme().text.title);
         let mut title_format = egui::text::TextFormat::simple(font.clone(), theme.ui.text);
         title_format.coords.push("wght", 600.0);
         let mut title_job = egui::text::LayoutJob::single_section(
@@ -219,7 +219,7 @@ impl NotificationPanel {
         let title = ui.painter().layout_job(title_job);
         let symbol = ui.painter().layout(
             trade.symbol.clone(),
-            FontId::proportional(crate::styles::typography::LG),
+            FontId::proportional(ui.active_theme().text.title),
             theme.ui.text,
             (content_width - 12.0).max(1.0),
         );
@@ -236,7 +236,7 @@ impl NotificationPanel {
         };
         let price = ui.painter().layout(
             l10n::format_text(ui.ctx(), "at {0}", &[("0", trade.price.to_string())]),
-            FontId::proportional(crate::styles::typography::LG),
+            FontId::proportional(ui.active_theme().text.title),
             theme.ui.text,
             (content_width - price_at.x).max(1.0),
         );
@@ -349,7 +349,7 @@ impl NotificationPanel {
                 let icon_size = DESIGN_TOKENS.sizing.icon_md;
                 ui.add(icon.as_image_tinted(Vec2::splat(icon_size), kind_color));
 
-                ui.add_space(DESIGN_TOKENS.spacing.md);
+                ui.add_space(ui.active_theme().spacing.md);
 
                 // The close button first, so that a long message wraps short of it.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
@@ -379,7 +379,7 @@ impl NotificationPanel {
 
             // Progress bar (if duration > 0)
             if toast.duration > 0.0 {
-                ui.add_space(DESIGN_TOKENS.spacing.sm);
+                ui.add_space(ui.active_theme().spacing.sm);
                 let current_time = current_time_seconds();
                 let fraction = toast.remaining_fraction(current_time);
 

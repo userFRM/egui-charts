@@ -1,9 +1,9 @@
 //! Fixed aggregations of executions, quotes and synchronized depth, never estimates from bars.
 
+use crate::data::{OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
-    Indicator, IndicatorValues, InputKind, InputValue, OrderFlowInput, OrderFlowKind, PlotStyle,
-    PlotType, StudyInput,
+    Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyInput,
 };
 use egui::Color32;
 
@@ -118,7 +118,7 @@ impl Indicator for OrderFlowStudy {
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
     fn line_names(&self) -> Vec<String> {
@@ -144,7 +144,7 @@ impl Indicator for OrderFlowStudy {
                 PlotType::Line
             },
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             visible: true,
         }
     }
