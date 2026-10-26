@@ -160,30 +160,24 @@ impl IndicatorSettingsDialog {
                                         input.value = input.default.clone();
                                         continue;
                                     }
-                                    ui.label(&input.label);
-                                    match (&input.kind, &mut input.value) {
+                                    let label = ui.label(&input.label);
+                                    let response = match (&input.kind, &mut input.value) {
                                         (
                                             InputKind::Length(min, max),
                                             InputValue::Length(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Integer(min, max),
                                             InputValue::Integer(value),
-                                        ) => {
-                                            ui.add(egui::DragValue::new(value).range(*min..=*max));
-                                        }
+                                        ) => ui.add(egui::DragValue::new(value).range(*min..=*max)),
                                         (
                                             InputKind::Number(min, max),
                                             InputValue::Number(value),
-                                        ) => {
-                                            ui.add(
-                                                egui::DragValue::new(value)
-                                                    .speed(0.1)
-                                                    .range(*min..=*max),
-                                            );
-                                        }
+                                        ) => ui.add(
+                                            egui::DragValue::new(value)
+                                                .speed(0.1)
+                                                .range(*min..=*max),
+                                        ),
                                         (InputKind::Choice(choices), InputValue::Choice(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
                                                 .selected_text(
@@ -194,10 +188,11 @@ impl IndicatorSettingsDialog {
                                                     {
                                                         ui.selectable_value(value, index, label);
                                                     }
-                                                });
+                                                })
+                                                .response
                                         }
                                         (InputKind::Toggle, InputValue::Toggle(value)) => {
-                                            ui.checkbox(value, "");
+                                            ui.checkbox(value, "")
                                         }
                                         (InputKind::Source, InputValue::Source(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
@@ -229,19 +224,18 @@ impl IndicatorSettingsDialog {
                                                             source.label(),
                                                         );
                                                     }
-                                                });
+                                                })
+                                                .response
                                         }
                                         (InputKind::Color, InputValue::Color(value)) => {
-                                            ui.color_edit_button_srgba(value);
+                                            ui.color_edit_button_srgba(value)
                                         }
-                                        (InputKind::Symbol, InputValue::Symbol(value)) => {
-                                            ui.add(
-                                                egui::TextEdit::singleline(value)
-                                                    .hint_text("Chart symbol"),
-                                            );
-                                        }
+                                        (InputKind::Symbol, InputValue::Symbol(value)) => ui.add(
+                                            egui::TextEdit::singleline(value)
+                                                .hint_text("Chart symbol"),
+                                        ),
                                         (InputKind::Timeframe, InputValue::Timeframe(value)) => {
-                                            egui::ComboBox::from_id_salt(&input.id)
+                                            let response = egui::ComboBox::from_id_salt(&input.id)
                                                 .selected_text(value.map_or_else(
                                                     || "Chart interval".to_owned(),
                                                     |tf| tf.to_string(),
@@ -270,7 +264,8 @@ impl IndicatorSettingsDialog {
                                                             std::num::NonZeroU64::new(60).unwrap(),
                                                         ));
                                                     }
-                                                });
+                                                })
+                                                .response;
                                             if let Some(Timeframe::Custom(seconds)) = value {
                                                 let mut count = seconds.get();
                                                 if ui
@@ -279,17 +274,18 @@ impl IndicatorSettingsDialog {
                                                             .range(1..=u64::MAX)
                                                             .suffix(" s"),
                                                     )
+                                                    .labelled_by(label.id)
                                                     .changed()
                                                 {
                                                     *seconds =
                                                         std::num::NonZeroU64::new(count).unwrap();
                                                 }
                                             }
+                                            response
                                         }
-                                        _ => {
-                                            ui.label("This input is unavailable.");
-                                        }
-                                    }
+                                        _ => ui.label("This input is unavailable."),
+                                    };
+                                    response.labelled_by(label.id);
                                     ui.end_row();
                                 }
                             });
@@ -309,7 +305,8 @@ impl IndicatorSettingsDialog {
                                             egui::DragValue::new(&mut plot.width)
                                                 .range(0.5..=10.0)
                                                 .suffix(" px"),
-                                        );
+                                        )
+                                        .accessible_name("Line width");
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         egui::ComboBox::from_id_salt("pattern")
@@ -328,7 +325,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{pattern:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Line pattern");
                                         egui::ComboBox::from_id_salt("plot_type")
                                             .selected_text(format!("{:?}", plot.plot_type))
                                             .show_ui(ui, |ui| {
@@ -343,7 +342,9 @@ impl IndicatorSettingsDialog {
                                                         format!("{kind:?}"),
                                                     );
                                                 }
-                                            });
+                                            })
+                                            .response
+                                            .accessible_name("Plot type");
                                     });
                                     ui.separator();
                                 });
@@ -360,7 +361,8 @@ impl IndicatorSettingsDialog {
                                         egui::DragValue::new(precision)
                                             .range(0..=12)
                                             .suffix(" decimals"),
-                                    );
+                                    )
+                                    .accessible_name("Precision");
                                 }
                             });
                         }
@@ -421,16 +423,17 @@ mod tests {
     #[test]
     fn dialog_follows_the_window_when_it_shrinks() {
         for theme in [Theme::light(), Theme::dark()] {
-            for tab in [
-                None,
-                Some(Tab::Inputs),
-                Some(Tab::Style),
-                Some(Tab::Visibility),
+            for (name, tab) in [
+                ("MA Ribbon", None),
+                ("MA Ribbon", Some(Tab::Inputs)),
+                ("MA Ribbon", Some(Tab::Style)),
+                ("MA Ribbon", Some(Tab::Visibility)),
+                ("Vol Profile FR", Some(Tab::Inputs)),
             ] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let study = crate::studies::IndicatorFactory::new()
-                    .create("MA Ribbon")
+                    .create(name)
                     .unwrap();
                 let mut dialog = IndicatorSettingsDialog::default();
                 dialog.open(SeriesId(2), study.as_ref(), Some(Timeframe::Min1));
@@ -477,7 +480,7 @@ mod tests {
                         .unwrap();
                     assert!(
                         screen.contains_rect(shown),
-                        "tab {}: {shown:?} outside {screen:?}",
+                        "{name} tab {}: {shown:?} outside {screen:?}",
                         tab.map(|tab| tab as u8).unwrap_or(3)
                     );
                 }

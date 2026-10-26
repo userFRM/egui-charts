@@ -1,48 +1,8 @@
-//! The example host keeps template and symbol notes documents in application storage. Remote
-//! storage is host-owned.
+//! Study and drawing templates, kept in the demo's storage.
 
 use super::DemoApp;
-use egui_charts::data::Reply;
-use egui_charts::services::{Storage, StoreKind};
 use egui_charts::studies::{InputValue, StudySource};
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate};
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-#[derive(Default)]
-pub(super) struct TemplateStorage(pub Mutex<HashMap<String, String>>);
-
-impl Storage for TemplateStorage {
-    fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
-        let prefix = format!("{kind:?}/");
-        reply.send(Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .keys()
-            .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
-            .collect()));
-    }
-    fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
-        reply.send(Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .get(&format!("{kind:?}/{name}"))
-            .cloned()));
-    }
-    fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(format!("{kind:?}/{name}"), document);
-        reply.send(Ok(()));
-    }
-    fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().remove(&format!("{kind:?}/{name}"));
-        reply.send(Ok(()));
-    }
-}
 
 impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {

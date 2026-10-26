@@ -71,8 +71,8 @@ Each item is marked as complete, partial, or missing.
 - [x] Inverted scale
 - [x] Hierarchical time tick generation with weight system
 - [x] Price mark generation
-- [ ] Price formatters (default, currency, percentage, scientific, volume, custom) defined but not used by axis labels
-- [x] Default time formatter on the time axis (locale, relative, custom defined but not injectable; locale is a stub)
+- [x] Host price and percentage formatters for axis ticks, crosshair labels and price tags (`Chart::set_price_formatter`, `set_percentage_formatter`); per-series formatters and locale number separators not yet
+- [x] Host time formatters for axis marks, crosshair and tooltip labels (`Chart::set_time_formatter`), with month and weekday names in the chart's locale (`set_locale`) and a date pattern (`set_date_format`)
 
 ### Multi-Pane
 - [x] `IndicatorPane` widget for separate-pane indicators
@@ -242,9 +242,9 @@ Note: tools with a fixed point count (parallel channel, pitchforks, triangle, ha
 
 ---
 
-## Technical Indicators (161 registered)
+## Technical Indicators (170 registered)
 
-All 161 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
+With default features, all 170 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
 Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
 
 ### Rendering Limitation
@@ -252,7 +252,7 @@ Studies share line renderers. Overlays also support crossing markers, direction 
 - [ ] MACD, PPO and PVO histograms render as a line instead of bars
 - [ ] Ichimoku cloud renders as 5 separate lines instead of filled cloud regions
 - [ ] Parabolic SAR renders as a connected line instead of individual dots
-- [ ] Volume Profile outputs `IndicatorValue::Multiple` but there is no horizontal bar chart renderer
+- [x] Volume profiles expose price-row distributions through `Indicator::volume_profiles` and draw horizontal histograms with up/down volume, POC and value-area lines
 
 ### Moving Averages
 - [x] SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, SWMA
@@ -307,7 +307,7 @@ Studies share line renderers. Overlays also support crossing markers, direction 
 - [x] OBV, VWAP (session, week, month, quarter, year or host-event anchors, with deviation or percentage bands; dialog-created studies inherit the chart instrument's time zone and session), Anchored VWAP
 - [x] MFI, A/D Line, CMF, Klinger Oscillator
 - [x] Ease of Movement, Net Volume (volume signed by the change from the previous close, first bar blank), Volume ROC, Volume Oscillator
-- [ ] Volume Profile Visible Range, Volume Profile Fixed Range: bin volume over the whole history; bin 0 is plotted on the price scale, so nothing visible draws
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles compute only their selected spans; fixed and anchored times survive prepended history
 - [x] Time Price Opportunity: each session's TPO profile beside its bars, as letters or blocks, with point of control, value area and initial balance, for the visible or the latest session; the chart builds the profiles with the TPO chart type's code and cache
 - [x] VWMA, Balance of Power
 - [x] Volume Price Trend, NVI, PVI
@@ -331,13 +331,14 @@ Studies share line renderers. Overlays also support crossing markers, direction 
 
 ### Support / Resistance
 - [x] Pivot Points Standard: Traditional, Fibonacci, Woodie, Classic, DM and Camarilla levels from the previous day, week, month, quarter or year of trading days, up to R5 and S5
-- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; the last leg follows the current extreme until the next reversal
+- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; public pivots include the moving last extreme
+- [x] Automatic trend line, parallel channel, Fibonacci retracement and extension, and pitchfork studies use those pivots and the existing drawing renderers (`drawings` feature)
 
 ### Price Oscillators
 - [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
 
 ### Factory Coverage
-- [x] `IndicatorFactory` registers all 161 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
+- [x] `IndicatorFactory` registers all 170 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
 - [x] The indicator dialog lists every study its `IndicatorFactory` registers, including a host's own, and creates them through it
 
 ---
@@ -491,7 +492,7 @@ The ui_kit components are generic building blocks:
 
 ### Data Layer
 - [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
-- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account
+- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account, and its fills are drawn on the chart and announced with its rejections
 - [ ] `services::SymbolSearch` and `Signals` are defined, but nothing calls them yet
 - [ ] No in-crate `Datafeed` implementation: the host owns the transport
 
@@ -540,7 +541,7 @@ The ui_kit components are generic building blocks:
 - 19 of 19 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 161 registered indicators with calculation code
+- 170 registered indicators with calculation code
 - UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
 - Reusable ui_kit building blocks
 - Theme system with design tokens and dark, light and high-contrast presets

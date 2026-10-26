@@ -12,64 +12,66 @@ impl Drawing {
     /// Apply common styles to this drawing's paint range. Defaults retain the renderer's
     /// hierarchy; custom fork levels and semantic position colours take precedence.
     pub(super) fn finish_style(&self, painter: &Painter, start: usize, rect: Rect) {
-        if self.line_style != LineStyle::Solid
+        let styled = self.line_style != LineStyle::Solid
             || self.stroke_width != 2.0
             || self.fill_color.is_some()
             || self.font_weight == FontWeight::Bold
             || self.extend_left
-            || self.extend_right
-        {
-            painter.ctx().graphics_mut(|g| {
-                let list = g.entry(painter.layer_id());
-                let mut previous: Option<(ShapeIdx, Pos2, Stroke)> = None;
-                for index in start..list.next_idx().0 {
-                    let mut segment = None;
-                    list.mutate_shape(ShapeIdx(index), |s| {
-                        if matches!(
+            || self.extend_right;
+        painter.ctx().graphics_mut(|g| {
+            let list = g.entry(painter.layer_id());
+            // Segments that continue one another become one path, which the tessellator joins
+            // with half the vertices and a dash pattern runs along without restarting.
+            let mut previous: Option<(ShapeIdx, Pos2, Stroke, Rect)> = None;
+            for index in start..list.next_idx().0 {
+                let mut segment = None;
+                list.mutate_shape(ShapeIdx(index), |s| {
+                    if styled
+                        && matches!(
                             self.tool_type,
                             DrawingToolType::InfoLine
                                 | DrawingToolType::TrendAngle
                                 | DrawingToolType::Arrow
                                 | DrawingToolType::ArrowMarker
-                        ) && let Shape::LineSegment { points, .. } = &mut s.shape
-                            && self.points.get(..2) == Some(points.as_slice())
-                            && let Some((a, b)) = self.trend_line_ends(rect.min.x, rect.max.x)
-                        {
-                            *points = [a, b];
-                        }
-                        if let Shape::LineSegment { points, stroke } = s.shape {
-                            segment = Some((points, stroke));
-                        }
-                    });
-                    if self.line_style != LineStyle::Solid {
-                        if let Some((points, stroke)) = segment {
-                            if let Some((first, end, old_stroke)) = previous
-                                && end == points[0]
-                                && old_stroke == stroke
-                            {
-                                list.mutate_shape(first, |s| match &mut s.shape {
-                                    Shape::LineSegment { points: old, .. } => {
-                                        s.shape =
-                                            Shape::line(vec![old[0], old[1], points[1]], stroke)
-                                    }
-                                    Shape::Path(p) => p.points.push(points[1]),
-                                    _ => {}
-                                });
-                                list.reset_shape(ShapeIdx(index));
-                                previous = Some((first, points[1], stroke));
-                            } else {
-                                previous = Some((ShapeIdx(index), points[1], stroke));
-                            }
-                        } else {
-                            previous = None;
-                        }
+                        )
+                        && let Shape::LineSegment { points, .. } = &mut s.shape
+                        && self.points.get(..2) == Some(points.as_slice())
+                        && let Some((a, b)) = self.trend_line_ends(rect.min.x, rect.max.x)
+                    {
+                        *points = [a, b];
                     }
+                    if let Shape::LineSegment { points, stroke } = s.shape {
+                        segment = Some((points, stroke, s.clip_rect));
+                    }
+                });
+                if let Some((points, stroke, clip)) = segment {
+                    if let Some((first, end, old_stroke, old_clip)) = previous
+                        && end == points[0]
+                        && old_stroke == stroke
+                        && old_clip == clip
+                    {
+                        list.mutate_shape(first, |s| match &mut s.shape {
+                            Shape::LineSegment { points: old, .. } => {
+                                s.shape = Shape::line(vec![old[0], old[1], points[1]], stroke)
+                            }
+                            Shape::Path(p) => p.points.push(points[1]),
+                            _ => {}
+                        });
+                        list.reset_shape(ShapeIdx(index));
+                        previous = Some((first, points[1], stroke, clip));
+                    } else {
+                        previous = Some((ShapeIdx(index), points[1], stroke, clip));
+                    }
+                } else {
+                    previous = None;
                 }
+            }
+            if styled {
                 for index in start..list.next_idx().0 {
                     list.mutate_shape(ShapeIdx(index), |s| self.style_shape(&mut s.shape));
                 }
-            });
-        }
+            }
+        });
         self.render_end_markers(painter, rect);
         let pixels_per_point = painter.pixels_per_point();
         painter.ctx().graphics_mut(|g| {
@@ -346,9 +348,7 @@ fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32) {
             }
         }
         Shape::Circle(c) if !c.stroke.is_empty() || c.radius * pixels_per_point > 6.0 => {
-            let radius = c.radius * pixels_per_point;
-            let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
-            let sides = ((std::f32::consts::PI / step).ceil() as usize).clamp(8, 128);
+            let sides = circle_sides(c.radius * pixels_per_point);
             let points = (0..sides)
                 .map(|i| {
                     let angle = i as f32 * std::f32::consts::TAU / sides as f32;
@@ -361,6 +361,13 @@ fn fewer_circle_sides(shape: &mut Shape, pixels_per_point: f32) {
         }
         _ => {}
     }
+}
+
+/// The fewest sides of a polygon whose sides stay within a quarter of a physical pixel of a
+/// circle of `radius` physical pixels, from 8 to 128.
+pub(super) fn circle_sides(radius: f32) -> usize {
+    let step = (1.0 - 0.25 / radius).clamp(-1.0, 1.0).acos();
+    ((std::f32::consts::PI / step).ceil() as usize).clamp(8, 128)
 }
 
 #[cfg(test)]

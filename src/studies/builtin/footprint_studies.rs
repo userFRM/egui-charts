@@ -224,15 +224,13 @@ mod tests {
         ); // 5/15 at 101 and 102.
         // Unknown volume does not make a two-sided auction; one price is only marked once.
         for (sides, unfinished) in [
-            ([TradeSide::Buy, TradeSide::Sell], 1),
-            ([TradeSide::Buy, TradeSide::Buy], 0),
-            ([TradeSide::Sell, TradeSide::Unknown], 0),
+            ([Some(TradeSide::Buy), Some(TradeSide::Sell)], 1),
+            ([Some(TradeSide::Buy), Some(TradeSide::Buy)], 0),
+            ([Some(TradeSide::Sell), None], 0),
         ] {
             let mut extreme = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
             for side in sides {
-                extreme
-                    .push(&Tick::new(start, 100.0, 1.0, Some(side)))
-                    .unwrap();
+                extreme.push(&Tick::new(start, 100.0, 1.0, side)).unwrap();
             }
             assert_eq!(
                 footprint_studies(&extreme, 3.0, 3, 0.3, 0.0)

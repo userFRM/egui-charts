@@ -57,6 +57,24 @@ pub struct Drawing {
     /// or merge; hosts restoring studies must retain or remap their ids. Older files use main.
     #[serde(default)]
     pub pane: Option<usize>,
+    /// Whether pointer and programmatic selection can select this drawing.
+    #[serde(default = "enabled")]
+    pub selectable: bool,
+    /// Whether chart saves and persistence notifications include this drawing.
+    #[serde(default = "enabled")]
+    pub saveable: bool,
+    /// Whether host object lists should include this drawing. Rendering is independent.
+    #[serde(default = "enabled")]
+    pub listed: bool,
+    /// Host-defined group identity, retained through saving and undo.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Stable id of a host-registered tool; `None` uses the built-in renderer.
+    #[serde(default)]
+    pub custom_tool: Option<String>,
+    /// Host-defined settings passed to the registered renderer and saved without interpretation.
+    #[serde(default)]
+    pub custom_settings: serde_json::Value,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -132,6 +150,10 @@ pub struct Drawing {
     pub z_order: i32,
 }
 
+fn enabled() -> bool {
+    true
+}
+
 impl Drawing {
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
@@ -141,7 +163,13 @@ impl Drawing {
             created_at: None,
             notes: None,
             label: None,
+            selectable: true,
+            saveable: true,
+            listed: true,
+            group: None,
             tool_type,
+            custom_tool: None,
+            custom_settings: serde_json::Value::Null,
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
@@ -187,6 +215,14 @@ impl Drawing {
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
+    }
+
+    /// Creates a host-defined drawing. The manager looks up `tool` in its registry; the
+    /// built-in polyline identity supplies anchor handles and multi-click input only.
+    pub fn custom(tool: impl Into<String>) -> Self {
+        let mut drawing = Self::new(0, DrawingToolType::Polyline);
+        drawing.custom_tool = Some(tool.into());
+        drawing
     }
 
     /// Create a new drawing with a specific color
@@ -267,16 +303,9 @@ impl Drawing {
                 FibonacciConfig::default()
             }
         });
-        let offset = if extension {
-            self.chart_points
-                .get(2)
-                .map_or(0.0, |origin| origin.price - start.price)
-        } else {
-            0.0
-        };
+        let origin = self.chart_points.get(2).unwrap_or(start).price;
         let prices = config
-            .level_prices(start.price, end.price, extension)
-            .map(|price| price + offset)
+            .level_prices(start.price, end.price, extension, origin)
             .collect();
         Some((config, prices))
     }

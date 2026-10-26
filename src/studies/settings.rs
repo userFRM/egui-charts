@@ -383,6 +383,10 @@ impl Indicator for ConfiguredStudy {
             false
         }
     }
+    #[cfg(feature = "drawings")]
+    fn drawings(&self) -> &[crate::drawings::Drawing] {
+        self.study.drawings()
+    }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }
@@ -523,6 +527,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
+    }
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+        self.study.volume_profiles(visible)
     }
     fn zones(&self) -> &[super::StudyZone] {
         self.study.zones()

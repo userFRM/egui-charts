@@ -44,7 +44,7 @@ pub struct Button<'a> {
     size: ButtonSize,
     tooltip: Option<String>,
     enabled: bool,
-    selected: bool,
+    selected: Option<bool>,
     icon_scale: Option<f32>,
     text_color: Option<Color32>,
 }
@@ -59,7 +59,7 @@ impl<'a> Button<'a> {
             size: ButtonSize::MD,
             tooltip: None,
             enabled: true,
-            selected: false,
+            selected: None,
             icon_scale: None,
             text_color: None,
         }
@@ -74,7 +74,7 @@ impl<'a> Button<'a> {
             size: ButtonSize::MD,
             tooltip: None,
             enabled: true,
-            selected: false,
+            selected: None,
             icon_scale: None,
             text_color: None,
         }
@@ -89,7 +89,7 @@ impl<'a> Button<'a> {
             size: ButtonSize::MD,
             tooltip: None,
             enabled: true,
-            selected: false,
+            selected: None,
             icon_scale: None,
             text_color: None,
         }
@@ -182,7 +182,7 @@ impl<'a> Button<'a> {
     /// Set whether the button appears selected/active
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
+        self.selected = Some(selected);
         self
     }
 
@@ -240,7 +240,7 @@ impl<'a> Widget for Button<'a> {
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
             let pressed = response.is_pointer_button_down_on();
-            let variant = if self.selected {
+            let variant = if self.selected == Some(true) {
                 ButtonVariant::Primary
             } else {
                 self.variant

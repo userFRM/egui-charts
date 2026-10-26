@@ -22,6 +22,10 @@ impl DrawingTemplate {
         settings.level_ys.clear();
         settings.screen_anchor = None;
         settings.pane = None;
+        settings.group = None;
+        settings.selectable = true;
+        settings.saveable = true;
+        settings.listed = true;
         settings.completed = false;
         Self { settings }
     }
@@ -29,7 +33,9 @@ impl DrawingTemplate {
     /// Apply properties without moving or replacing the selected drawing. Hosts wrap this edit
     /// in their drawing manager's `edit_drawing` to retain undo and persistence notifications.
     pub fn apply_to(&self, drawing: &mut crate::drawings::Drawing) -> Result<(), &'static str> {
-        if self.settings.tool_type != drawing.tool_type {
+        if self.settings.tool_type != drawing.tool_type
+            || self.settings.custom_tool != drawing.custom_tool
+        {
             return Err("Select a drawing of the template's type");
         }
         if !self.settings.stroke_width.is_finite()
@@ -51,6 +57,10 @@ impl DrawingTemplate {
             completed: drawing.completed,
             screen_anchor: drawing.screen_anchor,
             pane: drawing.pane,
+            group: drawing.group.clone(),
+            selectable: drawing.selectable,
+            saveable: drawing.saveable,
+            listed: drawing.listed,
             z_order: drawing.z_order,
             ..self.settings.clone()
         };

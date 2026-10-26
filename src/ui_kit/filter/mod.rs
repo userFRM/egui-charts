@@ -170,7 +170,8 @@ fn search_field(
                 })
                 .ui(ui)
         })
-        .inner;
+        .inner
+        .accessible_name(placeholder);
 
     let icon_rect = |center_x: f32| {
         Rect::from_center_size(

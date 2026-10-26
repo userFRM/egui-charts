@@ -18,6 +18,7 @@
 
 mod chart;
 mod crosshair;
+mod drawing_tool;
 mod interaction;
 mod keyboard;
 mod kinetic;
@@ -29,6 +30,7 @@ pub use chart::{
     SessionBreakStyle, SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
     HandleScrollOptions, TrackingModeExitMode, TrackingModeOptions,
@@ -45,7 +47,7 @@ pub use crate::scales::TimezoneMode;
 /// Bundles all behavioural and interaction configuration into a single struct
 /// that can be passed to the chart widget.  Each field corresponds to a
 /// focused configuration sub-module.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartOptions {
     /// Time scale (horizontal) options
     pub time_scale: TimeScaleOptions,
@@ -75,4 +77,16 @@ pub struct ChartOptions {
     /// pane, in the priority a click selects them.
     /// Default: false
     pub hovered_series_on_top: bool,
+}
+
+/// Font weight shared by chart watermarks and drawing annotations.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FontWeight {
+    /// Regular weight.
+    #[default]
+    Normal,
+    /// Bold weight.
+    Bold,
 }

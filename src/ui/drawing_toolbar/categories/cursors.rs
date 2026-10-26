@@ -167,7 +167,12 @@ impl ToolCategory for CursorsCategory {
                 foreground,
             );
             response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, cursor.name())
+                egui::WidgetInfo::selected(
+                    egui::Role::RadioButton,
+                    response.enabled(),
+                    active,
+                    cursor.name(),
+                )
             });
             if response.has_focus() {
                 ui.painter().rect_stroke(
@@ -226,7 +231,12 @@ impl ToolCategory for CursorsCategory {
             theme.ui.panel_bg,
         );
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Switch, true, state.values_tooltip, values_label)
+            egui::WidgetInfo::selected(
+                egui::Role::Switch,
+                response.enabled(),
+                state.values_tooltip,
+                values_label,
+            )
         });
         if response.has_focus() {
             ui.painter().rect_stroke(

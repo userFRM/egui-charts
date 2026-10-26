@@ -282,6 +282,7 @@ pub struct IndicatorPane {
     pub(super) bar_index: Option<usize>,
     pub(super) measured_axis_width: f32,
     pub(super) price_map: Option<PriceMap>,
+    pub(super) price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     pub(super) overlay: bool,
     pub(super) legend_offset: f32,
     pub(super) pane_controls: bool,
@@ -296,6 +297,7 @@ impl IndicatorPane {
             bar_index: None,
             measured_axis_width: 0.0,
             price_map: None,
+            price_formatter: None,
             overlay: false,
             legend_offset: 0.0,
             pane_controls: false,
@@ -547,6 +549,13 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::GraphicsObject,
+                response.enabled(),
+                format!("{} pane", indicator.name()),
+            )
+        });
 
         if !ui.is_rect_visible(rect) {
             return None;
@@ -738,7 +747,14 @@ impl IndicatorPane {
                         rect.right()
                     },
                     None,
-                    Some(indicator.format_value(mapping.price.y_to_price(pos.y))),
+                    Some(match self.price_formatter.as_deref() {
+                        Some(formatter) => mapping.price.transform().label(
+                            mapping.price.y_to_scale(pos.y),
+                            indicator.precision().unwrap_or(2),
+                            Some(formatter),
+                        ),
+                        None => indicator.format_value(mapping.price.y_to_price(pos.y)),
+                    }),
                 )
             });
             // Draw y-axis labels
@@ -845,6 +861,11 @@ impl IndicatorPane {
             max_val = max_val.max(candle.bar.high);
         }
 
+        for plot in indicator.volume_profiles(visible_range.clone()) {
+            min_val = min_val.min(plot.profile.low());
+            max_val = max_val.max(plot.profile.high());
+        }
+
         for zone in indicator.zones().iter().filter(|zone| {
             zone.bars.end > visible_range.start
                 && zone.bars.start < visible_range.end
@@ -852,6 +873,12 @@ impl IndicatorPane {
         }) {
             min_val = min_val.min(zone.bottom);
             max_val = max_val.max(zone.top);
+        }
+
+        #[cfg(feature = "drawings")]
+        for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
+            min_val = min_val.min(price);
+            max_val = max_val.max(price);
         }
 
         if min_val != f64::MAX
@@ -1243,14 +1270,19 @@ impl IndicatorPane {
                 super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
             } else {
                 crate::chart::rendering::axes::render_study_tags(
-                    painter, chart_rect, &map, indicator, axis_edge, &mut tags,
+                    painter, chart_rect, &map, indicator, axis_edge, &mut tags, None,
                 );
             }
         }
         let mut width = if indicator.is_volume() {
             0.0
         } else {
-            crate::chart::rendering::axes::price_axis_width(painter, &map, &[])
+            crate::chart::rendering::axes::price_axis_width(
+                painter,
+                &map,
+                &[],
+                self.price_formatter.as_deref(),
+            )
         };
         for tag in tags.iter().flatten() {
             width = width.max(tag.width() + 5.0 + 8.0);
@@ -1265,10 +1297,14 @@ impl IndicatorPane {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
 
-        for mark in map.marks() {
+        for mark in crate::chart::renderers::price_marks(&map, self.price_formatter.as_deref()) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = indicator.format_value(mark.price);
+                let label = if self.price_formatter.is_some() {
+                    mark.label
+                } else {
+                    indicator.format_value(mark.price)
+                };
                 let galley = painter.layout_no_wrap(
                     label,
                     crate::chart::rendering::axes::axis_font(painter.ctx()),

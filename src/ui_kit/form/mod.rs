@@ -65,15 +65,17 @@ impl<'a> FormRow<'a> {
         ui.spacing_mut().item_spacing.y = DESIGN_TOKENS.spacing.md;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
-            ui.allocate_ui_with_layout(
+            let label = ui.allocate_ui_with_layout(
                 vec2(self.label_width, ui.spacing().interact_size.y),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(self.label_width);
-                    ui.label(self.label);
+                    ui.label(self.label)
                 },
             );
-            ui.with_layout(Layout::left_to_right(Align::Center), add_widget);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.label_inputs_by(label.inner.id, add_widget);
+            });
         });
         if let Some(desc) = self.description {
             ui.label(

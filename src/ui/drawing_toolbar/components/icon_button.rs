@@ -56,6 +56,8 @@ pub fn draw_icon_btn(
 
     render_svg_at_rect_themed(ui, icon, rect, response.hovered(), is_active);
 
+    response
+        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
     response.on_hover_text(tooltip)
 }
 
@@ -109,8 +111,6 @@ pub fn draw_icon_button_padded(
     icon_size: f32,
     padding: f32,
 ) -> Response {
-    let left_padding = padding;
-
     // Full rect for allocation
     let size = Vec2::splat(icon_size + padding * 2.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -127,25 +127,16 @@ pub fn draw_icon_button_padded(
         Color32::TRANSPARENT // Let parent Frame's background show through
     };
 
-    // Left padding is transparent - parent Frame provides background
-    let _left_padding_rect =
-        egui::Rect::from_min_size(rect.min, Vec2::new(left_padding, rect.height()));
-
     // Draw icon button - SQUARE, centered in button
     let icon_button_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(icon_size));
     ui.painter()
         .rect_filled(icon_button_rect, DESIGN_TOKENS.rounding.button, bg_color);
 
-    // Icon perfectly centered in full width
-    let icon_center_x = rect.min.x + rect.width() / 2.0;
-    let icon_rect = egui::Rect::from_center_size(
-        egui::Pos2::new(icon_center_x, rect.center().y),
-        Vec2::splat(icon_size),
-    );
-
     let is_hovered = response.hovered() || response.is_pointer_button_down_on();
-    render_svg_at_rect_themed(ui, icon, icon_rect, is_hovered, is_active);
+    render_svg_at_rect_themed(ui, icon, icon_button_rect, is_hovered, is_active);
 
+    response
+        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
     response.on_hover_text(tooltip)
 }
 
@@ -193,7 +184,9 @@ fn draw_rail_button(
         Vec2::new(tokens.button_width, tokens.button_height),
         Sense::click(),
     );
-    response.widget_info(|| WidgetInfo::selected(Role::Button, true, is_selected, tooltip));
+    response.widget_info(|| {
+        WidgetInfo::selected(Role::Button, response.enabled(), is_selected, tooltip)
+    });
 
     if ui.is_rect_visible(rect) {
         let theme = ui.active_theme();

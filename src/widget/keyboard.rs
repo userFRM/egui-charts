@@ -387,8 +387,11 @@ impl super::Chart {
             }
             A::ToggleGrid => self.config.show_grid = !self.config.show_grid,
             A::ToggleVolume => self.config.show_volume = !self.config.show_volume,
+            #[cfg(feature = "drawings")]
             A::DrawingTool(tool) => self.drawings.set_active_tool(Some(tool)),
+            #[cfg(feature = "drawings")]
             A::ToggleDrawings => self.drawings.toggle_visibility_all(),
+            #[cfg(feature = "drawings")]
             A::CompleteDrawing => {
                 if self.drawings.active_tool.is_some_and(|tool| {
                     tool.interaction_mode() == crate::drawings::DrawingInteractionMode::MultiPoint
@@ -398,6 +401,7 @@ impl super::Chart {
                 }
             }
             // Without a selected drawing, the key removes the selected study.
+            #[cfg(feature = "drawings")]
             A::DeleteSelectedDrawing => match self.selection.selected_id() {
                 Some(super::ChartElementId::Indicator(id))
                     if self.drawings.selected_ids().next().is_none() =>
@@ -406,12 +410,21 @@ impl super::Chart {
                 }
                 _ => self.drawings.delete_selected(),
             },
+            #[cfg(feature = "drawings")]
             A::Cancel => {
                 self.drawings.cancel_curr_drawing();
                 self.drawings.deselect();
                 self.drawings.set_active_tool(None);
                 self.drawings.set_eraser_mode(false);
             }
+            #[cfg(not(feature = "drawings"))]
+            A::DeleteSelectedDrawing => {
+                if let Some(super::ChartElementId::Indicator(id)) = self.selection.selected_id() {
+                    self.remove_series(id);
+                }
+            }
+            #[cfg(not(feature = "drawings"))]
+            A::DrawingTool(_) | A::ToggleDrawings | A::CompleteDrawing | A::Cancel => {}
             _ => self.keyboard.requests.push(ShortcutRequest::Action(action)),
         }
     }
@@ -662,6 +675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn typed_entry_keeps_following_edit_keys() {
         let ctx = Context::default();
         let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);

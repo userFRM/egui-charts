@@ -52,7 +52,7 @@ pub use interaction_mode::DrawingInteractionMode;
 /// case-insensitive matching, including common abbreviations:
 ///
 /// ```
-/// # use egui_charts::drawings::DrawingToolType;
+/// # use egui_charts::config::DrawingToolType;
 /// let tool: DrawingToolType = "fib".parse().unwrap();
 /// assert_eq!(tool, DrawingToolType::FibonacciRetracement);
 /// ```
