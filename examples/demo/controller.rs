@@ -5638,6 +5638,9 @@ mod tests {
                         assert_eq!(app.replay.is_some(), replay);
                     }
                     if !replay {
+                        // Exact UTC-day bounds need continuous data, including weekends.
+                        app.timeframe_toolbar.set_session(SessionType::Full24x7);
+                        app.apply_session();
                         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
                         app.extra_charts[0].chart.set_feed_paused(true);
                         app.layout.sync.sync_time_axis = false;
