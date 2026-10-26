@@ -2019,6 +2019,7 @@ impl Chart {
                     .and_then(|instrument| instrument.volume_decimals),
                 if has_currency { 24.0 } else { 0.0 },
                 price_formatter.as_deref(),
+                self.volume_formatter.as_deref(),
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
