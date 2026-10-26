@@ -7,7 +7,7 @@
 //! |------|---------|
 //! | `SingleClick` | One click creates a complete drawing (e.g., marker) |
 //! | `ClickClick` | Two clicks or a drag create the drawing (e.g., trend line) |
-//! | `DragToDraw` | Click-drag-release creates the drawing (e.g., rectangle) |
+//! | `DragToDraw` | Two clicks or a drag create the drawing (e.g., rectangle) |
 //! | `ContinuousDraw` | Freehand drawing while dragging (e.g., brush, highlighter) |
 //! | `MultiPoint` | Multiple clicks, double-click or Enter to complete (e.g., path) |
 //!
