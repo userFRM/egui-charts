@@ -15,18 +15,24 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
 impl Chart {
-    /// Formats a timestamp with the chart's zone, clock visibility and bar duration.
+    /// Formats a timestamp with the chart's zone, clock visibility and bar duration, or a key
+    /// as the crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
     /// Hosts can use this for data windows and other readouts beside the chart.
     pub fn format_time(&self, time: chrono::DateTime<chrono::Utc>) -> String {
-        self.build_time_formatter()
-            .format_crosshair(time, self.time_label_seconds())
+        let bar_seconds = self.time_label_seconds();
+        match &self.horizontal_scale {
+            Some(scale) => scale.format_crosshair(time, bar_seconds),
+            None => self
+                .build_time_formatter()
+                .format_crosshair(time, bar_seconds),
+        }
     }
 
     fn current_bar_countdown(&self) -> Option<String> {
         if !self.config.show_countdown || !self.config.show_symbol_last_val {
             return None;
         }
-        let last = self.state.data().bars.last()?;
+        let last = crate::model::last_with_value(&self.state.data().bars)?;
         let timeframe = self.timeframe?;
         if matches!(timeframe, crate::model::Timeframe::Ticks(_)) {
             return None;
@@ -118,13 +124,94 @@ impl Chart {
         }
     }
 
-    fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
-        TimeFormatterBuilder::new()
+    pub(crate) fn build_time_formatter(&self) -> Box<dyn crate::scales::TimeFormatter> {
+        let mut builder = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(self.chart_options.time_scale.seconds_visible)
             .with_time_visible(self.chart_options.time_scale.time_visible)
-            .with_timezone(self.display_timezone())
-            .build()
+            .with_timezone(self.display_timezone());
+        if let Some(locale) = &self.locale {
+            builder = builder.with_locale(locale.clone());
+        }
+        if let Some(date_format) = &self.date_format {
+            builder = builder.with_date_format(date_format.clone());
+        }
+        if let Some(formatter) = &self.time_formatter {
+            builder = builder.with_formatter(formatter.clone_box());
+        }
+        builder.build()
+    }
+
+    /// Names months and weekdays in time axis, crosshair and tooltip labels in `locale`'s
+    /// language, such as `"de-DE"` (see [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
+    /// `None` restores English names.
+    ///
+    /// The names need the `locales` cargo feature, on by default; without it they stay English.
+    pub fn set_locale(&mut self, locale: Option<String>) {
+        self.locale = locale;
+    }
+
+    /// Writes crosshair and tooltip dates with a `strftime` pattern, such as `"%d.%m.%Y"`, followed
+    /// by the clock for intraday bars. `None` restores the built-in dates, which an invalid pattern
+    /// also falls back to.
+    pub fn set_date_format(&mut self, date_format: Option<String>) {
+        self.date_format = date_format;
+    }
+
+    /// Formats time axis marks with [`TimeFormatter::format`], which receives the
+    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip and
+    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    ///
+    /// The formatter replaces the built-in one, the locale and the date format. It receives
+    /// wall-clock times in the chart's time zone, and the time scale's
+    /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
+    /// `None` restores the built-in formatter.
+    ///
+    /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
+    /// [`TimeFormatter::format_crosshair`]: crate::scales::TimeFormatter::format_crosshair
+    pub fn set_time_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::TimeFormatter>>,
+    ) {
+        self.time_formatter = formatter;
+    }
+
+    /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
+    /// price tags with [`PriceFormatter::format`], and the axis ticks with
+    /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
+    /// instrument's decimals. It applies to every price scale; studies keep their own formats.
+    /// `None` restores the built-in labels.
+    ///
+    /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
+    /// [`PriceFormatter::format_tick`]: crate::scales::PriceFormatter::format_tick
+    pub fn set_price_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        self.price_formatter = formatter;
+    }
+
+    /// Formats price scale labels in the percentage and indexed-to-100 modes, as
+    /// [`set_price_formatter`](Self::set_price_formatter) does in the others. The formatter
+    /// receives the percentage or index value the axis shows. `None` restores signed
+    /// percentages and index values.
+    pub fn set_percentage_formatter(
+        &mut self,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        self.percentage_formatter = formatter;
+    }
+
+    /// The host formatter for the labels of a price scale in `mode`.
+    pub(super) fn price_label_formatter(
+        &self,
+        mode: crate::scales::PriceScaleMode,
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        match mode {
+            crate::scales::PriceScaleMode::Percentage
+            | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
+            _ => self.price_formatter.clone(),
+        }
     }
 
     /// Overrides automatic session breaks with host logic. `None` restores metadata-based breaks.
@@ -301,14 +388,18 @@ impl Chart {
         let _theme_scope = theme
             .as_ref()
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
-        ui.scope(|ui| {
+        let size = self.size;
+        let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
                 crate::theme::apply_to_style(ui.style_mut(), theme);
             }
             self.show_themed_content(ui, footprint)
-        })
-        .inner
+        };
+        // Keep the same UI scope when an override is cleared, preserving focus and widget state.
+        match size {
+            Some(size) => ui.allocate_ui(size, show).inner,
+            None => ui.scope(show).inner,
+        }
     }
 
     fn show_themed_content(
@@ -321,6 +412,8 @@ impl Chart {
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
+        #[cfg(feature = "drawings")]
+        self.sync_stored_drawings(ui.ctx());
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -422,6 +515,9 @@ impl Chart {
             ui.ctx().request_discard("Chart measured its axis labels");
         }
         self.record_host_events(ui);
+        // Within the frame of the edit, in case it is the last.
+        #[cfg(feature = "drawings")]
+        self.save_stored_drawings();
         response
     }
 
@@ -437,9 +533,15 @@ impl Chart {
         use crate::model::LastPriceAnimation;
         let styles = &self.chart_type_params.styles;
         let animation = styles.last_price_animation;
-        let Some(last) = self.state.shown().last() else {
+        let Some(index) = self
+            .state
+            .shown()
+            .iter()
+            .rposition(|bar| !bar.is_whitespace())
+        else {
             return;
         };
+        let last = &self.state.shown()[index];
         let price = self
             .config
             .price_source
@@ -451,6 +553,7 @@ impl Chart {
             &coords.price,
             price_rect,
             price,
+            last,
         )
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
@@ -472,10 +575,7 @@ impl Chart {
             LastPriceAnimation::Continuous => (now / period).fract(),
             _ => (now - started) / period,
         };
-        let point = Pos2::new(
-            coords.idx_to_x(self.state.shown().len() - 1),
-            coords.price.price_to_y(price),
-        );
+        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
         if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
             rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
             ui.ctx().request_repaint();
@@ -503,8 +603,10 @@ impl Chart {
         if visible_data.len() < 2 {
             return Timeframe::default();
         }
+        // An even sample of the gaps keeps a zoomed-out frame from sorting all of them.
         let mut gaps_ms: Vec<i64> = visible_data
             .windows(2)
+            .step_by((visible_data.len() / 1024).max(1))
             .map(|w| (w[1].time - w[0].time).num_milliseconds())
             .filter(|&g| g > 0)
             .collect();
@@ -687,8 +789,19 @@ impl Chart {
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
+        #[cfg(feature = "drawings")]
+        let eraser_mode = self.drawings.eraser_mode;
+        #[cfg(not(feature = "drawings"))]
+        let eraser_mode = false;
+        #[cfg(feature = "drawings")]
+        let drawing_tool_active = self.drawings.active_tool.is_some();
+        #[cfg(not(feature = "drawings"))]
+        let drawing_tool_active = false;
         let time_based = !self.chart_type.is_time_independent();
         let show_volume = self.shows_volume();
+        #[cfg(not(feature = "drawings"))]
+        let is_drawing_interaction = false;
+        #[cfg(feature = "drawings")]
         let is_drawing_interaction = self.drawings.active_tool.is_some()
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -873,6 +986,8 @@ impl Chart {
             .price_scale()
             .map(transform, price_rect.min.y, price_rect.max.y);
 
+        let price_formatter = self.price_label_formatter(price_map.transform().mode);
+
         // Store the final price mapping and rects for external use (selection dots, hit testing)
         self.last_price_map = price_map;
         self.last_rendered_price_rect = price_rect;
@@ -895,8 +1010,32 @@ impl Chart {
             return shown;
         }
 
+        // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
+        let factor = super::merge::factor(
+            self.state.time_scale().bar_spacing(),
+            ui.ctx().pixels_per_point(),
+        )
+        .min(if time_based { usize::MAX } else { 1 });
+        self.merge_groups.update(
+            self.state.shown(),
+            self.state.revision(),
+            factor,
+            self.config.price_source,
+        );
+        let groups = (factor > 1).then(|| {
+            let covering = self
+                .merge_groups
+                .covering(start_idx..start_idx + visible_data.len());
+            (covering.start, &self.merge_groups.groups[covering])
+        });
+        // The first bar of each group, at the group's position, for the time axis and sessions.
+        let time_bars: Option<Vec<_>> =
+            groups.map(|(_, groups)| groups.iter().map(|group| group.bar.clone()).collect());
+
         // Largest visible volume: the volume pane and volume candles scale by it
-        let max_volume = visible_data
+        let max_volume = time_bars
+            .as_deref()
+            .unwrap_or(visible_data)
             .iter()
             .map(|c| c.volume)
             .filter(|v| v.is_finite())
@@ -926,6 +1065,13 @@ impl Chart {
             self.state.time_scale().right_offset(),
             price_map,
         );
+        let (time_data, time_coords) = match (&time_bars, groups) {
+            (Some(bars), Some((start, _))) => (
+                bars.as_slice(),
+                super::merge::group_mapping(&coords, factor, start),
+            ),
+            _ => (visible_data, coords),
+        };
         let colors = StyleColors {
             bullish: self.config.bullish_color,
             bearish: self.config.bearish_color,
@@ -938,7 +1084,23 @@ impl Chart {
         };
 
         let timezone = self.display_timezone();
-        let formatter = self.build_time_formatter();
+        let time_scale = self.build_time_formatter();
+        let host_scale = self.horizontal_scale.clone();
+        let scale: &dyn crate::scales::HorizontalScale =
+            host_scale.as_deref().unwrap_or(&time_scale);
+        let time_grid = time_based && self.config.show_grid && self.config.show_vertical_grid;
+        // The grid and the labels share one set of marks and the merged bars' mapping.
+        let (time_marks, time_points) = if time_grid || self.config.show_time_labels {
+            renderers::time_axis_marks(
+                &RenderContext::new(&painter, chart_rect),
+                time_data,
+                &time_coords,
+                scale,
+                &self.chart_options.time_scale,
+            )
+        } else {
+            Default::default()
+        };
 
         if self.config.show_grid && self.config.show_vertical_grid {
             let style = self
@@ -948,10 +1110,9 @@ impl Chart {
             if time_based {
                 renderers::render_time_grid(
                     &RenderContext::new(&painter, chart_rect),
-                    visible_data,
-                    &coords,
-                    formatter.as_ref(),
-                    &self.chart_options.time_scale,
+                    &time_marks,
+                    &time_points,
+                    &time_coords,
                     self.config
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
@@ -979,22 +1140,36 @@ impl Chart {
         );
         let session_painter = painter.with_clip_rect(price_rect);
         let session_ctx = RenderContext::new(&session_painter, price_rect);
-        if self.config.show_session_breaks {
+        // Sessions and extended hours are periods of time, absent from other horizontal scales.
+        if self.config.show_session_breaks && host_scale.is_none() {
             let provider = self
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
             let background =
                 renderers::SessionBackgroundRenderer::from_background(self.config.background_color);
-            background.render(&session_ctx, visible_data, provider, &coords, start_idx);
+            background.render(
+                &session_ctx,
+                time_data,
+                provider,
+                &time_coords,
+                time_coords.start_idx,
+            );
             renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
                 line_color: self.config.session_break_color,
                 line_width: 1.0,
                 style: self.config.session_break_style,
             })
-            .render(&session_ctx, visible_data, provider, &coords, start_idx);
+            .render(
+                &session_ctx,
+                time_data,
+                provider,
+                &time_coords,
+                time_coords.start_idx,
+            );
         }
         if time_based
+            && host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
             && self.config.show_extended_hours
         {
@@ -1005,10 +1180,10 @@ impl Chart {
             };
             renderers::render_extended_hours(
                 &session_ctx,
-                visible_data,
+                time_data,
                 &exchange_session,
-                &coords,
-                start_idx,
+                &time_coords,
+                time_coords.start_idx,
                 color,
             );
         }
@@ -1064,6 +1239,46 @@ impl Chart {
             rendering::CoordMapping::new(chart_rect.min.x),
             self.config.price_source,
         );
+        // Draw one merged bar, or a column's line points, for each group.
+        let merged = super::merge::line_style(self.chart_type)
+            .filter(|_| factor > 1)
+            .map(|line| {
+                let merge = |line| {
+                    super::merge::Merged::new(
+                        self.state.shown(),
+                        &self.merge_groups,
+                        start_idx..start_idx + visible_data.len(),
+                        line,
+                        self.config.price_source,
+                    )
+                };
+                // Volume columns merge as bars beneath a merged line.
+                let volume = (line && render_params.show_volume()).then(|| merge(false));
+                (merge(line), volume)
+            });
+        let merged_x = |merged: &super::merge::Merged, index: usize, min_x: f32| {
+            // Past the last merged bar, as a renderer measuring its pitch asks for.
+            let past = |last: f32| last + (index + 1 - merged.index.len()) as f32 * factor as f32;
+            let index = merged
+                .index
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| merged.index.last().map_or(0.0, |&last| past(last)));
+            self.state
+                .time_scale()
+                .idx_to_coord_precise(index, min_x, chart_rect_width)
+        };
+        let merged_params = rendering::ChartTypeParams::new(
+            rendering::BarDimensions::new(bar_width * factor as f32, self.config.wick_width),
+            rendering::VolumeSettings::new(
+                render_params.show_volume() && merged.as_ref().is_some_and(|m| m.1.is_none()),
+                max_volume,
+            ),
+            &self.chart_type_params,
+            rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
+            rendering::CoordMapping::new(chart_rect.min.x),
+            self.config.price_source,
+        );
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
         let studies = if self.chart_type.is_time_independent() {
@@ -1081,7 +1296,12 @@ impl Chart {
                         .iter()
                         .find(|study| study.is_volume() && study.is_overlay() && study.is_visible())
                         .map_or(max_volume.max(1.0), |study| {
-                            super::volume::range(study.as_ref(), &(start_idx..end_idx)).1
+                            super::volume::range(
+                                study.as_ref(),
+                                &(start_idx..end_idx),
+                                Some(&self.merge_groups),
+                            )
+                            .1
                         }),
                 ),
                 volume_rect.top(),
@@ -1103,114 +1323,6 @@ impl Chart {
             .position(|id| *id == super::SeriesId::MAIN)
             .unwrap_or(0);
         let (behind, front) = self.pane_layout.main.split_at(series_at);
-        let paint_overlay = |id: &super::SeriesId| {
-            let Some(study) = self
-                .study_ids
-                .iter()
-                .position(|study| study == id)
-                .map(|idx| &studies.indicators()[idx])
-                .filter(|study| study.is_visible() && study.is_overlay())
-            else {
-                return;
-            };
-            if study.is_volume() && self.main_series_visible {
-                let rect = super::volume::overlay_rect(price_rect, &self.config);
-                let (min, max) = super::volume::range(study.as_ref(), &(start_idx..end_idx));
-                super::volume::paint(
-                    &painter,
-                    rect,
-                    study.as_ref(),
-                    &(start_idx..end_idx),
-                    &coords,
-                    min,
-                    max,
-                );
-            }
-            // TPO studies draw the chart type's profiles beside the bars.
-            if let Some(config) = study
-                .tpo()
-                .filter(|_| !self.chart_type.is_time_independent())
-            {
-                rendering::candles::tpo::render_live_tpo(
-                    &clipped_painter,
-                    price_rect,
-                    &self.state.data().bars,
-                    start_idx..start_idx + visible_data.len(),
-                    self.state.revision(),
-                    &price_map,
-                    config,
-                    &bar_clock,
-                    idx_to_coord,
-                    chart_rect.min.x,
-                    self.config.bullish_color,
-                    self.config.bearish_color,
-                );
-            }
-            if !self.has_renderer(*id) {
-                renderers::IndicatorRenderer::render(
-                    &price_ctx,
-                    std::slice::from_ref(study),
-                    visible_data,
-                    &price_map,
-                    &coords,
-                );
-            }
-        };
-        behind.iter().for_each(paint_overlay);
-
-        if self.main_series_visible {
-            if let Some((flow, config)) = footprint.filter(|_| time_based) {
-                if show_volume && !cfg!(feature = "studies") {
-                    rendering::candles::volume::render_volume_bars(
-                        &clipped_volume_ctx,
-                        visible_data,
-                        start_idx,
-                        max_volume,
-                        &colors,
-                        chart_rect.min.x,
-                        idx_to_coord,
-                    );
-                }
-                crate::chart::overlays::render_footprint(
-                    &clipped_painter,
-                    &self.get_chart_mapping(),
-                    self.bars(super::SeriesId::MAIN),
-                    flow,
-                    config,
-                );
-            } else {
-                rendering::render_chart_type(
-                    self.chart_type,
-                    &render_ctx,
-                    &render_params,
-                    idx_to_coord,
-                );
-                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
-            }
-        }
-
-        self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Normal);
-        self.paint_secondary_series(&painter, price_rect);
-
-        if let Some(bubbles) = self
-            .feed_link
-            .as_ref()
-            .and_then(|link| link.bubbles.as_ref())
-            .filter(|_| time_based && self.main_series_visible && self.replay.is_none())
-        {
-            let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
-            bubbles.render(&clipped_painter, visible_data, x, |p| {
-                price_map.price_to_y(p)
-            });
-        }
-
-        front.iter().for_each(paint_overlay);
-        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
-
-        // Resolve a click on the main chart area into a selection. Overlay
-        // indicators take priority over the series beneath them; an empty-area
-        // click clears the selection. Clicks in a study's pane are resolved
-        // where the panes are rendered, outside this rect.
         let main_visible_range = start_idx..(start_idx + visible_data.len());
         let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
         // Primitives are hit tested at the pointer, before the chart state is borrowed mutably.
@@ -1251,6 +1363,7 @@ impl Chart {
                 max_volume,
                 main_visible_range.clone(),
                 self.main_series_style.hit_tolerance,
+                Some(&self.merge_groups),
             )
             .filter(|(id, _)| match id {
                 // A renderer hit tests its custom series in place of the study's plots.
@@ -1258,6 +1371,167 @@ impl Chart {
                 _ => self.main_series_visible,
             })
         };
+        // The element under the pointer goes last when hovered series are drawn on top.
+        let on_top = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|pos| self.chart_options.hovered_series_on_top && chart_rect.contains(*pos))
+            .and_then(element_at)
+            .map(|(id, _)| id);
+        let main_on_top = on_top == Some(super::ChartElementId::Series(super::SeriesId::MAIN));
+        let paint_overlay = |id: &super::SeriesId| {
+            let Some(study) = self
+                .study_ids
+                .iter()
+                .position(|study| study == id)
+                .map(|idx| &studies.indicators()[idx])
+                .filter(|study| study.is_visible() && study.is_overlay())
+            else {
+                return;
+            };
+            if study.is_volume() && self.main_series_visible {
+                let rect = super::volume::overlay_rect(price_rect, &self.config);
+                let (min, max) = super::volume::range(
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    Some(&self.merge_groups),
+                );
+                super::volume::paint(
+                    &painter,
+                    rect,
+                    study.as_ref(),
+                    &(start_idx..end_idx),
+                    &coords,
+                    min,
+                    max,
+                    Some(&self.merge_groups),
+                );
+            }
+            // TPO studies draw the chart type's profiles beside the bars.
+            if let Some(config) = study
+                .tpo()
+                .filter(|_| !self.chart_type.is_time_independent())
+            {
+                rendering::candles::tpo::render_live_tpo(
+                    &clipped_painter,
+                    price_rect,
+                    &self.state.data().bars,
+                    start_idx..start_idx + visible_data.len(),
+                    self.state.revision(),
+                    &price_map,
+                    config,
+                    &bar_clock,
+                    idx_to_coord,
+                    chart_rect.min.x,
+                    self.config.bullish_color,
+                    self.config.bearish_color,
+                );
+            }
+            if !self.has_renderer(*id) {
+                renderers::IndicatorRenderer::render(
+                    &price_ctx,
+                    std::slice::from_ref(study),
+                    visible_data,
+                    &price_map,
+                    &coords,
+                );
+            }
+        };
+        let paint_main_series = || {
+            if self.main_series_visible {
+                if let Some((flow, config)) = footprint.filter(|_| time_based) {
+                    if show_volume && !cfg!(feature = "studies") {
+                        rendering::candles::volume::render_volume_bars(
+                            &clipped_volume_ctx,
+                            visible_data,
+                            start_idx,
+                            max_volume,
+                            &colors,
+                            chart_rect.min.x,
+                            idx_to_coord,
+                        );
+                    }
+                    crate::chart::overlays::render_footprint(
+                        &clipped_painter,
+                        &self.get_chart_mapping(),
+                        self.bars(super::SeriesId::MAIN),
+                        flow,
+                        config,
+                    );
+                } else {
+                    // Share the renderer instantiation between ordinary and merged bars.
+                    let (data, params) = match &merged {
+                        Some((merged, _)) => (
+                            rendering::CandleDataContext {
+                                visible_data: &merged.bars[merged.start..],
+                                full_data: &merged.bars,
+                                start_idx: merged.start,
+                                ..render_ctx
+                            },
+                            &merged_params,
+                        ),
+                        None => (
+                            rendering::CandleDataContext { ..render_ctx },
+                            &render_params,
+                        ),
+                    };
+                    rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
+                        match &merged {
+                            Some((merged, _)) => merged_x(merged, index, min_x),
+                            None => idx_to_coord(index, min_x),
+                        }
+                    });
+                    if let Some((_, Some(volume))) = &merged {
+                        rendering::candles::volume::render_volume_bars(
+                            &clipped_volume_ctx,
+                            &volume.bars[volume.start..],
+                            volume.start,
+                            max_volume,
+                            &colors,
+                            chart_rect.min.x,
+                            |index, min_x| merged_x(volume, index, min_x),
+                        );
+                    }
+                }
+                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
+            }
+        };
+        let paint_unhovered = |id: &super::SeriesId| {
+            if on_top != Some(super::ChartElementId::Indicator(*id)) {
+                paint_overlay(id);
+            }
+        };
+        behind.iter().for_each(paint_unhovered);
+        if !main_on_top {
+            paint_main_series();
+        }
+
+        self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Normal);
+        self.paint_secondary_series(&painter, price_rect);
+
+        if let Some(bubbles) = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.bubbles.as_ref())
+            .filter(|_| time_based && self.main_series_visible && self.replay.is_none())
+        {
+            let x = |i| idx_to_coord(start_idx + i, chart_rect.min.x);
+            bubbles.render(&clipped_painter, visible_data, x, |p| {
+                price_map.price_to_y(p)
+            });
+        }
+
+        front.iter().for_each(paint_unhovered);
+        match on_top {
+            Some(super::ChartElementId::Indicator(id)) => paint_overlay(&id),
+            _ if main_on_top => paint_main_series(),
+            _ => {}
+        }
+        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
+
+        // Resolve a click on the main chart area into a selection. Overlay
+        // indicators take priority over the series beneath them; an empty-area
+        // click clears the selection. Clicks in a study's pane are resolved
+        // where the panes are rendered, outside this rect.
         if response.clicked()
             && let Some(click_pos) = response.interact_pointer_pos()
         {
@@ -1280,20 +1554,26 @@ impl Chart {
             let price = coords.y_to_price(click_pos.y);
 
             // Drawings sit on top of the series, so they take priority.
+            #[cfg(feature = "drawings")]
             let drawing_hit = self.drawings.hit_test(click_pos);
+            #[cfg(not(feature = "drawings"))]
+            let drawing_hit: Option<usize> = None;
 
             self.right_click = Some(if let Some(drawing_id) = drawing_hit {
                 // Right-clicking a drawing selects it and
                 // clears any series/indicator selection so handles don't show
                 // on two objects at once.
                 self.selection.deselect();
-                if self.drawings.is_selected(drawing_id) {
-                    let ids: Vec<_> = std::iter::once(drawing_id)
-                        .chain(self.drawings.selected_ids())
-                        .collect();
-                    self.drawings.select_drawings(ids);
-                } else {
-                    self.drawings.select(drawing_id);
+                #[cfg(feature = "drawings")]
+                {
+                    if self.drawings.is_selected(drawing_id) {
+                        let ids: Vec<_> = std::iter::once(drawing_id)
+                            .chain(self.drawings.selected_ids())
+                            .collect();
+                        self.drawings.select_drawings(ids);
+                    } else {
+                        self.drawings.select(drawing_id);
+                    }
                 }
                 RightClickTarget::Drawing {
                     drawing_id,
@@ -1323,14 +1603,17 @@ impl Chart {
 
         // What the pointer is over, for host pointer events, in the right-click priority.
         if let Some(pos) = pointer {
+            #[cfg(feature = "drawings")]
             let drawing = self.drawings.hit_test(pos);
+            #[cfg(not(feature = "drawings"))]
+            let drawing: Option<usize> = None;
             if let Some(hit) = primitive_hit.filter(|_| {
                 drawing.is_none()
                     && response.hovered()
                     && !response.dragged()
                     && !self.zoom_mode_active
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none()
+                    && !eraser_mode
+                    && !drawing_tool_active
             }) {
                 ui.ctx().set_cursor_icon(hit.cursor);
             }
@@ -1387,19 +1670,30 @@ impl Chart {
                 axis_edge,
             );
             if line.axis_label {
-                pending_values.push((line.price, rendering::axes::axis_label_colors(line)));
+                pending_values.push((line.price, rendering::axes::axis_label_colors(line), false));
             }
         }
+        #[cfg(feature = "ui")]
+        let trading_outlined = std::mem::take(&mut self.trading_outlined);
         #[cfg(feature = "ui")]
         pending_values.extend(
             std::mem::take(&mut self.trading_tags)
                 .into_iter()
-                .map(|(value, fill)| (value, (rendering::axes::tag_text_color(fill), fill))),
+                .enumerate()
+                .map(|(index, (value, fill))| {
+                    let outlined = trading_outlined.contains(&index);
+                    let colors = if outlined {
+                        (fill, ui.active_theme().chart.bg)
+                    } else {
+                        (rendering::axes::tag_text_color(fill), fill)
+                    };
+                    (value, colors, outlined)
+                }),
         );
 
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
-            && let Some(last) = self.state.data().bars.last()
+            && let Some(last) = crate::model::last_with_value(&self.state.data().bars)
             && let Some(index) = self
                 .state
                 .data()
@@ -1409,7 +1703,7 @@ impl Chart {
                         < exchange_session.trading_date(last.time)
                 })
                 .checked_sub(1)
-            && let Some(previous) = self.state.data().bars.get(index)
+            && let Some(previous) = crate::model::last_with_value(&self.state.data().bars[..=index])
         {
             let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
                 .with_style(crate::model::LineStyle::Dotted)
@@ -1429,7 +1723,11 @@ impl Chart {
                 axis_edge,
             );
             if self.config.show_symbol_prev_close {
-                pending_values.push((previous.close, rendering::axes::axis_label_colors(&line)));
+                pending_values.push((
+                    previous.close,
+                    rendering::axes::axis_label_colors(&line),
+                    false,
+                ));
             }
         }
 
@@ -1451,12 +1749,17 @@ impl Chart {
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
         // from the newest bar in view
         let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => self.state.data().bars.last(),
-            crate::model::PriceLineSource::LastVisible => visible_data.last(),
+            crate::model::PriceLineSource::LastBar => {
+                crate::model::last_with_value(&self.state.data().bars)
+            }
+            crate::model::PriceLineSource::LastVisible => {
+                crate::model::last_with_value(visible_data)
+            }
         };
         let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
             let color = style
                 .price_line_color
+                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
                 .unwrap_or(if last.close >= last.open {
                     self.config.bullish_color
                 } else {
@@ -1501,6 +1804,7 @@ impl Chart {
                 self.instrument()
                     .and_then(|instrument| instrument.volume_decimals),
                 if has_currency { 24.0 } else { 0.0 },
+                price_formatter.as_deref(),
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -1510,7 +1814,7 @@ impl Chart {
 
         tags.push(last_price_tag);
         if show_price_axis {
-            for (value, colors) in &pending_values {
+            for (value, colors, outlined) in &pending_values {
                 if price_map
                     .range()
                     .contains(price_map.transform().to_scale(*value))
@@ -1518,8 +1822,9 @@ impl Chart {
                     let label = price_map.transform().label(
                         price_map.transform().to_scale(*value),
                         price_map.price_precision().unwrap_or(2),
+                        price_formatter.as_deref(),
                     );
-                    tags.push(rendering::axes::render_axis_value(
+                    let tag = rendering::axes::render_axis_value(
                         &painter,
                         price_rect,
                         axis_edge,
@@ -1527,7 +1832,16 @@ impl Chart {
                         label,
                         *colors,
                         &tags,
-                    ));
+                    );
+                    if *outlined && let Some(rect) = tag {
+                        painter.rect_stroke(
+                            rect,
+                            2.0,
+                            egui::Stroke::new(1.0, colors.0),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    tags.push(tag);
                 }
             }
         }
@@ -1540,7 +1854,11 @@ impl Chart {
                     price_rect,
                     axis_edge,
                     map.price_to_y(value),
-                    map.transform().label(map.transform().to_scale(value), 2),
+                    map.transform().label(
+                        map.transform().to_scale(value),
+                        2,
+                        self.price_label_formatter(map.transform().mode).as_deref(),
+                    ),
                     colors,
                     &tags,
                 ));
@@ -1628,6 +1946,7 @@ impl Chart {
                             rect,
                             study.as_ref(),
                             &(start_idx..end_idx),
+                            Some(&self.merge_groups),
                         );
                         super::volume::tags(
                             &painter,
@@ -1650,6 +1969,7 @@ impl Chart {
                     study.as_ref(),
                     axis_edge,
                     &mut tags,
+                    price_formatter.as_deref(),
                 );
             }
         }
@@ -1670,7 +1990,17 @@ impl Chart {
                     (low, "Low", self.config.bearish_color),
                 ]);
             }
-            if self.config.show_bid_ask
+            let trading_bid_ask = {
+                #[cfg(feature = "ui")]
+                {
+                    std::mem::take(&mut self.trading_bid_ask)
+                }
+                #[cfg(not(feature = "ui"))]
+                {
+                    false
+                }
+            };
+            if (self.config.show_bid_ask || trading_bid_ask)
                 && let Some(quote) = self.quote.as_ref().filter(|quote| {
                     quote.bid.is_finite()
                         && quote.ask.is_finite()
@@ -1679,12 +2009,19 @@ impl Chart {
                 })
             {
                 values.extend([
-                    (quote.bid, "Bid", self.config.bearish_color),
-                    (quote.ask, "Ask", self.config.bullish_color),
+                    (quote.bid, "Bid", ui.active_theme().ui.accent),
+                    (quote.ask, "Ask", ui.active_theme().chart.candle_down),
                 ]);
             }
             for (value, name, color) in values {
                 let line = PriceLine::new(value, color)
+                    .with_width(
+                        if (name == "Bid" || name == "Ask") && !self.config.show_bid_ask {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    )
                     .with_style(crate::model::LineStyle::Dotted)
                     .with_axis_label(false);
                 rendering::render_price_line(
@@ -1700,14 +2037,18 @@ impl Chart {
                     .range()
                     .contains(price_map.transform().to_scale(value))
                 {
-                    let label = format!(
-                        "{name} {}",
-                        price_map.transform().label(
-                            price_map.transform().to_scale(value),
-                            price_map.price_precision().unwrap_or(2)
-                        )
+                    let price = price_map.transform().label(
+                        price_map.transform().to_scale(value),
+                        price_map.price_precision().unwrap_or(2),
+                        price_formatter.as_deref(),
                     );
-                    tags.push(rendering::axes::render_axis_value(
+                    let quote = name == "Bid" || name == "Ask";
+                    let label = if quote {
+                        price
+                    } else {
+                        format!("{name} {price}")
+                    };
+                    let tag = rendering::axes::render_axis_value(
                         &painter,
                         price_rect,
                         axis_edge,
@@ -1715,7 +2056,32 @@ impl Chart {
                         label,
                         (egui::Color32::WHITE, color),
                         &tags,
-                    ));
+                    );
+                    if quote && let Some(rect) = tag {
+                        let badge = painter.layout_no_wrap(
+                            name.to_owned(),
+                            rendering::axes::axis_font(ui.ctx()),
+                            egui::Color32::WHITE,
+                        );
+                        let box_rect = Rect::from_min_size(
+                            egui::pos2(
+                                if axis_edge <= price_rect.left() {
+                                    rect.right() + 1.0
+                                } else {
+                                    rect.left() - badge.size().x - 8.0
+                                },
+                                rect.top(),
+                            ),
+                            egui::vec2(badge.size().x + 7.0, rect.height()),
+                        );
+                        painter.rect_filled(box_rect, 2.0, color);
+                        painter.galley(
+                            box_rect.center() - badge.size() / 2.0,
+                            badge,
+                            egui::Color32::WHITE,
+                        );
+                    }
+                    tags.push(tag);
                 }
             }
         }
@@ -1758,6 +2124,7 @@ impl Chart {
         }
 
         // Handle drawing tools
+        #[cfg(feature = "drawings")]
         {
             // Clone/extract values before mutable borrow of self
             let timescale = self.state.time_scale().clone();
@@ -1824,17 +2191,24 @@ impl Chart {
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
+        #[cfg(feature = "drawings")]
+        let eraser_mode = self.drawings.eraser_mode;
+        #[cfg(feature = "drawings")]
+        let drawing_tool_active = self.drawings.active_tool.is_some();
         let menu_open = std::mem::take(&mut self.menu_open) || response.secondary_clicked();
         let mut crosshair_tags = [None; 2];
-        self.cursor_modes.update(ui.input(|input| input.stable_dt));
-        if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
-            && !self.drawings.eraser_mode
+        #[cfg(feature = "drawings")]
         {
-            self.cursor_modes
-                .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
-            self.cursor_modes.render(ui, price_rect);
-        } else {
-            self.cursor_modes.move_pointer(None);
+            self.cursor_modes.update(ui.input(|input| input.stable_dt));
+            if self.chart_options.crosshair.style == crate::config::CrosshairStyle::Demonstration
+                && !eraser_mode
+            {
+                self.cursor_modes
+                    .move_pointer(response.hover_pos().filter(|pos| price_rect.contains(*pos)));
+                self.cursor_modes.render(ui, price_rect);
+            } else {
+                self.cursor_modes.move_pointer(None);
+            }
         }
         let hover_rect =
             Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));
@@ -1860,9 +2234,18 @@ impl Chart {
             let selected = hover_pos
                 .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
                 .map(|index| start_idx + index)
-                .unwrap_or_else(|| self.state.shown().len().saturating_sub(1));
+                .unwrap_or_else(|| {
+                    // The last bar with a value, before any whitespace bars at the end.
+                    let shown = self.state.shown();
+                    shown
+                        .iter()
+                        .rposition(|bar| !bar.is_whitespace())
+                        .unwrap_or(shown.len().saturating_sub(1))
+                });
             if let Some(bar) = self.state.shown().get(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
+                #[cfg(feature = "ui")]
+                let order_quantity = self.order_quantity.take();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -1882,25 +2265,28 @@ impl Chart {
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_visible && self.config.show_symbol_labels;
                 legend.title_as_description = self.config.title_as_description;
-                legend.show_ohlc = self.main_series_visible && self.config.show_ohlc_info;
-                legend.show_change = self.main_series_visible && self.config.show_ohlc_change;
-                legend.show_change_percent =
-                    self.main_series_visible && self.config.show_ohlc_change_percent;
+                // A whitespace bar has no values to show.
+                let values = self.main_series_visible && !bar.is_whitespace();
+                legend.show_ohlc = values && self.config.show_ohlc_info;
+                legend.show_change = values && self.config.show_ohlc_change;
+                legend.show_change_percent = values && self.config.show_ohlc_change_percent;
                 legend.show_indicator_titles = self.config.show_indicator_labels;
                 legend.show_indicator_inputs = self.config.show_indicator_inputs;
                 legend.show_indicator_values = self.config.show_indicator_last_val;
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
-                legend.previous_close = selected
-                    .checked_sub(1)
-                    .and_then(|index| self.state.shown().get(index))
-                    .map(|bar| bar.close);
+                legend.previous_close =
+                    crate::model::last_with_value(&self.state.shown()[..selected])
+                        .map(|bar| bar.close);
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
-                legend.show_volume = self.main_series_visible
-                    && self.chart_type.supports_volume()
-                    && self.config.show_legend_volume;
-                let (quote_action, study_settings, bottom) = ui
+                legend.show_volume =
+                    values && self.chart_type.supports_volume() && self.config.show_legend_volume;
+                #[cfg(feature = "ui")]
+                {
+                    legend.quantity = order_quantity;
+                }
+                let (quote_action, study_settings, bottom, quantity) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(
                             ui,
@@ -1918,6 +2304,12 @@ impl Chart {
                 if let Some(action) = quote_action {
                     self.quote_action = Some(action);
                 }
+                #[cfg(feature = "ui")]
+                if quantity.is_some() {
+                    self.quantity_clicked = quantity;
+                }
+                #[cfg(not(feature = "ui"))]
+                let _ = quantity;
                 study_action = study_settings;
                 legend_bottom = bottom;
             }
@@ -1951,11 +2343,11 @@ impl Chart {
                 let held_values = tooltip_options.enabled
                     && tooltip_options.on_long_press
                     && held
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none();
+                    && !eraser_mode
+                    && !drawing_tool_active;
                 let mut crosshair_options = self.chart_options.crosshair;
                 // Arrow keeps the axis labels, which a hidden crosshair never shows.
-                if (held_values || self.drawings.eraser_mode)
+                if (held_values || eraser_mode)
                     && crosshair_options.style != crate::config::CrosshairStyle::Hidden
                 {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
@@ -1970,6 +2362,13 @@ impl Chart {
                 } else {
                     hover_pos
                 };
+                self.last_crosshair = index.map(|index| {
+                    let main = price_rect.contains(hover_pos) && !volume_rect.contains(hover_pos);
+                    (
+                        self.state.shown()[index].time,
+                        main.then(|| price_map.y_to_price(snapped.y)),
+                    )
+                });
                 crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
@@ -1988,8 +2387,9 @@ impl Chart {
                     time_axis_top,
                     axis_edge,
                     last_price_tag,
-                    formatter.as_ref(),
+                    scale,
                     bar_seconds,
+                    price_formatter.as_deref(),
                 );
                 if let Some(index) = index
                     .filter(|_| crosshair_options.style != crate::config::CrosshairStyle::Hidden)
@@ -2007,6 +2407,7 @@ impl Chart {
                         &price_map,
                         price_rect,
                         value,
+                        bar,
                     ) {
                         rendering::candles::render_crosshair_marker(
                             &painter.with_clip_rect(price_rect),
@@ -2058,9 +2459,10 @@ impl Chart {
                 }
                 if tooltip_options.enabled
                     && (!tooltip_options.on_long_press || held)
-                    && !self.drawings.eraser_mode
-                    && self.drawings.active_tool.is_none()
+                    && !eraser_mode
+                    && !drawing_tool_active
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
+                    && !visible_data[local_idx].is_whitespace()
                 {
                     let candle = &visible_data[local_idx];
                     if tooltip_options.on_long_press {
@@ -2079,7 +2481,12 @@ impl Chart {
                             5.0,
                             5.0,
                         );
-                        for (index, bar) in visible_data.iter().enumerate().step_by(25) {
+                        for (index, bar) in visible_data
+                            .iter()
+                            .enumerate()
+                            .step_by(25)
+                            .filter(|(_, bar)| !bar.is_whitespace())
+                        {
                             let pos = Pos2::new(
                                 coords.idx_to_x(start_idx + index),
                                 price_map.price_to_y(bar.close),
@@ -2096,16 +2503,14 @@ impl Chart {
                         &price_ctx,
                         hover_pos,
                         candle,
-                        (start_idx + local_idx)
-                            .checked_sub(1)
-                            .and_then(|index| self.state.shown().get(index))
+                        crate::model::last_with_value(&self.state.shown()[..start_idx + local_idx])
                             .map(|bar| bar.close),
                         &tooltip_options,
                         &colors,
                         &price_map,
                         &coords,
                         visible_data,
-                        formatter.as_ref(),
+                        scale,
                         bar_seconds,
                         &self.study_values_at(start_idx + local_idx),
                         self.instrument(),
@@ -2122,22 +2527,32 @@ impl Chart {
                     // Convert bar index to screen x coordinate
                     let x = coords.idx_to_x(bar_idx.round() as usize);
                     if coords.is_x_visible(x) {
-                        // Create a synthetic hover position at the center of the price range
-                        let center_y = price_rect.center().y;
-                        let synced_pos = Pos2::new(x, center_y);
-
+                        // At the host's price, or a synthetic position at the centre of the
+                        // price range for a time alone
+                        let mut options = self.chart_options.crosshair;
+                        let y = match self.synced_crosshair_price {
+                            Some(price) => {
+                                options.mode = crate::config::CrosshairMode::Normal;
+                                price_map.price_to_y(price)
+                            }
+                            None => price_rect.center().y,
+                        };
+                        if let Some(bar) = self.state.shown().get(bar_idx.round() as usize) {
+                            self.last_crosshair = Some((bar.time, self.synced_crosshair_price));
+                        }
                         crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
-                            synced_pos,
+                            Pos2::new(x, y),
                             visible_data,
                             &price_map,
                             &coords,
-                            &self.chart_options.crosshair,
+                            &options,
                             time_axis_top,
                             axis_edge,
                             last_price_tag,
-                            formatter.as_ref(),
+                            scale,
                             bar_seconds,
+                            price_formatter.as_deref(),
                         );
                     }
                 }
@@ -2177,22 +2592,20 @@ impl Chart {
             }
         }
 
-        let current_price = self
-            .state
-            .data()
-            .bars
-            .last()
+        let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
                 price_map.transform().label(
                     price_map.transform().to_scale(bar.close),
                     price_map.price_precision().unwrap_or(2),
+                    price_formatter.as_deref(),
                 )
             });
         self.measured_axis_width = rendering::axes::price_axis_width(
             &painter,
             &price_map,
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
+            price_formatter.as_deref(),
         );
         self.measured_axis_width = self.measured_axis_width.max(independent_axis_width);
         for tag in tags.iter().skip(usize::from(has_currency)).flatten() {
@@ -2250,6 +2663,7 @@ impl Chart {
                 &self.config.price_axis,
                 &tags,
                 price_labels,
+                price_formatter.as_deref(),
             );
         } else if self.config.show_left_axis {
             renderers::render_price_labels_at_pos(
@@ -2260,6 +2674,7 @@ impl Chart {
                 crate::scales::PriceScaleId::Left,
                 &tags,
                 price_labels,
+                price_formatter.as_deref(),
             );
         }
         if self.config.show_time_labels {
@@ -2268,10 +2683,10 @@ impl Chart {
             let chart_ctx = RenderContext::new(&painter, axis_context_rect);
             rendering::render_time_labels(
                 &chart_ctx,
-                visible_data,
-                &coords,
+                time_marks,
+                &time_points,
+                &time_coords,
                 &colors,
-                formatter.as_ref(),
                 time_tags,
                 &self.chart_options.time_scale,
                 time_labels,
@@ -2630,6 +3045,7 @@ mod tests {
                 chart.config.show_symbol_prev_close = label;
                 chart.config.show_prev_close_line = line;
                 chart.config.show_countdown = countdown;
+                chart.config.show_bid_ask = label;
                 chart.main_series_style.last_value_visible = series;
                 chart.main_series_style.price_line_visible = series;
                 let bar = chart.state.data().bars.last().unwrap();
@@ -2679,6 +3095,26 @@ mod tests {
                             - chart.config.left_axis_width.max(chart.measured_axis_width),
                     "session label is clipped on the left"
                 );
+                for name in ["Bid", "Ask"] {
+                    let badge = painted.iter().find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == name => {
+                            Some(text.visual_bounding_rect())
+                        }
+                        _ => None,
+                    });
+                    assert_eq!(badge.is_some(), label);
+                    if let Some(badge) = badge {
+                        assert!(
+                            ctx.content_rect().contains_rect(badge)
+                                && if left {
+                                    badge.center().x >= plot.left()
+                                } else {
+                                    badge.center().x <= plot.right()
+                                },
+                            "{name} stays inside the plot on either axis"
+                        );
+                    }
+                }
                 let close_y = chart.last_price_map.price_to_y(120.0);
                 let prev_y = chart.last_price_map.price_to_y(110.0);
                 let price_tags: Vec<_> = painted
@@ -2776,6 +3212,7 @@ mod tests {
     #[test]
     fn line_pulse_and_crosshair_marker_follow_their_bars() {
         use crate::model::{ChartType, LastPriceAnimation};
+        use egui::Color32;
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
         chart.set_chart_type(ChartType::Line);
@@ -2818,6 +3255,40 @@ mod tests {
             ),
             vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
         );
+        // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
+        // bar's own colour, and a hovered empty slot has no dot.
+        let mut bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        bars[98].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::GOLD),
+            ..Default::default()
+        }));
+        bars[99] = crate::model::Bar::whitespace(bars[99].time);
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        let map = chart.get_chart_mapping();
+        for (time, index, marker) in [(5.2, 98, true), (5.3, 99, false)] {
+            let hover = Pos2::new(
+                map.idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(hover)]);
+            for radius in [3.0, 5.0] {
+                let dots: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Circle(dot) if dot.radius == radius && dot.fill == Color32::GOLD => {
+                            Some(dot.center)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected = if radius == 3.0 || marker {
+                    vec![Pos2::new(map.idx_to_x(98), map.price_to_y(110.0))]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(dots, expected, "{radius} at {index}");
+            }
+        }
     }
 
     /// Axis buttons route their clicks without changing the price range or viewport.
@@ -3098,6 +3569,167 @@ mod tests {
     }
 
     #[test]
+    fn runtime_options_size_and_crosshair_position_apply_to_a_built_chart() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        // Unrelated options keep the view; new bounds clamp it; spacing and offset apply.
+        chart.apply_synced_time_scale(3.0, -20.0);
+        let mut options = chart.chart_options().clone();
+        options.crosshair.mode = crate::config::CrosshairMode::Magnet;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (3.0, -20.0));
+        options.time_scale.min_bar_spacing = 4.0;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (4.0, -20.0));
+        options.time_scale.bar_spacing = 8.0;
+        options.time_scale.right_offset = 5.0;
+        chart.set_chart_options(options.clone());
+        assert_eq!(chart.get_time_scale_state(), (8.0, 5.0));
+        assert_eq!(chart.chart_options(), &options);
+
+        chart.set_size(Some(egui::vec2(300.0, 200.0)));
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let plot = chart.get_rendered_price_rect();
+        assert!(plot.max.x < 300.0 && plot.max.y < 200.0 && plot.width() > 200.0);
+        chart.set_size(None);
+
+        // The price label follows the host's price, which no axis tick shows.
+        let time = chart.state.shown()[50].time;
+        let label = |chart: &mut crate::widget::Chart, t| {
+            shapes(&ctx, chart, t, Vec::new())
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "137.50"))
+        };
+        chart.set_crosshair_position(Some((time, 137.5)));
+        assert!(label(&mut chart, 0.2));
+        chart.set_synced_crosshair_time(Some(time));
+        assert!(!label(&mut chart, 0.3));
+    }
+
+    #[test]
+    fn hovered_series_draw_above_the_others_when_enabled() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use egui::Color32;
+        let levels = [
+            (150.0, Color32::from_rgb(201, 1, 1)),
+            (170.0, Color32::from_rgb(1, 201, 1)),
+        ];
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart.chart_options.tooltip.enabled = false;
+        for (level, color) in levels {
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Level", move |bars| {
+                    vec![IndicatorValue::Single(level); bars.len()]
+                })
+                .with_color(color),
+            ));
+        }
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let map = chart.get_chart_mapping();
+        let candle = chart.config().bullish_color;
+        let first = |shapes: &[Shape], color| {
+            shapes.iter().position(|shape| match shape {
+                Shape::Rect(rect) => rect.fill == color,
+                Shape::LineSegment { stroke, .. } => stroke.color == color,
+                Shape::Mesh(mesh) => mesh.vertices.iter().any(|vertex| vertex.color == color),
+                _ => false,
+            })
+        };
+        // (enabled, hovered price, colours from the bottom up)
+        for (t, (enabled, price, order)) in [
+            (false, 120.0, [candle, levels[0].1, levels[1].1]),
+            (true, 120.0, [levels[0].1, levels[1].1, candle]),
+            (true, 150.0, [candle, levels[1].1, levels[0].1]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let t = t as f64;
+            chart.chart_options.hovered_series_on_top = enabled;
+            let pointer = || {
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(90),
+                    map.price_to_y(price),
+                ))]
+            };
+            frame(&ctx, &mut chart, t + 0.1, pointer());
+            let painted = shapes(&ctx, &mut chart, t + 0.2, pointer());
+            let positions = order.map(|color| first(&painted, color).unwrap());
+            assert!(positions.is_sorted(), "{enabled} {price}: {positions:?}");
+        }
+    }
+
+    #[test]
+    fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
+        use crate::model::{Bar, BarData};
+        use chrono::{TimeZone, Utc};
+        let bars = (0..65_536)
+            .map(|i| {
+                let t = Utc.timestamp_opt(1_600_000_000 + i * 60, 0).unwrap();
+                let (low, high) = match i {
+                    34_321 => (100.0, 1000.0),
+                    47_777 => (1.0, 101.0),
+                    _ => (100.0, 101.0 + (i % 7) as f64),
+                };
+                Bar::new(t, 100.0, high, low, 101.0, 1.0)
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        let mut options = chart.chart_options().clone();
+        options.time_scale.min_bar_spacing = 0.0;
+        chart.set_chart_options(options);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.apply_synced_time_scale(chart.get_rendered_price_rect().width() / 65_536.0, 0.0);
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let color = chart.config().bullish_color;
+        let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
+            shapes(&ctx, chart, t, Vec::new())
+                .iter()
+                .flat_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == color => {
+                        vec![rect.rect.min.y, rect.rect.max.y]
+                    }
+                    Shape::LineSegment { points, stroke } if stroke.color == color => {
+                        points.iter().map(|point| point.y).collect()
+                    }
+                    Shape::Mesh(mesh) => mesh
+                        .vertices
+                        .iter()
+                        .filter(|vertex| vertex.color == color)
+                        .map(|vertex| vertex.pos.y)
+                        .collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        let ys = painted_ys(&mut chart, 0.2);
+        // About one bar per pixel column, each still reaching the highest and lowest price.
+        assert!(ys.len() < 20_000, "{} points", ys.len());
+        let map = chart.get_chart_mapping();
+        let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let bottom = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!((top - map.price_to_y(1000.0)).abs() < 1.0, "{top}");
+        assert!((bottom - map.price_to_y(1.0)).abs() < 1.0, "{bottom}");
+
+        // A live bar opening a group, then updating it, is drawn in it, with its volume.
+        let time = Utc.timestamp_opt(1_600_000_000 + 65_536 * 60, 0).unwrap();
+        for (t, high) in [(0.3, 1500.0), (0.5, 2000.0)] {
+            chart.update(
+                crate::widget::SeriesId::MAIN,
+                Bar::new(time, 100.0, high, 100.0, 101.0, 1.0),
+            );
+            frame(&ctx, &mut chart, t, Vec::new());
+            let ys = painted_ys(&mut chart, t + 0.1);
+            let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
+            let y = chart.get_chart_mapping().price_to_y(high);
+            assert!((top - y).abs() < 1.0, "{high}: {top} against {y}");
+        }
+    }
+
+    #[test]
     fn time_visibility_flags_reach_axis_and_crosshair() {
         use crate::model::{Bar, BarData, Timeframe};
         use chrono::{Duration, TimeZone, Utc};
@@ -3132,13 +3764,16 @@ mod tests {
             } else {
                 Timeframe::Day1
             });
+            chart.chart_options.tooltip.enabled = false;
+            // Each change after a frame, as the axis menu makes them, so the time labels follow.
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::nyse();
+            frame(&ctx, &mut chart, 0.03, vec![]);
             let options = &mut chart.chart_options.time_scale;
-            options.timezone = crate::scales::TimezoneMode::nyse();
             options.time_visible = time_visible;
             options.seconds_visible = seconds_visible;
             options.ticks_visible = ticks_visible;
-            chart.chart_options.tooltip.enabled = false;
-            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.06, vec![]);
             let map = chart.get_chart_mapping();
             let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
@@ -3201,6 +3836,107 @@ mod tests {
                 .map(|pair| pair[1] - pair[0])
                 .fold(f32::INFINITY, f32::min);
             assert_eq!(gap >= 200.0, characters == 20, "{centres:?}");
+        }
+    }
+
+    #[test]
+    fn host_formatters_reach_axes_crosshair_and_tags() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use crate::scales::{PriceFormatter, TickMarkType, TimeFormatter};
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "tick time".into()
+            }
+            fn format_crosshair(&self, _: DateTime<Utc>, _: i64) -> String {
+                "hover time".into()
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(Host)
+            }
+        }
+        impl PriceFormatter for Host {
+            fn format(&self, _: f64) -> String {
+                "label price".into()
+            }
+            fn format_tick(&self, _: f64) -> String {
+                "tick price".into()
+            }
+            fn clone_box(&self) -> Box<dyn PriceFormatter> {
+                Box::new(Host)
+            }
+        }
+        // Wednesday 13 March 2024, 14:30 UTC, at the hovered bar.
+        let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
+        type Setup = fn(&mut crate::widget::Chart);
+        let cases: [(Setup, &[&str]); 5] = [
+            (
+                |chart| chart.set_locale(Some("de-DE".into())),
+                &[if cfg!(feature = "locales") {
+                    "Mi 13 Mär '24 14:30"
+                } else {
+                    "Wed 13 Mar '24 14:30"
+                }],
+            ),
+            (
+                |chart| chart.set_date_format(Some("%d.%m.%Y".into())),
+                &["13.03.2024 14:30"],
+            ),
+            (
+                |chart| chart.set_time_formatter(Some(Arc::new(Host))),
+                &["hover time", "tick time"],
+            ),
+            (
+                |chart| chart.set_price_formatter(Some(Arc::new(Host))),
+                &["label price", "tick price"],
+            ),
+            (
+                |chart| {
+                    chart.set_percentage_formatter(Some(Arc::new(Host)));
+                    chart.apply_series_settings(&SeriesSettings {
+                        price_scale_mode: PriceScaleMode::Percentage,
+                        ..SeriesSettings::default()
+                    });
+                },
+                &["label price", "tick price"],
+            ),
+        ];
+        for (setup, expected) in cases {
+            let ctx = egui::Context::default();
+            let bars = (0..100)
+                .map(|i| {
+                    let open = 100.0 + i as f64;
+                    Bar::new(
+                        time + Duration::minutes(i - 50),
+                        open,
+                        open + 2.0,
+                        open - 1.0,
+                        open + 1.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min1);
+            chart.chart_options.tooltip.enabled = false;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // After a first frame, so the formatters reach a chart that has already drawn.
+            setup(&mut chart);
+            frame(&ctx, &mut chart, 0.05, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+            for text in expected {
+                assert!(
+                    painted.iter().any(
+                        |shape| matches!(shape, Shape::Text(shape) if shape.galley.text() == *text)
+                    ),
+                    "{text}"
+                );
+            }
         }
     }
 
@@ -3869,6 +4605,7 @@ mod tests {
     /// A drag starting on a button belongs to that button even after leaving the row.
     /// Clicking it also preserves a series selection while a drawing tool is active.
     #[test]
+    #[cfg(feature = "drawings")]
     fn navigation_buttons_do_not_start_chart_gestures() {
         use crate::drawings::DrawingToolType;
         use crate::widget::{ChartElementId, SeriesId};

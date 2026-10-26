@@ -284,6 +284,11 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
+        #[cfg(feature = "drawings")]
+        if !indicator.drawings().is_empty() {
+            crate::studies::plots::paint_drawings(context, indicator, price_scale, coords);
+            return;
+        }
         if !indicator.candles().is_empty() {
             crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
             return;

@@ -144,6 +144,10 @@ impl Indicator for ConfiguredStudy {
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.study.set_bar_clock(clock)
     }
+    #[cfg(feature = "drawings")]
+    fn drawings(&self) -> &[crate::drawings::Drawing] {
+        self.study.drawings()
+    }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }

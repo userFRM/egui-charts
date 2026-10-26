@@ -15,7 +15,14 @@ pub fn render_ohlc_bar(
     params: &BarRenderParams,
     style: &BarsStyle,
 ) {
-    let color = colors.bar_color(bar.is_bullish());
+    if bar.is_whitespace() {
+        return;
+    }
+    let color = bar
+        .colors
+        .as_ref()
+        .and_then(|own| own.color)
+        .unwrap_or_else(|| colors.bar_color(bar.is_bullish()));
 
     // Convert prices to screen coords
     let high_y = price_scale.price_to_y(bar.high);

@@ -114,6 +114,15 @@ impl DemoApp {
             }
             "samples" => {
                 self.api_samples = !self.api_samples;
+                if self.api_samples {
+                    self.widget_bar.widgets = super::sample_widgets().to_vec();
+                } else {
+                    self.widget_bar.widgets.clear();
+                    self.widget_bar.active_widget = None;
+                    if self.open_panel == Some(super::SidePanel::TimeAndSales) {
+                        self.open_panel = None;
+                    }
+                }
                 self.annotate();
                 return;
             }

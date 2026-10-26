@@ -33,6 +33,7 @@ pub mod selection;
 pub mod series;
 
 // Internal engine modules: used within the crate but not part of the public API.
+#[cfg(feature = "drawings")]
 pub(crate) mod cursor_modes;
 pub(crate) mod hit_test;
 pub(crate) mod indicators;
@@ -42,9 +43,9 @@ pub(crate) mod state;
 
 // Axis composition for hosts that allocate their own pane and input regions.
 pub use renderers::{
-    RenderContext, TradingLineAction, TradingLineOptions, TradingLines, alert_shortcut_price,
-    render_alert_levels, render_axis_currency, render_crosshair_full, render_event_band,
-    render_trading_lines,
+    PnlUnit, RenderContext, TradingLineAction, TradingLineOptions, TradingLines,
+    alert_shortcut_price, render_alert_levels, render_axis_currency, render_crosshair_full,
+    render_event_band, render_trading_lines,
 };
 #[cfg(feature = "ui")]
 pub(crate) use renderers::{decimals, to_step};

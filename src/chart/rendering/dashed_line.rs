@@ -106,12 +106,19 @@ pub(super) fn draw_dashed_segment(
     let first = ((from + phase) / period).floor() as i64;
     let last = ((to + phase) / period).ceil() as i64;
     let mut dots = Mesh::default();
+    let square_dots = dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0);
+    if square_dots {
+        // Reserve the clipped span once so adding dots never copies growing mesh buffers.
+        let count = (last - first) as usize;
+        dots.reserve_vertices(count * 4);
+        dots.reserve_triangles(count * 2);
+    }
     for k in first..last {
         let dash_start = (k as f64 * period - phase).max(from);
         let dash_end = (k as f64 * period - phase + f64::from(dash_len)).min(to);
         if dash_start < dash_end {
             let (start, end) = (at(dash_start), at(dash_end));
-            if dash_len == 1.0 && stroke.width == 1.0 && (dx == 0.0 || dy == 0.0) {
+            if square_dots {
                 // A mesh keeps one-point dots square; thin rectangles are tessellated as lines.
                 let half_width = if dx == 0.0 {
                     egui::vec2(stroke.width / 2.0, 0.0)

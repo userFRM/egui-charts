@@ -30,6 +30,8 @@ struct Scenario {
     columns: usize,
     studies: bool,
     drawings: Drawings,
+    /// Smallest bar spacing in pixels, below the default 0.5 to zoom out further.
+    min_bar_spacing: f32,
 }
 
 /// Where the 500 drawings of a scenario are anchored, every drawing tool in turn.
@@ -40,7 +42,7 @@ enum Drawings {
     AcrossHistory,
 }
 
-const SCENARIOS: [Scenario; 6] = [
+const SCENARIOS: [Scenario; 7] = [
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed out",
         bars: 5_000_000,
@@ -49,6 +51,17 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 1,
         studies: false,
         drawings: Drawings::None,
+        min_bar_spacing: 0.5,
+    },
+    Scenario {
+        name: "1 chart, 1,000,000 bars, all in view",
+        bars: 1_000_000,
+        visible: 1_000_000,
+        charts: 1,
+        columns: 1,
+        studies: false,
+        drawings: Drawings::None,
+        min_bar_spacing: 0.0,
     },
     Scenario {
         name: "1 chart, 5,000,000 bars, zoomed in",
@@ -58,6 +71,7 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 1,
         studies: false,
         drawings: Drawings::None,
+        min_bar_spacing: 0.5,
     },
     Scenario {
         name: "4 charts, 100,000 bars",
@@ -67,6 +81,7 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 2,
         studies: false,
         drawings: Drawings::None,
+        min_bar_spacing: 0.5,
     },
     Scenario {
         name: "8 charts, 100,000 bars, 10 studies each",
@@ -76,6 +91,7 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 4,
         studies: true,
         drawings: Drawings::None,
+        min_bar_spacing: 0.5,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings in view",
@@ -85,6 +101,7 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 1,
         studies: false,
         drawings: Drawings::InView,
+        min_bar_spacing: 0.5,
     },
     Scenario {
         name: "1 chart, 10,000 bars, 500 drawings across the history",
@@ -94,6 +111,7 @@ const SCENARIOS: [Scenario; 6] = [
         columns: 1,
         studies: false,
         drawings: Drawings::AcrossHistory,
+        min_bar_spacing: 0.5,
     },
 ];
 
@@ -158,7 +176,9 @@ fn chart(scenario: &Scenario) -> Chart {
     let bars = (0..scenario.bars)
         .map(|i| example::sample_bar(i, 0))
         .collect();
-    let mut chart = Chart::new(BarData::from_bars(bars));
+    let mut options = egui_charts::config::ChartOptions::default();
+    options.time_scale.min_bar_spacing = scenario.min_bar_spacing;
+    let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
     chart.set_chart_type(ChartType::Candles);
     chart.set_visible_bars(scenario.visible);
     chart.set_symbol("SAMPLE");
@@ -229,6 +249,8 @@ fn price_based(filters: &[String], frames: usize) {
                 high: open.max(close) + 0.05,
                 low: open.min(close) - 0.05,
                 volume: 100.0,
+                colors: None,
+                payload: None,
             }
         })
         .collect();

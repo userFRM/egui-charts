@@ -79,7 +79,7 @@ impl IndicatorFactory {
     ///
     /// The list below is the single registration site for built-ins: adding a
     /// new indicator type here makes it constructible by name with zero further
-    /// wiring. Each entry is instantiated via its [`Default`] implementation.
+    /// wiring. Types use their defaults; automatic drawings also select a construction kind.
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
@@ -266,6 +266,17 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
+        #[cfg(feature = "drawings")]
+        for kind in AutoDrawingKind::ALL {
+            let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Support and resistance",
+                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10))),
+                ),
+            );
+        }
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
@@ -437,6 +448,8 @@ mod tests {
                     low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
                     close,
                     volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect();
@@ -463,6 +476,11 @@ mod tests {
                 study.tpo().is_some().to_string(),
                 format!("{:?}", study.volume_profiles(200..400)),
             ];
+            #[cfg(feature = "drawings")]
+            let shapes = shapes
+                .into_iter()
+                .chain(std::iter::once(format!("{:?}", study.drawings())))
+                .collect();
             let lines: Vec<Vec<String>> = std::iter::once(shapes)
                 .chain(study.values().to_rows().iter().map(|v| {
                     let mut xs = match v {
@@ -634,6 +652,28 @@ mod tests {
             Box::new(Volume24h::new()),
             Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::ParallelChannel,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciRetracement,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciExtension,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
             Box::new(WilliamsFractals::new(l(0))),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
@@ -699,6 +739,8 @@ mod tests {
             low: prev_close.min(close) - rng.unit() * 0.2,
             close,
             volume: 100.0 + rng.unit() * 900.0,
+            colors: None,
+            payload: None,
         };
         if rng.unit() < 0.01 {
             bar.close = f64::NAN;
@@ -818,6 +860,8 @@ mod tests {
                 low: c - 1.0,
                 close: c,
                 volume: 1000.0 + i as f64,
+                colors: None,
+                payload: None,
             }
         };
         let normal: Vec<Bar> = (0..200).map(bar).collect();
@@ -996,11 +1040,17 @@ mod tests {
             IndicatorValue::None => 0,
         };
         // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
-        for (study, conventional) in bottom
-            .iter()
-            .zip(&conventional)
-            .filter(|(study, _)| study.name() != "ZigZag")
-        {
+        for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
+            !matches!(
+                study.name(),
+                "ZigZag"
+                    | "Auto Trend Line"
+                    | "Auto Parallel Channel"
+                    | "Auto Fibonacci Retracement"
+                    | "Auto Fibonacci Extension"
+                    | "Auto Pitchfork"
+            )
+        }) {
             let lost = study
                 .values()
                 .to_rows()
@@ -1037,6 +1087,8 @@ mod tests {
                 low: c.min(o) - 1.0 - (x * 0.5).cos().abs(),
                 close: c,
                 volume: 1000.0 + ((i * 37) % 211) as f64 * 9.0,
+                colors: None,
+                payload: None,
             }
         };
         let long: Vec<Bar> = (0..600).map(real).collect();

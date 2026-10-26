@@ -353,10 +353,13 @@ impl ChartState {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = &self.shown()[start..end];
-        // In whitespace retain the nearest reference bar so relative axis units stay valid.
-        let base = self
-            .shown()
-            .get(start.min(self.shown().len().saturating_sub(1)))
+        // In whitespace retain the nearest reference bar so relative axis units stay valid: the
+        // first bar with a value from the left edge on, or else the last one before it.
+        let at = start.min(self.shown().len().saturating_sub(1));
+        let base = self.shown()[at..]
+            .iter()
+            .find(|bar| !bar.is_whitespace())
+            .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
         let relative = matches!(
             mode,
@@ -380,6 +383,13 @@ impl ChartState {
                     && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
+                #[cfg(not(feature = "drawings"))]
+                let drawing_prices = std::iter::empty();
+                #[cfg(feature = "drawings")]
+                let drawing_prices = crate::studies::plots::drawing_prices(
+                    study,
+                    study_start.max(start)..study_end.max(end),
+                );
                 (0..study.line_cnt())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
@@ -435,6 +445,7 @@ impl ChartState {
                             .into_iter()
                             .flat_map(|plot| [plot.profile.low(), plot.profile.high()]),
                     )
+                    .chain(drawing_prices)
             });
         let main = main_visible
             .then(|| {

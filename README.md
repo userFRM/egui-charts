@@ -129,7 +129,7 @@ The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the 
 
 ## Studies
 
-A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 162 indicator names, each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
+A chart computes its studies, updates them as its bars change and draws them: overlays on the price pane, the others in panes below it. `IndicatorFactory` registers 167 indicator names with default features (the five automatic drawing studies require `drawings`), each a distinct study under a category such as Momentum or Volume, and the indicator dialog lists every study the factory registers, the host's own included. Six more types are built directly instead of registered: five compute the same study as a registered one under their defaults (`CVD` and A/D, `CloseToCloseVol` and Historical Volatility, `HL2` and Median Price, `HLC3` and Typical Price, `PriceChannel` and Donchian Channels), and `EhlersFisher` is a variant of the Fisher Transform.
 
 | Group | Examples |
 |---|---|
@@ -156,9 +156,9 @@ The built-in studies and `IndicatorFactory` are in the `studies` feature, which 
 
 ## Drawing tools
 
-`DrawingToolType` defines 98 drawing tool types, counting four cursor modes, which the drawing toolbar groups into cursors, lines, Fibonacci, patterns, projections, shapes, annotations and icons. Drawings are anchored to bar and price, so they stay in place through pan and zoom, and undo and redo are built in. Some tools are placeholders or approximations; [ROADMAP.md](ROADMAP.md) lists the status of each.
+The `drawings` feature enables drawing tools and is included by `ui`. Widget-only applications add `drawings` to use these APIs. `DrawingToolType` defines 98 drawing tool types, counting four cursor modes, which the drawing toolbar groups into cursors, lines, Fibonacci, patterns, projections, shapes, annotations and icons. Drawings are anchored to bar and price, so they stay in place through pan and zoom, and undo and redo are built in. Some tools are placeholders or approximations; [ROADMAP.md](ROADMAP.md) lists the status of each.
 
-Magnet snapping is not applied yet. `drawings::persistence` saves drawings to JSON, with their anchors as timestamps and every setting, and restores them; the chart does not call it, so the application decides when to save and load.
+Magnet snapping is not applied yet. `drawings::persistence` saves drawings to JSON, with their anchors as timestamps and every setting, and restores them; hosts can save and load explicitly through `Chart::save_drawings` and `load_drawings`, or attach a host storage service with `Chart::set_storage`.
 
 ## Order flow
 
@@ -191,18 +191,19 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-dark.svg">
-  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading: every build has the Broker trait; the ui feature adds order tickets and order and position lines. Depth of market is planned. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
+  <img alt="Four nested layers, each containing the ones inside it. Innermost, the engine and chart widget, built with default features off and the widget feature: one chart in your egui app, fed by your Datafeed, with chart types, scales, pan and zoom, crosshair, markers, drawing tools, themes and the Indicator trait. Around it, studies and terminal, the default build (ui, which enables studies): the built-in studies, the toolbars, panels and dialogs, and the symbol search and storage traits. Then trading: every build has the Broker trait and a paper account; the ui feature adds a broker picker, an account panel, order tickets with a depth ladder and order and position lines. Outermost, order flow, with no feature yet: the default build has TPO, volume profile and cumulative delta, and footprint and depth heatmap are planned." src="https://raw.githubusercontent.com/userFRM/egui-charts/main/docs/layers-light.svg" width="880">
 </picture>
 
 | Layer | What it gives | Feature |
 |---|---|---|
 | Engine | Bars, symbols and timeframes, price and time scales, the `Datafeed` contract and the host service traits (broker, symbol search, storage, alerts, signals), and the `Indicator` trait with `IndicatorRegistry`. No egui dependency. | always on |
 | Studies | The built-in studies and `IndicatorFactory`, also without egui | `studies` |
-| Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, drawings, studies on the chart, theme | `widget` |
+| Chart widget | `Chart` and `ChartBuilder`: rendering, pan and zoom, crosshair, chart types, studies on the chart, theme | `widget` |
+| Drawing tools | Drawing geometry, interaction, undo and persistence | `drawings` |
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
-| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, order tickets and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
+| Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets with a depth ladder and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
-The default feature is `ui`, which enables `icons`, `widget` and `studies`.
+The default features are `ui`, which enables `icons`, `widget`, `studies` and `drawings`, and `locales`.
 
 ```toml
 # The chart with toolbars, panels, dialogs, icons and built-in studies (default)
@@ -218,7 +219,7 @@ egui-charts = { version = "0.2", default-features = false, features = ["widget",
 egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
 ```
 
-`serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
+`locales` names months and weekdays and the AM/PM marker in the language given to `Chart::set_locale` or `LocaleTimeFormatter`, from chrono's locale tables; the builds above with `default-features = false` leave it out and write those names in English unless they list it. `serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
 
 `cargo bench --bench bare_chart --no-default-features --features widget` measures the frame cost of the bare chart example.
 

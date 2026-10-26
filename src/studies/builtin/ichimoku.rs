@@ -277,6 +277,8 @@ mod tests {
                 low: lows[i],
                 close: closes[i],
                 volume: 1.0,
+                colors: None,
+                payload: None,
             })
             .collect();
         let n = f64::NAN;

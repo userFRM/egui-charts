@@ -25,9 +25,12 @@ pub struct ChartPointer {
     /// Pane counted from the top among the panes drawn, the price pane with its volume band
     /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
-    /// Main series bar, or price-based element, at `index`; `None` in whitespace.
+    /// Main series bar, or price-based element, at `index`, with its colours and payload: a
+    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` in the whitespace before the
+    /// first bar or after the last.
     pub bar: Option<Bar>,
-    /// Close of the bar or element before `index`, from which legends measure the change.
+    /// Close of the last bar or element with a value before `index`, from which legends measure
+    /// the change.
     pub previous_close: Option<f64>,
     /// Each visible series added with `add_series` or `add_comparison` that has a bar at `time`.
     pub series_bars: Vec<(SeriesId, Bar)>,
@@ -48,7 +51,7 @@ pub struct ChartPointer {
 pub enum PointerTarget {
     /// A series or study line, as a click there would select it.
     Element(ChartElementId),
-    /// A drawing, by its [`crate::drawings::DrawingManager`] id.
+    /// A drawing, by its drawing id.
     Drawing(usize),
     /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
     Primitive(super::PrimitiveId),
@@ -284,8 +287,8 @@ impl Chart {
             pane,
             bar: bar_at.map(|index| shown[index].clone()),
             previous_close: bar_at
-                .and_then(|index| index.checked_sub(1))
-                .map(|index| shown[index].close),
+                .and_then(|index| crate::model::last_with_value(&shown[..index]))
+                .map(|bar| bar.close),
             series_bars: self
                 .price_series
                 .iter()
@@ -401,7 +404,11 @@ mod tests {
         chart.set_symbol("A");
         chart.set_timeframe(crate::model::Timeframe::Day1);
         chart.set_timeframe(crate::model::Timeframe::Day1);
-        let bars = chart.bars(SeriesId::MAIN).to_vec();
+        let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+        // A payload comes back with its bar, and a whitespace bar keeps its slot and is skipped
+        // for the previous close.
+        bars[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": 70 })));
+        bars[69] = Bar::whitespace(bars[69].time);
         chart.set_data(SeriesId::MAIN, bars.clone());
         chart.update(SeriesId::MAIN, bars[99].clone());
         assert_eq!(
@@ -495,7 +502,7 @@ mod tests {
             // Each candle spans 100..200, so the pointer is over the main series.
             assert_eq!((pointer.index, pointer.pos, pointer.pane), (70, pos, 0));
             assert_eq!(pointer.bar.as_ref(), Some(&bars[70]));
-            assert_eq!(pointer.previous_close, Some(bars[69].close));
+            assert_eq!(pointer.previous_close, Some(bars[68].close));
             assert!(pointer.series_bars.is_empty() && pointer.studies.is_empty());
             assert_eq!(
                 pointer.target,
@@ -683,13 +690,16 @@ mod tests {
         // Added series, drawings, touch input and held modifiers reach the payload.
         let series = chart.add_series(Default::default());
         chart.set_data(series, bars.clone());
-        let mut line = crate::drawings::Drawing::with_color(
-            1,
-            crate::drawings::DrawingToolType::HorizontalLine,
-            [255, 0, 0, 255],
-        );
-        line.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 150.0)];
-        chart.drawings_mut().drawings.push(line);
+        #[cfg(feature = "drawings")]
+        {
+            let mut line = crate::drawings::Drawing::with_color(
+                1,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [255, 0, 0, 255],
+            );
+            line.chart_points = vec![crate::drawings::ChartPoint::new(50.0, 150.0)];
+            chart.drawings_mut().drawings.push(line);
+        }
         frame(&ctx, &mut chart, 3.6, vec![]);
         chart.drain_events().for_each(drop);
         let map = chart.get_chart_mapping();
@@ -715,12 +725,14 @@ mod tests {
             panic!("{events:?}")
         };
         assert_eq!(pointer.series_bars, vec![(series, bars[70].clone())]);
+        #[cfg(feature = "drawings")]
         assert_eq!(pointer.target, Some(PointerTarget::Drawing(1)));
         assert_eq!(
             (pointer.modifiers, pointer.kind),
             (Modifiers::SHIFT, PointerKind::Touch)
         );
         chart.remove_series(series);
+        #[cfg(feature = "drawings")]
         chart.drawings_mut().drawings.clear();
         frame(
             &ctx,

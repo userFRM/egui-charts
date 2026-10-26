@@ -78,7 +78,8 @@ thread_local! {
 }
 
 /// The build for `full` at `revision`: `fresh` makes an empty builder, `start` picks the first
-/// bar to push (the work bound of Renko and range bars, 0 for the others).
+/// bar to push (the work bound of Renko and range bars, 0 for the others). Whitespace bars are
+/// not pushed.
 fn cached<B: PriceBuilder + Clone, P: Copy + PartialEq>(
     cache: &'static LocalKey<RefCell<SpanCache<Built<B>, P>>>,
     param: P,
@@ -98,14 +99,16 @@ fn cached<B: PriceBuilder + Clone, P: Copy + PartialEq>(
             |bars| {
                 let mut builder = fresh();
                 let from = start(bars);
-                for bar in &bars[from..] {
+                for bar in bars[from..].iter().filter(|bar| !bar.is_whitespace()) {
                     builder.push(bar);
                 }
                 Built::new(builder, limit, from > 0, bar)
             },
             |built, next| {
                 let mut builder = built.builder.clone();
-                builder.push(next);
+                if !next.is_whitespace() {
+                    builder.push(next);
+                }
                 Some(Built::new(builder, limit, built.late_start, bar))
             },
         )
@@ -186,6 +189,8 @@ pub(super) fn line_break(
             low: line.low(),
             close: line.close,
             volume: 0.0,
+            colors: None,
+            payload: None,
         },
     )
 }
@@ -213,6 +218,8 @@ pub(super) fn point_and_figure(
             low: column.low(),
             close: column.end_price,
             volume: 0.0,
+            colors: None,
+            payload: None,
         },
     )
 }
@@ -336,6 +343,8 @@ mod tests {
                     low: o.min(c),
                     close: c,
                     volume: 0.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -344,6 +353,7 @@ mod tests {
     /// Studies consume element OHLC, and time annotations land on completion slots.
     #[cfg(feature = "studies")]
     #[test]
+    #[cfg(feature = "drawings")]
     fn studies_and_annotations_follow_price_based_elements() {
         use crate::{
             drawings::DrawingToolType,

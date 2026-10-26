@@ -28,6 +28,9 @@ pub(super) fn render_high_low(
     bearish_color: Color32,
 ) {
     for (i, bar) in visible_data.iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
 
         let y_high = price_scale.price_to_y(bar.high);

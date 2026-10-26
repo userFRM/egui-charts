@@ -293,6 +293,12 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             ui.checkbox(&mut config.extend_right, "Extend right");
         });
     }
+    if matches!(
+        drawing.tool_type,
+        Tool::FibonacciRetracement | Tool::FibonacciExtension
+    ) {
+        ui.checkbox(&mut config.logarithmic, "Logarithmic levels");
+    }
     if config != original {
         drawing.fib_config = Some(config);
     }

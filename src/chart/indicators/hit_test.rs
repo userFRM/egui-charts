@@ -92,6 +92,13 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
+    #[cfg(feature = "drawings")]
+    if !indicator.drawings().is_empty() {
+        let drawings = crate::studies::plots::mapped_drawings(indicator, coords, value_to_y);
+        return crate::drawings::services::DrawingInteraction::new()
+            .hit_test(click_pos, &drawings, "")
+            .map(|_| coords.x_to_idx(click_pos.x));
+    }
     let mut plot = indicator.plot_style(line_idx);
     if !indicator.candles().is_empty() {
         return indicator
@@ -130,10 +137,16 @@ where
     {
         plot.width = coords.bar_spacing * 0.8;
     }
+    // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
+    let reach = HIT_TOLERANCE + plot.width + coords.bar_spacing;
+    let start = visible_range
+        .start
+        .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1));
     let end = visible_range
         .end
-        .max(coords.x_to_idx(rect.right()).saturating_add(1));
-    for bar in visible_range.start..end {
+        .max(coords.x_to_idx(rect.right()).saturating_add(1))
+        .min(coords.x_to_idx(click_pos.x + reach).saturating_add(2));
+    for bar in start..end {
         let Some(value) = indicator.plot_value(line_idx, bar) else {
             continue;
         };

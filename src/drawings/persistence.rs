@@ -113,7 +113,7 @@ impl StoredDrawing {
     }
 
     /// The first field holding NaN or an infinity, which JSON cannot store.
-    fn non_finite_field(&self) -> Option<String> {
+    pub(super) fn non_finite_field(&self) -> Option<String> {
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
         if bad(d.stroke_width.into()) {
@@ -770,6 +770,7 @@ mod tests {
             extend_left: true,
             extend_right: true,
             reverse: true,
+            logarithmic: true,
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
@@ -784,8 +785,20 @@ mod tests {
     #[test]
     fn every_tool_round_trips_with_all_settings() {
         use crate::drawings::ProfileDisplay::{Delta, Total, UpDown};
-        for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
+        for (tool, custom_anchors) in DrawingToolType::all()
+            .iter()
+            .copied()
+            .filter(|t| !t.is_cursor())
+            .map(|tool| (tool, None))
+            .chain((1..=3).map(|anchors| (DrawingToolType::Polyline, Some(anchors))))
+        {
             let mut drawing = non_default_drawing(tool);
+            if let Some(anchors) = custom_anchors {
+                drawing.custom_tool = Some("host-shape".into());
+                drawing.custom_settings = serde_json::json!({"radius": 10});
+                drawing.chart_points.truncate(anchors);
+                drawing.update_screen_coords(bar_to_x, price_to_y);
+            }
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![0.25, 0.75],
                 time_levels: vec![0.5],
@@ -796,6 +809,9 @@ mod tests {
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
+            drawing.selectable = false;
+            drawing.listed = false;
+            drawing.group = Some("levels".into());
             if matches!(
                 tool,
                 DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
@@ -933,6 +949,7 @@ mod tests {
         for (stored, tool) in v2.drawings().iter().zip(tools) {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
+            want.fib_config.as_mut().unwrap().logarithmic = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
