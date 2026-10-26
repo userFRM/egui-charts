@@ -919,7 +919,7 @@ impl DemoApp {
             self.indicator_dialog.show(ctx, &self.theme)
         {
             self.chart.begin_user_action();
-            let inputs = self.indicator_dialog.input_summary(study.name());
+            let inputs = study_input_summary(study.as_ref());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
             self.chart.end_user_action();
@@ -3770,11 +3770,6 @@ mod tests {
                     }
                 };
                 click(&mut app, row);
-                let output = frame(&mut app, vec![]);
-                let add = text_at(&output, "Add");
-                assert!(ctx.content_rect().contains(add));
-                output.drop_without_applying_deltas();
-                click(&mut app, add);
                 let child = app
                     .chart
                     .indicators()

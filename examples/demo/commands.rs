@@ -68,7 +68,7 @@ impl DemoApp {
         }
         if let Some(name) = id.strip_prefix("study:") {
             if let Some(study) = IndicatorFactory::new().create(name) {
-                let inputs = self.indicator_dialog.input_summary(name);
+                let inputs = super::study_input_summary(study.as_ref());
                 let id = self.chart.add_indicator(study);
                 self.chart.set_indicator_inputs(id, inputs);
             }

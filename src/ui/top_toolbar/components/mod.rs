@@ -22,7 +22,7 @@ pub use chart_type_selector::{
 // From indicator_dialog
 pub use indicator_dialog::{
     IndicatorCategory, IndicatorDialog, IndicatorDialogAction, IndicatorDialogConfig,
-    IndicatorInfo, IndicatorParams, IndicatorTab,
+    IndicatorInfo, IndicatorTab,
 };
 
 // From chart_grid_selector
