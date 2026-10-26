@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo saves comparison symbols, styles, visibility, pane positions and price scales beside each layout's chart snapshots, and recreates their synthetic feed bindings on restore. Save As, rename and autosave retain these definitions; older layouts open without comparisons. ([#960](https://github.com/userFRM/egui-charts/issues/960))
+
 - Chart settings use the active representation's Symbol controls for line styles, area and baseline fills, and price-based construction inputs. The demo's top gear, price-axis gear, main-series menu and main-series double-click open the same seven-tab dialog with current values. `ChartSettingsState` literals add `chart_type`, `chart_type_params` and `price_source`, or use `..Default::default()`; older saved settings retain the chart's existing parameters. `SettingsAction::Apply` carries `Box<ChartSettingsState>`; dereference it when passing settings to an owned setter. ([#965](https://github.com/userFRM/egui-charts/issues/965), [#966](https://github.com/userFRM/egui-charts/issues/966))
 
 - The demo selects Range bars with a range interval and sizes them in instrument ticks. Copy price writes the selected price to the clipboard at instrument precision. Fresh sessions start with both crosshair strokes; saved cursor choices are retained. ([#968](https://github.com/userFRM/egui-charts/issues/968), [#969](https://github.com/userFRM/egui-charts/issues/969), [#970](https://github.com/userFRM/egui-charts/issues/970))

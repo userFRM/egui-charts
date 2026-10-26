@@ -4310,6 +4310,42 @@ mod tests {
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into()));
+        app.add_series_pane();
+        let rsi = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::RSI::new(14)));
+        let pane = app.chart.series_pane(rsi).unwrap();
+        app.chart.move_pane(pane, 0);
+        let id = app.comparisons[0].1;
+        let mut options = app
+            .chart
+            .series()
+            .find(|(key, _)| *key == id)
+            .unwrap()
+            .1
+            .clone();
+        options.width = 4.0;
+        options.color = egui::Color32::YELLOW;
+        options.scale = egui_charts::model::SeriesScale::Separate(7);
+        app.chart.set_series_options(id, options);
+        app.chart.set_series_visible(id, false);
+        app.chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(100.0, 200.0);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        for _ in 0..3 {
+            ctx.run_ui(Default::default(), |ui| {
+                app.chart.show(ui);
+                for extra in &mut app.extra_charts {
+                    extra.chart.show(ui);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+        app.chart
+            .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         assert!(!app.export_dialog.is_open());
         app.poll_storage(&ctx);
@@ -4321,6 +4357,36 @@ mod tests {
         app.poll_storage(&ctx);
         let saved = |app: &DemoApp| {
             assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert_eq!(app.comparisons.len(), 2);
+            assert_eq!(
+                app.chart.chart_options().crosshair.style,
+                egui_charts::config::CrosshairStyle::Dot
+            );
+            assert_eq!(app.extra_charts.len(), 1);
+            assert_eq!(app.extra_charts[0].comparisons.len(), 2);
+            for (_, id, _) in &app.extra_charts[0].comparisons {
+                assert!(!app.extra_charts[0].chart.bars(*id).is_empty());
+            }
+            let id = app
+                .comparisons
+                .iter()
+                .find(|(symbol, _, _)| symbol == "AAPL")
+                .unwrap()
+                .1;
+            let options = app.chart.series().find(|(key, _)| *key == id).unwrap().1;
+            assert_eq!(options.width, 4.0);
+            assert_eq!(options.color, egui::Color32::YELLOW);
+            assert_eq!(options.scale, egui_charts::model::SeriesScale::Separate(7));
+            assert!(!app.chart.is_series_visible(id));
+            assert_eq!(app.chart.series_price_scale(id).unwrap().range().min, 100.0);
+            assert_eq!(app.chart.series_price_scale(id).unwrap().range().max, 200.0);
+            let pane = app.chart.series_pane(app.comparisons[1].1).unwrap();
+            assert_ne!(pane, egui_charts::widget::PaneId::MAIN);
+            assert_eq!(app.chart.panes()[1], pane);
+            assert_eq!(app.chart.pane_stretch_factor(pane), Some(1.5));
+            for (_, id, _) in &app.comparisons {
+                assert!(!app.chart.bars(*id).is_empty());
+            }
             assert!(app.chart.indicators().any(|(_, study)| {
                 study.inputs().first().map(|input| &input.value)
                     == Some(&egui_charts::studies::InputValue::Length(7))
@@ -4333,6 +4399,12 @@ mod tests {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut app = DemoApp::new(&cc);
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_layout_action(LayoutAction::Rename("Unnamed".into(), "Renamed".into()));
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_layout_action(LayoutAction::SaveAs("Copy".into()));
         app.poll_storage(&ctx);
         saved(&app);
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
