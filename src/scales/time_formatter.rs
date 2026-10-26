@@ -8,8 +8,8 @@
 //! Use [`TimeFormatterBuilder`] for a fluent construction API.
 
 use super::timescale_marks::TickMarkType;
+use crate::model::TimezoneId;
 use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -400,48 +400,55 @@ pub enum TimezoneMode {
     /// Display in user's local timezone
     Local,
     /// Display in specific timezone
-    Timezone(Tz),
+    Timezone(TimezoneId),
     /// Display in exchange/venue timezone (user must specify via Timezone)
-    Exchange(Tz),
+    Exchange(TimezoneId),
 }
 
 impl TimezoneMode {
-    /// Common exchange timezones
+    /// New York exchange time, with daylight-saving rules (`timezones` feature).
+    #[cfg(feature = "timezones")]
     pub fn nyse() -> Self {
-        TimezoneMode::Exchange(Tz::America__New_York)
+        TimezoneMode::Exchange("America/New_York".parse().unwrap())
     }
 
+    /// London exchange time, with daylight-saving rules (`timezones` feature).
+    #[cfg(feature = "timezones")]
     pub fn lse() -> Self {
-        TimezoneMode::Exchange(Tz::Europe__London)
+        TimezoneMode::Exchange("Europe/London".parse().unwrap())
     }
 
+    /// Tokyo exchange time (`timezones` feature).
+    #[cfg(feature = "timezones")]
     pub fn jse() -> Self {
-        TimezoneMode::Exchange(Tz::Asia__Tokyo)
+        TimezoneMode::Exchange("Asia/Tokyo".parse().unwrap())
     }
 
+    /// Hong Kong exchange time (`timezones` feature).
+    #[cfg(feature = "timezones")]
     pub fn hkex() -> Self {
-        TimezoneMode::Exchange(Tz::Asia__Hong_Kong)
+        TimezoneMode::Exchange("Asia/Hong_Kong".parse().unwrap())
     }
 
-    /// Get the underlying Tz for conversion
-    pub fn to_tz(&self) -> Option<Tz> {
+    /// Get the selected zone for conversion; UTC and system local time return `None`.
+    pub fn to_tz(&self) -> Option<TimezoneId> {
         match self {
             TimezoneMode::Utc => None,   // Already UTC
             TimezoneMode::Local => None, // Will use system local
-            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => Some(*tz),
+            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => Some(tz.clone()),
         }
     }
 }
 
 /// Timezone-aware formatter wrapper
 /// Converts ts to target timezone before formatting
-pub struct TimezoneAwareFormatter {
+pub struct TimezoneAwareFormatter<T> {
     inner: Box<dyn TimeFormatter>,
-    timezone: TimezoneMode,
+    timezone: T,
     time_visible: bool,
 }
 
-impl Clone for TimezoneAwareFormatter {
+impl<T: Clone> Clone for TimezoneAwareFormatter<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone_box(),
@@ -451,30 +458,24 @@ impl Clone for TimezoneAwareFormatter {
     }
 }
 
-impl TimezoneAwareFormatter {
+impl<T: chrono::TimeZone> TimezoneAwareFormatter<T> {
     /// Create a new timezone-aware formatter
-    pub fn new(inner: Box<dyn TimeFormatter>, timezone: TimezoneMode) -> Self {
+    pub fn new(inner: Box<dyn TimeFormatter>, timezone: T, time_visible: bool) -> Self {
         Self {
             inner,
             timezone,
-            time_visible: true,
+            time_visible,
         }
     }
 
     /// Convert UTC ts to target timezone
     fn convert_timezone(&self, utc_time: DateTime<Utc>) -> DateTime<Utc> {
         use crate::model::session::local_time;
-        match &self.timezone {
-            TimezoneMode::Utc => utc_time,
-            TimezoneMode::Local => local_time(chrono::Local, utc_time).and_utc(),
-            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => {
-                local_time(*tz, utc_time).and_utc()
-            }
-        }
+        local_time(self.timezone.clone(), utc_time).and_utc()
     }
 }
 
-impl TimeFormatter for TimezoneAwareFormatter {
+impl<T: chrono::TimeZone + Send + Sync + 'static> TimeFormatter for TimezoneAwareFormatter<T> {
     fn format(&self, time: DateTime<Utc>, mark_type: TickMarkType) -> String {
         let converted = self.convert_timezone(time);
         if !self.time_visible
@@ -499,13 +500,7 @@ impl TimeFormatter for TimezoneAwareFormatter {
 
     fn utc_time(&self, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
         use crate::model::session::local_instant;
-        match &self.timezone {
-            TimezoneMode::Utc => Some(time),
-            TimezoneMode::Local => local_instant(chrono::Local, time.naive_utc()),
-            TimezoneMode::Timezone(tz) | TimezoneMode::Exchange(tz) => {
-                local_instant(*tz, time.naive_utc())
-            }
-        }
+        local_instant(self.timezone.clone(), time.naive_utc())
     }
 
     fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
@@ -617,9 +612,20 @@ impl TimeFormatterBuilder {
             .into_box()
         };
 
-        let mut formatter = TimezoneAwareFormatter::new(base, self.timezone.unwrap_or_default());
-        formatter.time_visible = self.time_visible;
-        Box::new(formatter)
+        // UTC and system-local formatters need no storage for a selected zone.
+        match self.timezone.unwrap_or_default() {
+            TimezoneMode::Utc => {
+                Box::new(TimezoneAwareFormatter::new(base, Utc, self.time_visible))
+            }
+            TimezoneMode::Local => Box::new(TimezoneAwareFormatter::new(
+                base,
+                chrono::Local,
+                self.time_visible,
+            )),
+            TimezoneMode::Timezone(zone) | TimezoneMode::Exchange(zone) => {
+                Box::new(TimezoneAwareFormatter::new(base, zone, self.time_visible))
+            }
+        }
     }
 }
 
@@ -761,26 +767,100 @@ mod tests {
     }
 
     #[test]
-    fn test_timezone_conversion_utc() {
+    fn builder_overrides_host_calendar_and_clock_visibility() {
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, time: DateTime<Utc>, _: TickMarkType) -> String {
+                time.to_rfc3339()
+            }
+            fn wall_time(&self, time: DateTime<Utc>) -> DateTime<Utc> {
+                time + chrono::Duration::hours(1)
+            }
+            fn utc_time(&self, _: DateTime<Utc>) -> Option<DateTime<Utc>> {
+                None
+            }
+            fn time_visible(&self) -> bool {
+                false
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(self.clone())
+            }
+        }
+        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
         let formatter = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(false)
+            .with_formatter(Box::new(Host))
             .with_timezone(TimezoneMode::Utc)
             .build();
-
-        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
-        let result = formatter.format(time, TickMarkType::Time);
-        assert_eq!(result, "14:30");
+        for formatter in [formatter.clone_box(), formatter] {
+            assert!(formatter.time_visible());
+            assert_eq!(formatter.wall_time(time), time);
+            assert_eq!(formatter.utc_time(time), Some(time));
+            assert_eq!(
+                formatter.format(time, TickMarkType::Time),
+                time.to_rfc3339()
+            );
+        }
     }
 
     #[test]
-    fn test_timezone_conversion_ny() {
-        use chrono_tz::America::New_York;
+    fn test_timezone_conversion_utc_and_fixed_offsets() {
+        let time = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+        for (name, label, wall) in [
+            ("UTC", "14:30", "2024-06-15T14:30:00Z"),
+            ("+05:45", "20:15", "2024-06-15T20:15:00Z"),
+            ("-03:30", "11:00", "2024-06-15T11:00:00Z"),
+            ("+14:00", "04:30", "2024-06-16T04:30:00Z"),
+            ("-12:00", "02:30", "2024-06-15T02:30:00Z"),
+            ("+00:19:32", "14:49", "2024-06-15T14:49:32Z"),
+            ("+23:59:59", "14:29", "2024-06-16T14:29:59Z"),
+            ("-23:59:59", "14:30", "2024-06-14T14:30:01Z"),
+        ] {
+            let mode = TimezoneMode::Timezone(name.parse().unwrap());
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(json, format!(r#"{{"Timezone":"{name}"}}"#));
+            assert_eq!(serde_json::from_str::<TimezoneMode>(&json).unwrap(), mode);
+            let formatter = TimeFormatterBuilder::new()
+                .with_24_hour(true)
+                .with_seconds(false)
+                .with_timezone(mode)
+                .build();
+            assert_eq!(formatter.format(time, TickMarkType::Time), label, "{name}");
+            assert_eq!(
+                formatter.wall_time(time),
+                wall.parse::<DateTime<Utc>>().unwrap(),
+                "{name}"
+            );
+            assert_eq!(formatter.utc_time(formatter.wall_time(time)), Some(time));
+        }
+        for invalid in [
+            "",
+            "+24:00",
+            "-24:00",
+            "+01:60",
+            "+01:00:60",
+            "+01:00junk",
+            "+１:00",
+            "unknown",
+        ] {
+            assert!(invalid.parse::<TimezoneId>().is_err(), "{invalid}");
+        }
+        for seconds in [i32::MIN, -86_400, 86_400, i32::MAX] {
+            assert!(TimezoneId::fixed_offset(seconds).is_none());
+        }
+        assert_eq!(
+            TimezoneId::named("America/New_York").is_some(),
+            cfg!(feature = "timezones")
+        );
+    }
 
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn test_timezone_conversion_ny() {
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(false)
-            .with_timezone(TimezoneMode::Timezone(New_York))
+            .with_timezone(TimezoneMode::Timezone("America/New_York".parse().unwrap()))
             .build();
 
         // June 15, 2024 14:30 UTC = 10:30 EDT (UTC-4)
@@ -801,14 +881,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn test_dst_spring_forward() {
-        use chrono_tz::America::New_York;
-
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange(New_York))
+            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
             .build();
 
         // 2024 DST transition: March 10, 2:00 AM -> 3:00 AM
@@ -823,14 +902,13 @@ mod tests {
         assert_eq!(result_after, "04:00:00");
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn test_dst_fall_back() {
-        use chrono_tz::America::New_York;
-
         let formatter = TimeFormatterBuilder::new()
             .with_24_hour(true)
             .with_seconds(true)
-            .with_timezone(TimezoneMode::Exchange(New_York))
+            .with_timezone(TimezoneMode::Exchange("America/New_York".parse().unwrap()))
             .build();
 
         // 2024 DST transition: November 3, 2:00 AM -> 1:00 AM
@@ -845,6 +923,7 @@ mod tests {
         assert_eq!(result_after, "02:00:00");
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn test_timezone_london() {
         let formatter = TimeFormatterBuilder::new()
@@ -864,6 +943,7 @@ mod tests {
         assert_eq!(result_winter, "14:30");
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn test_timezone_tokyo() {
         let formatter = TimeFormatterBuilder::new()
@@ -879,6 +959,7 @@ mod tests {
         assert_eq!(result, "23:30");
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn test_timezone_clone() {
         let formatter1 = TimeFormatterBuilder::new()

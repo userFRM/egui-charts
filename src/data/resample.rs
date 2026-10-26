@@ -212,6 +212,7 @@ mod tests {
         Bar::new(time, open, high, low, close, volume)
     }
 
+    #[cfg(feature = "timezones")]
     #[test]
     fn resamples_selected_exchange_sessions() {
         use crate::model::{Session, SessionWindow, TimezoneId};
@@ -335,7 +336,8 @@ mod tests {
             resample_with_session(&monday, Timeframe::Hour1, Timeframe::Day1, &tokyo, false),
             Some(monday)
         );
-        let local = BarClock::new(Timeframe::Day1).with_timezone(chrono_tz::America::New_York);
+        let local =
+            BarClock::new(Timeframe::Day1).with_timezone("America/New_York".parse().unwrap());
         let selected =
             resample_with_session(&input, Timeframe::Hour1, local, &overnight, false).unwrap();
         assert_eq!(
@@ -416,7 +418,10 @@ mod tests {
         for (from, to, bars, expected) in cases {
             assert_eq!(resample(&bars, from, to), expected, "{from} to {to}");
         }
-        let local = BarClock::new(Timeframe::Hour4).with_timezone(chrono_tz::America::New_York);
+        let Some(zone) = crate::model::TimezoneId::named("America/New_York") else {
+            return;
+        };
+        let local = BarClock::new(Timeframe::Hour4).with_timezone(zone);
         // Local midnight to 04:00 lasts three hours on the spring clock change.
         let input = vec![
             bar("2024-03-10T05:00:00Z", [100.0, 101.0, 99.0, 100.0, 2.0]),

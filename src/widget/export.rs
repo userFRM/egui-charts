@@ -53,7 +53,7 @@ impl Chart {
         match self.display_timezone() {
             crate::scales::TimezoneMode::Local => time.with_timezone(&chrono::Local).to_rfc3339(),
             zone => time
-                .with_timezone(&zone.to_tz().unwrap_or(chrono_tz::UTC))
+                .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
                 .to_rfc3339(),
         }
     }
@@ -394,7 +394,7 @@ mod tests {
         ]
         .map(|time| DateTime::parse_from_rfc3339(time).unwrap().to_utc())
         .into();
-        for (zone, expected_times) in [
+        let zones = [
             (
                 crate::scales::TimezoneMode::Utc,
                 [
@@ -402,21 +402,24 @@ mod tests {
                     "2024-11-03T06:30:00.125+00:00",
                 ],
             ),
+            #[cfg(feature = "timezones")]
             (
-                crate::scales::TimezoneMode::Timezone(chrono_tz::America::New_York),
+                crate::scales::TimezoneMode::Timezone("America/New_York".parse().unwrap()),
                 [
                     "2024-11-03T01:30:00.125-04:00",
                     "2024-11-03T01:30:00.125-05:00",
                 ],
             ),
+            #[cfg(feature = "timezones")]
             (
-                crate::scales::TimezoneMode::Exchange(chrono_tz::UTC),
+                crate::scales::TimezoneMode::Exchange(crate::model::TimezoneId::utc()),
                 [
                     "2024-11-03T01:30:00.125-04:00",
                     "2024-11-03T01:30:00.125-05:00",
                 ],
             ),
-        ] {
+        ];
+        for (zone, expected_times) in zones {
             let bars: Vec<_> = times
                 .iter()
                 .zip([10.0, 14.0, 18.0])

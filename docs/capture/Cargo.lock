@@ -566,7 +566,6 @@ checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
 dependencies = [
  "chrono",
  "phf 0.12.1",
- "serde",
 ]
 
 [[package]]
@@ -831,6 +830,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "log",
+ "png 0.17.16",
  "resvg",
  "serde",
  "serde_json",

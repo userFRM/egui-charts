@@ -30,10 +30,7 @@ pub(crate) fn exchange_session(
     use chrono::{NaiveTime, Weekday::*};
     let supplied_zone = instrument.and_then(|instrument| instrument.time_zone.clone());
     let mut local_zone = supplied_zone.is_none() && *timezone == crate::scales::TimezoneMode::Local;
-    let mut zone = supplied_zone.unwrap_or_else(|| {
-        TimezoneId::named(timezone.to_tz().map_or("UTC", |tz| tz.name()))
-            .unwrap_or_else(TimezoneId::utc)
-    });
+    let mut zone = supplied_zone.unwrap_or_else(|| timezone.to_tz().unwrap_or_default());
     let mut session = instrument.and_then(|instrument| instrument.session.clone());
     if let Some(config) = config
         && let (Some(time_zone), Ok(open), Ok(close)) = (

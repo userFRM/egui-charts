@@ -126,7 +126,7 @@ harness = false
 required-features = ["widget"]
 
 [features]
-default = ["ui", "locales"]
+default = ["ui", "locales", "timezones"]
 ## The egui chart widget: `Chart`, `ChartBuilder`, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
@@ -148,6 +148,9 @@ ui = ["icons", "studies", "drawings", "dep:thiserror", "eframe/accesskit"]
 ## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
 ## Without it those labels stay in English.
 locales = ["chrono/unstable-locales"]
+## IANA time zones and daylight-saving rules from chrono-tz, enabled by default.
+## Without it, UTC, system local time and explicit fixed offsets remain available.
+timezones = ["dep:chrono-tz"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
 
@@ -184,6 +187,7 @@ rand = "0.10.0"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # `examples/bare_chart.rs` starts its web runner from the page.
 wasm-bindgen-futures = "0.4.79"
+wasm-bindgen-test = "0.3.79"
 
 [dependencies]
 # theme::apply_to_egui installs the bundled Roboto face.
@@ -197,7 +201,7 @@ resvg = { version = "0.45.1", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
-chrono-tz = { version = "0.10.4", features = ["serde"] }
+chrono-tz = { version = "0.10.4", optional = true }
 web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
 # Encodes chart images rasterised by `Chart::export_png`.

@@ -203,7 +203,7 @@ With the `serde` feature, `Theme` implements `Serialize` and `Deserialize`, so a
 | Icons | Embedded SVG icons, drawn through `egui_extras` | `icons` |
 | Terminal UI | Top, drawing and timeframe toolbars, replay controls, side panels, broker picker, account panel, order tickets with a depth ladder and trading lines, dialogs, and the `ui_kit` widgets they are built from | `ui` |
 
-The default features are `ui`, which enables `icons`, `widget`, `studies` and `drawings`, and `locales`.
+The default features are `ui`, `locales` and `timezones`. `ui` enables `icons`, `widget`, `studies` and `drawings`.
 
 ```toml
 # The chart with toolbars, panels, dialogs, icons and built-in studies (default)
@@ -218,6 +218,8 @@ egui-charts = { version = "0.2", default-features = false, features = ["widget",
 # The engine with the built-in studies, without egui
 egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
 ```
+
+`timezones` (on by default) supplies IANA zones and daylight-saving rules through the optional `chrono-tz` dependency. Without it, UTC, system local time and fixed offsets remain available: `TimezoneMode::Timezone("+05:45".parse()?)` and `TimezoneId::fixed_offset(5 * 3600 + 45 * 60)` need no database. Named zones are rejected when the feature is off; Trading Sessions uses fixed standard-time offsets (+09:00, +00:00 and -05:00) for its default sessions, which the host can override with `with_session`; the exchange presets (`TimezoneMode::{nyse,lse,jse,hkex}` and `DailySessionProvider::nyse`) require it. Session configuration presets and the settings time zone list use fixed offsets when the feature is off. Add `"timezones"` to the feature list above when the host supplies named exchange zones. Time zone APIs use the crate's `model::TimezoneId`; callers no longer depend on a particular `chrono-tz` version. Persisted named-zone strings keep their format.
 
 `locales` names months and weekdays and the AM/PM marker in the language given to `Chart::set_locale` or `LocaleTimeFormatter`, from chrono's locale tables; the builds above with `default-features = false` leave it out and write those names in English unless they list it. `serde` (off by default) adds `Serialize` and `Deserialize` to `Theme`. `theme::apply_to_egui` installs the bundled Roboto ahead of the application's proportional fonts. To replace it, call `egui::Context::set_fonts` after applying the theme. eframe enables egui's `default_fonts` as fallbacks by default. Since egui 0.37 those fonts have no emoji, which need egui's `monochrome_emoji_fonts` feature or fonts the application installs. The chart installs no image loader other than SVG; an application that shows PNG, JPEG, file or HTTP images calls `egui_extras::install_image_loaders` with the loader features it needs.
 
@@ -264,9 +266,9 @@ the adapter and error handling, and adds no language support to the library.
 | Target | Status |
 |---|---|
 | Linux x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
-| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on stable |
-| WebAssembly (wasm32-unknown-unknown) | The demo is built for it in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
+| macOS aarch64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| Windows x86_64 | Built and linted in CI on stable and the MSRV; tests run on both |
+| WebAssembly (wasm32-unknown-unknown) | Widget tests run in headless Chrome; the demo is built in CI and runs as the [live demo](https://userfrm.github.io/egui-charts/demo/) |
 
 Other targets are expected to work but are not built in CI. The chart is an egui widget, so it runs wherever egui runs: in an eframe window on Linux, macOS and Windows, or in the browser through eframe's web runner.
 

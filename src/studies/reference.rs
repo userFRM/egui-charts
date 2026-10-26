@@ -831,7 +831,13 @@ fn staple_studies_match_published_definitions() {
         ("AutoVWAP-LL", auto(AutoAnchor::LowestLow), bars.clone()),
         ("AutoVWAP-HV", auto(AutoAnchor::HighestVolume), bars.clone()),
     ]);
+    let available = |name: &str| match name {
+        "RVOL-chicago" | "Sessions-default" => cfg!(feature = "timezones"),
+        "Sessions-fixed" => !cfg!(feature = "timezones"),
+        _ => true,
+    };
     studies.extend(time_studies(&bars));
+    studies.retain(|(name, _, _)| available(name));
     for (_, study, data) in &mut studies {
         study.calculate(data);
     }
@@ -842,6 +848,9 @@ fn staple_studies_match_published_definitions() {
     for row in EXPECTED.lines() {
         let mut tokens = row.split_whitespace();
         let name = tokens.next().unwrap();
+        if !available(name) {
+            continue;
+        }
         let line: usize = tokens.next().unwrap().parse().unwrap();
         let idx = studies.iter().position(|(n, _, _)| *n == name);
         let idx = idx.unwrap_or_else(|| panic!("{name} has expected values but is not built"));
@@ -984,7 +993,7 @@ fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>
         (1_710_162_000, 400.0),
     ]);
     let futures = Instrument::new("FUTURES")
-        .with_time_zone(TimezoneId::named("America/Chicago").unwrap())
+        .with_time_zone(TimezoneId::named("America/Chicago").unwrap_or_default())
         .with_session(Session::new([SessionWindow::new(
             [
                 Weekday::Mon,
@@ -1107,7 +1116,11 @@ fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>
             seasons,
         ),
         (
-            "Sessions-default",
+            if cfg!(feature = "timezones") {
+                "Sessions-default"
+            } else {
+                "Sessions-fixed"
+            },
             Box::new(TradingSessions::new()),
             sessions.clone(),
         ),

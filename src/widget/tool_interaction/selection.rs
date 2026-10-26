@@ -240,7 +240,8 @@ mod tests {
 
     /// Shift-click keeps both drawings selected; dragging either body moves the group
     /// without panning, and Delete removes the whole selection in one undo step.
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn shift_selection_moves_and_deletes_as_one_action() {
         use crate::widget::test_frames::{chart, frame};
         use egui::{Key, Modifiers, vec2};

@@ -610,7 +610,8 @@ mod tests {
         chart.user_action(|chart| {
             chart.config_mut().background_color = Color32::RED;
             chart.price_scale_mut().options_mut().invert_scale = true;
-            chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::nyse();
+            chart.chart_options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone("+05:45".parse().unwrap());
         });
         chart.user_action(|chart| chart.set_timeframe(Timeframe::Hour1));
         chart.user_action(|chart| chart.set_chart_type(ChartType::Line));
@@ -697,7 +698,7 @@ mod tests {
                     assert_eq!(chart.state.price_scale().options().invert_scale, red);
                     assert_eq!(
                         chart.chart_options.time_scale.timezone
-                            == crate::scales::TimezoneMode::nyse(),
+                            == crate::scales::TimezoneMode::Timezone("+05:45".parse().unwrap()),
                         red
                     );
                 }
@@ -715,7 +716,8 @@ mod tests {
             if let Some(spacing) = spacing {
                 options.time_scale.bar_spacing = spacing;
             }
-            options.time_scale.timezone = crate::scales::TimezoneMode::nyse();
+            options.time_scale.timezone =
+                crate::scales::TimezoneMode::Timezone("+05:45".parse().unwrap());
             let before = std::mem::replace(chart, Chart::new(BarData::new()));
             *chart = before.with_chart_options(options);
         };

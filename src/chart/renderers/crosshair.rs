@@ -297,10 +297,12 @@ mod tests {
         let bars: Vec<_> = (0..30)
             .map(|i| Bar::new(time + Duration::hours(i), 704.0, 706.0, 703.0, 705.0, 10.0))
             .collect();
-        for (zone, first_label) in [
+        let zones = [
             (TimezoneMode::Utc, "Tue 01 Oct '24 00:30"),
+            #[cfg(feature = "timezones")]
             (TimezoneMode::nyse(), "Mon 30 Sep '24 20:30"),
-        ] {
+        ];
+        for (zone, first_label) in zones {
             let formatter = TimeFormatterBuilder::new().with_timezone(zone).build();
             for (index, hover_y, width, style) in [
                 (0, 100.0, 300.0, CrosshairStyle::Full),

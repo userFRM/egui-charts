@@ -139,8 +139,8 @@ impl TimeframeToolbarState {
     pub fn formatted_time(&self) -> String {
         let zone = self
             .timezone
-            .parse::<chrono_tz::Tz>()
-            .unwrap_or(chrono_tz::UTC);
+            .parse::<crate::model::TimezoneId>()
+            .unwrap_or(crate::model::TimezoneId::utc());
         match &self.curr_time {
             Some(time) => format!("{} {zone}", time.with_timezone(&zone).format("%H:%M:%S")),
             None => format!("--:--:-- {zone}"),
@@ -161,11 +161,14 @@ mod tests {
     fn clock_converts_the_named_zone_and_falls_back_to_utc() {
         for (instant, zone, expected) in [
             ("2026-01-15T13:00:00Z", "UTC", "13:00:00 UTC"),
+            ("2026-01-15T13:00:00Z", "+05:45", "18:45:00 +05:45"),
+            #[cfg(feature = "timezones")]
             (
                 "2026-01-15T13:00:00Z",
                 "America/New_York",
                 "08:00:00 America/New_York",
             ),
+            #[cfg(feature = "timezones")]
             (
                 "2026-07-15T13:00:00Z",
                 "America/New_York",

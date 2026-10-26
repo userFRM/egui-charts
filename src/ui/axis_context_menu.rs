@@ -102,7 +102,7 @@ impl AxisMenus {
         let config = chart.config();
         if time {
             let timezone = &chart.chart_options.time_scale.timezone;
-            let exchange = TimezoneMode::Exchange(chrono_tz::UTC);
+            let exchange = TimezoneMode::Exchange(crate::model::TimezoneId::utc());
             let mut entries = vec![
                 row(
                     "UTC",

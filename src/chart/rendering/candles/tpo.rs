@@ -828,7 +828,7 @@ mod tests {
         let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
         let days = [Mon, Tue, Wed, Thu, Fri];
         let clock = BarClock::new(Timeframe::Min30).with_session(
-            TimezoneId::named("America/New_York").unwrap(),
+            TimezoneId::fixed_offset(-5 * 3600).unwrap(),
             Session::new([SessionWindow::new(days, at(9, 30), at(16, 0))]).with_extended_windows([
                 SessionWindow::new(days, at(4, 0), at(9, 30)),
                 SessionWindow::new(days, at(16, 0), at(20, 0)),
@@ -953,7 +953,7 @@ mod tests {
                 "letters" => config.custom_letters = Some("xy".into()),
                 "grid" => config.tick_size = 2.0,
                 "global span" => bars.last_mut().unwrap().high = 2103.0,
-                "zone" => clock = clock.with_timezone(chrono_tz::Asia::Tokyo),
+                "zone" => clock = clock.with_timezone("+09:00".parse().unwrap()),
                 _ => unreachable!(),
             }
             let current = cached_profiles(

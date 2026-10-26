@@ -214,7 +214,7 @@ impl Indicator for HigherIntervalCandles {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "timezones"))]
 mod tests {
     use super::*;
     use crate::model::{Session, SessionWindow, TimezoneId};
@@ -303,7 +303,7 @@ mod tests {
             use egui::{Pos2, Rect, Shape};
             let mut options = crate::config::ChartOptions::default();
             options.time_scale.timezone =
-                crate::scales::TimezoneMode::Timezone(chrono_tz::Asia::Tokyo);
+                crate::scales::TimezoneMode::Timezone("Asia/Tokyo".parse().unwrap());
             let mut chart = crate::widget::ChartBuilder::new()
                 .with_chart_options(options)
                 .build();

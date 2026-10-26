@@ -1,8 +1,7 @@
 //! Bar boundaries in time.
 
-use super::Timeframe;
+use super::{Timeframe, TimezoneId};
 use chrono::{DateTime, Datelike, LocalResult, NaiveTime, Offset, TimeDelta, TimeZone, Utc};
-use chrono_tz::Tz;
 
 const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
@@ -13,7 +12,7 @@ const FIRST_MONDAY_MS: i64 = 4 * DAY_MS;
 pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
-    timezone: Option<Tz>,
+    timezone: Option<TimezoneId>,
     session: Option<super::ExchangeSessionProvider>,
 }
 
@@ -22,14 +21,14 @@ impl BarClock {
     pub fn new(timeframe: Timeframe) -> Self {
         Self {
             timeframe: Some(timeframe),
-            timezone: Some(chrono_tz::UTC),
+            timezone: Some(TimezoneId::utc()),
             session: None,
         }
     }
 
     /// Align time windows to the local calendar of `timezone`. Repeated clock hours remain
     /// separate; a boundary skipped by a clock change starts at the first valid local instant.
-    pub fn with_timezone(mut self, timezone: Tz) -> Self {
+    pub fn with_timezone(mut self, timezone: TimezoneId) -> Self {
         self.timezone = Some(timezone);
         self
     }
@@ -64,7 +63,7 @@ impl BarClock {
     pub(crate) fn exact() -> Self {
         Self {
             timeframe: None,
-            timezone: Some(chrono_tz::UTC),
+            timezone: Some(TimezoneId::utc()),
             session: None,
         }
     }
@@ -138,14 +137,14 @@ impl BarClock {
     }
 
     fn offset_at(&self, t: DateTime<Utc>) -> i32 {
-        match self.timezone {
-            Some(zone) => t.with_timezone(&zone).offset().fix().local_minus_utc(),
+        match &self.timezone {
+            Some(zone) => t.with_timezone(zone).offset().fix().local_minus_utc(),
             None => t.with_timezone(&chrono::Local).offset().local_minus_utc(),
         }
     }
 
     fn local_boundary(&self, local: chrono::NaiveDateTime, at: DateTime<Utc>) -> DateTime<Utc> {
-        let time = match self.timezone {
+        let time = match &self.timezone {
             Some(zone) => zone.from_local_datetime(&local).map(|time| time.to_utc()),
             None => chrono::Local
                 .from_local_datetime(&local)
@@ -160,8 +159,8 @@ impl BarClock {
                     first
                 }
             }
-            LocalResult::None => match self.timezone {
-                Some(zone) => super::session::local_instant(zone, local),
+            LocalResult::None => match &self.timezone {
+                Some(zone) => super::session::local_instant(zone.clone(), local),
                 None => super::session::local_instant(chrono::Local, local),
             }
             .unwrap_or(at),
@@ -219,8 +218,8 @@ impl BarClock {
     /// Label a trading date in this clock's calendar before finding its containing period.
     pub(crate) fn open_on_date(&self, date: chrono::NaiveDate) -> Option<DateTime<Utc>> {
         let midnight = date.and_time(NaiveTime::MIN);
-        let time = match self.timezone {
-            Some(zone) => super::session::local_instant(zone, midnight),
+        let time = match &self.timezone {
+            Some(zone) => super::session::local_instant(zone.clone(), midnight),
             None => super::session::local_instant(chrono::Local, midnight),
         }?;
         Some(self.bar_open(time))
@@ -234,12 +233,9 @@ impl BarClock {
     /// The trading days of this clock's bars: its exchange sessions, or calendar days in its
     /// time zone without them.
     pub(crate) fn sessions(&self) -> super::ExchangeSessionProvider {
-        let sessions = match (&self.session, self.timezone) {
+        let sessions = match (&self.session, &self.timezone) {
             (Some(session), _) => session.clone(),
-            (None, Some(zone)) => super::ExchangeSessionProvider::new(
-                super::TimezoneId::named(zone.name()).unwrap_or_else(super::TimezoneId::utc),
-                None,
-            ),
+            (None, Some(zone)) => super::ExchangeSessionProvider::new(zone.clone(), None),
             (None, None) => super::ExchangeSessionProvider::local(None),
         };
         sessions.with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
@@ -342,7 +338,10 @@ mod tests {
                 "2024-04-01T04:00:00Z",
             ),
         ] {
-            let clock = BarClock::new(timeframe).with_timezone(chrono_tz::America::New_York);
+            let Some(zone) = TimezoneId::named("America/New_York") else {
+                continue;
+            };
+            let clock = BarClock::new(timeframe).with_timezone(zone);
             assert_eq!(clock.bar_open(t(at)), t(open));
             assert_eq!(clock.next_open(t(open)), Some(t(next)));
         }

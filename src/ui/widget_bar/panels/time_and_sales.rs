@@ -3,13 +3,12 @@
 
 use std::collections::VecDeque;
 
-use chrono_tz::Tz;
 use egui::{Align, Align2, Label, Layout, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::object_tree::format_price;
 use crate::icons::icons;
-use crate::model::{Tick, TradeSide};
+use crate::model::{Tick, TimezoneId, TradeSide};
 use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
@@ -35,7 +34,7 @@ pub struct TimeAndSalesConfig {
     /// Decimals of sizes, as `Instrument::volume_decimals`.
     pub size_decimals: Option<u8>,
     /// Time zone of the time column, such as the chart's.
-    pub timezone: Tz,
+    pub timezone: TimezoneId,
 }
 
 /// The latest trades of one symbol, newest first, fed by the host.
