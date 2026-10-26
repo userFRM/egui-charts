@@ -90,7 +90,8 @@ impl Chart {
                 id: element,
                 bar_idx,
                 pos,
-                price: menu_value(self.studies.indicators()[index].as_ref(), bar_idx)
+                price: self
+                    .indicator_value_at(id, bar_idx)
                     .map_or(f64::NAN, |(_, value)| value),
             });
             return;

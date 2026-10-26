@@ -31,8 +31,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Price Momentum Oscillator: PMO and signal lines in a separate pane.
@@ -84,10 +84,7 @@ impl PriceMomentumOscillator {
             second_length: second_length.max(2),
             signal_length: signal_length.max(1),
             values: IndicatorValues::new(),
-            colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,
-                DESIGN_TOKENS.semantic.extended.warning,
-            ],
+            colors: vec![palette::BLUE, palette::ORANGE],
             visible: true,
         }
     }
@@ -167,7 +164,7 @@ impl Indicator for PriceMomentumOscillator {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(0.0, DESIGN_TOKENS.semantic.extended.gray, "Zero Line")],
+            levels: vec![(0.0, palette::GRAY, "Zero Line")],
             fill_between_levels: false,
         }
     }

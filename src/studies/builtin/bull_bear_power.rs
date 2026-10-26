@@ -27,8 +27,8 @@
 
 use super::ElderRay;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Bull Power plus Bear Power.
@@ -47,8 +47,8 @@ impl BullBearPower {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            positive_color: DESIGN_TOKENS.semantic.extended.success,
-            negative_color: DESIGN_TOKENS.semantic.extended.error,
+            positive_color: palette::GREEN,
+            negative_color: palette::RED,
             visible: true,
         }
     }

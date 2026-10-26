@@ -24,8 +24,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Awesome Oscillator indicator
@@ -50,8 +50,8 @@ impl AwesomeOscillator {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             values: IndicatorValues::new(),
-            positive_color: DESIGN_TOKENS.semantic.extended.success, // Green
-            negative_color: DESIGN_TOKENS.semantic.extended.error,   // Red
+            positive_color: palette::GREEN, // Green
+            negative_color: palette::RED,   // Red
             visible: true,
         }
     }

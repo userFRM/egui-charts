@@ -315,7 +315,7 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
     let hovered = row_response.hovered() || star_response.as_ref().is_some_and(Response::hovered);
 
     if ui.is_rect_visible(rect) {
-        let radius = DESIGN_TOKENS.rounding.sm;
+        let radius = ui.active_theme().radius.sm;
         let painter = ui.painter();
         let fill = match (row.selected, hovered) {
             (true, true) => Some(theme.ui.accent_hover),

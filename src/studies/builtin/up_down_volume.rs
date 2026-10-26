@@ -8,10 +8,10 @@
 use crate::model::LineStyle;
 use crate::model::{Bar, BarClock, Timeframe};
 use crate::scales::StudyFormat;
+use crate::studies::palette;
 use crate::studies::{
     Indicator, IndicatorValues, PlotStyle, PlotType, StudyData, StudyDataRequest,
 };
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Up and down volume from intrabars supplied by the host, in a separate pane.
@@ -31,9 +31,9 @@ impl UpDownVolume {
             clock: BarClock::new(Timeframe::Min1),
             values: IndicatorValues::new(),
             colors: [
-                DESIGN_TOKENS.semantic.chart.bullish.gamma_multiply(0.35),
-                DESIGN_TOKENS.semantic.chart.bearish.gamma_multiply(0.35),
-                DESIGN_TOKENS.semantic.extended.gray,
+                palette::UP.gamma_multiply(0.35),
+                palette::DOWN.gamma_multiply(0.35),
+                palette::GRAY,
             ],
             visible: true,
         }

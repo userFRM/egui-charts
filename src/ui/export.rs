@@ -275,7 +275,7 @@ impl ExportDialog {
         // Centred horizontally like the crate's other dialogs, but movable. The top edge is the
         // pivot, so the window grows downwards as its content changes instead of around its centre.
         let r = ctx.content_rect();
-        let frame = dialog_frame(&ctx.global_style());
+        let frame = dialog_frame(ctx);
         egui::Window::new("Export Chart")
             .title_bar(false)
             .resizable(false)

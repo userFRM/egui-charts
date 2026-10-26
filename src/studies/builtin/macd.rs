@@ -24,9 +24,9 @@
 //!
 //! # Default colours
 //!
-//! - MACD line: blue (`indicators.macd_line`)
-//! - Signal line: orange (`indicators.macd_signal`)
-//! - Histogram: green (`extended.success`)
+//! - MACD line: blue ([`palette::BLUE`](crate::studies::palette::BLUE))
+//! - Signal line: orange ([`palette::ORANGE`](crate::studies::palette::ORANGE))
+//! - Histogram: green ([`palette::GREEN`](crate::studies::palette::GREEN))
 //!
 //! # Example
 //!
@@ -43,9 +43,9 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Moving Average Convergence Divergence (MACD) indicator.
@@ -86,9 +86,9 @@ impl MACD {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
-                DESIGN_TOKENS.semantic.indicators.macd_signal, // Signal line
-                DESIGN_TOKENS.semantic.extended.success,     // Histogram
+                palette::BLUE,   // MACD line
+                palette::ORANGE, // Signal line
+                palette::GREEN,  // Histogram
             ],
             visible: true,
         }
@@ -207,11 +207,7 @@ impl Indicator for MACD {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(
-                0.0,
-                crate::tokens::DESIGN_TOKENS.semantic.extended.chart_text,
-                "Zero Line",
-            )],
+            levels: vec![(0.0, palette::WHITE, "Zero Line")],
             fill_between_levels: false,
         }
     }

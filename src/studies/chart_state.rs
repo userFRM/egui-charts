@@ -324,6 +324,7 @@ impl ChartState {
             None,
             true,
             None,
+            None,
             std::iter::empty(),
             std::iter::empty(),
         )
@@ -331,14 +332,15 @@ impl ChartState {
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
-    /// `series_values` are already in scale units. `main_bars` supplies the transformed visible
-    /// bars when the chart type draws different OHLC values from its source.
+    /// `series_values` are already in scale units. `main_bars` supplies transformed visible
+    /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_bars: Option<&[Bar]>,
         main_visible: bool,
         autoscale: Option<&crate::model::AutoscaleProvider>,
+        main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
@@ -440,21 +442,23 @@ impl ChartState {
             });
         let main = main_visible
             .then(|| {
-                let range = visible
-                    .iter()
-                    .flat_map(|bar| [bar.low, bar.high])
-                    .chain(
-                        visible
-                            .iter()
-                            .flat_map(|bar| [bar.open, bar.close])
-                            .filter(|_| mode == PriceScaleMode::Logarithmic),
-                    )
-                    .filter(|value| transform.to_scale(*value).is_finite())
-                    .fold(None, |range: Option<(f64, f64)>, value| {
-                        Some(range.map_or((value, value), |(min, max)| {
-                            (min.min(value), max.max(value))
-                        }))
-                    });
+                let range = main_range.or_else(|| {
+                    visible
+                        .iter()
+                        .flat_map(|bar| [bar.low, bar.high])
+                        .chain(
+                            visible
+                                .iter()
+                                .flat_map(|bar| [bar.open, bar.close])
+                                .filter(|_| mode == PriceScaleMode::Logarithmic),
+                        )
+                        .filter(|value| transform.to_scale(*value).is_finite())
+                        .fold(None, |range: Option<(f64, f64)>, value| {
+                            Some(range.map_or((value, value), |(min, max)| {
+                                (min.min(value), max.max(value))
+                            }))
+                        })
+                });
                 match autoscale {
                     Some(provider) => provider.range(visible, range),
                     None => range,

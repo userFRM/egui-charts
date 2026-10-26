@@ -25,8 +25,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Avg Directional Index indicator
@@ -49,9 +49,9 @@ impl ADX {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            adx_color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber (ADX)
-            plus_di_color: DESIGN_TOKENS.semantic.extended.success,   // Green (+DI)
-            minus_di_color: DESIGN_TOKENS.semantic.extended.error,    // Red (-DI)
+            adx_color: palette::GOLD,      // Amber (ADX)
+            plus_di_color: palette::GREEN, // Green (+DI)
+            minus_di_color: palette::RED,  // Red (-DI)
             visible: true,
         }
     }

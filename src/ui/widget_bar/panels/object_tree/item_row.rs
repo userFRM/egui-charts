@@ -3,10 +3,9 @@
 //! Renders individual items (drawings, indicators) in the tree.
 
 use crate::localization as l10n;
-use egui::{Rect, Sense, Stroke, Ui, vec2};
+use egui::{Color32, Rect, Sense, Stroke, Ui, vec2};
 
 use crate::icons::{Icon, icons as embedded_icons};
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 
 use super::actions::ObjectTreeAction;
@@ -28,7 +27,12 @@ pub fn render_item_row(
     let id = item.id;
 
     // Calculate indentation
-    let indent = indent_level as f32 * config.indent_width;
+    let indent_width = if config.indent_width == ObjectTreeConfig::default().indent_width {
+        ui.active_theme().spacing.xl
+    } else {
+        config.indent_width
+    };
+    let indent = indent_level as f32 * indent_width;
 
     // Allocate row
     let available_width = ui.available_width();
@@ -172,7 +176,7 @@ fn render_row_content(
         }
 
         // Calculate x position starting after indent
-        let mut x = rect.left() + indent + DESIGN_TOKENS.spacing.sm;
+        let mut x = rect.left() + indent + ui.active_theme().spacing.sm;
 
         // Expand/collapse chevron (for items with properties)
         if config.show_expand_chevron && item.source_type == SourceType::Drawing {
@@ -202,17 +206,25 @@ fn render_row_content(
                 egui::pos2(x + config.color_indicator_size / 2.0, center_y),
                 vec2(config.color_indicator_size, config.color_indicator_size),
             );
-            painter.rect_filled(color_rect, 2.0, item.color);
+            painter.rect_filled(
+                color_rect,
+                ui.active_theme().radius.xs,
+                if item.color == Color32::PLACEHOLDER {
+                    ui.active_theme().ui.text_secondary
+                } else {
+                    item.color
+                },
+            );
             painter.rect_stroke(
                 color_rect,
-                2.0,
+                ui.active_theme().radius.xs,
                 Stroke::new(
                     DESIGN_TOKENS.stroke.hairline,
-                    DESIGN_TOKENS.semantic.extended.gray,
+                    ui.active_theme().ui.text_muted,
                 ),
                 egui::StrokeKind::Inside,
             );
-            x += config.color_indicator_size + DESIGN_TOKENS.spacing.sm;
+            x += config.color_indicator_size + ui.active_theme().spacing.sm;
         }
 
         if let Some(tool_type) = item.tool_type {
@@ -231,13 +243,13 @@ fn render_row_content(
         } else if item.visible {
             ui.style().visuals.text_color()
         } else {
-            DESIGN_TOKENS.semantic.extended.gray
+            ui.active_theme().ui.text_muted
         };
         let mut job = egui::text::LayoutJob::simple(
             l10n::text(ui.ctx(), item.full_display_name()),
-            egui::FontId::proportional(typography::SM_MD),
+            egui::FontId::proportional(ui.active_theme().text.label),
             name_color,
-            (rect.right() - DESIGN_TOKENS.spacing.sm - 40.0 - x).max(0.0),
+            (rect.right() - ui.active_theme().spacing.sm - 40.0 - x).max(0.0),
         );
         job.wrap.max_rows = 1;
         let galley = painter.layout_job(job);
@@ -246,7 +258,7 @@ fn render_row_content(
     } // painter dropped
 
     // Second pass: interactive elements
-    let mut x = rect.left() + indent + DESIGN_TOKENS.spacing.sm;
+    let mut x = rect.left() + indent + ui.active_theme().spacing.sm;
 
     // Expand/collapse button
     if config.show_expand_chevron && item.source_type == SourceType::Drawing {
@@ -351,7 +363,7 @@ fn render_row_content(
     }
 
     // Right-side buttons, registered in visual order for keyboard navigation.
-    let right_x = rect.right() - DESIGN_TOKENS.spacing.sm;
+    let right_x = rect.right() - ui.active_theme().spacing.sm;
     let button_color = if is_selected {
         ui.visuals().selection.stroke.color
     } else {
@@ -422,7 +434,7 @@ fn render_properties(
 
     egui::Grid::new(format!("props_grid_{id}"))
         .num_columns(2)
-        .spacing([DESIGN_TOKENS.spacing.sm, DESIGN_TOKENS.spacing.xs])
+        .spacing([ui.active_theme().spacing.sm, ui.active_theme().spacing.xs])
         .show(ui, |ui| {
             // Color
             ui.hint_label("Color");
@@ -464,8 +476,13 @@ mod tests {
     use egui::Color32;
 
     #[test]
-    fn selected_names_use_selection_colours_and_end_before_the_buttons() {
-        for (_, theme) in crate::theme::presets() {
+    fn selected_rows_use_the_theme_and_end_names_before_the_buttons() {
+        let mut custom = crate::theme::Theme::light();
+        custom.radius.xs = 6.0;
+        for (_, theme) in crate::theme::presets()
+            .into_iter()
+            .chain([("custom", custom)])
+        {
             for width in [220.0, 280.0] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
@@ -485,6 +502,18 @@ mod tests {
                     render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
                 });
                 output.textures_delta.clear();
+                let swatches: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.rect.size() == vec2(10.0, 10.0) => {
+                            Some(rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(swatches.len(), 2);
+                assert!(swatches.iter().all(|rect| rect.corner_radius == egui::CornerRadius::from(theme.radius.xs)));
                 assert!(output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == row && rect.fill == selection.bg_fill)
                 }));
@@ -504,7 +533,7 @@ mod tests {
                 assert!(name.galley.elided);
                 assert!(
                     name.pos.x + name.galley.rect.right()
-                        <= row.right() - DESIGN_TOKENS.spacing.sm - 40.0
+                        <= row.right() - ctx.active_theme().spacing.sm - 40.0
                 );
                 output.drop_without_applying_deltas();
             }

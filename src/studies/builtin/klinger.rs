@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Klinger Volume Oscillator, as defined by Stephen J. Klinger in "Identifying Trends With Volume Analysis", Technical Analysis of Stocks & Commodities, V.15:12 (December 1997).
@@ -35,8 +35,8 @@ impl KlingerOscillator {
             signal_period: 13,
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Klinger
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - Klinger
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }

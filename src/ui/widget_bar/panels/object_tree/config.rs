@@ -75,7 +75,7 @@ impl Default for ObjectTreeConfig {
 
             // Dimensions
             row_height: DESIGN_TOKENS.sizing.button_sm, // 24px
-            indent_width: DESIGN_TOKENS.spacing.xl,     // 12px
+            indent_width: crate::theme::Theme::default().spacing.xl, // 12px
             max_height: 400.0,
             icon_size: 16.0,
             color_indicator_size: 10.0,

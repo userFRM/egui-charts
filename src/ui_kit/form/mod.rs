@@ -23,9 +23,9 @@
 //! ```
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 pub mod grid;
 
-use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align, Layout, RichText, Ui, vec2};
 
@@ -63,9 +63,9 @@ impl<'a> FormRow<'a> {
     /// widget are centred on one line; the description follows below them.
     pub fn show(self, ui: &mut Ui, add_widget: impl FnOnce(&mut Ui)) {
         let spacing = ui.spacing().item_spacing;
-        ui.spacing_mut().item_spacing.y = DESIGN_TOKENS.spacing.md;
+        ui.spacing_mut().item_spacing.y = ui.active_theme().spacing.md;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
+            ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
             let label = ui.allocate_ui_with_layout(
                 vec2(self.label_width, ui.spacing().interact_size.y),
                 Layout::left_to_right(Align::Center),
@@ -81,7 +81,7 @@ impl<'a> FormRow<'a> {
         if let Some(desc) = self.description {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), desc))
-                    .size(typography::SM)
+                    .size(ui.active_theme().text.small)
                     .color(ui.visuals().weak_text_color()),
             );
         }

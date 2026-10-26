@@ -24,9 +24,9 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// On Balance Volume indicator
@@ -50,7 +50,7 @@ impl OnBalanceVolume {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
+            color: palette::DEEP_PURPLE, // Deep Purple
             visible: true,
         }
     }

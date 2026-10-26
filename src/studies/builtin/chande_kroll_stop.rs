@@ -24,9 +24,9 @@
 
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Chande Kroll Stop: a short (upper) and a long (lower) trailing stop.
@@ -50,10 +50,7 @@ impl ChandeKrollStop {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             stop_length: stop_length.max(1),
             values: IndicatorValues::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.extended.error,
-                DESIGN_TOKENS.semantic.extended.success,
-            ],
+            colors: [palette::RED, palette::GREEN],
             visible: true,
         }
     }

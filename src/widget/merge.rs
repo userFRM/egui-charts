@@ -167,6 +167,28 @@ impl Groups {
         let end = range.end.div_ceil(factor).min(self.groups.len());
         (range.start / factor).min(end)..end
     }
+
+    /// Exact visible price range from cached whole groups and the source bars at the edges.
+    pub fn price_range(&self, bars: &[Bar], range: Range<usize>) -> Option<(f64, f64)> {
+        let factor = self.factor();
+        self.covering(range.clone())
+            .flat_map(|group| {
+                let first = group * factor;
+                let end = (first + factor).min(bars.len());
+                if first >= range.start && end <= range.end {
+                    std::slice::from_ref(&self.groups[group].bar)
+                } else {
+                    &bars[first.max(range.start)..end.min(range.end)]
+                }
+            })
+            .flat_map(|bar| [bar.low, bar.high])
+            .filter(|value| value.is_finite())
+            .fold(None, |range, value| {
+                Some(range.map_or((value, value), |(low, high): (f64, f64)| {
+                    (low.min(value), high.max(value))
+                }))
+            })
+    }
 }
 
 /// Visible bars merged for drawing, from the group before the first visible one when there is
@@ -272,6 +294,15 @@ mod tests {
             (1.0, 2.0)
         );
         assert!(groups.groups[2].bar.is_whitespace());
+        for (visible, expected) in [
+            (0..16, Some((1.0, 15.0))),
+            (2..5, Some((2.0, 4.0))),
+            (8..12, None),
+            (7..14, Some((7.0, 13.0))),
+            (12..12, None),
+        ] {
+            assert_eq!(groups.price_range(&bars, visible), expected);
+        }
         for line in [false, true] {
             let merged = Merged::new(&bars, &groups, 0..bars.len(), line, PriceSource::Close);
             // Only the last, ordinary column can be reduced; gaps and styled bars keep their slots.

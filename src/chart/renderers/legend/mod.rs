@@ -4,7 +4,6 @@ use super::{price_decimals, semibold};
 use crate::chart::renderers::StyleColors;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
 use crate::studies::Indicator;
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, ImageSource, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
@@ -52,6 +51,8 @@ pub enum StudyAction {
 
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
+    /// Host number formatting for this series' readouts.
+    pub formatters: super::super::ValueFormatters<'a>,
     /// Fallback title when the instrument has no description.
     pub symbol: &'a str,
     /// Display interval.
@@ -101,6 +102,7 @@ impl<'a> Legend<'a> {
     /// A series readout with volume and no optional host metadata or quotes.
     pub fn new(symbol: &'a str, timeframe: &'a str, bar: &'a Bar) -> Self {
         Self {
+            formatters: Default::default(),
             symbol,
             timeframe,
             instrument: None,
@@ -161,7 +163,7 @@ impl<'a> Legend<'a> {
         colors: &StyleColors,
     ) -> (Option<QuoteSide>, Option<StudyAction>, f32, Option<Rect>) {
         let theme = ui.active_theme();
-        let bounds = plot.shrink(8.0);
+        let bounds = plot.shrink(theme.spacing.md);
         if !bounds.is_positive() {
             return (None, None, plot.top(), None);
         }
@@ -211,7 +213,7 @@ impl<'a> Legend<'a> {
                     painter
                         .layout_no_wrap(
                             status.text.to_owned(),
-                            FontId::proportional(typography::SM),
+                            FontId::proportional(theme.text.small),
                             status.color,
                         )
                         .size()
@@ -220,15 +222,15 @@ impl<'a> Legend<'a> {
                 })
                 .sum::<f32>();
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
-            layout.text(title, typography::XXL, colors.text, title_width);
+            layout.text(title, theme.text.chart_title, colors.text, title_width);
             for (status, hint) in statuses {
                 let galley = painter.layout_no_wrap(
                     status.text.to_owned(),
-                    FontId::proportional(typography::SM),
+                    FontId::proportional(theme.text.small),
                     status.color,
                 );
                 let rect = layout.reserve(Vec2::new(galley.size().x + 8.0, 18.0));
-                painter.rect_filled(rect, 4.0, status.background);
+                painter.rect_filled(rect, theme.radius.sm, status.background);
                 painter.galley(rect.center() - galley.size() / 2.0, galley, status.color);
                 if let Some(hint) = hint {
                     let rect = rect.intersect(bounds);
@@ -242,25 +244,36 @@ impl<'a> Legend<'a> {
             if plot.width() < 600.0 {
                 layout.field(
                     "C ",
-                    format!("{:.precision$}", self.bar.close),
+                    self.formatters.price.map_or_else(
+                        || format!("{:.precision$}", self.bar.close),
+                        |formatter| formatter.format(self.bar.close),
+                    ),
                     layout.bar_color(self.bar),
                 );
             } else {
-                layout.ohlc(self.bar, precision);
+                layout.ohlc(self.bar, precision, self.formatters.price);
             }
         }
         if self.show_change || self.show_change_percent {
             let reference = self.previous_close.unwrap_or(self.bar.open);
             let change = self.bar.close - reference;
             let pct = percent_change(reference, self.bar.close);
+            let absolute = self.formatters.price.map_or_else(
+                || format!("{change:+.precision$}"),
+                |formatter| formatter.format(change),
+            );
+            let percent = self
+                .formatters
+                .percentage
+                .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
             let text = match (self.show_change, self.show_change_percent) {
-                (true, true) => format!("{change:+.precision$} ({pct:+.2}%)"),
-                (true, false) => format!("{change:+.precision$}"),
-                _ => format!("{pct:+.2}%"),
+                (true, true) => format!("{absolute} ({percent})"),
+                (true, false) => absolute,
+                _ => percent,
             };
             layout.text(
                 text,
-                typography::MD,
+                theme.text.ohlc,
                 colors.bar_color(change >= 0.0),
                 bounds.width(),
             );
@@ -302,7 +315,7 @@ impl<'a> Legend<'a> {
                         .intersect(bounds);
                 painter.rect_stroke(
                     title_rect,
-                    3,
+                    theme.radius.sm,
                     Stroke::new(1.0, theme.ui.border_control),
                     egui::StrokeKind::Inside,
                 );
@@ -377,19 +390,24 @@ impl<'a> Legend<'a> {
             {
                 layout.field(
                     "Vol ",
-                    self.instrument
-                        .and_then(|instrument| instrument.volume_decimals)
-                        .map_or_else(
-                            || format_volume(self.bar.volume),
-                            |decimals| {
-                                crate::scales::PriceFormatter::format(
-                                    &crate::scales::VolumeFormatter {
-                                        precision: usize::from(decimals),
+                    self.formatters
+                        .volume
+                        .map(|formatter| formatter.format(self.bar.volume))
+                        .unwrap_or_else(|| {
+                            self.instrument
+                                .and_then(|instrument| instrument.volume_decimals)
+                                .map_or_else(
+                                    || format_volume(self.bar.volume),
+                                    |decimals| {
+                                        crate::scales::PriceFormatter::format(
+                                            &crate::scales::VolumeFormatter {
+                                                precision: usize::from(decimals),
+                                            },
+                                            self.bar.volume,
+                                        )
                                     },
-                                    self.bar.volume,
                                 )
-                            },
-                        ),
+                        }),
                     layout.bar_color(self.bar),
                 );
                 layout.new_row();
@@ -413,7 +431,7 @@ impl<'a> Legend<'a> {
                             study.name()
                         }
                         .to_owned(),
-                        typography::MD,
+                        theme.text.ohlc,
                         colors.text,
                         bounds.width(),
                     );
@@ -422,7 +440,7 @@ impl<'a> Legend<'a> {
                     if self.show_indicator_inputs && study.plot_style(2).visible {
                         layout.text(
                             study.line_names().get(2).cloned().unwrap_or_default(),
-                            typography::MD,
+                            theme.text.ohlc,
                             Color32::from_gray(112),
                             bounds.width(),
                         );
@@ -441,7 +459,7 @@ impl<'a> Legend<'a> {
                                 .to_srgba_unmultiplied();
                             layout.text(
                                 study.format_value(value),
-                                typography::MD,
+                                theme.text.ohlc,
                                 Color32::from_rgb(r, g, b),
                                 bounds.width(),
                             );
@@ -456,7 +474,7 @@ impl<'a> Legend<'a> {
                     {
                         layout.text(
                             (*inputs).to_owned(),
-                            typography::MD,
+                            theme.text.ohlc,
                             theme.ui.text_muted,
                             bounds.width(),
                         );
@@ -473,12 +491,16 @@ impl<'a> Legend<'a> {
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
-                            study.value_format().format(value, precision)
+                            if study.value_format() == crate::scales::StudyFormat::Price {
+                                study.value_format().format(value, precision)
+                            } else {
+                                study.format_value(value)
+                            }
                         } else {
                             "∅".to_owned()
                         };
                         let color = study_colors.get(index).copied().unwrap_or(colors.text);
-                        layout.text(text, typography::MD, color, bounds.width());
+                        layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
                 let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
@@ -545,7 +567,7 @@ impl<'a> Legend<'a> {
             if response.has_focus() {
                 painter.rect_stroke(
                     rect,
-                    3.0,
+                    theme.radius.sm,
                     ui.visuals().selection.stroke,
                     egui::StrokeKind::Inside,
                 );
@@ -655,7 +677,7 @@ pub(crate) fn study_controls(
     if revealed {
         ui.painter().rect_stroke(
             row,
-            3.0,
+            theme.radius.sm,
             Stroke::new(1.0, theme.ui.border_control),
             egui::StrokeKind::Inside,
         );
@@ -688,7 +710,8 @@ pub(crate) fn study_controls(
         let response = response.on_hover_text(label);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         if response.hovered() {
-            ui.painter().rect_filled(rect, 3.0, theme.ui.btn_bg_hover);
+            ui.painter()
+                .rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         #[cfg(feature = "icons")]
@@ -787,7 +810,7 @@ impl<'a> Layout<'a> {
 
     fn field(&mut self, label: &str, value: String, color: Color32) {
         let mut job = egui::text::LayoutJob::default();
-        let font = FontId::proportional(typography::MD);
+        let font = FontId::proportional(self.painter.ctx().active_theme().text.ohlc);
         job.append(
             label,
             0.0,
@@ -806,7 +829,12 @@ impl<'a> Layout<'a> {
         self.colors.bar_color(bar.close >= bar.open)
     }
 
-    fn ohlc(&mut self, bar: &Bar, precision: usize) {
+    fn ohlc(
+        &mut self,
+        bar: &Bar,
+        precision: usize,
+        formatter: Option<&dyn crate::scales::PriceFormatter>,
+    ) {
         let color = self.bar_color(bar);
         for (label, value) in [
             ("O ", bar.open),
@@ -814,7 +842,14 @@ impl<'a> Layout<'a> {
             ("L ", bar.low),
             ("C ", bar.close),
         ] {
-            self.field(label, format!("{value:.precision$}"), color);
+            self.field(
+                label,
+                formatter.map_or_else(
+                    || format!("{value:.precision$}"),
+                    |formatter| formatter.format(value),
+                ),
+                color,
+            );
         }
     }
 }
@@ -834,7 +869,7 @@ fn paint_quotes(
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
         spread,
-        FontId::proportional(typography::XS),
+        FontId::proportional(theme.text.tiny),
         layout.colors.text,
     );
     let gap = (spread_galley.size().x + 12.0).max(36.0);
@@ -844,7 +879,7 @@ fn paint_quotes(
             .painter
             .layout_job(egui::text::LayoutJob::single_section(
                 format!("{price:.precision$}"),
-                semibold(FontId::proportional(typography::MD), color),
+                semibold(FontId::proportional(theme.text.ohlc), color),
             ));
         let label = layout.painter.layout_no_wrap(
             if side == QuoteSide::Sell {
@@ -853,7 +888,7 @@ fn paint_quotes(
                 "BUY"
             }
             .to_owned(),
-            FontId::proportional(typography::SM),
+            FontId::proportional(theme.text.small),
             color,
         );
         (price, label)
@@ -882,7 +917,7 @@ fn paint_quotes(
     let quantity = quantity.map(|quantity| {
         let text = layout.painter.layout_no_wrap(
             compact_quantity(quantity),
-            FontId::proportional(typography::SM),
+            FontId::proportional(theme.text.small),
             layout.colors.text,
         );
         let rect = Rect::from_center_size(
@@ -903,7 +938,7 @@ fn paint_quotes(
         } else {
             theme.ui.btn_bg_hover
         };
-        layout.painter.rect_filled(rect, 3.0, fill);
+        layout.painter.rect_filled(rect, theme.radius.sm, fill);
         layout
             .painter
             .galley(rect.center() - text.size() / 2.0, text, layout.colors.text);

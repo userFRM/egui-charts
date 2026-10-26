@@ -32,8 +32,8 @@
 
 use super::TrueStrengthIndex;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// SMI and signal lines of the SMI Ergodic Indicator.
@@ -57,16 +57,15 @@ pub struct SMIErgodic<const OSCILLATOR: bool> {
 impl<const OSCILLATOR: bool> SMIErgodic<OSCILLATOR> {
     /// Create the study with the long and short smoothing and signal lengths (20, 5 and 5 by convention).
     pub fn new(long_length: usize, short_length: usize, signal_length: usize) -> Self {
-        let extended = &DESIGN_TOKENS.semantic.extended;
         Self {
             long_length: long_length.max(1),
             short_length: short_length.max(1),
             signal_length: signal_length.max(1),
             values: IndicatorValues::new(),
             colors: if OSCILLATOR {
-                vec![extended.error]
+                vec![palette::RED]
             } else {
-                vec![extended.info, extended.error_darker]
+                vec![palette::BLUE, palette::DEEP_RED]
             },
             visible: true,
         }

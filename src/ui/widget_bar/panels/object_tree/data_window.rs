@@ -12,7 +12,6 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
 use super::types::DataWindowInfo;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::ext::UiExt;
 
 impl DataWindowInfo {
@@ -141,7 +140,7 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
 
     egui::Grid::new("ohlcv_grid")
         .num_columns(2)
-        .spacing([DESIGN_TOKENS.spacing.md, DESIGN_TOKENS.spacing.xs])
+        .spacing([ui.active_theme().spacing.md, ui.active_theme().spacing.xs])
         .min_col_width(50.0)
         .show(ui, |ui| {
             ui.hint_label("O");

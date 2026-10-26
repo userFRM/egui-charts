@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Price Channel
@@ -24,9 +24,9 @@ impl PriceChannel {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
-                DESIGN_TOKENS.semantic.extended.gray,    // Gray - Middle (neutral)
+                palette::GREEN, // Green - Upper
+                palette::RED,   // Red - Lower
+                palette::GRAY,  // Gray - Middle (neutral)
             ],
             visible: true,
         }

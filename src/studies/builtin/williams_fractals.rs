@@ -41,9 +41,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_max;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Williams Fractals: up fractals at swing highs and down fractals at swing lows.
@@ -62,8 +62,8 @@ impl WilliamsFractals {
         Self {
             periods: periods.max(2),
             values: IndicatorValues::new(),
-            up_color: DESIGN_TOKENS.semantic.extended.teal,
-            down_color: DESIGN_TOKENS.semantic.extended.error,
+            up_color: palette::TEAL,
+            down_color: palette::RED,
             visible: true,
         }
     }

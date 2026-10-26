@@ -4,6 +4,7 @@
 //! and loading drawing templates.
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingTemplate;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
@@ -70,7 +71,7 @@ impl TemplatesButton {
     ) -> Option<DrawingToolbarAction> {
         let popup_width = DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg;
         let popup_pos = egui::Pos2::new(
-            sidebar_rect.right() + DESIGN_TOKENS.spacing.sm,
+            sidebar_rect.right() + ui.active_theme().spacing.sm,
             sidebar_rect.center().y - DESIGN_TOKENS.sizing.button_xxl,
         );
 
@@ -84,14 +85,14 @@ impl TemplatesButton {
                 egui::Frame::popup(ui.style())
                     .fill(ui.style().visuals.window_fill())
                     .stroke(ui.style().visuals.window_stroke)
-                    .corner_radius(DESIGN_TOKENS.rounding.lg)
+                    .corner_radius(ui.active_theme().radius.lg)
                     .show(ui, |ui| {
                         ui.set_min_width(popup_width);
                         ui.space_lg();
 
                         ui.label(
                             egui::RichText::new(l10n::text(ui.ctx(), "Save Template"))
-                                .size(DESIGN_TOKENS.typography.body)
+                                .size(ui.active_theme().text.body)
                                 .strong(),
                         );
                         ui.space_md();

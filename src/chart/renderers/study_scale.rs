@@ -8,6 +8,15 @@ use egui::{Align2, Painter, Pos2, Rect};
 
 /// Keep independent study units out of the main price map, including hidden scales.
 pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> ChartMapping {
+    if let StudyScale::Shared(_) = study.scale() {
+        return ChartMapping {
+            price: study
+                .scale_mapping()
+                .unwrap_or(coords.price)
+                .with_bounds(coords.rect.top(), coords.rect.bottom()),
+            ..*coords
+        };
+    }
     if study.scale() == StudyScale::Main {
         return *coords;
     }
@@ -72,41 +81,73 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
 /// Paint an independent study axis in its reserved gutter to the left of the plot.
 pub(crate) fn render_study_axis(
     painter: &Painter,
-    study: &dyn Indicator,
+    studies: &[&dyn Indicator],
     coords: &ChartMapping,
     axis: Rect,
     show_values: bool,
+    relative_formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
+    let Some(&study) = studies.first() else {
+        return 0.0;
+    };
     let painter = painter.with_clip_rect(axis);
     let theme = painter.ctx().active_theme();
     let font = crate::chart::rendering::axes::axis_font(painter.ctx());
     let x = axis.right() - 8.0;
     let mut width = 0.0_f32;
     let mut labels = Vec::new();
-    if show_values && let Some(bar) = study.values().len().checked_sub(1) {
-        for line in 0..study.line_count() {
-            let plot = study.plot_style(line);
+    for &member in studies {
+        if !show_values {
+            continue;
+        }
+        let Some(bar) = member.values().len().checked_sub(1) else {
+            continue;
+        };
+        for line in 0..member.line_count() {
+            let plot = member.plot_style(line);
             if plot.visible
                 && !matches!(
                     plot.plot_type,
                     PlotType::BarColor | PlotType::BackgroundColor
                 )
-                && let Some(value) = study.plot_value(line, bar)
+                && let Some(value) = member.plot_value(line, bar)
             {
-                labels.push((value, Some(study.plot_style(line).color)));
+                let transform = coords.price.transform();
+                let relative = matches!(
+                    transform.mode,
+                    crate::scales::PriceScaleMode::Percentage
+                        | crate::scales::PriceScaleMode::IndexedTo100
+                );
+                let label = if relative {
+                    transform.label(transform.to_scale(value), 2, relative_formatter)
+                } else {
+                    member.format_value(value)
+                };
+                labels.push((
+                    coords.price_to_y(value),
+                    Some(member.plot_style(line).color),
+                    label,
+                ));
             }
         }
     }
     let mut occupied = Vec::new();
-    for (value, color) in labels.into_iter().chain(
-        coords
-            .price
-            .marks()
-            .into_iter()
-            .map(|mark| (mark.price, None)),
-    ) {
-        let y = coords.price_to_y(value);
-        let label = study.format_value(value);
+    for (y, color, label) in labels
+        .into_iter()
+        .chain(coords.price.marks().into_iter().map(|mark| {
+            let relative = matches!(
+                coords.price.transform().mode,
+                crate::scales::PriceScaleMode::Percentage
+                    | crate::scales::PriceScaleMode::IndexedTo100
+            );
+            let label = if relative {
+                relative_formatter.map_or(mark.label, |formatter| formatter.format_tick(mark.price))
+            } else {
+                study.format_value(mark.price)
+            };
+            (mark.y_coord, None, label)
+        }))
+    {
         let galley = painter.layout_no_wrap(
             label,
             font.clone(),
@@ -182,10 +223,11 @@ mod tests {
                 if scale == StudyScale::Independent {
                     render_study_axis(
                         ui.painter(),
-                        indicators[0].as_ref(),
+                        &[indicators[0].as_ref()],
                         &mapping,
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(80.0, 120.0)),
                         true,
+                        None,
                     );
                 }
             });

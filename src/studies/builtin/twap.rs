@@ -21,8 +21,8 @@
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::over_finite_bars;
 use crate::model::{Bar, Instrument, PriceSource};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Time Weighted Average Price, restarted at each anchor period.
@@ -49,7 +49,7 @@ impl TimeWeightedAvgPrice {
             source: PriceSource::OHLC4,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.info],
+            colors: vec![palette::BLUE],
             visible: true,
         }
     }

@@ -49,9 +49,9 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValues, StudyZone};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Most gaps a chart shows.
@@ -110,8 +110,8 @@ impl Gaps {
             trail_length: 300,
             values: IndicatorValues::new(),
             zones: Vec::new(),
-            up_color: DESIGN_TOKENS.semantic.extended.success,
-            down_color: DESIGN_TOKENS.semantic.extended.error,
+            up_color: palette::GREEN,
+            down_color: palette::RED,
             visible: true,
         }
     }

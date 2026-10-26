@@ -1,7 +1,7 @@
 //! Box zoom selection rendering
 
 use crate::chart::state::BoxZoomState;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
@@ -87,7 +87,7 @@ fn render_dimension_labels(painter: &Painter, rect: Rect) {
         label_pos,
         egui::Align2::CENTER_CENTER,
         &label_text,
-        FontId::proportional(typography::SM),
+        FontId::proportional(painter.ctx().active_theme().text.small),
         Color32::TRANSPARENT,
     );
     painter.rect_filled(
@@ -101,7 +101,7 @@ fn render_dimension_labels(painter: &Painter, rect: Rect) {
         label_pos,
         egui::Align2::CENTER_CENTER,
         label_text,
-        FontId::proportional(typography::SM),
+        FontId::proportional(painter.ctx().active_theme().text.small),
         DESIGN_TOKENS.semantic.chart.crosshair_label_text,
     );
 }

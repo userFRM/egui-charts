@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Historical Volatility (HV)
@@ -25,7 +25,7 @@ impl HistoricalVolatility {
             period: period.max(1),
             trading_days: 252.0, // Default for stocks
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Deep Orange
+            color: palette::ORANGE, // Deep Orange
             visible: true,
         }
     }

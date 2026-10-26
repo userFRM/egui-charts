@@ -1,6 +1,6 @@
 use super::ma_combination::impl_ma_preset;
 use super::{AverageLine, AverageType, MACombination};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
 
 /// A simple average crossing an exponential one.
 #[derive(Clone)]
@@ -12,16 +12,8 @@ impl MixedMACross {
     pub fn new(fast: usize, slow: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
-                AverageLine::new(
-                    AverageType::Simple,
-                    fast,
-                    DESIGN_TOKENS.semantic.extended.success,
-                ),
-                AverageLine::new(
-                    AverageType::Exponential,
-                    slow,
-                    DESIGN_TOKENS.semantic.extended.error,
-                ),
+                AverageLine::new(AverageType::Simple, fast, palette::GREEN),
+                AverageLine::new(AverageType::Exponential, slow, palette::RED),
             ])
             .unwrap(),
         }
@@ -46,11 +38,7 @@ pub struct TripleMA {
 impl TripleMA {
     /// Three lengths, each clamped to at least one. Marks crossings of the first two.
     pub fn new(fast: usize, middle: usize, slow: usize) -> Self {
-        let colors = [
-            DESIGN_TOKENS.semantic.extended.success,
-            DESIGN_TOKENS.semantic.extended.warning,
-            DESIGN_TOKENS.semantic.extended.error,
-        ];
+        let colors = [palette::GREEN, palette::ORANGE, palette::RED];
         Self {
             inner: MACombination::new(
                 [fast, middle, slow]

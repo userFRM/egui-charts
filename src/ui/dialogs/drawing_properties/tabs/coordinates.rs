@@ -2,6 +2,7 @@
 
 use crate::drawings::{ChartPoint, Drawing};
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::ext::UiExt;
@@ -137,7 +138,7 @@ impl CoordinatesTab {
                 ));
                 ui.space_sm();
                 FormGrid::new(format!("coord_grid_{i}"))
-                    .spacing(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm)
+                    .spacing(ui.active_theme().spacing.lg, ui.active_theme().spacing.sm)
                     .show(ui, |ui| {
                         field(ui, "Price", &mut point.price, "");
                         if point.original.is_some_and(|(_, time)| time.is_none()) {
