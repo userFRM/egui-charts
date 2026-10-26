@@ -1,4 +1,4 @@
-//! Additional bar histories requested by a study from the host's data source.
+//! Additional price or metric histories requested by a study from the host's data source.
 
 use crate::model::{Bar, BarClock, Instrument, Timeframe};
 use chrono::{DateTime, Utc};
@@ -11,9 +11,14 @@ pub struct StudyDataRequest {
     pub symbol: String,
     /// Requested interval, or `None` for the chart interval.
     pub timeframe: Option<Timeframe>,
+    /// Host metric key, or `None` for price bars. Metric points keep their publication times
+    /// and hold their last value; they do not use the requested price-bar interval.
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
-/// A requested series available during calculation, sorted by open time with unique bars.
+/// A requested series available during calculation, sorted by time with unique bars.
+/// Metric points use their value for OHLC and zero volume, without interval aggregation.
 /// An unavailable history has no bars; it is never substituted with the chart's prices.
 pub struct StudyData<'a> {
     /// The declaration this series answers, before resolving chart defaults.
@@ -29,8 +34,15 @@ pub struct StudyData<'a> {
 }
 
 impl StudyData<'_> {
-    /// Index of the bar containing `time`, retaining missing intervals as gaps.
+    /// Index of the bar containing `time`, retaining missing price intervals as gaps.
+    /// For metrics, the latest point at or before `time`, held until the next publication.
     pub fn bar_at(&self, time: DateTime<Utc>) -> Option<usize> {
+        if self.request.metric.is_some() {
+            return self
+                .bars
+                .partition_point(|bar| bar.time <= time)
+                .checked_sub(1);
+        }
         let open = self.clock.bar_open(time);
         let at = self
             .bars

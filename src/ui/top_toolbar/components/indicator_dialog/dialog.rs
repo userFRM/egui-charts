@@ -6,6 +6,8 @@ use super::{
     data::{IndicatorInfo, IndicatorParams, IndicatorPreferences},
     types::{IndicatorCategory, IndicatorTab},
 };
+use crate::data::inbox::Inbox;
+use crate::data::{Datafeed, FeedError, MetricSeries};
 use crate::icons::icons;
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
@@ -24,6 +26,7 @@ use egui::{
 };
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Width of the category sidebar.
 const SIDEBAR_WIDTH: f32 = 228.0;
@@ -51,6 +54,10 @@ pub struct IndicatorDialog {
     pub favorites: HashSet<String>,
     /// Creates the studies the dialog lists
     factory: IndicatorFactory,
+    metric_source: Option<(Arc<dyn Datafeed>, String)>,
+    metric_catalog: Option<Arc<Inbox>>,
+    metric_names: Vec<String>,
+    metric_error: Option<FeedError>,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
@@ -94,6 +101,10 @@ impl IndicatorDialog {
             favorites: HashSet::new(),
             indicators: IndicatorInfo::from_factory(&factory),
             factory,
+            metric_source: None,
+            metric_catalog: None,
+            metric_names: Vec::new(),
+            metric_error: None,
             config: IndicatorDialogConfig::default(),
             params: IndicatorParams::default(),
             show_config: false,
@@ -106,6 +117,69 @@ impl IndicatorDialog {
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
         self
+    }
+
+    /// List the metrics a feed offers for this instrument alongside the technical studies.
+    /// Replacing the feed or symbol discards pending replies from the previous source.
+    pub fn set_metric_source(&mut self, feed: Option<Arc<dyn Datafeed>>, symbol: &str) {
+        if match (&self.metric_source, &feed) {
+            (Some((previous, key)), Some(feed)) => key == symbol && Arc::ptr_eq(previous, feed),
+            (None, None) => true,
+            _ => false,
+        } {
+            return;
+        }
+        self.metric_source = feed.map(|feed| (feed, symbol.to_owned()));
+        self.metric_catalog = None;
+        self.metric_error = None;
+        for name in self.metric_names.drain(..) {
+            self.factory.unregister(&name);
+        }
+        self.indicators = IndicatorInfo::from_factory(&self.factory);
+        self.sel_indicator = None;
+        self.show_config = false;
+    }
+
+    fn poll_metrics(&mut self, ctx: &egui::Context) {
+        let Some((feed, symbol)) = &self.metric_source else {
+            return;
+        };
+        if self.metric_catalog.is_none() {
+            let inbox = Arc::new(Inbox::default());
+            let ctx = ctx.clone();
+            inbox.set_waker(move || ctx.request_repaint());
+            feed.metrics(symbol, inbox.reply(0));
+            self.metric_catalog = Some(inbox);
+        }
+        for (_, answer) in self.metric_catalog.as_ref().unwrap().drain().answers {
+            let result = answer
+                .downcast::<Result<Vec<MetricSeries>, FeedError>>()
+                .map(|result| *result)
+                .unwrap_or(Err(FeedError::Unanswered));
+            match result {
+                Ok(metrics) => {
+                    for metric in metrics {
+                        if metric.id.is_empty() {
+                            continue;
+                        }
+                        let key = format!("Metric: {}", metric.id);
+                        if self.factory.has(&key) {
+                            continue;
+                        }
+                        let mut info = IndicatorInfo::new(&key, &metric.name, &metric.unit);
+                        info.category = "Metrics".into();
+                        self.factory.register(key.clone(), move || {
+                            Box::new(MetricStudy::new(metric.clone()))
+                        });
+                        self.metric_names.push(key);
+                        self.indicators.push(info);
+                    }
+                    self.indicators.sort_by_key(|info| info.name.to_lowercase());
+                }
+                Err(FeedError::NotSupported) => {}
+                Err(error) => self.metric_error = Some(error),
+            }
+        }
     }
 
     /// Set a custom dialog configuration; its `TRANSPARENT` colours follow the theme
@@ -156,6 +230,7 @@ impl IndicatorDialog {
             return IndicatorDialogAction::None;
         }
 
+        self.poll_metrics(ctx);
         let config = self.config.resolved(theme);
 
         // Escape clears a search before it closes the dialog.
@@ -188,6 +263,10 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
+        if let Some(error) = &self.metric_error {
+            ui.label(format!("Metrics: {error}"));
+        }
+
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
@@ -772,6 +851,58 @@ impl IndicatorDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metric_catalog_ignores_old_symbols_and_creates_host_studies() {
+        use crate::data::{HistoryPage, HistoryRequest, Reply};
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Feed(Mutex<Vec<Reply<Vec<MetricSeries>>>>);
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Err(FeedError::NotSupported));
+            }
+            fn metrics(&self, _: &str, reply: Reply<Vec<MetricSeries>>) {
+                self.0.lock().unwrap().push(reply);
+            }
+        }
+        let feed = Arc::new(Feed::default());
+        let ctx = egui::Context::default();
+        let mut dialog = IndicatorDialog::new();
+        dialog.set_metric_source(Some(feed.clone()), "OLD");
+        dialog.poll_metrics(&ctx);
+        dialog.set_metric_source(Some(feed.clone()), "CURRENT");
+        dialog.poll_metrics(&ctx);
+        let mut replies = feed.0.lock().unwrap();
+        for (reply, name) in replies.drain(..).zip(["Stale metric", "Funding rate"]) {
+            reply.send(Ok(vec![MetricSeries {
+                id: "funding".into(),
+                name: name.into(),
+                unit: "%".into(),
+                format: StudyFormat::Percent,
+            }]));
+        }
+        dialog.poll_metrics(&ctx);
+        assert!(
+            dialog
+                .indicators
+                .iter()
+                .any(|info| info.name == "Funding rate")
+        );
+        assert!(
+            !dialog
+                .indicators
+                .iter()
+                .any(|info| info.name == "Stale metric")
+        );
+        let study = dialog.create("Metric: funding").unwrap();
+        assert!(!study.is_overlay());
+        assert_eq!(study.value_format(), StudyFormat::Percent);
+        assert_eq!(study.data_requests()[0].metric.as_deref(), Some("funding"));
+        dialog.set_metric_source(None, "CURRENT");
+        assert!(dialog.create("Metric: funding").is_none());
+        assert!(dialog.create("SMA").is_some());
+    }
 
     #[test]
     fn saved_favorites_restore_the_favorites_list() {

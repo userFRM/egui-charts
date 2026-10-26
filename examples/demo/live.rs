@@ -3,8 +3,9 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
     CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
-    HotlistEntry, HotlistQuery, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow,
-    Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample,
+    HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
+    MetricSubscription, NewsQuery, NewsStory, Reply, ScreenerQuery, ScreenerRow, Subscription,
+    SubscriptionId, SymbolDetails, aggregate_trades, resample,
 };
 use egui_charts::model::{
     Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
@@ -45,6 +46,7 @@ struct Simulation {
     adjusted: bool,
     subscription: Option<Subscription>,
     signals: Vec<Events<SignalEvent>>,
+    metrics: Vec<MetricSubscription>,
     /// The order book of the subscription, around the last price it was shown.
     market: Option<Market>,
 }
@@ -75,6 +77,7 @@ impl LiveFeed {
             adjusted: false,
             subscription: None,
             signals: Vec::new(),
+            metrics: Vec::new(),
             market: None,
         };
         while sim.next_trade <= now {
@@ -108,6 +111,7 @@ impl LiveFeed {
             adjusted: sim.adjusted,
             subscription: None,
             signals: Vec::new(),
+            metrics: Vec::new(),
             market: None,
         }))
     }
@@ -350,6 +354,14 @@ impl LiveFeed {
         let mut sim = self.state();
         if sim.paused {
             return std::time::Duration::from_secs(1);
+        }
+        let metric_changed = sim.now.timestamp().div_euclid(300) != now.timestamp().div_euclid(300);
+        if metric_changed {
+            sim.metrics.retain(|sub| sub.sink.is_active());
+            for sub in &sim.metrics {
+                sub.sink.set_server_time(now);
+                sub.sink.push_metric(open_interest(now));
+            }
         }
         let second_changed = sim.now.timestamp() != now.timestamp();
         sim.now = now;
@@ -685,7 +697,64 @@ impl Signals for LiveFeed {
     }
 }
 
+fn open_interest(time: DateTime<Utc>) -> MetricPoint {
+    let slot = time.timestamp().div_euclid(300) * 300;
+    MetricPoint {
+        time: DateTime::from_timestamp(slot, 0).unwrap(),
+        value: 100_000.0 + (slot as f64 / 3600.0).sin() * 8_000.0,
+    }
+}
+
 impl Datafeed for LiveFeed {
+    fn metrics(&self, symbol: &str, reply: Reply<Vec<MetricSeries>>) {
+        let metrics = if symbol == self.state().symbol {
+            vec![MetricSeries {
+                id: "open_interest".into(),
+                name: "Open interest".into(),
+                unit: "contracts".into(),
+                format: egui_charts::studies::StudyFormat::Volume,
+            }]
+        } else {
+            Vec::new()
+        };
+        reply.send(Ok(metrics));
+    }
+
+    fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+        let sim = self.state();
+        if request.symbol != sim.symbol || request.metric != "open_interest" {
+            reply.send(Err(FeedError::NotSupported));
+            return;
+        }
+        let oldest = sim.history.first().map_or(sim.now, |bar| bar.time);
+        let mut points: Vec<_> = (0..=(sim.now - oldest).num_seconds().max(0) / 300)
+            .map(|i| open_interest(oldest + TimeDelta::seconds(i * 300)))
+            .filter(|point| request.before.is_none_or(|before| point.time < before))
+            .collect();
+        // Include the developing five-minute point even when the oldest bar has an offset.
+        let current = open_interest(sim.now);
+        if request.before.is_none_or(|before| current.time < before)
+            && points.last().is_none_or(|point| point.time != current.time)
+        {
+            points.push(current);
+        }
+        let start = points.len().saturating_sub(request.count);
+        reply.send(Ok(MetricPage {
+            points: points.split_off(start),
+            end_of_history: start == 0,
+        }));
+    }
+
+    fn subscribe_metric(&self, subscription: MetricSubscription) {
+        let mut sim = self.state();
+        if subscription.symbol != sim.symbol || subscription.metric != "open_interest" {
+            return;
+        }
+        subscription.sink.set_server_time(sim.now);
+        subscription.sink.push_metric(open_interest(sim.now));
+        sim.metrics.push(subscription);
+    }
+
     fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::services::PriceTargets>) {
         if symbol != "SAMPLE" {
             reply.send(Err(FeedError::NotSupported));
@@ -756,6 +825,7 @@ impl Datafeed for LiveFeed {
 
     fn unsubscribe(&self, id: SubscriptionId) {
         let mut sim = self.state();
+        sim.metrics.retain(|sub| sub.id != id);
         if sim.subscription.as_ref().is_some_and(|sub| sub.id == id) {
             sim.subscription = None;
             sim.market = None;

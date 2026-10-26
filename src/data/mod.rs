@@ -36,6 +36,8 @@ mod footprint;
 )]
 pub(crate) mod inbox;
 mod market;
+mod metrics;
+pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -138,6 +140,24 @@ pub trait Datafeed: MaybeSend + 'static {
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Metrics offered for `symbol`, in display order. The default offers none.
+    /// The host publishes the values; the library computes no instrument metrics.
+    fn metrics(&self, symbol: &str, reply: Reply<Vec<MetricSeries>>) {
+        let _ = symbol;
+        reply.send(Ok(Vec::new()));
+    }
+
+    /// Metric history. The default answers [`FeedError::NotSupported`].
+    fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Start publishing metric points until [`Self::unsubscribe`]. The default does nothing.
+    fn subscribe_metric(&self, subscription: MetricSubscription) {
+        let _ = subscription;
     }
 
     /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],

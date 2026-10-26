@@ -928,6 +928,8 @@ impl DemoApp {
         if let Some(id) = self.quick_search.show(ctx) {
             self.execute_search_command(ctx, &id);
         }
+        self.indicator_dialog
+            .set_metric_source(Some(self.live.clone()), self.chart.symbol());
         // Indicators: add the study the dialog created.
         if let IndicatorDialogAction::AddIndicator(study) =
             self.indicator_dialog.show(ctx, &self.theme)

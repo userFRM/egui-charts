@@ -131,6 +131,7 @@ impl Indicator for UpDownVolume {
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         self.lower_timeframe()
             .map(|timeframe| StudyDataRequest {
+                metric: None,
                 symbol: String::new(),
                 timeframe: Some(timeframe),
             })
