@@ -4,7 +4,7 @@ use crate::chart::rendering::axes::paint_crosshair_tag;
 use crate::chart::rendering::draw_dashed_line;
 use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
-use crate::scales::{PriceMap, PriceScaleMode, TimeFormatter};
+use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
@@ -12,7 +12,7 @@ use egui::{Align2, Color32, Pos2, Rect, Stroke};
 ///
 /// The vertical line runs down to `chart_bottom`, the bottom of the volume pane. The price label
 /// sits in the price axis, which ends at `axis_right`, over the `last_price_tag` it overlaps, and
-/// the time label on the time axis below `chart_bottom`, written by `formatter`. Returns the rects
+/// the time label on the time axis below `chart_bottom`, written by `scale`. Returns the rects
 /// of the price and time labels drawn.
 pub fn render_crosshair_full(
     context: &RenderContext,
@@ -30,7 +30,7 @@ pub fn render_crosshair_full(
     chart_bottom: f32,
     axis_right: f32,
     last_price_tag: Option<Rect>,
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     bar_seconds: i64,
 ) -> [Option<Rect>; 2] {
     render_crosshair_with_options(
@@ -56,8 +56,9 @@ pub fn render_crosshair_full(
         chart_bottom,
         axis_right,
         last_price_tag,
-        formatter,
+        scale,
         bar_seconds,
+        None,
     )
 }
 
@@ -72,8 +73,9 @@ pub fn render_crosshair_with_options(
     chart_bottom: f32,
     axis_right: f32,
     last_price_tag: Option<Rect>,
-    formatter: &dyn TimeFormatter,
+    scale: &dyn HorizontalScale,
     bar_seconds: i64,
+    price_formatter: Option<&dyn PriceFormatter>,
 ) -> [Option<Rect>; 2] {
     let options = options.resolved(context.painter.ctx());
     let bar = coords
@@ -99,7 +101,11 @@ pub fn render_crosshair_with_options(
         &options,
         axis_right,
         last_price_tag,
-        None,
+        price_formatter.map(|price_formatter| {
+            price_scale
+                .transform()
+                .label(price_scale.y_to_scale(pos.y), 2, Some(price_formatter))
+        }),
     );
     let time_tag = bar
         .filter(|_| {
@@ -113,7 +119,7 @@ pub fn render_crosshair_with_options(
                 Pos2::new(pos.x, chart_bottom + 1.5),
                 Align2::CENTER_TOP,
                 context.rect.left()..=axis_right.max(context.rect.right()),
-                formatter.format_crosshair(candle.time, bar_seconds),
+                scale.format_crosshair(candle.time, bar_seconds),
                 (
                     options.label_text_color,
                     options.vert_label_background_color,
@@ -207,7 +213,7 @@ pub(crate) fn render_crosshair_price_tag(
         transform.mode,
         PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
     ) {
-        transform.label(price_scale.y_to_scale(pos.y), 2)
+        transform.label(price_scale.y_to_scale(pos.y), 2, None)
     } else {
         let decimals = price_scale
             .price_precision()
@@ -337,7 +343,7 @@ mod tests {
                         300.0,
                         axis_right,
                         None,
-                        formatter.as_ref(),
+                        &formatter,
                         3600,
                     );
                 });
@@ -440,8 +446,9 @@ mod tests {
                                 300.0,
                                 480.0,
                                 None,
-                                TimeFormatterBuilder::new().build().as_ref(),
+                                &TimeFormatterBuilder::new().build(),
                                 3600,
+                                None,
                             );
                         });
                         let (lines, dots): (Vec<_>, Vec<_>) = output

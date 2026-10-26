@@ -26,7 +26,7 @@ pub struct PriceMark {
 
 /// Configuration for price mark generation, set per scale through
 /// [`PriceScaleOptions::tick_marks`](super::PriceScaleOptions::tick_marks).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceMarkGeneratorConfig {
     /// Min spacing between marks in pixels, which keeps labels from overlapping at any density
     pub min_spacing: f32,
@@ -181,7 +181,7 @@ impl PriceMarkGenerator {
                 let label = if prices {
                     self.format_price(curr_price, precision)
                 } else {
-                    map.transform().label(curr_price, precision)
+                    map.transform().label(curr_price, precision, None)
                 };
 
                 // Calculate weight (higher for rounder numbers)

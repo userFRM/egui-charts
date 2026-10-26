@@ -41,6 +41,15 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
             high = high.max(0.0);
         }
     }
+    for plot in study.volume_profiles(super::volume_profile::profile_range(coords)) {
+        low = low.min(plot.profile.low());
+        high = high.max(plot.profile.high());
+    }
+    #[cfg(feature = "drawings")]
+    for price in crate::studies::plots::drawing_prices(study, start..end) {
+        low = low.min(price);
+        high = high.max(price);
+    }
     if !low.is_finite() {
         low = 0.0;
         high = 1.0;

@@ -34,7 +34,7 @@
 //! ```
 
 use super::clamp_param;
-use crate::model::{Bar, Session, SessionWindow, TimezoneId};
+use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use crate::tokens::DESIGN_TOKENS;
@@ -60,6 +60,15 @@ pub enum VwapAnchor {
     /// Restart at timestamps supplied by the host with `with_event_anchors`.
     Events,
 }
+
+const VWAP_ANCHORS: [VwapAnchor; 6] = [
+    VwapAnchor::Session,
+    VwapAnchor::Week,
+    VwapAnchor::Month,
+    VwapAnchor::Quarter,
+    VwapAnchor::Year,
+    VwapAnchor::Events,
+];
 
 impl VwapAnchor {
     /// Identifies the period that holds trading day `day`.
@@ -111,6 +120,7 @@ pub struct VolumeWeightedAvgPrice {
     shared: Option<usize>,
     /// Whether no two consecutive bars shared a UTC date at the last update.
     daily: bool,
+    timeframe: Option<Timeframe>,
     /// One per line: the VWAP, then the upper and lower band of each multiplier.
     colors: Vec<Color32>,
     visible: bool,
@@ -140,6 +150,7 @@ impl VolumeWeightedAvgPrice {
             stepper: Stepper::default(),
             shared: None,
             daily: true,
+            timeframe: None,
             colors: vec![DESIGN_TOKENS.semantic.extended.favorite_gold], // Amber
             visible: true,
             anchor: VwapAnchor::Session,
@@ -161,8 +172,8 @@ impl VolumeWeightedAvgPrice {
     /// The exchange time zone, in which trading days are counted. A bar shorter than a
     /// day counts on the exchange date of its timestamp. A bar of a day or longer, which
     /// a feed stamps inside its UTC period ([`HistoryPage::bars`](crate::data::HistoryPage::bars)),
-    /// counts on its UTC date; bars are taken to be a day or longer when no two
-    /// consecutive bars share a UTC date.
+    /// counts on its UTC date. Without an explicit timeframe, bars are taken to be a
+    /// day or longer when no two consecutive bars share a UTC date.
     pub fn with_time_zone(mut self, time_zone: TimezoneId) -> Self {
         self.time_zone = time_zone;
         self
@@ -224,11 +235,63 @@ impl Default for VolumeWeightedAvgPrice {
 }
 
 impl Indicator for VolumeWeightedAvgPrice {
-    crate::studies::inputs::study_inputs!(self;
-        daily: toggle("Daily"),
-        anchor: choice("Anchor", [VwapAnchor::Session, VwapAnchor::Week, VwapAnchor::Month, VwapAnchor::Quarter, VwapAnchor::Year, VwapAnchor::Events]),
-        percentage_bands: toggle("Percentage bands")
-    ; {});
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
+    fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+        use crate::studies::{InputKind, InputValue, StudyInput};
+        vec![
+            StudyInput::new(
+                "anchor",
+                "Anchor",
+                InputValue::Choice(self.anchor as usize),
+                InputKind::Choice(
+                    VWAP_ANCHORS
+                        .iter()
+                        .map(|anchor| format!("{anchor:?}"))
+                        .collect(),
+                ),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "percentage_bands",
+                "Percentage bands",
+                InputValue::Toggle(self.percentage_bands),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+        ]
+    }
+
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: crate::studies::InputValue,
+    ) -> Result<(), &'static str> {
+        use crate::studies::InputValue;
+        // Older templates stored this inferred flag; it never controlled the calculation.
+        if id == "daily" && matches!(value, InputValue::Toggle(_)) {
+            return Ok(());
+        }
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or("unknown study input")?;
+        if !schema.accepts(&value) {
+            return Err("study input is outside its accepted values");
+        }
+        match (id, value) {
+            ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
+            ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
+            _ => return Err("invalid VWAP input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn name(&self) -> &str {
         "VWAP"
@@ -249,7 +312,9 @@ impl Indicator for VolumeWeightedAvgPrice {
             (from.max(1)..data.len())
                 .find(|&at| data[at - 1].time.date_naive() == data[at].time.date_naive())
         });
-        let daily = self.shared.is_none();
+        let daily = self.timeframe.map_or(self.shared.is_none(), |tf| {
+            tf.duration_ms() >= Timeframe::Day1.duration_ms()
+        });
         let from = if daily != self.daily { 0 } else { from };
         self.daily = daily;
         let (zone, windows) = self.instrument_session.as_ref().map_or(
@@ -318,6 +383,10 @@ impl Indicator for VolumeWeightedAvgPrice {
                     )
                 }
             });
+    }
+
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        self.timeframe = Some(timeframe);
     }
 
     fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
@@ -777,6 +846,40 @@ mod tests {
                 matches!(study.values().to_rows()[2], IndicatorValue::Single(v) if v == 16.0),
                 "clearing metadata must restore UTC: {:?}",
                 study.values().to_rows()
+            );
+        }
+        // These two intraday bars straddle UTC midnight but share a New York date.
+        let sparse = bars[..2].to_vec();
+        for interval_first in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(sparse.clone()));
+            chart.set_instrument(Some(instrument.clone()));
+            if interval_first {
+                chart.set_timeframe(crate::model::Timeframe::Hour1);
+            }
+            chart.add_indicator(
+                crate::studies::IndicatorFactory::new()
+                    .create("VWAP")
+                    .unwrap(),
+            );
+            chart.set_timeframe(crate::model::Timeframe::Hour1);
+            shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 1),
+                Some(12.0)
+            );
+            chart.set_timeframe(crate::model::Timeframe::Day1);
+            shapes(&egui::Context::default(), &mut chart, 1.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 1),
+                Some(14.0)
+            );
+            chart.set_timeframe(crate::model::Timeframe::Hour1);
+            chart.set_symbol("UTC");
+            chart.set_instrument(Some(Instrument::new("UTC")));
+            shapes(&egui::Context::default(), &mut chart, 2.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 1),
+                Some(14.0)
             );
         }
         let mut chart = Chart::new(BarData::from_bars(bars));

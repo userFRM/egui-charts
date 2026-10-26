@@ -3,7 +3,9 @@
 //! Defines which price value to use for line-based chart calculations.
 
 /// Price source for series calculations
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum PriceSource {
     /// Opening price
     Open,

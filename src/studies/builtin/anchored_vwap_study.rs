@@ -37,6 +37,12 @@ impl Default for AnchoredVWAP {
 }
 
 impl Indicator for AnchoredVWAP {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         anchor_bar: length("Anchor bar", 0, usize::MAX)
     ; {});

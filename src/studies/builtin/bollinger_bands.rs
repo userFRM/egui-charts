@@ -113,6 +113,12 @@ impl Default for BollingerBands {
 }
 
 impl Indicator for BollingerBands {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
         std_dev: number("Std dev", 0.0, f64::MAX)

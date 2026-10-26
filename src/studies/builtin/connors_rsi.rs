@@ -207,6 +207,12 @@ impl ConnorsRSI {
 }
 
 impl Indicator for ConnorsRSI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         rsi_period: length("RSI period", 1, usize::MAX),
         streak_period: length("Streak period", 1, usize::MAX),

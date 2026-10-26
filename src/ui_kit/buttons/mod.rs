@@ -81,10 +81,15 @@ impl ButtonSize {
 }
 
 /// Report a button to accessibility tools and attach its tooltip, which also shows while disabled.
-fn finish(response: Response, selected: bool, label: &str, tooltip: Option<&str>) -> Response {
+fn finish(
+    response: Response,
+    selected: Option<bool>,
+    label: &str,
+    tooltip: Option<&str>,
+) -> Response {
     response.widget_info(|| {
-        if selected {
-            WidgetInfo::selected(Role::Button, response.enabled(), true, label)
+        if let Some(selected) = selected {
+            WidgetInfo::selected(Role::Button, response.enabled(), selected, label)
         } else {
             WidgetInfo::labeled(Role::Button, response.enabled(), label)
         }

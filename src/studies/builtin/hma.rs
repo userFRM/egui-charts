@@ -79,6 +79,12 @@ impl Default for HMA {
 }
 
 impl Indicator for HMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 2, usize::MAX)
     ; {});

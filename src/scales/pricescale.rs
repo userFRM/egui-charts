@@ -18,7 +18,7 @@ use super::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
 ///
 /// Determines how raw price values are transformed before being mapped to
 /// pixel coordinates.  The default is [`Normal`](PriceScaleMode::Normal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PriceScaleMode {
     /// Prices on a linear axis: equal price differences take equal heights.
     #[default]
@@ -57,7 +57,7 @@ impl FromStr for PriceScaleMode {
 }
 
 /// A min/max price range, used throughout the scale engine.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceRange {
     /// Minimum price in the range.
     pub min: f64,
@@ -86,7 +86,7 @@ impl PriceRange {
 ///
 /// The defaults keep the data in the middle 80% of the pane. Margins that together
 /// leave no room for the data are ignored.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleMargins {
     /// Space above the highest value, as a fraction of the pane height (0.0 to 1.0)
     pub top: f64,
@@ -149,7 +149,7 @@ impl fmt::Display for PriceScaleId {
 }
 
 /// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,
@@ -168,7 +168,7 @@ pub struct PriceScaleOptions {
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,
@@ -201,26 +201,39 @@ impl PriceTransform {
         }
     }
 
+    /// The value an axis label shows for a scale value: the price in the normal and logarithmic
+    /// modes, the percentage or index value otherwise.
+    pub(crate) fn axis_value(&self, value: f64) -> f64 {
+        if self.mode == PriceScaleMode::Logarithmic {
+            self.to_price(value)
+        } else {
+            value
+        }
+    }
+
     /// Formats a scale value for the axis: prices, signed percentages or index values.
-    pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
-        match self.mode {
-            PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
-            mode => {
-                use super::{DefaultPriceFormatter, PriceFormatter};
-                let price = if mode == PriceScaleMode::Logarithmic {
-                    self.to_price(value)
-                } else {
-                    value
-                };
-                DefaultPriceFormatter::with_precision(decimals).format(price)
-            }
+    ///
+    /// A host `formatter` receives the price in the normal and logarithmic modes and
+    /// the percentage or index value otherwise, and replaces `decimals`.
+    pub(crate) fn label(
+        &self,
+        value: f64,
+        decimals: usize,
+        formatter: Option<&dyn super::PriceFormatter>,
+    ) -> String {
+        use super::{DefaultPriceFormatter, PriceFormatter};
+        let value = self.axis_value(value);
+        match (formatter, self.mode) {
+            (Some(formatter), _) => formatter.format(value),
+            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
 }
 
 /// One price axis: options and the visible range in scale units, fitted to the
 /// data until the user scales it by hand.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PriceScale {
     options: PriceScaleOptions,
     /// Visible range in scale units

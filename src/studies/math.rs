@@ -60,7 +60,7 @@ impl Moments {
     }
 
     /// These moments with the close `y` of the next bar added (Welford's update).
-    #[cfg(feature = "widget")]
+    #[cfg(feature = "drawings")]
     pub(crate) fn with(&self, y: f64) -> Self {
         let n = self.n + 1.0;
         let (dx, dy) = (self.n - self.mean_x, y - self.mean_y);

@@ -175,6 +175,10 @@ impl AlertDialog {
             .width(self.config.width + 32.0)
             .height(self.config.height + 130.0)
             .show(ctx, &mut open, |ui| {
+                ui.response()
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
+                ui.ctx()
+                    .accesskit_node_builder(ui.response().id, |node| node.set_modal());
                 if dialog_header(ui, title) {
                     self.close();
                     action = AlertDialogAction::Cancel;
@@ -243,10 +247,12 @@ impl AlertDialog {
             (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
         FormGrid::new("alert_details").show(ui, |ui| {
             ui.label("Name");
-            ui.text_edit_singleline(&mut self.alert.name);
+            ui.text_edit_singleline(&mut self.alert.name)
+                .accessible_name("Name");
             ui.end_row();
             ui.label("Symbol");
-            ui.text_edit_singleline(&mut self.alert.symbol);
+            ui.text_edit_singleline(&mut self.alert.symbol)
+                .accessible_name("Symbol");
             ui.end_row();
             ui.label("Watchlist");
             egui::ComboBox::from_id_salt("alert_watchlist")
@@ -269,7 +275,9 @@ impl AlertDialog {
                     for (id, name) in &self.watchlists {
                         ui.selectable_value(&mut self.alert.watchlist, Some(id.clone()), name);
                     }
-                });
+                })
+                .response
+                .accessible_name("Watchlist");
             ui.end_row();
             ui.label("Frequency");
             egui::ComboBox::from_id_salt("alert_frequency")
@@ -283,13 +291,17 @@ impl AlertDialog {
                     ] {
                         ui.selectable_value(&mut self.alert.frequency, value, label);
                     }
-                });
+                })
+                .response
+                .accessible_name("Frequency");
             ui.end_row();
             ui.label("Expiry (optional)");
-            ui.text_edit_singleline(&mut self.expires);
+            ui.text_edit_singleline(&mut self.expires)
+                .accessible_name("Expiry (optional)");
             ui.end_row();
             ui.label("Message");
-            ui.text_edit_multiline(&mut self.alert.message);
+            ui.text_edit_multiline(&mut self.alert.message)
+                .accessible_name("Message");
             ui.end_row();
         });
         ui.separator();
@@ -325,7 +337,8 @@ impl AlertDialog {
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label("Preset");
-                ui.text_edit_singleline(&mut self.preset_name);
+                ui.text_edit_singleline(&mut self.preset_name)
+                    .accessible_name("Preset");
                 if ui
                     .add_enabled(
                         self.loaded
@@ -354,7 +367,9 @@ impl AlertDialog {
                             apply = Some(alert.clone());
                         }
                     }
-                });
+                })
+                .response
+                .accessible_name("Apply preset");
             if let Some(mut preset) = apply {
                 preset.id.clone_from(&self.alert.id);
                 preset.status = self.alert.status;
@@ -391,6 +406,12 @@ fn source_picker(
             for (value, name) in sources {
                 ui.selectable_value(source, value.clone(), name);
             }
+        })
+        .response
+        .accessible_name(if id == "other" {
+            "Comparison source"
+        } else {
+            "Source"
         });
 }
 
@@ -470,7 +491,9 @@ fn rule_form(
                     *condition = value;
                 }
             }
-        });
+        })
+        .response
+        .accessible_name("Condition");
     ui.horizontal_wrapped(|ui| match condition {
         AlertCondition::Crossing(v)
         | AlertCondition::CrossingUp(v)
@@ -478,13 +501,14 @@ fn rule_form(
         | AlertCondition::Above(v)
         | AlertCondition::Below(v) => {
             ui.label("Level");
-            ui.add(egui::DragValue::new(v).speed(0.01));
+            ui.add(egui::DragValue::new(v).speed(0.01))
+                .accessible_name("Level");
         }
         AlertCondition::EnteringChannel { lower, upper }
         | AlertCondition::ExitingChannel { lower, upper } => {
             ui.label("Lower / upper");
-            ui.add(egui::DragValue::new(lower));
-            ui.add(egui::DragValue::new(upper));
+            ui.add(egui::DragValue::new(lower)).accessible_name("Lower");
+            ui.add(egui::DragValue::new(upper)).accessible_name("Upper");
         }
         AlertCondition::MovingBy { value, bars }
         | AlertCondition::MovingByPercent {
@@ -492,13 +516,17 @@ fn rule_form(
             bars,
         } => {
             ui.label("Change / bars");
-            ui.add(egui::DragValue::new(value));
-            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX));
+            ui.add(egui::DragValue::new(value))
+                .accessible_name("Change");
+            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
+                .accessible_name("Bars");
         }
         AlertCondition::VolumeAboveAverage { multiplier, bars } => {
             ui.label("Multiplier / preceding bars");
-            ui.add(egui::DragValue::new(multiplier).speed(0.1));
-            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX));
+            ui.add(egui::DragValue::new(multiplier).speed(0.1))
+                .accessible_name("Multiplier");
+            ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
+                .accessible_name("Bars");
         }
         AlertCondition::Compare { other, comparison } => {
             source_picker(ui, "other", other, sources);
@@ -514,7 +542,9 @@ fn rule_form(
                     ] {
                         ui.selectable_value(comparison, value, value.to_string());
                     }
-                });
+                })
+                .response
+                .accessible_name("Comparison");
         }
     });
 }

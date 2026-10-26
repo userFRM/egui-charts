@@ -73,6 +73,12 @@ impl Default for AcceleratorOscillator {
 }
 
 impl Indicator for AcceleratorOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
             color: self.rising_color,

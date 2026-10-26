@@ -480,7 +480,13 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
-    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            egui::Role::MenuItem,
+            response.enabled() && item.enabled,
+            &item.label,
+        )
+    });
 
     let hovered = item.enabled && (response.hovered() || highlighted);
     // (label, icon, trailing text)
