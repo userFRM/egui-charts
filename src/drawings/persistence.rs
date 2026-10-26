@@ -1016,6 +1016,7 @@ mod tests {
         for (stored, tool) in v2.drawings().iter().zip(tools) {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
+            want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
             want.fib_config.as_mut().unwrap().logarithmic = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
