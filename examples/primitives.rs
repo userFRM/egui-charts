@@ -153,7 +153,7 @@ impl Primitive for Lollipops {
     }
 
     fn hit_test(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<CursorIcon> {
-        let index = view.mapping.x_to_idx_f32(pos.x).round();
+        let index = view.mapping.x_to_idx_f64(pos.x).round();
         if index < 0.0 || !view.visible.contains(&(index as usize)) {
             return None;
         }

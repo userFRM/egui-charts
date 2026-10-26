@@ -294,7 +294,8 @@ mod tests {
             })
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
-        frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
         chart.state.time_scale_mut().set_bar_spacing(200.0);
         chart.state.time_scale_mut().set_right_offset(0.0);
         let x = chart.index_to_x(999_999.0).unwrap();
@@ -312,6 +313,52 @@ mod tests {
                 .abs()
                 < 1_000
         );
+        let plot = chart.get_rendered_price_rect();
+        for (step, (index, nearest)) in [(999_997.49, 999_997), (999_997.51, 999_998)]
+            .into_iter()
+            .enumerate()
+        {
+            let pos = egui::pos2(chart.index_to_x(index).unwrap(), plot.center().y);
+            frame(
+                &ctx,
+                &mut chart,
+                0.1 + step as f64 * 0.1,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            assert!(
+                chart.drain_events().any(|event| matches!(
+                    event,
+                    ChartEvent::CrosshairMoved(Some(pointer)) if pointer.index == nearest
+                )),
+                "index {index} must select bar {nearest}"
+            );
+        }
+        let time = chart.bars(SeriesId::MAIN)[999_997].time + Duration::milliseconds(300);
+        let added = chart.add_series(crate::widget::SeriesOptions {
+            chart_type: crate::model::ChartType::Candles,
+            up_color: egui::Color32::BLUE,
+            ..Default::default()
+        });
+        chart.set_data(added, vec![Bar::new(time, 9.0, 11.0, 9.0, 11.0, 100.0)]);
+        let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+        let x = chart.index_to_x(999_997.005).unwrap();
+        assert!(
+            painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Rect(body)
+                    if body.fill == egui::Color32::BLUE && (body.rect.center().x - x).abs() < 1e-3
+            )),
+            "an added series must retain its fractional time position"
+        );
+        let plot = chart.get_rendered_price_rect();
+        let center = 999_997.137;
+        let x = chart.index_to_x(center).unwrap();
+        assert!(chart.execute_box_zoom(
+            egui::pos2(x - 125.0, plot.top() + 100.0),
+            egui::pos2(x + 125.0, plot.top() + 200.0),
+            plot,
+            plot.width(),
+        ));
+        assert!((chart.index_to_x(center).unwrap() - plot.center().x).abs() < 1e-3);
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical

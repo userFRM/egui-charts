@@ -793,11 +793,9 @@ impl Chart {
                 .get(index)
                 .and_then(|bar| super::sync::index_at(main, bar.time))
                 .map_or(f32::NAN, |at| {
-                    self.state.time_scale().idx_to_coord_precise(
-                        at as f32,
-                        rect.left(),
-                        rect.width(),
-                    )
+                    self.state
+                        .time_scale()
+                        .idx_to_coord_precise(at, rect.left(), rect.width())
                 })
         };
         rendering::render_chart_type(
@@ -865,11 +863,10 @@ impl Chart {
         if let Some(marks) = &item.change_marks {
             marks.paint(plot, |time, close| {
                 let index = super::sync::index_at(main, time)?;
-                let x = self.state.time_scale().idx_to_coord_precise(
-                    index as f32,
-                    rect.left(),
-                    rect.width(),
-                );
+                let x =
+                    self.state
+                        .time_scale()
+                        .idx_to_coord_precise(index, rect.left(), rect.width());
                 Some(Pos2::new(x, map.price_to_y(close)))
             });
         }
@@ -938,7 +935,7 @@ impl Chart {
                         main.get(
                             self.state
                                 .time_scale()
-                                .coord_to_idx(point.x, rect.left(), rect.width())
+                                .coord_to_idx_precise(point.x, rect.left(), rect.width())
                                 .round()
                                 .max(0.0) as usize,
                         )

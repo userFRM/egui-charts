@@ -515,14 +515,16 @@ impl Chart {
         // A box inside one bar shows that bar across the width, or keeps a wider spacing.
         let time_scale = self.state.time_scale_mut();
         let center_idx =
-            time_scale.coord_to_idx((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
+            time_scale.coord_to_idx_precise((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
         let old = time_scale.bar_spacing();
         time_scale.set_bar_spacing((old * chart_width / (max_x - min_x)).min(chart_width.max(old)));
         // The inverse of `coord_to_idx` at the middle of the width.
         let spacing = time_scale.bar_spacing();
-        let base_idx = time_scale.base_idx() as f32;
-        time_scale
-            .set_right_offset(center_idx - base_idx + (chart_width / 2.0 - 1.0) / spacing - 0.5);
+        let base_idx = time_scale.base_idx() as f64;
+        time_scale.set_right_offset(
+            (center_idx - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing)
+                - 0.5) as f32,
+        );
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
         // visible close (the base of the relative modes) can differ from the one it was drawn on.

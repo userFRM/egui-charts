@@ -295,16 +295,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Time coordinates subtract absolute indices before applying fractional offsets and retain double precision through host conversions and zoom anchoring. Small pans on million-bar histories move smoothly at high zoom, and synchronized UTC edge times retain their fractional indices; existing `f32` inverse methods remain available alongside precise inverses. ([#916](https://github.com/userFRM/egui-charts/issues/916))
-
+- Small pans and anchored zooms retain fractional movement on large histories. Synchronized UTC ranges, added series and pointer actions keep sub-bar precision. ([#916](https://github.com/userFRM/egui-charts/issues/916))
 - Main and comparison series use the same ordinary-price fallback when their percentage or indexed reference is zero or unavailable, keeping drawable comparison coordinates finite. ([#913](https://github.com/userFRM/egui-charts/issues/913))
-
 - Logarithmic autoscaling filters drawable positive OHLC prices before reducing their extrema, including opens and closes of bars whose lows cross zero, on the main and added series. ([#914](https://github.com/userFRM/egui-charts/issues/914))
-
 - Each chart and added series retains its own Heikin Ashi history, so nine or more active histories reuse their transforms on unchanged frames and release them with their owners. Price fitting and painting share those transformed bars, including recursive opens carried across price gaps. Migration for low-level renderer callers: add `heikin_ashi: &cache` to `CandleDataContext` literals, retaining one `chart::rendering::candles::HeikinAshiCache::default()` per series. The widget manages its caches automatically. ([#912](https://github.com/userFRM/egui-charts/issues/912), [#915](https://github.com/userFRM/egui-charts/issues/915))
-
 - Automatic price tick labels derive precision from their spacing and use scientific notation beyond eight decimals, so sub-nano prices remain nonzero and distinct on normal and logarithmic axes. Explicit instrument precision is preserved. ([#917](https://github.com/userFRM/egui-charts/issues/917))
-
 - A zero right margin keeps the newest candle and its streaming updates in the visible data and price fit, including when the right edge is fixed. Logical ranges include their rightmost bar slot when converted to end-exclusive slices. ([#910](https://github.com/userFRM/egui-charts/issues/910))
 
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))

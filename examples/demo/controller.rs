@@ -5642,7 +5642,7 @@ mod tests {
                         app.extra_charts[0].chart.set_feed_paused(true);
                         app.layout.sync.sync_time_axis = false;
                         frame(&mut app);
-                        let day = app.bars.last().unwrap().time.date_naive() - chrono::Days::new(2);
+                        let day = app.bars[app.bars.len() / 2].time.date_naive();
                         for sync in [false, true] {
                             app.layout.sync.sync_date_range = sync;
                             let before = app.extra_charts[0].chart.get_time_scale_state();
