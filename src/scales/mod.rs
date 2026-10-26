@@ -21,6 +21,7 @@ mod horizontal;
 mod price_formatter;
 mod pricescale;
 mod pricescale_marks;
+mod study_format;
 mod time_formatter;
 mod timescale_marks;
 
@@ -28,6 +29,8 @@ pub use countdown::bar_countdown;
 pub use horizontal::{
     HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout, key_time, time_key,
 };
+#[cfg(feature = "widget")]
+pub(crate) use price_formatter::price_decimals;
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
@@ -40,6 +43,7 @@ pub use pricescale::{
     PriceScaleOptions, PriceTransform,
 };
 pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
+pub use study_format::StudyFormat;
 pub use time_formatter::{
     CustomTimeFormatter, DefaultTimeFormatter, LocaleTimeFormatter, RelativeTimeFormatter,
     TimeFormatter, TimeFormatterBuilder, TimezoneMode,
@@ -47,8 +51,3 @@ pub use time_formatter::{
 pub use timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,
 };
-
-mod study_format;
-#[cfg(feature = "widget")]
-pub(crate) use price_formatter::price_decimals;
-pub use study_format::StudyFormat;

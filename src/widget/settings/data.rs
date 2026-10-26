@@ -294,10 +294,9 @@ impl Default for ScalesAndLinesSettings {
 }
 
 /// Trading tab settings: the Buy and Sell buttons' behaviour, notifications and the layers
-/// [`Trading::show`](crate::ui::trading::Trading::show) draws, through
-/// [`Trading::display`](crate::ui::trading::Trading::display). The Buy and Sell buttons
-/// themselves are [`StatusLineOptions::show_quote_boxes`]. Saved settings without a field take
-/// its default.
+/// `ui::trading::Trading::show` draws through `Trading::display` with the `ui` feature.
+/// The Buy and Sell buttons themselves are [`StatusLineOptions::show_quote_boxes`].
+/// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct TradingSettings {
@@ -307,11 +306,10 @@ pub struct TradingSettings {
     /// Show current Bid and Ask tags supplied by the quote source.
     pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
-    /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
+    /// `ui::trading::Trading::take_execution_sound` with the `ui` feature.
     pub play_execution_sound: bool,
     /// The name of the sound the host plays for fills, one of the
-    /// [`SettingsDialog::execution_sounds`](crate::ui::top_toolbar::components::settings_menu::SettingsDialog::execution_sounds); empty for
-    /// the host's first.
+    /// `SettingsDialog::execution_sounds` with the `ui` feature; empty for the host's first.
     pub execution_sound: String,
     /// Which trading events raise a notification.
     pub notifications: TradingNotifications,

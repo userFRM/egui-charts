@@ -2,7 +2,6 @@
 
 use crate::studies::{StudyCandle, StudyZone};
 
-#[cfg(feature = "widget")]
 pub(crate) fn zone_rect(
     zone: &StudyZone,
     coords: &crate::chart::coords::ChartMapping,
@@ -20,7 +19,6 @@ pub(crate) fn zone_rect(
     (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
 
-#[cfg(feature = "widget")]
 pub(crate) fn candle_geometry(
     candle: &StudyCandle,
     coords: &crate::chart::coords::ChartMapping,
@@ -54,7 +52,6 @@ pub(crate) fn candle_geometry(
     Some((body, wick))
 }
 
-#[cfg(feature = "widget")]
 pub(crate) fn paint_candles(
     context: &crate::chart::renderers::RenderContext,
     study: &dyn crate::studies::Indicator,
@@ -87,7 +84,6 @@ pub(crate) fn paint_candles(
     }
 }
 
-#[cfg(feature = "widget")]
 pub(crate) fn paint_zones(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,

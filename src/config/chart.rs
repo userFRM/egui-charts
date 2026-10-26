@@ -474,7 +474,7 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
-    /// Apply this theme's background, grid, axis text and candle colours to `config`.
+    /// Apply the theme's background, grid, axis text and candle colours to this configuration.
     ///
     /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
     /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)

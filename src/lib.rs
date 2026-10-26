@@ -55,7 +55,7 @@
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
 //! | **Widget** | [`widget`] | `Chart` egui widget and `ChartBuilder`: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes, loading from a feed |
 //! | **Extensions** | `ui_kit::ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
-//! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
+//! | **Icons** | `icons` | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //!
 //! ## Feature flags
@@ -205,6 +205,9 @@ pub mod tokens;
 
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+pub mod localization;
+#[cfg(feature = "widget")]
+#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 #[warn(missing_docs)]
 pub mod widget;
 
@@ -236,9 +239,6 @@ pub mod ui;
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 
 pub use model::ChartType;
-#[cfg(feature = "widget")]
-#[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
-pub mod localization;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use widget::{Chart, ChartBuilder, RightClickTarget};

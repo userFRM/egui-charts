@@ -146,7 +146,7 @@ impl PaperAccount {
     /// Returns the account to its starting balance without orders, positions or history,
     /// retaining the host's prices and replay clock. The terminal shows the fresh account once
     /// it connects again, such as through
-    /// [`Trading::set_service`](crate::ui::trading::Trading::set_service).
+    /// `ui::trading::Trading::set_service` with the `ui` feature.
     pub fn reset(&self) {
         let mut state = self.lock();
         let last = std::mem::take(&mut state.last);

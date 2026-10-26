@@ -32,8 +32,8 @@ pub struct ZoomState {
 /// # Example
 ///
 /// ```
-/// use egui_charts::model::{BarData};
-/// use egui_charts::studies::{ChartState};
+/// use egui_charts::model::BarData;
+/// use egui_charts::studies::ChartState;
 ///
 /// let data = BarData::new();
 /// let state = ChartState::new(data);

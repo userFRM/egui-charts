@@ -25,8 +25,8 @@
 //!
 //! | Sub-module | Purpose |
 //! |---|---|
-//! | `builtin` | *(feature `studies`)* All built-in indicators ([`SMA`], [`EMA`], [`RSI`], [`MACD`], [`BollingerBands`], ...) |
-//! | [`factory`] | *(feature `studies`)* [`IndicatorFactory`] -- dynamic creation of indicators by name |
+//! | `builtin` | *(feature `studies`)* All built-in indicators (`SMA`, `EMA`, `RSI`, `MACD`, `BollingerBands`, ...) |
+//! | `factory` | *(feature `studies`)* `IndicatorFactory` -- dynamic creation of indicators by name |
 //! | `indicator_trait` | The core [`Indicator`] trait and [`IndicatorValue`] enum |
 //! | `custom` | [`CustomIndicator`] -- define indicators at runtime with closures |
 //!

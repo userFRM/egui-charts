@@ -113,8 +113,8 @@ pub struct StudyPane {
 ///
 /// # Implementors
 ///
-/// All built-in indicators implement this trait (e.g. [`SMA`](super::SMA),
-/// [`RSI`](super::RSI), [`MACD`](super::MACD)), and users can implement it
+/// All built-in indicators implement this trait (e.g. `SMA`, `RSI`, `MACD` with the
+/// `studies` feature), and users can implement it
 /// for their own indicators or use [`CustomIndicator`](super::CustomIndicator)
 /// to define one at runtime via a closure.
 ///

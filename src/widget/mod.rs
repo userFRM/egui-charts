@@ -909,8 +909,8 @@ impl Chart {
 
     /// Returns a mutable reference to the chart's visual configuration.
     ///
-    /// Use this to apply settings produced by a dialog in place, e.g.
-    /// `settings.apply_to_chart(chart)`, without rebuilding the
+    /// Use this to edit visual options in place, e.g.
+    /// `chart.config_mut().show_grid = false`, without rebuilding the
     /// whole [`ChartConfig`]. Changes take effect on the next rendered frame. Wrap a host UI
     /// submission in [`Self::user_action`] to include it in chart history.
     pub fn config_mut(&mut self) -> &mut ChartConfig {

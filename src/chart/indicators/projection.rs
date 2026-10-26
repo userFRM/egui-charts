@@ -2,7 +2,6 @@
 
 use crate::studies::StudyProjection;
 
-#[cfg(feature = "widget")]
 pub(crate) fn projection_rect(
     projection: &StudyProjection,
     coords: &crate::chart::coords::ChartMapping,
@@ -20,7 +19,6 @@ pub(crate) fn projection_rect(
     (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
 
-#[cfg(feature = "widget")]
 pub(crate) fn paint(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,
