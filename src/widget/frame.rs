@@ -2769,7 +2769,22 @@ impl Chart {
                         visible_data,
                         scale,
                         bar_seconds,
-                        &self.study_values_at(start_idx + local_idx),
+                        &self
+                            .study_rows_at(start_idx + local_idx)
+                            .into_iter()
+                            .filter(|(id, _)| {
+                                !tooltip_options.on_long_press
+                                    || tooltip_options.show_volume_details
+                                    || self
+                                        .study_ids
+                                        .iter()
+                                        .zip(self.rendered_studies().indicators())
+                                        .any(|(study_id, study)| {
+                                            study_id == id && !study.is_volume()
+                                        })
+                            })
+                            .map(|(_, row)| row)
+                            .collect::<Vec<_>>(),
                         self.instrument(),
                         self.value_formatters(),
                     );
@@ -3628,14 +3643,16 @@ mod tests {
             frame(&ctx, &mut chart, 0.0, vec![]);
             let map = chart.get_chart_mapping();
             let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
-            for (step, enabled, pressed, expected) in [
-                (1, true, false, false),
-                (2, true, true, true),
-                (3, true, false, false),
-                (4, false, true, false),
-                (5, false, false, false),
+            for (step, enabled, pressed, expected, volume_details) in [
+                (1, true, false, false, false),
+                (2, true, true, true, false),
+                (3, true, true, true, true),
+                (4, true, false, false, false),
+                (5, false, true, false, false),
+                (6, false, false, false, false),
             ] {
                 chart.set_tooltip_enabled(enabled);
+                chart.chart_options.tooltip.show_volume_details = volume_details;
                 let painted = shapes(
                     &ctx,
                     &mut chart,
@@ -3666,6 +3683,11 @@ mod tests {
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
                 if expected {
+                    assert_eq!(
+                        labels.iter().any(|label| label.starts_with("Volume:")),
+                        volume_details,
+                        "volume study details are opt-in"
+                    );
                     assert!(labels.contains(&"Time"));
                     assert!(!labels.contains(&"Change"));
                     assert!(labels.contains(&"Vol"));
