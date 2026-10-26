@@ -45,6 +45,7 @@ impl StoredDocument {
     }
 
     /// Whether the document is still being read.
+    #[cfg(feature = "drawings")]
     pub(crate) fn reading(&self) -> bool {
         self.writable.is_none()
     }

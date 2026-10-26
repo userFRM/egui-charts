@@ -41,6 +41,7 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
             high = high.max(0.0);
         }
     }
+    #[cfg(feature = "drawings")]
     for price in crate::studies::plots::drawing_prices(study, start..end) {
         low = low.min(price);
         high = high.max(price);

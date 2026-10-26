@@ -412,6 +412,7 @@ impl Chart {
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
+        #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
@@ -515,6 +516,7 @@ impl Chart {
         }
         self.record_host_events(ui);
         // Within the frame of the edit, in case it is the last.
+        #[cfg(feature = "drawings")]
         self.save_stored_drawings();
         response
     }

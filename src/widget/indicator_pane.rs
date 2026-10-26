@@ -863,6 +863,7 @@ impl IndicatorPane {
             max_val = max_val.max(zone.top);
         }
 
+        #[cfg(feature = "drawings")]
         for price in crate::studies::plots::drawing_prices(indicator, visible_range.clone()) {
             min_val = min_val.min(price);
             max_val = max_val.max(price);

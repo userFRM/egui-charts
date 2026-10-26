@@ -80,6 +80,7 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
+    #[cfg(feature = "drawings")]
     if !indicator.drawings().is_empty() {
         let drawings = crate::studies::plots::mapped_drawings(indicator, coords, value_to_y);
         return crate::drawings::services::DrawingInteraction::new()

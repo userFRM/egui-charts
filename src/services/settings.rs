@@ -2,7 +2,7 @@
 
 use super::document::{Received, StoredDocument};
 use super::{Storage, StoreKind};
-use crate::drawings::DrawingToolType;
+use crate::config::DrawingToolType;
 use crate::model::Timeframe;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;

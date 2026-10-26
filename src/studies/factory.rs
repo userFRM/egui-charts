@@ -263,7 +263,7 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
-        #[cfg(feature = "widget")]
+        #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
             self.constructors.insert(
@@ -463,7 +463,7 @@ mod tests {
                 format!("{:?}", study.zones()),
                 study.tpo().is_some().to_string(),
             ];
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             let shapes = shapes
                 .into_iter()
                 .chain(std::iter::once(format!("{:?}", study.drawings())))
@@ -635,27 +635,27 @@ mod tests {
             Box::new(Volume24h::new()),
             Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(
                 AutoDrawingKind::ParallelChannel,
                 x(5.0),
                 l(0),
             )),
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(
                 AutoDrawingKind::FibonacciRetracement,
                 x(5.0),
                 l(0),
             )),
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(
                 AutoDrawingKind::FibonacciExtension,
                 x(5.0),
                 l(0),
             )),
-            #[cfg(feature = "widget")]
+            #[cfg(feature = "drawings")]
             Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
             Box::new(WilliamsFractals::new(l(0))),

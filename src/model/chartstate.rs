@@ -383,9 +383,9 @@ impl ChartState {
                     && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
-                #[cfg(not(feature = "widget"))]
+                #[cfg(not(feature = "drawings"))]
                 let drawing_prices = std::iter::empty();
-                #[cfg(feature = "widget")]
+                #[cfg(feature = "drawings")]
                 let drawing_prices = crate::studies::plots::drawing_prices(
                     study,
                     study_start.max(start)..study_end.max(end),

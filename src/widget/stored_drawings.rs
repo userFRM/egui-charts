@@ -316,6 +316,23 @@ mod tests {
         frame(&mut chart);
         assert!(host.documents.lock().unwrap().contains_key("A"));
 
+        let mut transient = Drawing::new(0, DrawingToolType::HorizontalLine);
+        transient.chart_points = vec![ChartPoint::new(4.0, 10.75)];
+        transient.saveable = false;
+        chart.user_action(|chart| chart.drawings_mut().add_drawing(transient).unwrap());
+        for replay in 0..3 {
+            match replay {
+                1 => assert!(chart.undo()),
+                2 => assert!(chart.redo()),
+                _ => {}
+            }
+            frame(&mut chart);
+            let json = host.documents.lock().unwrap()["A"].clone();
+            let (saved, skipped) = DrawingStorage::from_json(&json).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(saved.drawings().len(), 1, "transient drawing was saved");
+        }
+
         let mut restarted = new_chart(&host);
         frame(&mut restarted);
         let restored = &restarted.drawings().drawings;

@@ -143,10 +143,11 @@ A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/
 
 The default build includes the chart widget, the icons, the built-in studies and the application-level UI components. An application that only shows charts uses `default-features = false, features = ["widget"]`. With `default-features = false` alone the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui.
 
-- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `drawings`, `config`, `theme`, `styles`, `widget`). Required by `icons` and `ui`.
+- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `config`, `theme`, `styles`, `widget`). Required by `drawings`, `icons` and `ui`.
+- `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
-- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons` and `studies`.
+- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow

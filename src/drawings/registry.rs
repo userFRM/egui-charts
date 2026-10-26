@@ -171,6 +171,7 @@ mod tests {
                     instrument: None,
                     bars: &[],
                     revision: 0,
+                    time_axis: true,
                     bar_to_x: &|x| x,
                     price_to_y: &|y| y as f32,
                 },

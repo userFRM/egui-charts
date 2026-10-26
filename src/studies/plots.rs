@@ -162,7 +162,7 @@ pub(crate) fn paint_zones(
 }
 
 /// Anchor and level prices of drawings reaching the visible bars, for all study scales.
-#[cfg(feature = "widget")]
+#[cfg(feature = "drawings")]
 pub(crate) fn drawing_prices(
     study: &dyn super::Indicator,
     bars: std::ops::Range<usize>,
@@ -207,7 +207,7 @@ pub(crate) fn drawing_prices(
 }
 
 /// Apply the study's presentation and pane mapping before rendering or hit testing.
-#[cfg(feature = "widget")]
+#[cfg(feature = "drawings")]
 pub(crate) fn mapped_drawings(
     study: &dyn super::Indicator,
     coords: &crate::chart::coords::ChartMapping,
@@ -244,7 +244,7 @@ pub(crate) fn mapped_drawings(
         .collect()
 }
 
-#[cfg(feature = "widget")]
+#[cfg(feature = "drawings")]
 pub(crate) fn paint_drawings(
     context: &crate::chart::renderers::RenderContext,
     study: &dyn super::Indicator,
