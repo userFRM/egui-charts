@@ -22,6 +22,7 @@ const CUSTOM_FORM_W: f32 = 232.0;
 
 /// Timeframe unit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TimeframeUnit {
     /// A fixed number of executions per bar.
     Tick,
@@ -31,6 +32,8 @@ pub enum TimeframeUnit {
     Range,
     /// Absolute buy minus sell volume in whole units.
     Delta,
+    /// One of the model's subsecond presets.
+    Millisecond,
     Second,
     Minute,
     Hour,
@@ -46,6 +49,7 @@ impl TimeframeUnit {
             TimeframeUnit::Volume => "V",
             TimeframeUnit::Range => "R",
             TimeframeUnit::Delta => "delta",
+            TimeframeUnit::Millisecond => "ms",
             TimeframeUnit::Second => "S",
             TimeframeUnit::Minute => "m",
             TimeframeUnit::Hour => "h",
@@ -61,6 +65,7 @@ impl TimeframeUnit {
             TimeframeUnit::Volume => "volume units",
             TimeframeUnit::Range => "range ticks",
             TimeframeUnit::Delta => "delta units",
+            TimeframeUnit::Millisecond => "milliseconds",
             TimeframeUnit::Second => "seconds",
             TimeframeUnit::Minute => "minutes",
             TimeframeUnit::Hour => "hours",
@@ -93,33 +98,33 @@ fn interval(value: u32, unit: TimeframeUnit) -> Timeframe {
 
 fn parts(tf: Timeframe) -> (u64, TimeframeUnit) {
     use TimeframeUnit as Unit;
-    let seconds = tf.duration_ms() / 1000;
+    let seconds = match tf {
+        Timeframe::Custom(seconds) => seconds.get(),
+        _ => tf.duration_ms() as u64 / 1000,
+    };
     match tf {
+        Timeframe::Ms100 => (100, Unit::Millisecond),
+        Timeframe::Ms250 => (250, Unit::Millisecond),
+        Timeframe::Ms500 => (500, Unit::Millisecond),
         Timeframe::Ticks(n) => (n.get(), Unit::Tick),
         Timeframe::Volume(n) => (n.get(), Unit::Volume),
         Timeframe::Range(n) => (n.get(), Unit::Range),
         Timeframe::Delta(n) => (n.get(), Unit::Delta),
         Timeframe::Month1 => (1, Unit::Month),
         Timeframe::Week1 => (1, Unit::Week),
-        _ if seconds >= 86_400 && seconds % 86_400 == 0 => (seconds as u64 / 86_400, Unit::Day),
-        _ if seconds >= 3_600 && seconds % 3_600 == 0 => (seconds as u64 / 3_600, Unit::Hour),
-        _ if seconds >= 60 && seconds % 60 == 0 => (seconds as u64 / 60, Unit::Minute),
-        _ => (seconds.max(0) as u64, Unit::Second),
+        _ if seconds >= 86_400 && seconds % 86_400 == 0 => (seconds / 86_400, Unit::Day),
+        _ if seconds >= 3_600 && seconds % 3_600 == 0 => (seconds / 3_600, Unit::Hour),
+        _ if seconds >= 60 && seconds % 60 == 0 => (seconds / 60, Unit::Minute),
+        _ => (seconds, Unit::Second),
     }
 }
 
 fn display(tf: Timeframe) -> String {
-    if tf.duration_ms() > 0 && tf.duration_ms() < 1000 {
-        return tf.to_string();
-    }
     let (value, unit) = parts(tf);
     format!("{value}{}", unit.short_name())
 }
 
 fn display_long(tf: Timeframe) -> String {
-    if tf.duration_ms() > 0 && tf.duration_ms() < 1000 {
-        return format!("{} milliseconds", tf.duration_ms());
-    }
     let (value, unit) = parts(tf);
     let name = if value == 1 {
         match unit {
@@ -127,6 +132,7 @@ fn display_long(tf: Timeframe) -> String {
             TimeframeUnit::Volume => "volume unit",
             TimeframeUnit::Range => "range tick",
             TimeframeUnit::Delta => "delta unit",
+            TimeframeUnit::Millisecond => "millisecond",
             TimeframeUnit::Second => "second",
             TimeframeUnit::Minute => "minute",
             TimeframeUnit::Hour => "hour",
@@ -151,8 +157,13 @@ fn all_presets() -> Vec<Timeframe> {
         interval(1000, TimeframeUnit::Volume),
         interval(10, TimeframeUnit::Range),
         interval(100, TimeframeUnit::Delta),
+        // Milliseconds
+        Timeframe::Ms100,
+        Timeframe::Ms250,
+        Timeframe::Ms500,
         // Seconds
         interval(1, TimeframeUnit::Second),
+        Timeframe::Sec2,
         interval(5, TimeframeUnit::Second),
         interval(10, TimeframeUnit::Second),
         interval(15, TimeframeUnit::Second),
@@ -229,6 +240,7 @@ impl Default for TimeframeSelectorConfig {
 
 /// Action from timeframe selector
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TimeframeAction {
     None,
     Select(Timeframe),
@@ -273,6 +285,10 @@ impl CustomTimeframeDialog {
             }
             Ok(v) if v > 10_000 => {
                 self.error = Some("Value too large (max 10000)".to_string());
+                None
+            }
+            Ok(v) if self.unit == TimeframeUnit::Millisecond && ![100, 250, 500].contains(&v) => {
+                self.error = Some("Use 100, 250 or 500 milliseconds".to_owned());
                 None
             }
             Ok(v) => {
@@ -583,6 +599,7 @@ impl TimeframeSelector {
                     (TimeframeUnit::Volume, "Volume"),
                     (TimeframeUnit::Range, "Range"),
                     (TimeframeUnit::Delta, "Delta"),
+                    (TimeframeUnit::Millisecond, "Milliseconds"),
                     (TimeframeUnit::Second, "Seconds"),
                     (TimeframeUnit::Minute, "Minutes"),
                     (TimeframeUnit::Hour, "Hours"),
@@ -889,6 +906,11 @@ mod tests {
         assert_eq!(click(&mut restored, add), TimeframeAction::None);
         assert!(restored.custom_dialog.error.is_some());
         assert_eq!(restored.preferences(), saved);
+        restored.custom_dialog.unit = TimeframeUnit::Millisecond;
+        restored.custom_dialog.value_input = "1".to_owned();
+        assert_eq!(click(&mut restored, add), TimeframeAction::None);
+        assert!(restored.custom_dialog.error.is_some());
+        assert_eq!(restored.preferences(), saved);
         restored.set_supported_timeframes(None);
         let (_, labels, _) = frame(&mut restored, vec![]);
         assert!(
@@ -943,27 +965,46 @@ mod tests {
     #[test]
     fn interval_pick_updates_the_trigger_and_selection() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for selected in [
-                interval(100, TimeframeUnit::Tick),
-                interval(45, TimeframeUnit::Second),
-                interval(5, TimeframeUnit::Minute),
-                interval(1, TimeframeUnit::Hour),
+            for (selected, short, long) in [
+                (
+                    Model::Ticks(std::num::NonZeroU64::new(100).unwrap()),
+                    "100T",
+                    "100 ticks",
+                ),
+                (Model::Ms250, "250ms", "250 milliseconds"),
+                ("45s".parse().unwrap(), "45S", "45 seconds"),
+                (Model::Min5, "5m", "5 minutes"),
+                (Model::Hour1, "1h", "1 hour"),
+                (
+                    Model::Custom(std::num::NonZeroU64::MAX),
+                    "18446744073709551615S",
+                    "18446744073709551615 seconds",
+                ),
             ] {
+                assert_eq!(display(selected), short);
+                assert_eq!(display_long(selected), long);
                 for supported in [None, Some(vec![selected]), Some(vec![])] {
                     let ctx = egui::Context::default();
                     crate::theme::apply_to_egui(&ctx, &theme);
-                    let mut selector = TimeframeSelector::new(interval(1, TimeframeUnit::Minute));
+                    let mut selector = TimeframeSelector::new(Model::Min1);
+                    if !all_presets().contains(&selected) {
+                        selector.custom_timeframes.push(selected);
+                    }
                     let available = supported.as_ref().is_none_or(|values| !values.is_empty());
                     selector.set_supported_timeframes(supported.clone());
                     let mut frame = |events| {
                         let mut action = TimeframeAction::None;
                         let mut output = ctx.run_ui(
                             egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    vec2(800.0, 2400.0),
+                                )),
                                 events,
                                 ..Default::default()
                             },
                             |ui| {
-                                action = selector.menu_ui(ui, &theme, 1600.0);
+                                action = selector.menu_ui(ui, &theme, 2400.0);
                             },
                         );
                         output.textures_delta.clear();
@@ -998,7 +1039,7 @@ mod tests {
                     };
                     let (pos, _) = frame(vec![]);
                     let Some(pos) = pos else {
-                        assert!(!available);
+                        assert!(!available, "{selected:?}, {supported:?}");
                         continue;
                     };
                     frame(vec![egui::Event::PointerMoved(pos)]);
