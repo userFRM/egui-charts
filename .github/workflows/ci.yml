@@ -111,6 +111,8 @@ jobs:
         run: cargo test --no-default-features --features ui --lib
       - name: Run doc tests (all features)
         run: cargo test --doc --all-features
+      - name: Run doc tests (no default features)
+        run: cargo test --doc --no-default-features
 
   wasm-test:
     if: github.event.pull_request.draft != true
