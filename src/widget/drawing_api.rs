@@ -68,6 +68,7 @@ impl Chart {
     }
 
     /// Reveals an offscreen drawing by panning, retaining zoom and the auto/manual scale state.
+    #[cfg(feature = "ui")]
     pub(crate) fn reveal_drawing(&mut self, id: usize) {
         let Some(drawing) = self.drawings.drawings.iter().find(|d| d.id == id) else {
             return;
