@@ -762,6 +762,7 @@ impl IndicatorDialog {
                         .unwrap_or_default(),
                 };
                 let response = egui::ComboBox::from_id_salt("new_study_source")
+                    .truncate()
                     .selected_text(l10n::text(ui.ctx(), selected))
                     .show_ui(ui, |ui| {
                         for (source, label) in &self.sources {
