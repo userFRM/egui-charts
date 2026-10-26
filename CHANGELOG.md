@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Pointer events include hidden added series and their payloads. `Chart::set_pointer_kind` lets host input integrations identify pens, which egui does not distinguish from touch. `None` restores automatic mouse/touch detection. ([#829](https://github.com/userFRM/egui-charts/issues/829))
+
 - `localization::set_translator` installs a host-owned UI text lookup for one egui context; `clear_translator` restores English. Toolbars, menus, dialogs, panels, shared controls and accessibility names resolve text before layout, including when the language changes while a dialog is open. Missing translations retain the crate's existing English text. Searches accept translated labels and original English names. `localization::text` shares the lookup with host controls, and `format_text` substitutes named message values after translation without interpreting braces inside those values. Hosts supply other languages and fonts; chart date and number formatters remain independent. ([#204](https://github.com/userFRM/egui-charts/issues/204))
 
 - Standalone examples cover custom studies, timestamped drawing save/load, a host-run backtest, host script evaluation and UTC chart synchronization across intervals. The historical examples share one generated OHLCV helper, and existing CI checks compile every declared example. The demo retains its execution-based history. Data feeds, durable storage, strategy execution and scripting runtimes remain host-owned. ([#249](https://github.com/userFRM/egui-charts/issues/249))

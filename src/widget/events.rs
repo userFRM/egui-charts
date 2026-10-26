@@ -32,7 +32,8 @@ pub struct ChartPointer {
     /// Close of the last bar or element with a value before `index`, from which legends measure
     /// the change.
     pub previous_close: Option<f64>,
-    /// Each visible series added with `add_series` or `add_comparison` that has a bar at `time`.
+    /// Every series added with `add_series` or `add_comparison` that has a bar at `time`,
+    /// including hidden series and their host payloads.
     pub series_bars: Vec<(SeriesId, Bar)>,
     /// Visible study plots at `index`, as [`Chart::study_values_at`] returns them, each with the
     /// id of its study.
@@ -59,14 +60,17 @@ pub enum PointerTarget {
 
 /// The device behind a [`ChartPointer`].
 ///
-/// egui reports pen input as touch, so pens arrive as [`Self::Touch`].
+/// egui does not distinguish pens. Hosts with device information use
+/// [`Chart::set_pointer_kind`] before showing the chart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointerKind {
     /// A mouse, trackpad or other hovering pointer.
     Mouse,
-    /// A finger or pen on a touch surface.
+    /// A finger on a touch surface, or an unidentified pen from egui.
     Touch,
+    /// A pen identified by the host input integration.
+    Pen,
 }
 
 /// A notification for the host. Existing selection and action polling APIs remain independent.
@@ -130,6 +134,7 @@ pub(super) struct HostEvents {
     logical_range: Option<crate::model::LogicalRange>,
     time_scale_size: egui::Vec2,
     pointer: Option<ChartPointer>,
+    kind: Option<PointerKind>,
     click_frames: [Option<u64>; 3],
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
@@ -147,6 +152,13 @@ impl HostEvents {
 }
 
 impl Chart {
+    /// Overrides the input device reported by pointer events. Set this before `show` when
+    /// the host knows the active device, including pens that egui cannot identify. `None`
+    /// restores automatic mouse/touch detection. Update it when the active device changes.
+    pub fn set_pointer_kind(&mut self, kind: Option<PointerKind>) {
+        self.host_events.kind = kind;
+    }
+
     /// Drains host notifications in occurrence order. Call after `show` each frame.
     ///
     /// Symbol, interval and data setters enqueue immediately; view and pointer changes are
@@ -292,7 +304,6 @@ impl Chart {
             series_bars: self
                 .price_series
                 .iter()
-                .filter(|item| item.visible)
                 .filter_map(|item| {
                     let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
                     Some((item.id, item.bars[at].clone()))
@@ -301,17 +312,19 @@ impl Chart {
             studies: bar_at.map_or_else(Vec::new, |index| self.study_rows_at(index)),
             target: self.host_events.target,
             modifiers: ui.input(|input| input.modifiers),
-            kind: if ui.input(|input| {
-                input.any_touches()
-                    || input
-                        .events
-                        .iter()
-                        .any(|event| matches!(event, egui::Event::Touch { .. }))
-            }) {
-                PointerKind::Touch
-            } else {
-                PointerKind::Mouse
-            },
+            kind: self.host_events.kind.unwrap_or_else(|| {
+                if ui.input(|input| {
+                    input.any_touches()
+                        || input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Touch { .. }))
+                }) {
+                    PointerKind::Touch
+                } else {
+                    PointerKind::Mouse
+                }
+            }),
         })
     }
 
@@ -690,6 +703,7 @@ mod tests {
         // Added series, drawings, touch input and held modifiers reach the payload.
         let series = chart.add_series(Default::default());
         chart.set_data(series, bars.clone());
+        assert!(chart.set_series_visible(series, false));
         #[cfg(feature = "drawings")]
         {
             let mut line = crate::drawings::Drawing::with_color(
@@ -731,6 +745,15 @@ mod tests {
             (pointer.modifiers, pointer.kind),
             (Modifiers::SHIFT, PointerKind::Touch)
         );
+        for kind in [PointerKind::Pen, PointerKind::Mouse] {
+            chart.set_pointer_kind(Some(kind));
+            frame(&ctx, &mut chart, 3.75, vec![Event::PointerMoved(pos)]);
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer)) if pointer.kind == kind
+                    && pointer.series_bars == vec![(series, bars[70].clone())]
+            )));
+        }
+        chart.set_pointer_kind(None);
         chart.remove_series(series);
         #[cfg(feature = "drawings")]
         chart.drawings_mut().drawings.clear();
