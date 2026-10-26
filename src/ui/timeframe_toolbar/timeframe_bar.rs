@@ -5,7 +5,7 @@
 
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Local, Timelike};
@@ -84,7 +84,7 @@ impl TimeframeBarConfig {
             active_bg: ui.btn_bg_active,
             hover_bg: ui.btn_bg_hover,
             border_color: ui.border,
-            btn_padding: DESIGN_TOKENS.spacing.lg,
+            btn_padding: theme.spacing.lg,
         }
     }
 }
@@ -204,11 +204,11 @@ impl TimeframeBar {
         date_res.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, date_res.enabled(), &translated_label)
         });
-        crate::styles::focus::draw_focus_ring(ui, &date_res, DESIGN_TOKENS.rounding.sm);
+        crate::styles::focus::draw_focus_ring(ui, &date_res, ui.active_theme().radius.sm);
         if date_res.hovered() {
             painter.rect_filled(
                 date_icon_rect,
-                DESIGN_TOKENS.rounding.sm,
+                ui.active_theme().radius.sm,
                 self.config.hover_bg,
             );
         }
@@ -251,7 +251,7 @@ impl TimeframeBar {
             let label = tf.label();
             let galley = painter.layout_no_wrap(
                 l10n::text(ui.ctx(), label),
-                egui::FontId::proportional(typography::SM),
+                egui::FontId::proportional(ui.active_theme().text.small),
                 self.config.text_color,
             );
 
@@ -262,7 +262,7 @@ impl TimeframeBar {
             );
 
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
-            crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.sm);
+            crate::styles::focus::draw_focus_ring(ui, &btn_res, ui.active_theme().radius.sm);
             let is_active = *tf == self.active_timeframe;
             let translated_label = l10n::text(ui.ctx(), label);
             btn_res.widget_info(|| {
@@ -278,12 +278,12 @@ impl TimeframeBar {
 
             // Button background (with press feedback)
             if is_active {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.sm, self.config.active_bg);
+                painter.rect_filled(btn_rect, ui.active_theme().radius.sm, self.config.active_bg);
             } else if is_pressed {
                 // Pressed state - use active background
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.sm, self.config.active_bg);
+                painter.rect_filled(btn_rect, ui.active_theme().radius.sm, self.config.active_bg);
             } else if is_hovered {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.sm, self.config.hover_bg);
+                painter.rect_filled(btn_rect, ui.active_theme().radius.sm, self.config.hover_bg);
             }
 
             // Button text
@@ -295,7 +295,7 @@ impl TimeframeBar {
 
             let text_galley = painter.layout_no_wrap(
                 l10n::text(ui.ctx(), label),
-                egui::FontId::proportional(typography::SM),
+                egui::FontId::proportional(ui.active_theme().text.small),
                 text_color,
             );
             painter.galley(
@@ -323,7 +323,7 @@ impl TimeframeBar {
             let adj_text = "ADJ";
             let adj_galley = painter.layout_no_wrap(
                 l10n::text(ui.ctx(), adj_text),
-                egui::FontId::proportional(typography::XS),
+                egui::FontId::proportional(ui.active_theme().text.tiny),
                 if self.adj_enabled {
                     self.config.active_text_color
                 } else {
@@ -347,19 +347,19 @@ impl TimeframeBar {
                     &translated_label,
                 )
             });
-            crate::styles::focus::draw_focus_ring(ui, &adj_res, DESIGN_TOKENS.rounding.sm);
+            crate::styles::focus::draw_focus_ring(ui, &adj_res, ui.active_theme().radius.sm);
 
             if adj_res.hovered() || self.adj_enabled {
                 painter.rect_filled(
                     adj_button_rect,
-                    DESIGN_TOKENS.rounding.sm,
+                    ui.active_theme().radius.sm,
                     self.config.active_bg,
                 );
             }
 
             let adj_draw_galley = painter.layout_no_wrap(
                 l10n::text(ui.ctx(), adj_text),
-                egui::FontId::proportional(typography::XS),
+                egui::FontId::proportional(ui.active_theme().text.tiny),
                 if self.adj_enabled {
                     self.config.active_text_color
                 } else {
@@ -391,7 +391,7 @@ impl TimeframeBar {
         );
         let time_galley = painter.layout_no_wrap(
             l10n::text(ui.ctx(), time_str),
-            egui::FontId::proportional(typography::XS),
+            egui::FontId::proportional(ui.active_theme().text.tiny),
             self.config.text_color,
         );
         painter.galley(

@@ -18,8 +18,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Double Exponential Moving Avg indicator
@@ -40,7 +40,7 @@ impl DEMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
+            color: palette::CYAN, // Cyan
             visible: true,
         }
     }

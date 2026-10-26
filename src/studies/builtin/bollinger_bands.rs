@@ -26,7 +26,8 @@
 //!
 //! # Default colours
 //!
-//! Upper/middle/lower sourced from `indicators.bb_upper`, `bb_middle`, `bb_lower`.
+//! Upper and lower bands use [`palette::ACCENT`](crate::studies::palette::ACCENT);
+//! the middle band uses [`palette::BB_MIDDLE`](crate::studies::palette::BB_MIDDLE).
 //!
 //! # Example
 //!
@@ -44,9 +45,9 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Bollinger Bands indicator.
@@ -70,9 +71,9 @@ impl BollingerBands {
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.bb_upper,  // Upper
-                DESIGN_TOKENS.semantic.indicators.bb_middle, // Middle
-                DESIGN_TOKENS.semantic.indicators.bb_lower,  // Lower
+                palette::ACCENT,    // Upper
+                palette::BB_MIDDLE, // Middle
+                palette::ACCENT,    // Lower
             ],
             visible: true,
         }

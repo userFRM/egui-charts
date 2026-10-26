@@ -310,19 +310,19 @@ pub struct ChartConfig {
     pub show_high_low: bool,
     /// Whether to show countdown to next candle
     pub show_countdown: bool,
-    /// Whether to show "Go to Realtime" button when scrolled away from live edge
+    /// Whether to show the scroll-to-latest button when scrolled away from the live edge.
     pub show_realtime_btn: bool,
-    /// Pos of the realtime button
+    /// Position of the realtime button; bottom-right by default.
     pub realtime_button_pos: RealtimeButtonPos,
-    /// Custom text for the realtime button (None = "Go to Realtime")
+    /// Custom text for the realtime button (`None` draws a double right chevron).
     pub realtime_button_text: Option<String>,
-    /// Size of the realtime button (width, height)
+    /// Size of the realtime button (width, height), 28 by 28 points by default.
     pub realtime_button_size: (f32, f32),
-    /// Background color for the realtime button
+    /// Background color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_color: Color32,
-    /// Hover background color for the realtime button
+    /// Hover background color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_hover_color: Color32,
-    /// Text color for the realtime button
+    /// Text or icon color for the realtime button; `PLACEHOLDER` follows the theme.
     pub realtime_button_text_color: Color32,
     /// When to show the navigation buttons.
     pub navigation_buttons: NavigationButtons,
@@ -357,8 +357,7 @@ pub struct ChartConfig {
 pub enum RealtimeButtonPos {
     /// Top-left of the chart
     TopLeft,
-    /// Top-center of the chart (default)
-    #[default]
+    /// Top-center of the chart
     TopCenter,
     /// Top-right of the chart
     TopRight,
@@ -366,7 +365,8 @@ pub enum RealtimeButtonPos {
     BottomLeft,
     /// Bottom-center of the chart
     BottomCenter,
-    /// Bottom-right of the chart
+    /// Bottom-right of the chart (default)
+    #[default]
     BottomRight,
 }
 
@@ -451,12 +451,15 @@ impl Default for ChartConfig {
             show_high_low: false,
             show_countdown: true,
             show_realtime_btn: true,
-            realtime_button_pos: RealtimeButtonPos::TopCenter,
+            realtime_button_pos: RealtimeButtonPos::BottomRight,
             realtime_button_text: None,
-            realtime_button_size: (110.0, 28.0),
-            realtime_button_color: DESIGN_TOKENS.semantic.extended.chart_tooltip_bg,
-            realtime_button_hover_color: DESIGN_TOKENS.semantic.extended.chart_axis_bg,
-            realtime_button_text_color: chart.axis_text,
+            realtime_button_size: (
+                DESIGN_TOKENS.sizing.charts_ext.realtime_button_width,
+                DESIGN_TOKENS.sizing.button_md,
+            ),
+            realtime_button_color: Color32::PLACEHOLDER,
+            realtime_button_hover_color: Color32::PLACEHOLDER,
+            realtime_button_text_color: Color32::PLACEHOLDER,
             navigation_buttons: NavigationButtons::default(),
             // Session breaks disabled by default
             show_session_breaks: false,

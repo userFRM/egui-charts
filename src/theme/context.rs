@@ -147,6 +147,10 @@ mod tests {
         // and an edited Dark theme must propagate too.
         let mut edited_dark = Theme::dark();
         edited_dark.ui.border = Color32::GREEN;
+        edited_dark.text.body = 17.0;
+        edited_dark.text.bottom_bar = 19.0;
+        edited_dark.spacing.md = 9.0;
+        edited_dark.radius.sm = 7.0;
         for (name, theme) in [
             ("light", Theme::light()),
             ("dark", Theme::dark()),
@@ -173,6 +177,23 @@ mod tests {
                 themed.config.border_color, theme.ui.border,
                 "{name}: untouched colour stale"
             );
+            assert_eq!(
+                themed.config.font_size, theme.text.bottom_bar,
+                "{name}: font stale"
+            );
+            assert_eq!(
+                themed.config.btn_padding_h, theme.spacing.md,
+                "{name}: spacing stale"
+            );
+            assert_eq!(
+                ctx.global_style().text_styles[&egui::TextStyle::Body].size,
+                theme.text.body
+            );
+            assert_eq!(
+                ctx.global_style().visuals.widgets.inactive.corner_radius,
+                egui::CornerRadius::from(theme.radius.sm)
+            );
+            assert_eq!(custom.config.font_size, Theme::dark().text.bottom_bar);
             assert_eq!(
                 custom.config.border_color,
                 Theme::dark().ui.border,

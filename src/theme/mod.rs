@@ -15,11 +15,9 @@
 //! apply_to_egui(ctx, &theme);
 //! ```
 
-pub mod components;
 mod context;
 mod presets;
 
-pub use components::{ContextMenuStyle, DialogStyle, SettingsDialogStyle};
 pub use context::ThemeExt;
 #[cfg(feature = "ui")]
 pub(crate) use context::{ThemeDerived, follow_active_theme, theme_derived};
@@ -44,7 +42,7 @@ pub struct Theme {
     pub ui: UiColors,
     /// Colours of the chart surface.
     pub chart: ChartColors,
-    /// Type scale and chart text roles. Not applied to egui's text styles.
+    /// Type scale and chart text roles, also applied to egui's built-in text styles.
     #[cfg_attr(feature = "serde", serde(default))]
     pub text: TextSizes,
     /// Spacing scale.
@@ -194,7 +192,7 @@ impl ChartColors {
 
 /// Font sizes, in points.
 ///
-/// Components choose which role to use; setting a role does not change egui's text styles.
+/// Components choose a role; the built-in egui text styles use the same scale.
 /// Use `..Default::default()` in struct literals to keep defaults for the other roles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
@@ -203,6 +201,10 @@ impl ChartColors {
     serde(default)
 )]
 pub struct TextSizes {
+    /// Small badges.
+    pub micro: f32,
+    /// Chart markers and compact annotations.
+    pub marker: f32,
     /// Badges and footnotes.
     pub tiny: f32,
     /// Secondary labels.
@@ -215,6 +217,8 @@ pub struct TextSizes {
     pub title: f32,
     /// Section headings.
     pub heading: f32,
+    /// Modal dialog titles.
+    pub dialog_title: f32,
     /// In-pane chart title, independently of its OHLC values.
     pub chart_title: f32,
     /// Toolbar labels, including Save.
@@ -232,6 +236,9 @@ pub struct TextSizes {
 impl Default for TextSizes {
     fn default() -> Self {
         Self {
+            micro: 8.0,
+            marker: 9.0,
+            dialog_title: 18.0,
             tiny: 10.0,
             small: 11.0,
             label: 12.0,
@@ -252,12 +259,15 @@ impl TextSizes {
     /// Every size multiplied by `factor`.
     pub fn scaled(self, factor: f32) -> Self {
         Self {
+            micro: self.micro * factor,
+            marker: self.marker * factor,
             tiny: self.tiny * factor,
             small: self.small * factor,
             label: self.label * factor,
             body: self.body * factor,
             title: self.title * factor,
             heading: self.heading * factor,
+            dialog_title: self.dialog_title * factor,
             chart_title: self.chart_title * factor,
             toolbar: self.toolbar * factor,
             ohlc: self.ohlc * factor,
@@ -295,13 +305,13 @@ pub struct Spacing {
 impl Default for Spacing {
     fn default() -> Self {
         Self {
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 12.0,
-            xxl: 16.0,
-            xxxl: 24.0,
+            xs: DESIGN_TOKENS.spacing.xs,
+            sm: DESIGN_TOKENS.spacing.sm,
+            md: DESIGN_TOKENS.spacing.md,
+            lg: DESIGN_TOKENS.spacing.lg,
+            xl: DESIGN_TOKENS.spacing.xl,
+            xxl: DESIGN_TOKENS.spacing.xxl,
+            xxxl: DESIGN_TOKENS.spacing.xxxl,
         }
     }
 }
@@ -329,11 +339,11 @@ pub struct Radii {
 impl Default for Radii {
     fn default() -> Self {
         Self {
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 12.0,
+            xs: DESIGN_TOKENS.rounding.xs,
+            sm: DESIGN_TOKENS.rounding.sm,
+            md: DESIGN_TOKENS.rounding.md,
+            lg: DESIGN_TOKENS.rounding.lg,
+            xl: DESIGN_TOKENS.rounding.xl,
         }
     }
 }
@@ -550,6 +560,17 @@ pub(crate) fn apply_to_style(style: &mut egui::Style, theme: &Theme) {
 
     let spacing = &theme.spacing;
     style.visuals = visuals;
+    for (role, size) in [
+        (egui::TextStyle::Small, theme.text.small),
+        (egui::TextStyle::Body, theme.text.body),
+        (egui::TextStyle::Button, theme.text.body),
+        (egui::TextStyle::Heading, theme.text.heading),
+        (egui::TextStyle::Monospace, theme.text.body),
+    ] {
+        if let Some(font) = style.text_styles.get_mut(&role) {
+            font.size = size;
+        }
+    }
     style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
     style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
     style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
@@ -724,6 +745,9 @@ mod tests {
     #[test]
     fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
         for (role, default) in [
+            ("micro", 8.0),
+            ("marker", 9.0),
+            ("dialog_title", 18.0),
             ("chart_title", 16.0),
             ("toolbar", 14.0),
             ("ohlc", 13.0),
@@ -904,7 +928,6 @@ mod tests {
                 assert_eq!(state.weak_bg_fill, fill, "{name}: widget fill");
             }
             assert_eq!(visuals.widgets.open.fg_stroke.color, ui.text);
-            let settings = SettingsDialogStyle::from_theme(&theme);
             #[cfg(feature = "ui")]
             assert_eq!(
                 crate::ui::timeframe_toolbar::TimeframeBarConfig::from_theme(&theme)
@@ -973,29 +996,12 @@ mod tests {
                 text_min,
             );
             check(
-                "active settings text",
-                settings.tab_text_active,
-                "pressed fill",
-                settings.tab_bg_active,
-                text_min,
-            );
-            check(
-                "active settings icon",
-                settings.tab_icon_active,
-                "pressed fill",
-                settings.tab_bg_active,
+                "open outline",
+                visuals.widgets.open.bg_stroke.color,
+                "panels",
+                panel,
                 outline_min,
             );
-            for (role, stroke) in [
-                ("open outline", visuals.widgets.open.bg_stroke),
-                ("settings input", settings.input_border),
-                ("settings hovered input", settings.input_border_hover),
-                ("settings dropdown", settings.dropdown_border),
-                ("settings checkbox", settings.checkbox_border),
-                ("settings secondary button", settings.btn_secondary_border),
-            ] {
-                check(role, stroke.color, "panels", panel, outline_min);
-            }
             if name.contains("accent") {
                 check("selection fill", ui.selection_bg, "panels", panel, 1.3);
                 check("accent hover", ui.accent_hover, "accent", ui.accent, 1.2);

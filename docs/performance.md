@@ -6,7 +6,7 @@ Measure the application's whole frame, including tessellation and releasing the 
 cargo bench --bench frame_time -- "zoomed out" "8 charts"
 ```
 
-Keep the viewport size, physical pixel scale, visible range, features and studies the same when comparing builds. Initial history and study calculations are separate from steady frames. Alternate the two binaries across several rounds on the same machine, as described in [CONTRIBUTING.md](../CONTRIBUTING.md#measuring-frame-time).
+Keep the viewport size, physical pixel scale, visible range, features and studies the same when comparing builds. Initial history and study calculations are separate from steady frames. Alternate the two binaries across several rounds on the same machine, as described in [CONTRIBUTING.md](https://github.com/userFRM/egui-charts/blob/main/CONTRIBUTING.md#measuring-frame-time).
 
 ## Linux allocation policy
 

@@ -44,8 +44,8 @@
 use super::over_finite_bars;
 use super::pivot_points_high_low::pivots;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Text of the marks on outputs 5 to 8.
@@ -91,9 +91,9 @@ impl RsiDivergence {
             bearish: true,
             hidden_bearish: false,
             values: IndicatorValues::new(),
-            rsi_color: DESIGN_TOKENS.semantic.extended.accent,
-            bull_color: DESIGN_TOKENS.semantic.extended.success,
-            bear_color: DESIGN_TOKENS.semantic.extended.error,
+            rsi_color: palette::ACCENT,
+            bull_color: palette::GREEN,
+            bear_color: palette::RED,
             visible: true,
         }
     }

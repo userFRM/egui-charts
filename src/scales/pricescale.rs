@@ -503,6 +503,13 @@ impl PriceMap {
         }
     }
 
+    /// Uses the same scale, orientation and formatting in a different vertical plot area.
+    pub fn with_bounds(mut self, top: f32, bottom: f32) -> Self {
+        self.top = top;
+        self.bottom = bottom;
+        self
+    }
+
     /// Sets the price precision for this frame.
     pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
         self.price_precision = decimals;

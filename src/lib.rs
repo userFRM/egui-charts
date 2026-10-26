@@ -188,6 +188,39 @@ pub use widget::{Chart, ChartBuilder, RightClickTarget};
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
+// Compile the documentation pages alongside their shared source guides.
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/chart-types.mdx")]
+pub struct SiteChartTypesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/data-model.mdx")]
+pub struct SiteDataModelDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/data.mdx")]
+pub struct SiteDataDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/first-chart.mdx")]
+pub struct SiteFirstChartDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/studies.mdx")]
+pub struct SiteStudiesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/theming.mdx")]
+pub struct SiteThemingDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/study-data.md")]
+pub struct StudyDataGuideDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/strategy-report.md")]
+pub struct StrategyReportGuideDoctests;
+
 #[cfg(all(test, feature = "ui"))]
 mod tests {
     use crate::drawings::DrawingToolType;

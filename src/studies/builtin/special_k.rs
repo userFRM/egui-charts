@@ -32,9 +32,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// (rate of change length, SMA length, weight) of each component.
@@ -69,10 +69,7 @@ impl PringsSpecialK {
         Self {
             signal_lengths: [signal_length_1.max(1), signal_length_2.max(1)],
             values: IndicatorValues::new(),
-            colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,
-                DESIGN_TOKENS.semantic.extended.error,
-            ],
+            colors: vec![palette::BLUE, palette::RED],
             visible: true,
         }
     }

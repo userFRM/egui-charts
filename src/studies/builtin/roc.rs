@@ -22,8 +22,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Rate of Change indicator
@@ -44,7 +44,7 @@ impl RateOfChange {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.success,
+            color: palette::GREEN,
             visible: true,
         }
     }

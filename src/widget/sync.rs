@@ -87,8 +87,7 @@ impl Chart {
         if to <= from || scale.width() <= 1.0 {
             return false;
         }
-        scale.set_bar_spacing(((scale.width() - 1.0) as f64 / (to - from)) as f32);
-        scale.set_right_offset(to - scale.base_idx() as f64 - 0.5);
+        scale.fit_logical_range(from, to);
         self.tracking_mode_active = false;
         self.kinetic_scroll = super::state::KineticScrollState::new();
         true
@@ -224,6 +223,22 @@ mod tests {
                 to: range.from
             }));
             assert_eq!(receiver.get_time_scale_state(), before);
+        }
+        // A 65.5-hour closure: the requested edges are 8 and 32 hours (less one second)
+        // after its first bar, at fractions 28_800/235_800 and 115_199/235_800.
+        let mut times: Vec<i64> = (0..=4096).map(|index| index * 60).collect();
+        let start = *times.last().unwrap();
+        times.extend((0..1024).map(|index| start + 235_800 + index * 60));
+        let range = VisibleTimeRange {
+            from: time(start + 28_800),
+            to: time(start + 115_199),
+        };
+        for width in [251.0, 592.125] {
+            let mut receiver = chart(&times, width);
+            assert!(receiver.apply_synced_time_range(range));
+            let actual = receiver.visible_time_range().unwrap();
+            assert!((actual.from - range.from).num_milliseconds().abs() < 1);
+            assert!((actual.to - range.to).num_milliseconds().abs() < 1);
         }
         // A day inside a three-day session gap spans one third of a bar, even after long history.
         for count in [2, 20_000] {

@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Williams Accumulation/Distribution
@@ -19,7 +19,7 @@ impl WilliamsAD {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            color: palette::UP, // Teal
             visible: true,
         }
     }

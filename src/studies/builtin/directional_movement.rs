@@ -1,7 +1,7 @@
 use super::{ADX, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Directional Movement Index (DMI / DI+ / DI-)
@@ -24,9 +24,9 @@ impl DirectionalMovement {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success,       // Green - +DI
-                DESIGN_TOKENS.semantic.extended.error,         // Red - -DI
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber - ADX
+                palette::GREEN, // Green - +DI
+                palette::RED,   // Red - -DI
+                palette::GOLD,  // Amber - ADX
             ],
             visible: true,
         }

@@ -7,7 +7,6 @@ use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::ConnectionState;
 use egui::{Color32, Response, RichText, Ui, Vec2, Widget};
 
@@ -79,7 +78,7 @@ impl<'a> Widget for ConnectionStatusIndicator<'a> {
         let icon = self.state_icon();
 
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.xs;
+            ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.xs;
 
             // Icon - use SVG with tint color
             ui.add(icon.as_image_tinted(Vec2::splat(icon_sizes::XS), color));

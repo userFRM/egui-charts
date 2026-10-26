@@ -64,8 +64,6 @@ pub enum IntervalRange {
 
 impl IntervalRange {
     /// The preset intervals and `current` on which the range hides a study, by duration.
-    // shortcut: custom intervals other than `current` stay visible, as hidden intervals are an
-    // exact list; upgrade when study visibility takes duration ranges.
     pub fn hidden_intervals(self, current: Timeframe) -> Vec<Timeframe> {
         let mut intervals = Timeframe::all();
         if !intervals.contains(&current) {
@@ -111,6 +109,8 @@ pub(crate) struct StudyContextMenu {
     /// Other panes by their stable ids, with their titles.
     panes: Vec<(PaneId, String)>,
     has_interval: bool,
+    next_scale: u64,
+    shared_scales: Vec<u64>,
     /// Controls the host hid, set through
     /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible).
     pub(crate) hidden: HashSet<Control>,
@@ -127,9 +127,8 @@ impl StudyContextMenu {
         self.volume = study.is_volume();
         self.name = if self.volume { "Vol" } else { study.name() }.to_owned();
         self.catalogue_name = study.name().to_owned();
-        // shortcut: on price-based chart types `bar` counts elements while this reads the
-        // source-bar results; upgrade when alerts evaluate element studies.
-        self.alert = crate::widget::menu_value(study, bar)
+        self.alert = chart
+            .indicator_value_at(id, bar)
             .filter(|_| !chart.symbol.is_empty())
             .map(|(output, value)| {
                 let mut alert = Alert::new(chart.symbol.clone(), AlertCondition::Crossing(value));
@@ -141,11 +140,36 @@ impl StudyContextMenu {
                         output,
                     }
                 };
-                (alert, study.format_value(value))
+                (
+                    alert,
+                    chart
+                        .indicator_value_text(id, value)
+                        .unwrap_or_else(|| study.format_value(value)),
+                )
             });
         self.visible = study.is_visible();
         self.overlay = study.is_overlay();
-        self.scale = (!(self.overlay && self.volume)).then(|| study.scale());
+        self.scale = Some(study.scale());
+        self.shared_scales = chart
+            .indicators()
+            .filter_map(|(_, study)| match study.scale() {
+                StudyScale::Shared(crate::model::SeriesScale::Separate(key)) => Some(key),
+                _ => None,
+            })
+            .chain(
+                chart
+                    .series()
+                    .filter_map(|(_, options)| match options.scale {
+                        crate::model::SeriesScale::Separate(key) => Some(key),
+                        _ => None,
+                    }),
+            )
+            .collect();
+        self.shared_scales.sort_unstable();
+        self.shared_scales.dedup();
+        self.next_scale = (0..)
+            .find(|key| !self.shared_scales.contains(key))
+            .unwrap_or(0);
         self.axis_side = if chart.config().show_right_axis || !chart.config().show_left_axis {
             "right"
         } else {
@@ -260,41 +284,46 @@ impl StudyContextMenu {
             entries: moves,
         });
         let side = self.axis_side;
-        items.push(match self.scale {
-            Some(scale) => {
-                let now = match scale {
-                    StudyScale::Main => side,
-                    StudyScale::Independent if self.overlay => "left",
-                    StudyScale::Independent => side,
-                    StudyScale::None => "no scale",
-                };
-                let mut entries = vec![item(
-                    &format!("Pin to {side} scale"),
-                    A::PinTo(if self.overlay {
-                        StudyScale::Main
-                    } else {
-                        StudyScale::Independent
-                    }),
-                )];
-                if self.overlay {
-                    entries.push(item(
-                        "Pin to new left scale",
-                        A::PinTo(StudyScale::Independent),
-                    ));
-                }
-                entries.push(item("No scale", A::PinTo(StudyScale::None)));
-                MenuEntry::Submenu {
-                    label: format!("Pin to scale (now {now})"),
-                    icon: Some(&embedded_icons::PIN_TO_SCALE),
-                    entries,
-                }
-            }
-            // A volume overlay keeps its own band at the foot of the main pane.
-            None => MenuEntry::Item(
-                MenuItem::new("Pin to scale (now no scale)", A::PinTo(StudyScale::None))
-                    .with_icon(&embedded_icons::PIN_TO_SCALE)
-                    .disabled(),
+        let now = match self.scale.unwrap_or(StudyScale::None) {
+            StudyScale::Main => side.to_owned(),
+            StudyScale::Independent if self.overlay && self.volume => "no scale".into(),
+            StudyScale::Independent if self.overlay && !self.volume => "independent left".into(),
+            StudyScale::Independent => "independent".into(),
+            StudyScale::None => "no scale".into(),
+            StudyScale::Shared(crate::model::SeriesScale::Right) => "right".into(),
+            StudyScale::Shared(crate::model::SeriesScale::Left) => "left".into(),
+            StudyScale::Shared(crate::model::SeriesScale::Separate(key)) => format!("scale {key}"),
+            StudyScale::Shared(crate::model::SeriesScale::Overlay(_)) => "no scale".into(),
+        };
+        let mut entries = vec![
+            item(
+                "Pin to right scale",
+                A::PinTo(StudyScale::Shared(crate::model::SeriesScale::Right)),
             ),
+            item(
+                "Pin to left scale",
+                A::PinTo(StudyScale::Shared(crate::model::SeriesScale::Left)),
+            ),
+            item(
+                "Pin to new scale",
+                A::PinTo(StudyScale::Shared(crate::model::SeriesScale::Separate(
+                    self.next_scale,
+                ))),
+            ),
+        ];
+        for key in &self.shared_scales {
+            entries.push(item(
+                &format!("Pin to scale {key}"),
+                A::PinTo(StudyScale::Shared(crate::model::SeriesScale::Separate(
+                    *key,
+                ))),
+            ));
+        }
+        entries.push(item("No scale", A::PinTo(StudyScale::None)));
+        items.push(MenuEntry::Submenu {
+            label: format!("Pin to scale (now {now})"),
+            icon: Some(&embedded_icons::PIN_TO_SCALE),
+            entries,
         });
         items.extend([
             MenuEntry::Separator,
@@ -350,6 +379,16 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
             {
                 let mut settings = study.settings();
                 settings.hidden_intervals = range.hidden_intervals(current);
+                settings.interval_range = match range {
+                    IntervalRange::All => crate::studies::StudyIntervalRange::All,
+                    IntervalRange::Only => crate::studies::StudyIntervalRange::Only(current),
+                    IntervalRange::AndAbove => {
+                        crate::studies::StudyIntervalRange::AndAbove(current)
+                    }
+                    IntervalRange::AndBelow => {
+                        crate::studies::StudyIntervalRange::AndBelow(current)
+                    }
+                };
                 // A study without editable presentation keeps showing on every interval.
                 let _ = study.apply_settings(&[], settings);
             }
@@ -376,6 +415,26 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
             chart.remove_series(id);
         }
         A::Settings => chart.indicator_settings_request = Some(id),
-        A::AddAlert(_) | A::AddIndicator | A::AddToFavorites(_) | A::Copy | A::ObjectTree => {}
+        A::AddIndicator => {
+            let source =
+                chart
+                    .indicators()
+                    .find(|(study, _)| *study == id)
+                    .and_then(|(_, study)| {
+                        (0..study.line_count())
+                            .find(|line| {
+                                let plot = study.plot_style(*line);
+                                plot.visible
+                                    && !matches!(
+                                        plot.plot_type,
+                                        crate::studies::PlotType::BarColor
+                                            | crate::studies::PlotType::BackgroundColor
+                                    )
+                            })
+                            .map(|plot| crate::studies::StudySource::Study { id: id.0, plot })
+                    });
+            chart.indicator_source_request = source;
+        }
+        A::AddAlert(_) | A::AddToFavorites(_) | A::Copy | A::ObjectTree => {}
     }
 }

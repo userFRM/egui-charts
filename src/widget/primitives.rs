@@ -40,6 +40,12 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 }
 
 impl Attached {
+    pub(super) fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        let factor =
+            super::merge::factor(view.mapping.bar_spacing, painter.ctx().pixels_per_point());
+        self.get().draw_merged(painter, view, pass, factor);
+    }
+
     pub(super) fn get(&self) -> MutexGuard<'_, dyn Primitive + 'static> {
         // A primitive that panicked in a hook keeps the state it had.
         self.primitive
@@ -204,8 +210,11 @@ impl Chart {
         } else {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
             let study = self.rendered_studies().indicators().get(idx)?;
-            (study.is_visible() && study.is_overlay() && !study.is_volume())
-                .then(|| crate::chart::renderers::study_mapping(study.as_ref(), coords))?
+            (study.is_visible()
+                && study.is_overlay()
+                && (!study.is_volume()
+                    || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
+            .then(|| crate::chart::renderers::study_mapping(study.as_ref(), coords))?
         };
         Some(self.primitive_view(series, mapping))
     }
@@ -236,7 +245,10 @@ impl Chart {
     }
 
     /// The primitives attached to `series`.
-    pub(super) fn primitives_of(&self, series: SeriesId) -> impl Iterator<Item = &Attached> {
+    pub(super) fn primitives_of(
+        &self,
+        series: SeriesId,
+    ) -> impl DoubleEndedIterator<Item = &Attached> {
         self.primitives
             .iter()
             .filter(move |item| item.series == series)
@@ -284,8 +296,11 @@ impl Chart {
         pass: PrimitivePass,
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
-        for (item, view) in self.main_primitives(coords) {
-            item.get().draw(&painter, &view, pass);
+        for (item, view) in self
+            .main_primitives(coords)
+            .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
+        {
+            item.draw(&painter, &view, pass);
         }
     }
 }
@@ -657,5 +672,39 @@ mod tests {
             chart.selection.selected_id(),
             Some(ChartElementId::Indicator(id))
         );
+        let pane = chart.series_pane(id).unwrap();
+        chart.set_preserve_empty_pane(pane, true);
+        #[cfg(feature = "drawings")]
+        chart.drawings_mut().drawings.clear();
+        let cover = chart.add_indicator(Box::new(CustomIndicator::new("Cover", |bars| {
+            vec![IndicatorValue::Single(15.0); bars.len()]
+        })));
+        for (step, destination) in [super::super::PaneId::MAIN, pane].into_iter().enumerate() {
+            chart.move_series_to_pane(id, destination);
+            chart.move_series_to_pane(cover, destination);
+            for (layer, (order, expected)) in [
+                (super::super::VisualOrder::SendToBack, cover),
+                (super::super::VisualOrder::BringToFront, id),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                chart.drain_events().for_each(drop);
+                chart.reorder_indicator(id, order);
+                let time = 1.0 + step as f64 + layer as f64 * 0.2;
+                frame(&ctx, &mut chart, time, vec![]);
+                let map = if destination == super::super::PaneId::MAIN {
+                    chart.get_chart_mapping().price
+                } else {
+                    chart.series_price_map(cover).unwrap()
+                };
+                let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(70), map.price_to_y(15.0));
+                frame(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::CrosshairMoved(Some(pointer))
+                        if pointer.target == Some(PointerTarget::Element(ChartElementId::Indicator(expected)))
+                )), "{destination:?} {order:?}");
+            }
+        }
     }
 }

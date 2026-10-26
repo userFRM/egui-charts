@@ -1,16 +1,14 @@
 //! The root [`DesignTokens`] struct and its spacing scale.
 
 use super::semantic::SemanticTokens;
-use super::sizing::{
-    LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens, TypographyTokens,
-};
+use super::sizing::{LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens};
 
 /// Shared spacing, dimensions and color defaults for chart controls.
 ///
 /// Access the global instance via [`DESIGN_TOKENS`](super::DESIGN_TOKENS).
-/// Contains spacing, sizing, rounding, typography, stroke widths, shadow
-/// parameters, and semantic color tokens organized by domain (UI, chart,
-/// indicators, drawings, etc.).
+/// Contains default spacing, sizing, rounding, stroke widths, shadow parameters
+/// and semantic color tokens. UI colors and text, spacing and radius scales come
+/// from the applied [`Theme`](crate::theme::Theme).
 #[derive(Clone, Debug)]
 pub struct DesignTokens {
     /// Spacing defaults.
@@ -19,8 +17,6 @@ pub struct DesignTokens {
     pub sizing: SizingTokens,
     /// Rounding defaults.
     pub rounding: RoundingTokens,
-    /// Typography defaults.
-    pub typography: TypographyTokens,
     /// Stroke defaults.
     pub stroke: StrokeTokens,
     /// Shadow defaults.

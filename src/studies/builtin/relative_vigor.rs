@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Relative Vigor Index (RVI)
@@ -25,8 +25,8 @@ impl RelativeVigorIndex {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - RVI
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Signal
+                palette::GREEN, // Green - RVI
+                palette::RED,   // Red - Signal
             ],
             visible: true,
         }

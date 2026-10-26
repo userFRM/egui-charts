@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Stochastic Momentum Index (SMI)
@@ -35,8 +35,8 @@ impl StochasticMomentumIndex {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - SMI
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - SMI
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }

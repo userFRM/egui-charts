@@ -26,9 +26,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Accelerator Oscillator, with Bill Williams' fixed lengths 5, 34 and 5.
@@ -45,8 +45,8 @@ impl AcceleratorOscillator {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            rising_color: DESIGN_TOKENS.semantic.extended.success,
-            falling_color: DESIGN_TOKENS.semantic.extended.error,
+            rising_color: palette::GREEN,
+            falling_color: palette::RED,
             visible: true,
         }
     }

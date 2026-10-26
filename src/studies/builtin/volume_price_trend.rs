@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Volume Price Trend (VPT)
@@ -19,7 +19,7 @@ impl VolumePriceTrend {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            color: palette::UP, // Teal
             visible: true,
         }
     }
@@ -174,8 +174,8 @@ impl NegativeVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.error, // Red
-            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::RED,           // Red
+            signal_color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -272,8 +272,8 @@ impl PositiveVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.success, // Green
-            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::GREEN,         // Green
+            signal_color: palette::ORANGE, // Orange
             visible: true,
         }
     }

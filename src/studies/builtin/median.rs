@@ -25,8 +25,8 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Median: rolling median of hl2, its EMA and ATR bands around it.
@@ -45,19 +45,18 @@ impl Median {
     /// Create the study from the median length (typically 3), the ATR length (typically 14)
     /// and the ATR multiplier (typically 2, clamped into 0 to `f64::MAX`, NaN to 0).
     pub fn new(length: usize, atr_length: usize, multiplier: f64) -> Self {
-        let palette = &DESIGN_TOKENS.semantic.extended;
         Self {
             length: length.max(1),
             atr_length: atr_length.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: [
-                palette.warning,
-                palette.accent,
-                palette.accent,
-                palette.info_light,
-                palette.success,
-                palette.purple,
+                palette::ORANGE,
+                palette::ACCENT,
+                palette::ACCENT,
+                palette::LIGHT_BLUE,
+                palette::GREEN,
+                palette::PURPLE,
             ],
             visible: true,
         }

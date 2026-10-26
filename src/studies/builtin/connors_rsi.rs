@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Connors RSI (CRSI)
@@ -33,7 +33,7 @@ impl ConnorsRSI {
             streak_period: 2,
             rank_period: 100,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.pink, // Pink
+            color: palette::PINK, // Pink
             visible: true,
         }
     }

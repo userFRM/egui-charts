@@ -81,22 +81,22 @@ const RIGHT: &[&[Slot]] = &[
 ];
 
 /// Space between the controls of a group.
-fn gap() -> f32 {
-    DESIGN_TOKENS.spacing.sm
+fn gap(ui: &Ui) -> f32 {
+    ui.active_theme().spacing.sm
 }
 
 /// Width of the group rule with its padding.
-fn separator() -> f32 {
-    2.0 * gap() + DESIGN_TOKENS.sizing.toolbar.separator_width
+fn separator(ui: &Ui) -> f32 {
+    2.0 * gap(ui) + DESIGN_TOKENS.sizing.toolbar.separator_width
 }
 
 /// Neutral group rule, centred in the strip.
 fn show_separator(ui: &mut Ui) {
-    ui.add_space(gap());
+    ui.add_space(gap(ui));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
     let color = super::buttons::rule_color(&ui.active_theme());
     ui.painter().rect_filled(rect, 0.0, color);
-    ui.add_space(gap());
+    ui.add_space(gap(ui));
 }
 
 impl Slot {
@@ -335,7 +335,7 @@ impl TopToolbar {
                                         if response.clicked() {
                                             host_action = TopToolbarAction::Host(id.clone());
                                         }
-                                        ui.add_space(gap());
+                                        ui.add_space(gap(ui));
                                     }
                                 },
                             )
@@ -403,12 +403,12 @@ impl TopToolbar {
             .text_styles
             .insert(egui::TextStyle::Button, font);
 
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
         self.show_groups(ui, LEFT, symbol, &mut action);
-        let right = self.groups_width(ui, RIGHT) + DESIGN_TOKENS.spacing.lg;
-        ui.add_space((ui.available_width() - right).max(separator()));
+        let right = self.groups_width(ui, RIGHT) + ui.active_theme().spacing.lg;
+        ui.add_space((ui.available_width() - right).max(separator(ui)));
         self.show_groups(ui, RIGHT, symbol, &mut action);
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
         action
     }
 
@@ -428,11 +428,11 @@ impl TopToolbar {
                 count += 1;
             }
             if count > 0 {
-                width += gap() * (count - 1) as f32;
+                width += gap(ui) * (count - 1) as f32;
                 shown += 1;
             }
         }
-        width + separator() * shown.saturating_sub(1) as f32
+        width + separator(ui) * shown.saturating_sub(1) as f32
     }
 
     /// Draw the visible controls of `groups`, with separators between groups.
@@ -459,7 +459,7 @@ impl TopToolbar {
             first_group = false;
             for (i, control) in visible.into_iter().enumerate() {
                 if i > 0 {
-                    ui.add_space(gap());
+                    ui.add_space(gap(ui));
                 }
                 self.show_control(ui, control, symbol, action);
             }

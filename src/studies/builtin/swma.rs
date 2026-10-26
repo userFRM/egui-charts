@@ -22,8 +22,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Symmetrically Weighted Moving Average indicator.
@@ -48,7 +48,7 @@ impl SWMA {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }

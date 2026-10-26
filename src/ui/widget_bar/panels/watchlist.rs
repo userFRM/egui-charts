@@ -277,8 +277,25 @@ impl WatchlistPanel {
         self.lists[self.active].symbols()
     }
 
-    /// Sets the latest quote of `symbol`.
+    /// Sets the latest quote of `symbol`, ignoring older timestamps and non-finite prices or
+    /// supplied numeric fields. Equal timestamps can correct the current quote.
     pub fn set_quote(&mut self, symbol: &str, quote: Quote) {
+        if !quote.last.is_finite()
+            || !quote.prev_close.is_finite()
+            || [quote.volume, quote.bid, quote.ask]
+                .into_iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || quote
+                .extended
+                .is_some_and(|extended| !extended.last.is_finite())
+            || self
+                .quotes
+                .get(symbol)
+                .is_some_and(|previous| quote.time < previous.time)
+        {
+            return;
+        }
         self.quotes.insert(symbol.to_owned(), quote);
     }
 
@@ -326,7 +343,7 @@ impl WatchlistPanel {
                 && let Ok(event) = answer.downcast::<(String, Quote)>()
             {
                 let (symbol, quote) = *event;
-                self.quotes.insert(symbol, quote);
+                self.set_quote(&symbol, quote);
             }
         }
     }
@@ -1179,6 +1196,43 @@ mod tests {
         panel.poll(&ctx);
         assert_eq!(panel.quote("C").map(|q| q.last), Some(3.0));
 
+        // Both service pushes and direct updates retain the latest finite quote.
+        let latest = Quote::new(
+            102.0,
+            100.0,
+            chrono::DateTime::from_timestamp(2, 0).unwrap(),
+        );
+        first.push(("A".into(), latest.clone()));
+        panel.poll(&ctx);
+        for invalid in [
+            Quote::new(
+                101.0,
+                100.0,
+                chrono::DateTime::from_timestamp(1, 0).unwrap(),
+            ),
+            Quote::new(f64::NAN, 100.0, latest.time),
+            Quote::new(103.0, f64::INFINITY, latest.time),
+            latest.clone().with_volume(f64::NEG_INFINITY),
+            latest.clone().with_bid_ask(f64::NAN, 103.0),
+            latest.clone().with_bid_ask(101.0, f64::INFINITY),
+            latest
+                .clone()
+                .with_extended(crate::model::ExtendedHoursQuote {
+                    session: crate::model::ExtendedSession::PostMarket,
+                    last: f64::NAN,
+                    time: latest.time,
+                }),
+        ] {
+            first.push(("A".into(), invalid.clone()));
+            panel.poll(&ctx);
+            assert_eq!(panel.quote("A"), Some(&latest), "{invalid:?}");
+            panel.set_quote("A", invalid);
+            assert_eq!(panel.quote("A"), Some(&latest));
+        }
+        let corrected = latest.clone().with_bid_ask(-1.0, 0.0).with_volume(0.0);
+        panel.set_quote("A", corrected.clone());
+        assert_eq!(panel.quote("A"), Some(&corrected));
+
         panel.set_selected("D");
         panel.poll(&ctx);
         let (symbols, second) = stream(1);
@@ -1186,7 +1240,7 @@ mod tests {
         assert!(!first.is_active() && second.is_active());
         first.push(("A".into(), quote(9.0)));
         panel.poll(&ctx);
-        assert_eq!(panel.quote("A").map(|q| q.last), Some(2.0));
+        assert_eq!(panel.quote("A").map(|q| q.last), Some(102.0));
         assert_eq!(panel.quote("C"), None);
         assert_eq!(service.0.lock().unwrap().len(), 2);
 

@@ -4,7 +4,7 @@
 //! loading, and managing indicator parameter templates.
 
 use crate::localization as l10n;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::IndicatorTemplate;
 use crate::ui_kit::ext::UiExt;
@@ -150,12 +150,12 @@ impl<'a> IndicatorTemplatePanel<'a> {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "Templates"))
-                    .size(DESIGN_TOKENS.typography.body)
+                    .size(ui.active_theme().text.body)
                     .strong(),
             );
             ui.label(
                 RichText::new(format!("({})", self.indicator_type))
-                    .size(DESIGN_TOKENS.typography.small)
+                    .size(ui.active_theme().text.small)
                     .color(ui.visuals().weak_text_color()),
             );
         });
@@ -234,7 +234,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
 
         ui.label(
             RichText::new(l10n::text(ui.ctx(), "Save Template"))
-                .size(DESIGN_TOKENS.typography.body)
+                .size(ui.active_theme().text.body)
                 .strong(),
         );
         ui.space_sm();
@@ -353,9 +353,12 @@ impl<'a> IndicatorTemplatePanel<'a> {
         template: &IndicatorTemplate,
     ) -> Option<IndicatorTemplateAction> {
         let item_height = DESIGN_TOKENS.sizing.button_lg;
-        let desired_size = Vec2::new(ui.available_width() - DESIGN_TOKENS.spacing.lg, item_height);
+        let desired_size = Vec2::new(
+            ui.available_width() - ui.active_theme().spacing.lg,
+            item_height,
+        );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         let is_selected = self
             .state
@@ -392,7 +395,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
                 ui.visuals().widgets.hovered.bg_fill
             };
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg);
+                .rect_filled(rect, ui.active_theme().radius.md, bg);
         }
     }
 
@@ -403,7 +406,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         template: &IndicatorTemplate,
         is_selected: bool,
     ) {
-        let text_x = rect.min.x + DESIGN_TOKENS.spacing.lg;
+        let text_x = rect.min.x + ui.active_theme().spacing.lg;
         let visuals = ui.visuals();
         let (text, weak) = if is_selected {
             let on_accent = visuals.selection.stroke.color;
@@ -414,10 +417,10 @@ impl<'a> IndicatorTemplatePanel<'a> {
 
         // Template name
         ui.painter().text(
-            Pos2::new(text_x, rect.min.y + DESIGN_TOKENS.spacing.xl),
+            Pos2::new(text_x, rect.min.y + ui.active_theme().spacing.xl),
             egui::Align2::LEFT_CENTER,
             l10n::text(ui.ctx(), &template.name),
-            egui::FontId::proportional(typography::MD),
+            egui::FontId::proportional(ui.active_theme().text.body),
             text,
         );
 
@@ -433,7 +436,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
             Pos2::new(text_x, rect.min.y + DESIGN_TOKENS.sizing.button_sm),
             egui::Align2::LEFT_CENTER,
             l10n::text(ui.ctx(), &suffix),
-            egui::FontId::proportional(typography::XS),
+            egui::FontId::proportional(ui.active_theme().text.tiny),
             weak,
         );
     }

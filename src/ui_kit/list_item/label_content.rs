@@ -1,13 +1,13 @@
 //! LabelContent - Simple text content with optional icon
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Response, RichText, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
 use crate::styles::icons;
 
 use super::content::{ContentContext, ListItemContent};
-use crate::tokens::DESIGN_TOKENS;
 
 /// Simple text content with optional icon
 ///
@@ -98,7 +98,7 @@ impl<'a> ListItemContent for LabelContent<'a> {
 
         // Calculate layout
         let icon_width = if self.icon.is_some() {
-            self.icon_size + DESIGN_TOKENS.spacing.sm
+            self.icon_size + ui.active_theme().spacing.sm
         } else {
             0.0
         };

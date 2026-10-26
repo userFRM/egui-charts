@@ -4,6 +4,7 @@
 
 use crate::icons::Icon;
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use super::svg_helpers::render_svg_at_rect_themed;
@@ -113,7 +114,7 @@ impl<'a> PairButton<'a> {
                 &translated_label,
             )
         });
-        crate::styles::focus::draw_focus_ring(ui, &icon_res, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &icon_res, ui.active_theme().radius.sm);
 
         // Arrow button (right edge)
         let arrow_rect = Rect::from_min_size(
@@ -127,7 +128,7 @@ impl<'a> PairButton<'a> {
         });
         ui.ctx()
             .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
-        crate::styles::focus::draw_focus_ring(ui, &arrow_res, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &arrow_res, ui.active_theme().radius.sm);
 
         // Draw icon button background (with visibility check)
         if ui.is_rect_visible(icon_rect) {
@@ -141,7 +142,7 @@ impl<'a> PairButton<'a> {
                 Color32::TRANSPARENT // Let parent Frame's background show through
             };
             ui.painter()
-                .rect_filled(icon_rect, DESIGN_TOKENS.rounding.button, icon_bg);
+                .rect_filled(icon_rect, ui.active_theme().radius.sm, icon_bg);
         }
 
         // Draw icon centered in interactive area (excluding left padding and arrow section)
@@ -210,7 +211,7 @@ impl<'a> PairButton<'a> {
     /// Uses exact dimensions:
     /// - Outer rect: 52×38px
     /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
-    /// - Inner rounding: 6px
+    /// - Inner rounding: the theme's medium radius
     /// - Icon: 24×24 centered
     pub fn show_styled(&self, ui: &mut Ui) -> PairButtonResponse {
         let tokens = &DESIGN_TOKENS.sizing.toolbar;
@@ -218,7 +219,7 @@ impl<'a> PairButton<'a> {
         let btn_height = tokens.button_height;
         let margin_h = tokens.hover_margin_h;
         let margin_v = tokens.hover_margin_v;
-        let inner_rounding = tokens.inner_rounding;
+        let inner_rounding = ui.active_theme().radius.md;
         let icon_size = tokens.icon_size;
 
         let cursor_pos = ui.cursor().min;

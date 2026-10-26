@@ -1,0 +1,60 @@
+---
+title: Financial charts. Your data.
+description: Embed interactive financial charts in your Rust application with egui-charts.
+---
+
+import { Aside, Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+
+egui-charts is a financial charting engine for egui. Put an interactive chart in
+your application, connect your data, and add analysis and workspace controls as
+you need them. The same Rust code runs natively and in WebAssembly.
+
+<LinkButton href="/egui-charts/docs/installation/" icon="right-arrow">Start building</LinkButton>
+<LinkButton href="/egui-charts/docs/api-reference/" variant="secondary">Explore the API</LinkButton>
+
+## Build around your chart
+
+<CardGrid>
+  <Card title="Start with a widget" icon="puzzle">
+    Keep a chart alive between frames and call `Chart::show` in your egui layout.
+    It handles painting, navigation and interaction.
+
+    [Create your first chart](first-chart.mdx)
+  </Card>
+  <Card title="Connect your data" icon="setting">
+    Supply bars already in memory, or attach a feed for asynchronous history
+    and live subscriptions.
+
+    [Bring history and live updates](data.mdx)
+  </Card>
+  <Card title="Add analysis" icon="magnifier">
+    Attach built-in or custom studies, draw on the chart, and work with actual
+    executions and order-book data.
+
+    [Explore studies](studies.mdx)
+  </Card>
+  <Card title="Compose a workspace" icon="window">
+    Use toolbars, dialogs and panels alongside your chart. The headless engine
+    also works without egui.
+
+    [Build your application UI](application-ui.mdx)
+  </Card>
+</CardGrid>
+
+## Bring your own services
+
+Your application owns market data connections, credentials, accounts and durable
+storage. The library provides data contracts, chart rendering, study calculations
+and host actions. It does not supply a market data feed or run trading strategies.
+
+Start with [the data model](data-model.mdx), then use the
+[builder guide](../../../../builder-guide.md) to connect events, persistence and
+synchronized charts.
+
+<Aside title="Choose the matching API">
+This guide follows `main`, which includes changes beyond the published 0.2.0
+release. Use the Git dependency in [installation](installation.mdx) for these
+examples. For released APIs, read [the 0.2.0 documentation](https://docs.rs/egui-charts/0.2.0).
+</Aside>
+
+[Third-party licenses](https://userfrm.github.io/egui-charts/docs/licenses.txt)

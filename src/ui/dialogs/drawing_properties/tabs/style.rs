@@ -109,7 +109,7 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
             });
 
             let visuals = ui.visuals();
-            let radius = DESIGN_TOKENS.rounding.md;
+            let radius = ui.active_theme().radius.md;
             if selected {
                 ui.painter()
                     .rect_filled(rect, radius, visuals.selection.bg_fill);

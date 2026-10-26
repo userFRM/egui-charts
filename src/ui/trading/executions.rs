@@ -5,7 +5,6 @@ use crate::localization as l10n;
 use egui::{FontId, Rect, Sense, Shape, Stroke, Ui, pos2};
 
 use crate::model::{Execution, OrderSide};
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::widget::Chart;
 
@@ -80,7 +79,7 @@ pub(super) fn show(
                     painter
                         .layout_no_wrap(
                             format!("{quantity} @ {price:.decimals$}"),
-                            FontId::proportional(typography::SM_MD),
+                            FontId::proportional(ui.active_theme().text.label),
                             chart.config().text_color,
                         )
                         .size()
@@ -153,7 +152,7 @@ pub(super) fn show(
         if labels {
             let label = painter.layout_no_wrap(
                 format!("{quantity} @ {price:.decimals$}"),
-                FontId::proportional(typography::SM_MD),
+                FontId::proportional(ui.active_theme().text.label),
                 chart.config().text_color,
             );
             let size = label.size();

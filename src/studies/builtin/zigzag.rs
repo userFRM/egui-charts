@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// ZigZag mode - what price to use
@@ -76,7 +76,7 @@ impl ZigZag {
             mode: ZigZagMode::HighLow,
             values: IndicatorValues::new(),
             pivots: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info,
+            color: palette::BLUE,
             visible: true,
         }
     }

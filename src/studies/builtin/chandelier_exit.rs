@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Chandelier Exit
@@ -27,8 +27,8 @@ impl ChandelierExit {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Long exit
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Short exit
+                palette::GREEN, // Green - Long exit
+                palette::RED,   // Red - Short exit
             ],
             visible: true,
         }

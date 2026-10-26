@@ -38,9 +38,9 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 const EMA_LENGTH: usize = 34;
@@ -60,20 +60,19 @@ pub struct ChopZone {
 impl ChopZone {
     /// Create the Chop Zone; its lengths are fixed by the definition.
     pub fn new() -> Self {
-        let palette = &DESIGN_TOKENS.semantic.extended;
         Self {
             values: IndicatorValues::new(),
             angles: IndicatorValues::new(),
             colors: [
-                palette.cyan,
-                palette.success_dark,
-                palette.success_light,
-                palette.teal,
-                palette.caution,
-                palette.favorite_gold,
-                palette.warning,
-                palette.pink,
-                palette.error_darker,
+                palette::CYAN,
+                palette::DARK_GREEN,
+                palette::LIGHT_GREEN,
+                palette::TEAL,
+                palette::YELLOW,
+                palette::GOLD,
+                palette::ORANGE,
+                palette::PINK,
+                palette::DEEP_RED,
             ],
             visible: true,
         }

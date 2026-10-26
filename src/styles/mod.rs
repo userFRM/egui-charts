@@ -1,7 +1,8 @@
 //! UI sizing, typography, icon sizes and keyboard focus helpers.
 //!
-//! Use these constants for chart and control layout, [`crate::tokens::DESIGN_TOKENS`]
-//! for shared design values and the active [`Theme`](crate::theme::Theme) for colors.
+//! UI colours, text, spacing and radii come from the applied [`Theme`](crate::theme::Theme).
+//! These modules retain fixed component dimensions and the default font sizes used by
+//! the theme. See `docs/theme.md` for runtime customisation.
 
 pub mod focus;
 pub mod icons;

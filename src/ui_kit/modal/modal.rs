@@ -105,7 +105,7 @@ impl Modal {
             return None;
         }
 
-        let mut frame = dialog_frame(&ctx.global_style());
+        let mut frame = dialog_frame(ctx);
         if let Some(fill) = self.fill {
             frame = frame.fill(fill);
         }
@@ -113,7 +113,7 @@ impl Modal {
             frame = frame.corner_radius(rounding);
         }
         let screen_height =
-            (ctx.content_rect().height() - 2.0 * DESIGN_TOKENS.spacing.xxxl).max(0.0);
+            (ctx.content_rect().height() - 2.0 * ctx.active_theme().spacing.xxxl).max(0.0);
         let height = self.height.map(|height| height.min(screen_height));
         let size = egui::vec2(
             self.width

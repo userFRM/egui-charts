@@ -9,7 +9,6 @@
 use crate::drawings::DrawingToolType;
 use crate::model::LineStyle;
 use crate::model::percent_change;
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Type of source in the tree
@@ -78,7 +77,7 @@ pub struct DrawingProperties {
 impl Default for DrawingProperties {
     fn default() -> Self {
         Self {
-            color: DESIGN_TOKENS.semantic.extended.accent,
+            color: crate::theme::Theme::default().ui.accent,
             line_width: 1.0,
             line_style: LineStyle::Solid,
             transparency: 0,
@@ -237,7 +236,7 @@ impl SourceItem {
             tool_type: None,
             name: name.into(),
             label: None,
-            color: DESIGN_TOKENS.semantic.extended.text_secondary, // Use theme constant for muted text
+            color: Color32::PLACEHOLDER, // Follows the panel theme
             visible: true,
             locked: true, // Data source is always locked
             selected: false,

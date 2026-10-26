@@ -3,7 +3,7 @@
 
 use crate::chart::renderers::ChartMapping;
 use crate::model::LineStyle;
-use crate::painting::dashed_line::draw_dashed_line;
+use crate::painting::dashed_line::draw_dashed_segments;
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
@@ -18,23 +18,17 @@ pub fn render_grid(
     style: LineStyle,
 ) {
     let marks = price_map.marks();
-
-    for mark in marks {
-        let stroke_width = if grid_color.is_opaque() {
-            DESIGN_TOKENS.stroke.hairline
-        } else if mark.weight >= 80 {
-            DESIGN_TOKENS.stroke.light
-        } else {
-            DESIGN_TOKENS.stroke.extra_thin
-        };
-        render_grid_line(
-            painter,
-            Pos2::new(rect.min.x, mark.y_coord),
-            Pos2::new(rect.max.x, mark.y_coord),
-            Stroke::new(stroke_width, grid_color),
-            style,
-        );
-    }
+    render_grid_lines(
+        painter,
+        marks.iter().map(|mark| {
+            [
+                Pos2::new(rect.min.x, mark.y_coord),
+                Pos2::new(rect.max.x, mark.y_coord),
+            ]
+        }),
+        grid_color,
+        style,
+    );
 }
 
 /// Renders vertical grid lines at fixed bar intervals
@@ -67,8 +61,7 @@ pub fn render_vertical_grid(
         0
     };
 
-    // Draw grid lines
-    for i in 0..=(visible_bars / bars_per_grid + 2) {
+    let lines = (0..=(visible_bars / bars_per_grid + 2)).filter_map(|i| {
         let grid_idx = first_visible_idx + i * bars_per_grid;
 
         // Convert bar index to x coord using same formula as candle rendering
@@ -76,39 +69,35 @@ pub fn render_vertical_grid(
 
         // Skip if outside visible area
         if x < rect.min.x - 1.0 || x > rect.max.x + 1.0 {
-            continue;
+            return None;
         }
-
-        render_grid_line(
-            painter,
-            Pos2::new(x, rect.min.y),
-            Pos2::new(x, rect.max.y),
-            Stroke::new(
-                if grid_color.is_opaque() {
-                    DESIGN_TOKENS.stroke.hairline
-                } else {
-                    DESIGN_TOKENS.stroke.extra_thin
-                },
-                grid_color,
-            ),
-            style,
-        );
-    }
+        Some([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
+    });
+    render_grid_lines(painter, lines, grid_color, style);
 }
 
-/// Paints a one-pixel grid line in `style` at the caller's price or time mark.
-pub(crate) fn render_grid_line(
+/// Paints one-pixel grid lines in `style`, batching their square dots into one mesh.
+pub(crate) fn render_grid_lines(
     painter: &Painter,
-    start: Pos2,
-    end: Pos2,
-    mut stroke: Stroke,
+    lines: impl IntoIterator<Item = [Pos2; 2], IntoIter: Clone>,
+    color: Color32,
     style: LineStyle,
 ) {
-    stroke.width = DESIGN_TOKENS.stroke.hairline;
+    let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, color);
     match style.hairline_pattern() {
-        Some((dash, gap)) => draw_dashed_line(painter, start, end, stroke, dash, gap),
+        Some((dash, gap)) => draw_dashed_segments(
+            painter,
+            lines.into_iter().map(|[start, end]| (start, end, 0.0)),
+            stroke,
+            dash,
+            gap,
+        ),
         None => {
-            painter.line_segment([start, end], stroke);
+            painter.extend(
+                lines
+                    .into_iter()
+                    .map(|points| egui::Shape::line_segment(points, stroke)),
+            );
         }
     }
 }
@@ -192,6 +181,15 @@ mod tests {
                         }
                     },
                 );
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(shape.shape, Shape::Mesh(_)))
+                        .count(),
+                    1,
+                    "grid dots share one mesh"
+                );
                 let mut span_count = 0;
                 for shape in &output.shapes {
                     match &shape.shape {
@@ -209,13 +207,21 @@ mod tests {
                                     bounds
                                 })
                                 .collect();
-                            for pair in dots.windows(2) {
-                                let gap = if vertical {
-                                    pair[1].top() - pair[0].bottom()
+                            for line in dots.chunk_by(|a, b| {
+                                if vertical {
+                                    a.left() == b.left()
                                 } else {
-                                    pair[1].left() - pair[0].right()
-                                };
-                                assert_eq!(gap, dot_gap);
+                                    a.top() == b.top()
+                                }
+                            }) {
+                                for pair in line.windows(2) {
+                                    let gap = if vertical {
+                                        pair[1].top() - pair[0].bottom()
+                                    } else {
+                                        pair[1].left() - pair[0].right()
+                                    };
+                                    assert_eq!(gap, dot_gap);
+                                }
                             }
                             span_count += dots.len();
                         }

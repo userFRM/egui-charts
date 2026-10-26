@@ -4,7 +4,7 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
-use crate::styles::{icons as icon_sizes, typography};
+use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
@@ -133,10 +133,10 @@ impl Default for WidgetBarConfig {
             width: 45.0,
             btn_size: DESIGN_TOKENS.sizing.toolbar.right_btn_size,
             icon_size: icon_sizes::TOOLBAR,
-            btn_spacing: DESIGN_TOKENS.sizing.toolbar.right_btn_spacing,
+            btn_spacing: crate::theme::Spacing::default().xs,
             hover_margin: DESIGN_TOKENS.sizing.toolbar.right_hover_margin, // 3px
-            hover_rounding: DESIGN_TOKENS.sizing.toolbar.right_hover_rounding, // 8px
-            top_padding: 4.0,
+            hover_rounding: crate::theme::Radii::default().lg,
+            top_padding: crate::theme::Spacing::default().sm,
         }
     }
 }
@@ -311,6 +311,18 @@ impl WidgetBar {
     /// Show the bar, keeping the bottom section at the foot and scrolling if it cannot fit.
     /// Host widget clicks return their id; the host owns the corresponding panel contents.
     pub fn show(&mut self, ui: &mut Ui) -> WidgetBarAction {
+        let theme = ui.active_theme();
+        let defaults = WidgetBarConfig::default();
+        let spacing = if self.config.btn_spacing == defaults.btn_spacing {
+            theme.spacing.xs
+        } else {
+            self.config.btn_spacing
+        };
+        let padding = if self.config.top_padding == defaults.top_padding {
+            theme.spacing.sm
+        } else {
+            self.config.top_padding
+        };
         let mut action = WidgetBarAction::None;
         ui.scope(|ui| {
             ui.spacing_mut().scroll.floating = true;
@@ -327,19 +339,15 @@ impl WidgetBar {
                     shown.sort();
                     shown.dedup();
                     let count = shown.len() + self.widgets.len();
-                    let pitch = self.config.btn_size + self.config.btn_spacing;
-                    let height = ui.available_height().max(
-                        self.config.top_padding + count as f32 * pitch + DESIGN_TOKENS.spacing.lg,
-                    );
+                    let pitch = self.config.btn_size + spacing;
+                    let height = ui
+                        .available_height()
+                        .max(padding + count as f32 * pitch + ui.active_theme().spacing.lg);
                     let (rect, _) = ui
                         .allocate_exact_size(Vec2::new(self.config.width, height), Sense::hover());
                     let painter = ui.painter().clone();
-                    painter.rect_filled(
-                        rect,
-                        DESIGN_TOKENS.rounding.panel,
-                        ui.visuals().panel_fill,
-                    );
-                    let mut y = rect.top() + self.config.top_padding;
+                    painter.rect_filled(rect, ui.active_theme().radius.md, ui.visuals().panel_fill);
+                    let mut y = rect.top() + padding;
                     for section in [WidgetBarSection::Top, WidgetBarSection::Bottom] {
                         let built_in = shown.iter().filter(|i| i.section() == section).count();
                         if section == WidgetBarSection::Bottom {
@@ -350,7 +358,7 @@ impl WidgetBar {
                                 continue;
                             }
                             y = y.max(
-                                rect.bottom() - count as f32 * pitch - DESIGN_TOKENS.spacing.md,
+                                rect.bottom() - count as f32 * pitch - ui.active_theme().spacing.md,
                             );
                         }
                         for widget in self.widgets.iter().filter(|w| w.section == section) {
@@ -378,7 +386,7 @@ impl WidgetBar {
                                     Vec2::new(self.config.width - 16.0, 1.0),
                                 );
                                 painter.rect_filled(sep, 0.0, ui.active_theme().ui.border);
-                                y += 1.0 + DESIGN_TOKENS.spacing.md;
+                                y += 1.0 + ui.active_theme().spacing.md;
                                 // Centre Help on the adjacent 38 px bottom row.
                                 y = y.max(rect.bottom() - 19.0 - self.config.btn_size / 2.0);
                             }
@@ -439,6 +447,11 @@ impl WidgetBar {
     ) -> egui::Response {
         let painter = ui.painter().clone();
         let theme = ui.active_theme();
+        let rounding = if self.config.hover_rounding == WidgetBarConfig::default().hover_rounding {
+            theme.radius.lg
+        } else {
+            self.config.hover_rounding
+        };
         let icon_color = theme.ui.text;
         let icon_hover_color = theme.ui.text;
         let active_color = theme.ui.selection_text;
@@ -464,22 +477,18 @@ impl WidgetBar {
 
         // Check for clicks
         let btn_res = ui.interact(btn_rect, id, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &btn_res, self.config.hover_rounding);
+        crate::styles::focus::draw_focus_ring(ui, &btn_res, rounding);
         let is_hovered = btn_res.hovered();
         let is_pressed = btn_res.is_pointer_button_down_on();
 
         // Button background on inner rect only - with visibility check
         if ui.is_rect_visible(hover_rect) {
             if is_pressed {
-                painter.rect_filled(hover_rect, self.config.hover_rounding, pressed_bg);
+                painter.rect_filled(hover_rect, rounding, pressed_bg);
             } else if is_active {
-                painter.rect_filled(
-                    hover_rect,
-                    self.config.hover_rounding,
-                    theme.ui.selection_bg,
-                );
+                painter.rect_filled(hover_rect, rounding, theme.ui.selection_bg);
             } else if is_hovered {
-                painter.rect_filled(hover_rect, self.config.hover_rounding, hover_bg);
+                painter.rect_filled(hover_rect, rounding, hover_bg);
             }
         }
 
@@ -511,7 +520,7 @@ impl WidgetBar {
 
         // Notification badge (with visibility check)
         if count > 0 {
-            let badge_radius = DESIGN_TOKENS.spacing.md;
+            let badge_radius = ui.active_theme().spacing.md;
             let badge_pos = Pos2::new(btn_rect.max.x - badge_radius, btn_rect.min.y + badge_radius);
             let badge_rect = Rect::from_center_size(badge_pos, Vec2::splat(badge_radius * 2.0));
 
@@ -525,7 +534,7 @@ impl WidgetBar {
                 };
                 let badge_galley = painter.layout_no_wrap(
                     l10n::text(ui.ctx(), cnt_text),
-                    egui::FontId::proportional(typography::XS),
+                    egui::FontId::proportional(ui.active_theme().text.tiny),
                     ui.active_theme().ui.danger_text,
                 );
                 painter.galley(

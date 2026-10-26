@@ -621,21 +621,6 @@ pub struct RoundingTokens {
     pub dialog: f32,
 }
 
-/// Typography tokens defining font sizes on a graduated scale.
-///
-/// Font sizes in egui logical points, with `body` and `small` aliases.
-#[derive(Clone, Debug)]
-pub struct TypographyTokens {
-    /// Small, in egui logical points.
-    pub sm: f32,
-    /// Medium, in egui logical points.
-    pub md: f32,
-    /// Body, in egui logical points.
-    pub body: f32,
-    /// Small, in egui logical points.
-    pub small: f32,
-}
-
 /// Stroke width tokens for lines, borders, and outlines.
 ///
 /// Scale: `extra_thin` (finest) through `thick` (boldest).

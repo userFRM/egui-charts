@@ -32,9 +32,9 @@
 //! ```
 
 use crate::model::{Bar, BarClock, Timeframe};
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 use std::collections::VecDeque;
@@ -68,7 +68,7 @@ impl Volume24h {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             long_bars: false,
-            color: DESIGN_TOKENS.semantic.extended.info,
+            color: palette::BLUE,
             visible: true,
         }
     }

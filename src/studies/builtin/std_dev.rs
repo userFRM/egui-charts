@@ -21,8 +21,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Standard Deviation indicator
@@ -43,7 +43,7 @@ impl StandardDeviation {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.favorite_gold,
+            color: palette::GOLD,
             visible: true,
         }
     }

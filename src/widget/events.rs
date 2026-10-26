@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use egui::{Modifiers, PointerButton, Pos2, Ui};
 
 /// A chart cursor position with the data a host legend, tooltip or context action reads.
-#[derive(Debug, Clone, PartialEq)]
+/// Identical whitespace slots compare equal, including their colours and host payloads.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
     /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
@@ -32,7 +33,8 @@ pub struct ChartPointer {
     /// Close of the last bar or element with a value before `index`, from which legends measure
     /// the change.
     pub previous_close: Option<f64>,
-    /// Each visible series added with `add_series` or `add_comparison` that has a bar at `time`.
+    /// Every series added with `add_series` or `add_comparison` that has a bar at `time`,
+    /// including hidden series and their host payloads.
     pub series_bars: Vec<(SeriesId, Bar)>,
     /// Visible study plots at `index`, as [`Chart::study_values_at`] returns them, each with the
     /// id of its study.
@@ -43,6 +45,41 @@ pub struct ChartPointer {
     pub modifiers: Modifiers,
     /// Device that produced the event.
     pub kind: PointerKind,
+}
+
+impl PartialEq for ChartPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time
+            && self.price == other.price
+            && self.series == other.series
+            && self.index == other.index
+            && self.pos == other.pos
+            && self.pane == other.pane
+            && self.previous_close == other.previous_close
+            && self.studies == other.studies
+            && self.target == other.target
+            && self.modifiers == other.modifiers
+            && self.kind == other.kind
+            && match (&self.bar, &other.bar) {
+                (Some(left), Some(right)) => same_bar(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.series_bars.len() == other.series_bars.len()
+            && self.series_bars.iter().zip(&other.series_bars).all(
+                |((left_id, left), (right_id, right))| left_id == right_id && same_bar(left, right),
+            )
+    }
+}
+
+fn same_bar(left: &Bar, right: &Bar) -> bool {
+    // Empty slots contain NaNs, but do not change while the pointer stays still.
+    left == right
+        || (left.is_whitespace()
+            && right.is_whitespace()
+            && left.time == right.time
+            && left.colors == right.colors
+            && left.payload == right.payload)
 }
 
 /// The object under the pointer of a [`ChartPointer`].
@@ -59,14 +96,17 @@ pub enum PointerTarget {
 
 /// The device behind a [`ChartPointer`].
 ///
-/// egui reports pen input as touch, so pens arrive as [`Self::Touch`].
+/// egui does not distinguish pens. Hosts with device information use
+/// [`Chart::set_pointer_kind`] before showing the chart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointerKind {
     /// A mouse, trackpad or other hovering pointer.
     Mouse,
-    /// A finger or pen on a touch surface.
+    /// A finger on a touch surface, or an unidentified pen from egui.
     Touch,
+    /// A pen identified by the host input integration.
+    Pen,
 }
 
 /// A notification for the host. Existing selection and action polling APIs remain independent.
@@ -130,6 +170,7 @@ pub(super) struct HostEvents {
     logical_range: Option<crate::model::LogicalRange>,
     time_scale_size: egui::Vec2,
     pointer: Option<ChartPointer>,
+    kind: Option<PointerKind>,
     click_frames: [Option<u64>; 3],
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
@@ -147,6 +188,13 @@ impl HostEvents {
 }
 
 impl Chart {
+    /// Overrides the input device reported by pointer events. Set this before `show` when
+    /// the host knows the active device, including pens that egui cannot identify. `None`
+    /// restores automatic mouse/touch detection. Update it when the active device changes.
+    pub fn set_pointer_kind(&mut self, kind: Option<PointerKind>) {
+        self.host_events.kind = kind;
+    }
+
     /// Drains host notifications in occurrence order. Call after `show` each frame.
     ///
     /// Symbol, interval and data setters enqueue immediately; view and pointer changes are
@@ -294,7 +342,6 @@ impl Chart {
             series_bars: self
                 .price_series
                 .iter()
-                .filter(|item| item.visible)
                 .filter_map(|item| {
                     let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
                     Some((item.id, item.bars[at].clone()))
@@ -303,17 +350,19 @@ impl Chart {
             studies: bar_at.map_or_else(Vec::new, |index| self.study_rows_at(index)),
             target: self.host_events.target,
             modifiers: ui.input(|input| input.modifiers),
-            kind: if ui.input(|input| {
-                input.any_touches()
-                    || input
-                        .events
-                        .iter()
-                        .any(|event| matches!(event, egui::Event::Touch { .. }))
-            }) {
-                PointerKind::Touch
-            } else {
-                PointerKind::Mouse
-            },
+            kind: self.host_events.kind.unwrap_or_else(|| {
+                if ui.input(|input| {
+                    input.any_touches()
+                        || input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Touch { .. }))
+                }) {
+                    PointerKind::Touch
+                } else {
+                    PointerKind::Mouse
+                }
+            }),
         })
     }
 
@@ -692,6 +741,7 @@ mod tests {
         // Added series, drawings, touch input and held modifiers reach the payload.
         let series = chart.add_series(Default::default());
         chart.set_data(series, bars.clone());
+        assert!(chart.set_series_visible(series, false));
         #[cfg(feature = "drawings")]
         {
             let mut line = crate::drawings::Drawing::with_color(
@@ -733,6 +783,45 @@ mod tests {
             (pointer.modifiers, pointer.kind),
             (Modifiers::SHIFT, PointerKind::Touch)
         );
+        for kind in [PointerKind::Pen, PointerKind::Mouse] {
+            chart.set_pointer_kind(Some(kind));
+            frame(&ctx, &mut chart, 3.75, vec![Event::PointerMoved(pos)]);
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer)) if pointer.kind == kind
+                    && pointer.series_bars == vec![(series, bars[70].clone())]
+            )));
+        }
+        chart.set_pointer_kind(None);
+        let mut empty = bars.clone();
+        empty[70] = Bar::whitespace(bars[70].time);
+        empty[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": "empty" })));
+        chart.set_data(SeriesId::MAIN, empty.clone());
+        chart.set_data(series, empty.clone());
+        frame(&ctx, &mut chart, 3.76, vec![Event::PointerMoved(pos)]);
+        let pointer = chart
+            .drain_events()
+            .find_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                _ => None,
+            })
+            .unwrap();
+        assert!(pointer.bar.as_ref().unwrap().is_whitespace());
+        assert!(pointer.series_bars[0].1.is_whitespace());
+        assert_eq!(pointer.series_bars[0].1.payload, empty[70].payload);
+        assert_eq!(pointer, pointer.clone());
+        frame(&ctx, &mut chart, 3.77, vec![]);
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+        );
+        empty[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "id": "changed" })));
+        chart.set_data(series, empty);
+        frame(&ctx, &mut chart, 3.78, vec![]);
+        assert!(chart.drain_events().any(|event| matches!(event,
+            ChartEvent::CrosshairMoved(Some(updated)) if updated != pointer
+        )));
+        chart.set_data(SeriesId::MAIN, bars.clone());
         chart.remove_series(series);
         #[cfg(feature = "drawings")]
         chart.drawings_mut().drawings.clear();
