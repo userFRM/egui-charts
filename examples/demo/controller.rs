@@ -1559,7 +1559,9 @@ impl DemoApp {
             TopToolbarAction::OpenSymbolSearch => self.symbol_search.open(),
             TopToolbarAction::OpenCompare => self.compare_dialog.open(),
             TopToolbarAction::OpenQuickSearch => self.quick_search.open(),
-            TopToolbarAction::OpenIndicators => self.indicator_dialog.open(),
+            TopToolbarAction::OpenIndicators => {
+                self.indicator_dialog.open_for_chart(&self.chart, None);
+            }
             TopToolbarAction::CreateAlert => self.open_alert(None),
             TopToolbarAction::ToggleReplay => self.toggle_replay(),
             TopToolbarAction::OpenSettings => {
@@ -2593,7 +2595,12 @@ impl DemoApp {
     ) {
         match action {
             StudyContextMenuAction::AddAlert(alert) => self.alerts.save(*alert),
-            StudyContextMenuAction::AddIndicator => self.indicator_dialog.open(),
+            StudyContextMenuAction::AddIndicator => {
+                self.indicator_dialog.open_for_chart(
+                    &self.chart,
+                    Some(egui_charts::studies::StudySource::Study { id: id.0, plot: 0 }),
+                );
+            }
             StudyContextMenuAction::AddToFavorites(name) => {
                 self.indicator_dialog.favorites.insert(name);
             }
@@ -2643,7 +2650,9 @@ impl DemoApp {
     fn handle_series_context(&mut self, action: SeriesContextMenuAction) {
         match action {
             SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
-            SeriesContextMenuAction::AddIndicator => self.indicator_dialog.open(),
+            SeriesContextMenuAction::AddIndicator => {
+                self.indicator_dialog.open_for_chart(&self.chart, None);
+            }
             SeriesContextMenuAction::AddAlert => self.open_alert(None),
             _ => {}
         }
@@ -2768,7 +2777,9 @@ impl DemoApp {
                 ShortcutRequest::Action(action) => match action {
                     A::OpenQuickSearch => self.quick_search.open(),
                     A::ShowKeyboardHelp => self.keyboard_shortcuts.toggle(),
-                    A::OpenIndicatorSearch => self.indicator_dialog.open(),
+                    A::OpenIndicatorSearch => {
+                        self.indicator_dialog.open_for_chart(&self.chart, None);
+                    }
                     A::OpenSymbolSearch => self.symbol_search.open(),
                     A::OpenIntervalSearch => {
                         self.interval_entry = Some(String::new());
@@ -3647,6 +3658,133 @@ mod tests {
             app.chart.drawings().drawings[0].chart_points[0],
             ChartPoint::new(10.0, 100.0)
         );
+    }
+
+    #[test]
+    fn study_menu_host_actions_keep_sources_and_clipboard_settings() {
+        use egui::{Event, PointerButton, RawInput, Shape};
+        use egui_charts::studies::{SMA, StudySource};
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [640.0, 1440.0] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                app.theme = theme.clone();
+                egui_charts::theme::apply_to_egui(&ctx, &theme);
+                let parent = app.chart.add_indicator(Box::new(SMA::new(7)));
+                app.handle_study_context(
+                    &ctx,
+                    parent,
+                    StudyContextMenuAction::AddToFavorites("SMA".into()),
+                );
+                assert!(app.indicator_dialog.favorites.contains("SMA"));
+                app.handle_study_context(&ctx, parent, StudyContextMenuAction::ObjectTree);
+                assert!(app.open_panel == Some(SidePanel::ObjectTree));
+                assert!(
+                    app.object_tree
+                        .state()
+                        .is_selected(indicator_tree_id(parent))
+                );
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    app.handle_study_context(ui.ctx(), parent, StudyContextMenuAction::Copy);
+                });
+                let text = output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .find_map(|command| match command {
+                        egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .expect("Copy supplies clipboard text");
+                output.drop_without_applying_deltas();
+                let mut other = egui_charts::ChartBuilder::new().build();
+                let pasted = other
+                    .paste_indicator(&text, &egui_charts::studies::IndicatorFactory::new())
+                    .unwrap();
+                let pasted = other.indicators().find(|(id, _)| *id == pasted).unwrap().1;
+                assert_eq!(
+                    pasted
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == "period")
+                        .unwrap()
+                        .value,
+                    egui_charts::studies::InputValue::Length(7)
+                );
+
+                app.handle_study_context(&ctx, parent, StudyContextMenuAction::AddIndicator);
+                let frame = |app: &mut DemoApp, events| {
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| app.show_dialogs(ui.ctx()),
+                    )
+                };
+                let text_at = |output: &egui::FullOutput, label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing {label}"))
+                };
+                for _ in 0..2 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(&mut app, vec![Event::Text("Simple Moving".into())]);
+                output.drop_without_applying_deltas();
+                let output = frame(&mut app, vec![]);
+                let row = text_at(&output, "Simple Moving Avg");
+                output.drop_without_applying_deltas();
+                let click = |app: &mut DemoApp, pos| {
+                    for pressed in [true, false] {
+                        frame(
+                            app,
+                            vec![
+                                Event::PointerMoved(pos),
+                                Event::PointerButton {
+                                    pos,
+                                    button: PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                },
+                            ],
+                        )
+                        .drop_without_applying_deltas();
+                    }
+                };
+                click(&mut app, row);
+                let output = frame(&mut app, vec![]);
+                let add = text_at(&output, "Add");
+                assert!(ctx.content_rect().contains(add));
+                output.drop_without_applying_deltas();
+                click(&mut app, add);
+                let child = app
+                    .chart
+                    .indicators()
+                    .find(|(id, study)| *id != parent && study.name() == "SMA")
+                    .expect("the dialog adds the selected study")
+                    .1;
+                assert_eq!(
+                    child.source(),
+                    Some(StudySource::Study {
+                        id: parent.0,
+                        plot: 0
+                    })
+                );
+            }
+        }
     }
 
     /// Typed search owns subsequent editing keys, including in the opening frame.

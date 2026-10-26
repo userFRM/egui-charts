@@ -745,11 +745,12 @@ impl IndicatorDialog {
                 .strong(),
         );
         let name = indicator.id.clone();
+        let default_source = self.create(&name).and_then(|study| study.source());
         ui.add_space(theme.spacing.lg);
 
         FormGrid::new("indicator_params").show(ui, |ui| {
             self.draw_indicator_params(ui, config, theme, &name);
-            if let Some(default) = self.create(&name).and_then(|study| study.source()) {
+            if let Some(default) = default_source {
                 let mut value = self.source.unwrap_or(default);
                 let label = ui.label(l10n::text(ui.ctx(), "Source"));
                 let selected = match &value {
@@ -786,10 +787,7 @@ impl IndicatorDialog {
             }
         });
 
-        let accepts_source = self.source.is_none()
-            || self
-                .create(&name)
-                .is_some_and(|study| study.source().is_some());
+        let accepts_source = self.source.is_none() || default_source.is_some();
         if !accepts_source {
             ui.label(l10n::text(
                 ui.ctx(),
