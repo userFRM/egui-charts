@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Standard Error Bands - upper/middle (linear regression)/lower bands
@@ -23,9 +23,9 @@ impl StandardErrorBands {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.purple,
+                palette::PURPLE,
                 Color32::from_rgb(120, 123, 134),
-                DESIGN_TOKENS.semantic.extended.purple,
+                palette::PURPLE,
             ],
             visible: true,
         }
@@ -147,7 +147,7 @@ impl Indicator for StandardErrorBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

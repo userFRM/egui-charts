@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Klinger Volume Oscillator, as defined by Stephen J. Klinger in "Identifying Trends With Volume Analysis", Technical Analysis of Stocks & Commodities, V.15:12 (December 1997).
@@ -35,8 +35,8 @@ impl KlingerOscillator {
             signal_period: 13,
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Klinger
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - Klinger
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }
@@ -131,8 +131,8 @@ impl Indicator for KlingerOscillator {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn name(&self) -> &str {
@@ -186,7 +186,7 @@ impl Indicator for KlingerOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -298,7 +298,7 @@ mod tests {
                 other => panic!("bar {bar}: expected two lines, got {other:?}"),
             }
         }
-        assert_eq!(klinger.line_cnt(), 2);
+        assert_eq!(klinger.line_count(), 2);
 
         // A bar with a non-finite price has no value; the study carries on after it.
         data[60].high = f64::NAN;

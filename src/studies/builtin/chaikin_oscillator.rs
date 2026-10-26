@@ -25,8 +25,8 @@
 
 use super::{AccumulationDistribution, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Fast minus slow EMA of the Accumulation/Distribution line.
@@ -46,7 +46,7 @@ impl ChaikinOscillator {
             fast_length: fast_length.max(1),
             slow_length: slow_length.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.error,
+            color: palette::RED,
             visible: true,
         }
     }
@@ -84,8 +84,8 @@ impl Indicator for ChaikinOscillator {
         slow_length: length("Slow Length", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn name(&self) -> &str {

@@ -11,6 +11,7 @@
 //! - **Cursor**: set_cursor_icon
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{CursorIcon, Response, Ui};
 
@@ -176,10 +177,7 @@ impl ResponseExt for Response {
 
     fn highlight(&self, ui: &mut Ui) -> &Self {
         let rect = self.rect;
-        let stroke = egui::Stroke::new(
-            DESIGN_TOKENS.stroke.thick,
-            DESIGN_TOKENS.semantic.status.caution,
-        );
+        let stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.thick, ui.active_theme().ui.warning);
         ui.painter()
             .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Outside);
         self

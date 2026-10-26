@@ -26,9 +26,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Accelerator Oscillator, with Bill Williams' fixed lengths 5, 34 and 5.
@@ -45,8 +45,8 @@ impl AcceleratorOscillator {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            rising_color: DESIGN_TOKENS.semantic.extended.success,
-            falling_color: DESIGN_TOKENS.semantic.extended.error,
+            rising_color: palette::GREEN,
+            falling_color: palette::RED,
             visible: true,
         }
     }
@@ -83,7 +83,7 @@ impl Indicator for AcceleratorOscillator {
         crate::studies::PlotStyle {
             color: self.rising_color,
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
@@ -100,8 +100,8 @@ impl Indicator for AcceleratorOscillator {
         })
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -141,7 +141,7 @@ impl Indicator for AcceleratorOscillator {
         false
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

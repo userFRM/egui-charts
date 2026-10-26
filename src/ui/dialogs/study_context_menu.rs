@@ -19,6 +19,7 @@ use std::collections::HashSet;
 /// the chart as one undoable user action before it returns them; the host carries out the
 /// others.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum StudyContextMenuAction {
     /// Save this alert, on the study's value at the menu's bar, through the host's alerts
     /// service, for example with

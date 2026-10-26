@@ -1,6 +1,6 @@
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Standard Error of the linear regression of close prices over a rolling window.
@@ -18,7 +18,7 @@ impl StandardError {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.teal],
+            colors: vec![palette::TEAL],
             visible: true,
         }
     }

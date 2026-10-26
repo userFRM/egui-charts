@@ -1,5 +1,5 @@
-//! Design tokens: the theme-independent spacing, sizing, rounding, typography,
-//! stroke, shadow and colour values used throughout the crate.
+//! Design tokens: default spacing, sizing, rounding,
+//! stroke, shadow and engine colour values. UI chrome reads the applied theme.
 //!
 //! All values live in the single static [`DESIGN_TOKENS`], a plain struct
 //! literal evaluated at compile time, so reading a token costs a memory load and
@@ -20,9 +20,6 @@
 //!
 //! // Sizing
 //! let btn_height = DESIGN_TOKENS.sizing.button_md;
-//!
-//! // Typography
-//! let body_size = DESIGN_TOKENS.typography.md;
 //!
 //! // Strokes
 //! let thin = DESIGN_TOKENS.stroke.hairline;
@@ -306,12 +303,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         panel: 6.0,
         dialog: 6.0,
     },
-    typography: TypographyTokens {
-        sm: 11.0,
-        md: 13.0,
-        body: 13.0,
-        small: 11.0,
-    },
     stroke: StrokeTokens {
         extra_thin: 0.5,
         light: 0.8,
@@ -326,32 +317,8 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
     },
     semantic: SemanticTokens {
         ui: UiSemanticTokens {
-            panel_bg_light: Color32::WHITE,
-            panel_bg_secondary_light: Color32::from_rgb(235, 235, 235),
-            text_light: Color32::from_rgb(26, 26, 26),
-            // Body, secondary and muted text defaults for light panels and windows.
-            text_secondary_light: Color32::from_rgb(51, 51, 51),
-            text_muted_light: Color32::from_rgb(102, 102, 102),
-            border_light: Color32::from_rgb(235, 235, 235),
-            border_subtle_light: Color32::from_rgb(245, 245, 245),
             text_muted_dark: Color32::from_rgb(150, 150, 150),
             border_dark: Color32::from_rgb(74, 74, 74),
-            icon_light: Color32::from_rgb(51, 51, 51),
-            icon_hover_light: Color32::from_rgb(26, 26, 26),
-            icon_dark: Color32::from_rgb(219, 219, 219),
-            icon_hover_dark: Color32::WHITE,
-            icon_active: Color32::from_rgb(49, 121, 245),
-            btn_bg_light: Color32::WHITE,
-            btn_bg_hover_light: Color32::from_rgb(234, 234, 234),
-            btn_bg_active_light: Color32::from_rgb(220, 220, 220),
-            accent: Color32::from_rgb(41, 98, 255),
-            accent_hover: Color32::from_rgb(51, 115, 255),
-            // Status text, at least 4.5:1 on its theme's panels and windows
-            success_light: Color32::from_rgb(46, 125, 50),
-            warning_light: Color32::from_rgb(180, 83, 9),
-            info_light: Color32::from_rgb(2, 119, 189),
-            success_dark: Color32::from_rgb(76, 175, 80),
-            error_dark: Color32::from_rgb(247, 104, 99),
         },
         chart: ChartSemanticTokens {
             bg: Color32::from_rgb(15, 15, 15),
@@ -389,58 +356,20 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         indicators: IndicatorSemanticTokens {
             ma: Color32::from_rgb(255, 152, 0),
             ema: Color32::from_rgb(33, 150, 243),
-            sma: Color32::from_rgb(255, 152, 0),
-            bb_upper: Color32::from_rgb(41, 98, 255),
-            bb_middle: Color32::from_rgb(255, 167, 38),
-            bb_lower: Color32::from_rgb(41, 98, 255),
-            rsi: Color32::from_rgb(126, 87, 194),
-            macd_line: Color32::from_rgb(33, 150, 243),
-            macd_signal: Color32::from_rgb(255, 152, 0),
-            vwap: Color32::from_rgb(255, 235, 59),
         },
         drawings: DrawingSemanticTokens {
             label_text: Color32::from_rgb(209, 212, 220),
             fib_50: Color32::from_rgb(156, 39, 176),
             fib_100: Color32::from_rgb(0, 188, 212),
         },
-        buttons: ButtonSemanticTokens {
-            primary_bg: Color32::from_rgb(30, 34, 45),
-            primary_fg: Color32::from_rgb(245, 245, 245),
-            secondary_bg: Color32::from_rgb(212, 212, 212),
-            secondary_fg: Color32::from_rgb(30, 34, 45),
-            // Dark enough for white text at 4.5:1
-            danger_bg: Color32::from_rgb(211, 47, 47),
-            danger_bg_hover: Color32::from_rgb(198, 40, 40),
-            danger_bg_active: Color32::from_rgb(183, 28, 28),
-            danger_fg: Color32::WHITE,
-        },
         extended: ExtendedSemanticTokens {
-            bg_active: Color32::from_rgb(230, 232, 240),
-            text_secondary: Color32::from_rgb(131, 137, 151),
-            text_muted: Color32::from_rgb(178, 181, 190),
             accent: Color32::from_rgb(41, 98, 255),
-            accent_hover: Color32::from_rgb(51, 115, 255),
-            accent_active: Color32::from_rgb(31, 78, 205),
             success: Color32::from_rgb(76, 175, 80),
-            success_light: Color32::from_rgb(139, 195, 74),
-            success_dark: Color32::from_rgb(46, 125, 50),
-            success_darker: Color32::from_rgb(27, 94, 32),
             error: Color32::from_rgb(244, 67, 54),
-            error_dark: Color32::from_rgb(211, 47, 47),
-            error_darker: Color32::from_rgb(183, 28, 28),
-            warning: Color32::from_rgb(255, 152, 0),
             caution: Color32::from_rgb(255, 235, 59),
             info: Color32::from_rgb(33, 150, 243),
-            info_light: Color32::from_rgb(100, 181, 246),
             disabled: Color32::from_rgb(158, 158, 158),
             purple: Color32::from_rgb(156, 39, 176),
-            deep_purple: Color32::from_rgb(103, 58, 183),
-            cyan: Color32::from_rgb(0, 188, 212),
-            teal: Color32::from_rgb(0, 150, 136),
-            indigo: Color32::from_rgb(63, 81, 181),
-            pink: Color32::from_rgb(233, 30, 99),
-            brown: Color32::from_rgb(121, 85, 72),
-            deep_orange: Color32::from_rgb(255, 87, 34),
             gray: Color32::from_rgb(128, 128, 128),
             light_gray: Color32::from_rgb(224, 224, 224),
             favorite_gold: Color32::from_rgb(255, 193, 7),
@@ -453,28 +382,6 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
             chart_crosshair_label_bg: Color32::from_rgb(55, 59, 70),
             bullish: Color32::from_rgb(8, 153, 129),
             bearish: Color32::from_rgb(242, 54, 69),
-        },
-        alert: AlertSemanticTokens {
-            info_bg: Color32::from_rgba_unmultiplied_const(41, 98, 255, 25),
-            info_border: Color32::from_rgba_unmultiplied_const(41, 98, 255, 100),
-            info_icon: Color32::from_rgb(41, 98, 255),
-            success_bg: Color32::from_rgba_unmultiplied_const(38, 166, 154, 25),
-            success_border: Color32::from_rgba_unmultiplied_const(38, 166, 154, 100),
-            success_icon: Color32::from_rgb(38, 166, 154),
-            warning_bg: Color32::from_rgba_unmultiplied_const(255, 193, 7, 25),
-            warning_border: Color32::from_rgba_unmultiplied_const(255, 193, 7, 100),
-            warning_icon: Color32::from_rgb(255, 193, 7),
-            error_bg: Color32::from_rgba_unmultiplied_const(239, 83, 80, 25),
-            error_border: Color32::from_rgba_unmultiplied_const(239, 83, 80, 100),
-            error_icon: Color32::from_rgb(239, 83, 80),
-        },
-        modal: ModalSemanticTokens {
-            overlay_bg: Color32::from_rgba_unmultiplied_const(0, 0, 0, 180),
-        },
-        command_palette: CommandPaletteSemanticTokens {
-            item_hover: Color32::from_rgba_unmultiplied_const(41, 98, 255, 50),
-            item_selected: Color32::from_rgba_unmultiplied_const(41, 98, 255, 100),
-            shortcut_text: Color32::from_rgb(131, 137, 151),
         },
         tpo: TpoSemanticTokens {
             poc: Color32::from_rgb(255, 193, 7),

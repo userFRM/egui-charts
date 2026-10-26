@@ -2,7 +2,7 @@
 
 use crate::data::{FeedError, inbox::Inbox};
 use crate::localization as l10n;
-use crate::model::{Instrument, Symbol, SymbolType};
+use crate::model::{Instrument, SymbolType};
 use crate::services::{StoreKind, SymbolQuery, SymbolSearch};
 use crate::ui::dialogs::templates::TemplateStore;
 use std::sync::Arc;
@@ -16,9 +16,9 @@ pub(super) struct Recent {
 }
 
 impl Recent {
-    fn symbol(&self) -> Symbol {
-        let mut symbol = Symbol::new(&self.name, &self.description);
-        symbol.exchange.clone_from(&self.exchange);
+    fn symbol(&self) -> Instrument {
+        let mut symbol = Instrument::new(&self.name).with_description(&self.description);
+        symbol.exchange = Some(self.exchange.clone());
         symbol.symbol_type = self.kind;
         symbol
     }
@@ -28,7 +28,7 @@ pub(super) struct Search {
     source: Option<Arc<dyn SymbolSearch>>,
     inbox: Arc<Inbox>,
     query: Option<SymbolQuery>,
-    rows: Vec<Symbol>,
+    rows: Vec<Instrument>,
     loading: bool,
     more: bool,
     offset: usize,
@@ -76,12 +76,15 @@ impl Search {
         self.offset = 0;
     }
 
-    pub(super) fn record(&mut self, symbol: &Symbol) {
-        self.opened.retain(|row| row.name != symbol.name);
+    pub(super) fn record(&mut self, symbol: &Instrument) {
+        self.opened.retain(|row| row.name != symbol.symbol);
         self.opened.push(Recent {
-            name: symbol.name.clone(),
-            description: symbol.display_name.clone(),
-            exchange: symbol.exchange.clone(),
+            name: symbol.symbol.clone(),
+            description: symbol
+                .description
+                .clone()
+                .unwrap_or_else(|| symbol.symbol.clone()),
+            exchange: symbol.exchange.clone().unwrap_or_default(),
             kind: symbol.symbol_type,
         });
     }
@@ -119,19 +122,10 @@ impl Search {
                     self.more = rows.len() >= limit && limit > 0;
                     self.offset += rows.len();
                     for instrument in rows.into_iter().take(limit) {
-                        if self.rows.iter().any(|row| row.name == instrument.symbol) {
+                        if self.rows.iter().any(|row| row.symbol == instrument.symbol) {
                             continue;
                         }
-                        let mut symbol = Symbol::new(
-                            &instrument.symbol,
-                            instrument
-                                .description
-                                .as_deref()
-                                .unwrap_or(&instrument.symbol),
-                        );
-                        symbol.exchange = instrument.exchange.unwrap_or_default();
-                        symbol.symbol_type = instrument.symbol_type;
-                        self.rows.push(symbol);
+                        self.rows.push(instrument);
                     }
                 }
                 Err(error) => {
@@ -210,7 +204,7 @@ impl Search {
         }
     }
 
-    pub(super) fn results(&self) -> Vec<Symbol> {
+    pub(super) fn results(&self) -> Vec<Instrument> {
         self.rows.clone()
     }
 
@@ -278,7 +272,7 @@ mod tests {
             search
                 .rows
                 .iter()
-                .map(|s| s.name.as_str())
+                .map(|s| s.symbol.as_str())
                 .collect::<Vec<_>>(),
             ["first", "second"]
         );
@@ -323,7 +317,7 @@ mod tests {
         let mut search = Search::default();
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
-            search.record(&Symbol::new(symbol, "Host name"));
+            search.record(&Instrument::new(symbol).with_description("Host name"));
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -341,11 +335,11 @@ mod tests {
             restored
                 .rows
                 .iter()
-                .map(|row| row.name.as_str())
+                .map(|row| row.symbol.as_str())
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
-        assert_eq!(restored.rows[0].display_name, "Host name");
+        assert_eq!(restored.rows[0].description.as_deref(), Some("Host name"));
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));
         for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {

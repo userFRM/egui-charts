@@ -31,8 +31,8 @@
 
 use super::{VWMA, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Volume Weighted MACD indicator
@@ -65,9 +65,9 @@ impl VolumeWeightedMACD {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
-                DESIGN_TOKENS.semantic.indicators.macd_signal, // Signal line
-                DESIGN_TOKENS.semantic.extended.success,     // Histogram positive
+                palette::BLUE,   // MACD line
+                palette::ORANGE, // Signal line
+                palette::GREEN,  // Histogram positive
             ],
             visible: true,
         }
@@ -111,8 +111,8 @@ impl Indicator for VolumeWeightedMACD {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -151,7 +151,7 @@ impl Indicator for VolumeWeightedMACD {
         false // VW-MACD is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

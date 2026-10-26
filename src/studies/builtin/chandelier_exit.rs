@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Chandelier Exit
@@ -27,8 +27,8 @@ impl ChandelierExit {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Long exit
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Short exit
+                palette::GREEN, // Green - Long exit
+                palette::RED,   // Red - Short exit
             ],
             visible: true,
         }
@@ -130,7 +130,7 @@ impl Indicator for ChandelierExit {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -192,7 +192,7 @@ mod tests {
         ];
 
         let mut failures = Vec::new();
-        if ChandelierExit::new(3, 2.0).line_cnt() != 2 {
+        if ChandelierExit::new(3, 2.0).line_count() != 2 {
             failures.push("short exit line is not drawn".to_string());
         }
         for (label, bars, expected) in cases {

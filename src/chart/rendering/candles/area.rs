@@ -413,7 +413,7 @@ fn draw_baseline_line_part(
     }
     let stroke = Stroke::new(line.width, line.color);
     if let Some((dash, gap)) = line.style.dash_pattern() {
-        crate::chart::rendering::dashed_line::draw_dashed_segment(
+        crate::painting::dashed_line::draw_dashed_segment(
             painter,
             a,
             b,

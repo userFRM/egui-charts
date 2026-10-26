@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_mean;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Know Sure Thing (KST) Oscillator
@@ -31,8 +31,8 @@ impl KnowSureThing {
             signal_period: 9,
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - KST
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - KST
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }

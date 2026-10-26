@@ -9,9 +9,12 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig, LineStyle,
-    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
+    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility,
 };
+
+use crate::data::VolumeProfileConfig;
+use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 
 /// A drawing on the chart

@@ -28,8 +28,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Williams Alligator: jaw, teeth and lips lines, displaced forward.
@@ -58,11 +58,7 @@ impl WilliamsAlligator {
             teeth_offset: 5,
             lips_offset: 3,
             values: IndicatorValues::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.extended.accent,
-                DESIGN_TOKENS.semantic.extended.pink,
-                DESIGN_TOKENS.semantic.extended.success,
-            ],
+            colors: [palette::ACCENT, palette::PINK, palette::GREEN],
             visible: true,
         }
     }

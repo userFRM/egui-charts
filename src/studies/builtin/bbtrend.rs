@@ -28,8 +28,8 @@
 
 use super::{BollingerBands, clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Trend strength from a short and a long Bollinger Band.
@@ -48,10 +48,7 @@ impl BBTrend {
     /// Create a BBTrend from the lengths of its two bands and their deviation multiplier.
     /// The multiplier is clamped into 0 to `f64::MAX`, NaN to 0.
     pub fn new(short_length: usize, long_length: usize, multiplier: f64) -> Self {
-        let (up, down) = (
-            DESIGN_TOKENS.semantic.extended.success,
-            DESIGN_TOKENS.semantic.extended.error,
-        );
+        let (up, down) = (palette::GREEN, palette::RED);
         Self {
             short_length: short_length.max(1),
             long_length: long_length.max(1),
@@ -109,7 +106,7 @@ impl Indicator for BBTrend {
         crate::studies::PlotStyle {
             color: self.colors[0],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
@@ -156,7 +153,7 @@ impl Indicator for BBTrend {
         false
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

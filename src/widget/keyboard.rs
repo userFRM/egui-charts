@@ -132,6 +132,7 @@ fn starts_entry(text: &str) -> bool {
 
 /// A shortcut that needs the host's dialogs, layout or clipboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShortcutRequest {
     /// Execute an application command.
     Action(KeyboardAction),

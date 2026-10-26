@@ -1,6 +1,7 @@
 //! Common drawing styles applied to renderer primitives.
 
-use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight, LineStyle};
+use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight};
+use crate::model::LineStyle;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layers::ShapeIdx};
 
 impl Drawing {

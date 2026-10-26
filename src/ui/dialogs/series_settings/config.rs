@@ -27,8 +27,8 @@ impl Default for SeriesSettingsConfig {
             width: 520.0,
             height: 480.0,
             tab_height: DESIGN_TOKENS.sizing.settings_dialog.tab_height,
-            content_padding: DESIGN_TOKENS.spacing.lg,
-            row_spacing: DESIGN_TOKENS.spacing.md,
+            content_padding: crate::theme::Theme::default().spacing.lg,
+            row_spacing: crate::theme::Theme::default().spacing.md,
             label_width: 110.0,
             control_width: DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
         }

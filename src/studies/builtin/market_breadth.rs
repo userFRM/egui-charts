@@ -7,10 +7,10 @@
 //! denominators have no value; a missing pair leaves the running total unchanged.
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
 };
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Advancing issues divided by declining issues.
@@ -54,7 +54,7 @@ impl<const RATIO: bool, const VOLUME: bool> Default for MarketBreadth<RATIO, VOL
             clock: None,
             wait_for_close: true,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.indicators.ma,
+            color: palette::ORANGE,
             visible: true,
         }
     }

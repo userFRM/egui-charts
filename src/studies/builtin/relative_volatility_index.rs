@@ -30,8 +30,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Length of the exponential averages of the up and down volatility.
@@ -52,7 +52,7 @@ impl RelativeVolatilityIndex {
         Self {
             length: length.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple,
+            color: palette::DEEP_PURPLE,
             visible: true,
         }
     }
@@ -138,7 +138,7 @@ impl Indicator for RelativeVolatilityIndex {
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
-        let gray = DESIGN_TOKENS.semantic.extended.gray;
+        let gray = palette::GRAY;
         crate::studies::StudyPane {
             height: None,
             range: Some((0.0, 100.0)),

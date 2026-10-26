@@ -371,18 +371,6 @@ pub struct RoundingTokens {
     pub dialog: f32,
 }
 
-/// Typography tokens defining font sizes on a graduated scale.
-///
-/// Scale: `micro` (8px) through `xxxl` (32px), plus semantic aliases
-/// (`body`, `small`, `heading`, `title`).
-#[derive(Clone, Debug)]
-pub struct TypographyTokens {
-    pub sm: f32,
-    pub md: f32,
-    pub body: f32,
-    pub small: f32,
-}
-
 /// Stroke width tokens for lines, borders, and outlines.
 ///
 /// Scale: `extra_thin` (finest) through `thick` (boldest).

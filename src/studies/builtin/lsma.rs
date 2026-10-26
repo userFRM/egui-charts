@@ -21,8 +21,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Least Squares Moving Average (Linear Regression Line) indicator.
@@ -48,7 +48,7 @@ impl LSMA {
             period: period.max(1),
             offset: 0,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber
+            color: palette::GOLD, // Amber
             visible: true,
         }
     }

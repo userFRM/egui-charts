@@ -1,6 +1,6 @@
 //! Independent styles retained when switching chart types.
 
-use super::LineStyle;
+use crate::model::LineStyle;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use serde::{Deserialize, Serialize};

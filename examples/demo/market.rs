@@ -6,7 +6,7 @@
 //! The benches include this file to measure a busy instrument; it uses only the library's API.
 
 use chrono::{DateTime, Utc};
-use egui_charts::model::{Level1Quote, OrderBook, OrderBookLevel, TradeSide};
+use egui_charts::model::{Level1Quote, OrderBook, OrderBookLevel, OrderSide};
 use std::collections::BTreeMap;
 
 /// Price levels quoted on each side.
@@ -86,14 +86,14 @@ impl Market {
         &mut self,
         ts: DateTime<Utc>,
         price: i64,
-        side: TradeSide,
+        side: OrderSide,
         size: f64,
     ) -> (u64, &OrderBook) {
         self.begin(ts);
         // +1 when the asks are taken, -1 when the bids are.
         let (taken, direction) = match side {
-            TradeSide::Buy => (false, 1),
-            TradeSide::Sell => (true, -1),
+            OrderSide::Buy => (false, 1),
+            OrderSide::Sell => (true, -1),
         };
         let swept = self.levels(taken, |level| (level - price) * direction < 0);
         swept

@@ -45,11 +45,11 @@
 //! ```
 
 use crate::model::Bar;
+use crate::model::LineStyle;
+use crate::studies::palette;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotPattern, PlotStyle, PlotType, StudyCell, StudyProjection,
-    StudyTable,
+    Indicator, IndicatorValues, PlotStyle, PlotType, StudyCell, StudyProjection, StudyTable,
 };
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, Months};
 use egui::Color32;
 use std::collections::BTreeMap;
@@ -72,7 +72,7 @@ pub struct Seasonality {
 impl Seasonality {
     /// Seasonality over every loaded year.
     pub fn new() -> Self {
-        let gray = DESIGN_TOKENS.semantic.extended.gray;
+        let gray = palette::GRAY;
         Self {
             start_year: 1900,
             values: IndicatorValues::new(),
@@ -87,8 +87,8 @@ impl Seasonality {
                 rows: Vec::new(),
             },
             projection: Vec::new(),
-            colors: [DESIGN_TOKENS.semantic.chart.bullish, gray, gray, gray, gray],
-            negative: DESIGN_TOKENS.semantic.chart.bearish,
+            colors: [palette::UP, gray, gray, gray, gray],
+            negative: palette::DOWN,
             visible: true,
         }
     }
@@ -291,9 +291,9 @@ impl Indicator for Seasonality {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
             pattern: if line == 1 {
-                PlotPattern::Dashed
+                LineStyle::Dashed
             } else {
-                PlotPattern::Solid
+                LineStyle::Solid
             },
             plot_type: PlotType::StepLine,
             visible: line < 2,

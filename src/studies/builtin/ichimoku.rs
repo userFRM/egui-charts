@@ -27,9 +27,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Ichimoku Cloud indicator
@@ -69,17 +69,17 @@ impl IchimokuCloud {
             senkou_b_period: senkou_b_period.max(1),
             displacement: kijun_period,
             values: IndicatorValues::new(),
-            tenkan_color: DESIGN_TOKENS.semantic.extended.info, // Blue
-            kijun_color: DESIGN_TOKENS.semantic.extended.error, // Red
+            tenkan_color: palette::BLUE, // Blue
+            kijun_color: palette::RED,   // Red
             span_a_color: {
-                let success = DESIGN_TOKENS.semantic.extended.success;
+                let success = palette::GREEN;
                 Color32::from_rgba_unmultiplied(success.r(), success.g(), success.b(), 100)
             }, // Green cloud (transparent)
             span_b_color: {
-                let error = DESIGN_TOKENS.semantic.extended.error;
+                let error = palette::RED;
                 Color32::from_rgba_unmultiplied(error.r(), error.g(), error.b(), 100)
             }, // Red cloud (transparent)
-            chikou_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            chikou_color: palette::PURPLE, // Purple
             visible: true,
         }
     }
@@ -221,7 +221,7 @@ impl Indicator for IchimokuCloud {
         true // Ichimoku is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         5 // Tenkan, Kijun, Senkou A, Senkou B, Chikou
     }
 

@@ -73,7 +73,7 @@ pub fn trade_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::{DateTime, TimeDelta, Utc};
 
     #[test]
@@ -94,12 +94,12 @@ mod tests {
         let mut footprint = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         footprint.set_size_filter(2.0, 10.0).unwrap();
         for (second, size, side) in [
-            (0, 3.0, TradeSide::Sell),
-            (1, 8.0, TradeSide::Buy),
-            (2, 2.0, TradeSide::Sell),
-            (3, 1.0, TradeSide::Buy),
-            (60, 4.0, TradeSide::Buy),
-            (180, 6.0, TradeSide::Sell),
+            (0, 3.0, OrderSide::Sell),
+            (1, 8.0, OrderSide::Buy),
+            (2, 2.0, OrderSide::Sell),
+            (3, 1.0, OrderSide::Buy),
+            (60, 4.0, OrderSide::Buy),
+            (180, 6.0, OrderSide::Sell),
         ] {
             footprint
                 .push(&Tick::new(
@@ -137,7 +137,7 @@ mod tests {
         // A one-bar window replaces its old volume before adding the next; two finite
         // 1e308 volumes must not overflow an intermediate two-bar sum.
         let mut large = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for (bar, side) in bars.iter().zip([TradeSide::Buy, TradeSide::Sell]) {
+        for (bar, side) in bars.iter().zip([OrderSide::Buy, OrderSide::Sell]) {
             large
                 .push(&Tick::new(bar.time, 100.0, 1e308, Some(side)))
                 .unwrap();

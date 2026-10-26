@@ -8,15 +8,15 @@
 
 use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
-use crate::ext::UiExt;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
+use crate::styles::icons as icon_sizes;
 use crate::styles::responsive::LayoutContext;
-use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::ext::UiExt;
 use egui::{Color32, Id, Key, Modifiers, Popup, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 
@@ -709,7 +709,10 @@ impl DrawingToolbar {
 
     /// Draw color picker popup
     fn draw_color_picker_popup(&mut self, ui: &mut Ui, sidebar_rect: Rect) -> Option<[u8; 4]> {
-        let popup_pos = self.color_picker_position(sidebar_rect);
+        let popup_pos = Pos2::new(
+            sidebar_rect.right() + ui.active_theme().spacing.sm,
+            sidebar_rect.center().y - DESIGN_TOKENS.sizing.dialog.color_picker_height / 2.0,
+        );
         let current_color = self.state.drawing_color;
 
         let (area_res, sel_color) = self.render_color_picker_area(ui, popup_pos, current_color);
@@ -717,15 +720,6 @@ impl DrawingToolbar {
         self.handle_color_picker_close(ui, &area_res, sidebar_rect, sel_color.is_some());
 
         sel_color
-    }
-
-    /// Calculate popup position for color picker
-    fn color_picker_position(&self, sidebar_rect: Rect) -> Pos2 {
-        let popup_height = DESIGN_TOKENS.sizing.dialog.color_picker_height;
-        Pos2::new(
-            sidebar_rect.right() + DESIGN_TOKENS.spacing.sm,
-            sidebar_rect.center().y - popup_height / 2.0,
-        )
     }
 
     /// Render the color picker area and return selected color if any
@@ -757,11 +751,14 @@ impl DrawingToolbar {
         egui::Frame::popup(ui.style())
             .fill(ui.style().visuals.window_fill())
             .stroke(ui.style().visuals.window_stroke)
-            .corner_radius(DESIGN_TOKENS.rounding.lg)
+            .corner_radius(ui.active_theme().radius.lg)
             .show(ui, |ui| {
                 ui.set_min_size(Vec2::new(popup_width, popup_height));
                 ui.space_lg();
-                ui.label(RichText::new(l10n::text(ui.ctx(), "Drawing Color")).size(typography::SM));
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "Drawing Color"))
+                        .size(ui.active_theme().text.small),
+                );
                 ui.space_md();
 
                 sel_color = self.render_color_swatches(ui, current_color);
@@ -774,7 +771,7 @@ impl DrawingToolbar {
     fn render_color_swatches(&self, ui: &mut Ui, current_color: [u8; 4]) -> Option<[u8; 4]> {
         let colors = Self::color_palette();
         let swatch_size = DESIGN_TOKENS.sizing.button_sm;
-        let swatch_spacing = DESIGN_TOKENS.spacing.sm;
+        let swatch_spacing = ui.active_theme().spacing.sm;
         let columns = 5;
         let mut sel_color = None;
 
@@ -847,11 +844,12 @@ impl DrawingToolbar {
                 &translated_label,
             )
         });
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
         let c =
             Color32::from_rgba_unmultiplied(color_val[0], color_val[1], color_val[2], color_val[3]);
-        ui.painter().rect_filled(rect, DESIGN_TOKENS.rounding.sm, c);
+        ui.painter()
+            .rect_filled(rect, ui.active_theme().radius.sm, c);
 
         self.render_swatch_border(ui, rect, &response, current_color == color_val);
         let clicked = response.clicked();
@@ -871,7 +869,7 @@ impl DrawingToolbar {
         if is_selected {
             ui.painter().rect_stroke(
                 rect,
-                DESIGN_TOKENS.rounding.sm,
+                ui.active_theme().radius.sm,
                 Stroke::new(DESIGN_TOKENS.stroke.thick, ui.active_theme().ui.accent),
                 egui::StrokeKind::Outside,
             );
@@ -879,7 +877,7 @@ impl DrawingToolbar {
             let hover_color = ui.style().visuals.widgets.hovered.fg_stroke.color;
             ui.painter().rect_stroke(
                 rect,
-                DESIGN_TOKENS.rounding.sm,
+                ui.active_theme().radius.sm,
                 Stroke::new(DESIGN_TOKENS.stroke.hairline, hover_color),
                 egui::StrokeKind::Outside,
             );
@@ -942,7 +940,7 @@ impl DrawingToolbar {
                 egui::Frame::new()
                     .fill(ui.visuals().panel_fill)
                     .stroke(ui.style().visuals.window_stroke)
-                    .corner_radius(DESIGN_TOKENS.rounding.md)
+                    .corner_radius(ui.active_theme().radius.md)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let quick_tools = [
@@ -972,7 +970,7 @@ impl DrawingToolbar {
                                 crate::styles::focus::draw_focus_ring(
                                     ui,
                                     &response,
-                                    DESIGN_TOKENS.rounding.sm,
+                                    ui.active_theme().radius.sm,
                                 );
 
                                 let bg = if is_sel {
@@ -983,7 +981,7 @@ impl DrawingToolbar {
                                     Color32::TRANSPARENT
                                 };
                                 ui.painter()
-                                    .rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
+                                    .rect_filled(rect, ui.active_theme().radius.sm, bg);
 
                                 let icon_rect = Rect::from_center_size(
                                     rect.center(),
@@ -1025,7 +1023,7 @@ impl DrawingToolbar {
                             crate::styles::focus::draw_focus_ring(
                                 ui,
                                 &response,
-                                DESIGN_TOKENS.rounding.sm,
+                                ui.active_theme().radius.sm,
                             );
                             let bg = if self.state.magnet_mode {
                                 ui.active_theme().ui.accent
@@ -1035,7 +1033,7 @@ impl DrawingToolbar {
                                 Color32::TRANSPARENT
                             };
                             ui.painter()
-                                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
+                                .rect_filled(rect, ui.active_theme().radius.sm, bg);
 
                             let icon_rect =
                                 Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::MD));

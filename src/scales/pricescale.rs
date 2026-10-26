@@ -177,6 +177,20 @@ pub struct PriceTransform {
 }
 
 impl PriceTransform {
+    /// Relative modes without a finite, nonzero reference show ordinary prices instead.
+    pub(crate) fn new(mode: PriceScaleMode, base: f64) -> Self {
+        match mode {
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => {
+                if base.is_finite() && base != 0.0 {
+                    Self { mode, base }
+                } else {
+                    Self::default()
+                }
+            }
+            _ => Self { mode, base: 0.0 },
+        }
+    }
+
     /// Converts a price to scale units.
     ///
     /// Logarithmic maps non-positive prices to negative infinity, which
@@ -375,7 +389,7 @@ impl PriceScale {
     /// Shows `min..max` and switches to manual.
     ///
     /// The bounds are in the units of the transform the last fit returned
-    /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
+    /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
         if let Some(ratio) = &mut self.bar_ratio {
             let span = self.range.max - self.range.min;

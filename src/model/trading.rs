@@ -26,8 +26,8 @@ impl std::fmt::Display for OrderId {
     }
 }
 
-/// Side of the order: buy or sell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Buy or sell, shared by orders, executions, aggressor trades and strategy positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderSide {
     /// Long / buy order.
     Buy,

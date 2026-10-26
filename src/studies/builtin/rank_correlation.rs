@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Rank Correlation Index (Spearman) - rank correlation of prices vs time index
@@ -20,7 +20,7 @@ impl RankCorrelationIndex {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.indigo],
+            colors: vec![palette::INDIGO],
             visible: true,
         }
     }

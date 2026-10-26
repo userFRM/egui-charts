@@ -3,8 +3,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// OHLC4 - Avg of Open, High, Low, Close
@@ -20,7 +20,7 @@ impl OHLC4 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }
@@ -106,7 +106,7 @@ impl HLC3 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }
@@ -192,7 +192,7 @@ impl HL2 {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -276,7 +276,7 @@ impl TrueRange {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.error, // Red
+            color: palette::RED, // Red
             visible: true,
         }
     }
@@ -319,8 +319,8 @@ impl TrueRange {
 }
 
 impl Indicator for TrueRange {
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {

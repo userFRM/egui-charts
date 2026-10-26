@@ -21,8 +21,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Standard Deviation indicator
@@ -43,7 +43,7 @@ impl StandardDeviation {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.favorite_gold,
+            color: palette::GOLD,
             visible: true,
         }
     }
@@ -78,8 +78,8 @@ impl Indicator for StandardDeviation {
         period: length("Period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -139,7 +139,7 @@ impl Indicator for StandardDeviation {
         false // StdDev is typically in a separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

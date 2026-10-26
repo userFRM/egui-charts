@@ -164,6 +164,7 @@ pub enum WatchlistColumn {
 
 /// An action the host handles.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum WatchlistAction {
     /// No host action.
     #[default]

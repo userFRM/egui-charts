@@ -7,10 +7,10 @@ use egui::{Context, Ui, Vec2};
 use super::actions::SeriesSettingsAction;
 use super::config::SeriesSettingsConfig;
 use super::tabs::{CanvasTab, ScalesTab, SeriesSettingsTab, StatusLineTab, SymbolTab};
-use crate::ext::UiExt;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::DialogFooter;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
 

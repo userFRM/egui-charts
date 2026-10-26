@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Percentage Price Oscillator (PPO): MACD taken as a percentage of the long average.
@@ -40,9 +40,9 @@ impl PriceOscillator {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - PPO
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
-                DESIGN_TOKENS.semantic.extended.success, // Green - Histogram
+                palette::BLUE,   // Blue - PPO
+                palette::ORANGE, // Orange - Signal
+                palette::GREEN,  // Green - Histogram
             ],
             visible: true,
         }
@@ -124,8 +124,8 @@ impl Indicator for PriceOscillator {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {
@@ -171,7 +171,7 @@ impl Indicator for PriceOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

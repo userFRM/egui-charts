@@ -13,6 +13,7 @@ use crate::localization as l10n;
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::filter::FilterWidget;
@@ -59,6 +60,9 @@ pub struct IndicatorDialog {
     metric_catalog: Option<Arc<Inbox>>,
     metric_names: Vec<String>,
     metric_error: Option<FeedError>,
+    source: Option<StudySource>,
+    sources: Vec<(StudySource, String)>,
+    source_error: Option<&'static str>,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
     /// Configuration
@@ -106,6 +110,9 @@ impl IndicatorDialog {
             metric_catalog: None,
             metric_names: Vec::new(),
             metric_error: None,
+            source: None,
+            sources: Vec::new(),
+            source_error: None,
             config: IndicatorDialogConfig::default(),
             params: IndicatorParams::default(),
             show_config: false,
@@ -194,8 +201,47 @@ impl IndicatorDialog {
         self.open_tab(IndicatorTab::Indicators);
     }
 
+    /// Open with the chart's study outputs available as sources. `source` preselects an
+    /// output for an Add indicator action; an unavailable output leaves the dialog closed.
+    /// The added study carries its source through [`ConfiguredStudy`].
+    pub fn open_for_chart(
+        &mut self,
+        chart: &crate::widget::Chart,
+        source: Option<StudySource>,
+    ) -> bool {
+        let sources: Vec<_> = chart
+            .indicators()
+            .flat_map(|(id, study)| {
+                study
+                    .line_names()
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(plot, name)| {
+                        (
+                            StudySource::Study { id: id.0, plot },
+                            format!("{}: {name}", study.name()),
+                        )
+                    })
+            })
+            .collect();
+        if source.is_some_and(|source| {
+            matches!(source, StudySource::Study { .. })
+                && !sources.iter().any(|(candidate, _)| *candidate == source)
+        }) {
+            self.close();
+            return false;
+        }
+        self.open();
+        self.source = source;
+        self.sources = sources;
+        true
+    }
+
     /// Open the dialog on `tab` with the search field focused
     pub fn open_tab(&mut self, tab: IndicatorTab) {
+        self.source = None;
+        self.sources.clear();
+        self.source_error = None;
         self.active_tab = tab;
         self.is_open = true;
         self.search.clear();
@@ -244,7 +290,6 @@ impl IndicatorDialog {
         let action = Modal::new("indicator_dialog", "Indicators")
             .width(config.width)
             .height(config.height)
-            .rounding(16.0)
             .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 self.draw_content(ui, &config, theme)
@@ -275,7 +320,7 @@ impl IndicatorDialog {
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
-                ui.style_mut().override_font_id = Some(FontId::proportional(16.0));
+                ui.style_mut().override_font_id = Some(FontId::proportional(theme.text.heading));
                 self.search.show(ui).response
             })
             .inner;
@@ -303,7 +348,7 @@ impl IndicatorDialog {
                 ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
                 ui.visuals_mut().selection.stroke.color = theme.ui.text;
                 for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
-                    ui.add_space(16.0);
+                    ui.add_space(theme.spacing.xxl);
                     ui.label(
                         RichText::new(l10n::text(
                             ui.ctx(),
@@ -313,10 +358,10 @@ impl IndicatorDialog {
                                 "BUILT-IN"
                             },
                         ))
-                        .size(11.0)
+                        .size(theme.text.small)
                         .color(theme.ui.text_secondary),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(theme.spacing.lg);
                     if SidebarTab::new(item.name(), category.get() == item)
                         .icon(item.icon())
                         .show(ui)
@@ -330,7 +375,7 @@ impl IndicatorDialog {
                 TabBar::new(IndicatorTab::all(), &mut self.active_tab)
                     .pills()
                     .show(ui);
-                ui.add_space(12.0);
+                ui.add_space(theme.spacing.xl);
                 action = self.draw_results(ui, config, theme);
             },
         );
@@ -396,12 +441,13 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
-        let filtered: Vec<IndicatorInfo> = self
+        let mut filtered: Vec<IndicatorInfo> = self
             .indicators
             .iter()
             .filter(|ind| self.matches(ui.ctx(), ind))
             .cloned()
             .collect();
+        filtered.sort_by_key(|indicator| !self.favorites.contains(&indicator.id));
         if filtered.is_empty() {
             self.draw_empty_state(ui);
             return IndicatorDialogAction::None;
@@ -415,7 +461,7 @@ impl IndicatorDialog {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 // Room above the first row and below the last for the focus ring.
-                let ring = DESIGN_TOKENS.spacing.xs;
+                let ring = theme.spacing.xs;
                 ui.add_space(ring);
                 for (i, indicator) in filtered.iter().enumerate() {
                     if let Some(a) = self.draw_indicator_item(ui, config, theme, indicator, i == 0)
@@ -455,7 +501,10 @@ impl IndicatorDialog {
         indicator: &IndicatorInfo,
         is_first: bool,
     ) -> Option<IndicatorDialogAction> {
-        let desired_size = Vec2::new(ui.available_width(), 32.0);
+        let desired_size = Vec2::new(
+            ui.available_width(),
+            32.0_f32.max(theme.text.title + 2.0 * theme.spacing.sm),
+        );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
@@ -498,13 +547,13 @@ impl IndicatorDialog {
         draw_focus_ring(ui, &response, theme.radius.md);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
-        self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
+        self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res)
     }
 
     /// The favourite toggle at the left of a row.
-    fn star_rect(row: Rect) -> Rect {
+    fn star_rect(ui: &Ui, row: Rect) -> Rect {
         Rect::from_min_size(
-            Pos2::new(row.min.x + DESIGN_TOKENS.spacing.sm, row.min.y),
+            Pos2::new(row.min.x + ui.active_theme().spacing.sm, row.min.y),
             Vec2::new(DESIGN_TOKENS.sizing.button_sm, row.height()),
         )
     }
@@ -515,7 +564,7 @@ impl IndicatorDialog {
         rect: Rect,
         is_favorite: bool,
     ) -> Response {
-        let star_rect = Self::star_rect(rect);
+        let star_rect = Self::star_rect(ui, rect);
         let star_res = ui.allocate_rect(star_rect, Sense::click());
         let tooltip = if is_favorite {
             "Remove from favorites"
@@ -551,7 +600,7 @@ impl IndicatorDialog {
         let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
         let mut job = LayoutJob::simple_singleline(
             l10n::text(ui.ctx(), indicator.name.clone()),
-            FontId::proportional(14.0),
+            FontId::proportional(ui.active_theme().text.title),
             text,
         );
         job.wrap = TextWrapping::truncate_at_width(right - x);
@@ -606,7 +655,6 @@ impl IndicatorDialog {
         enter: bool,
         response: &Response,
         star_res: &Response,
-        rect: Rect,
     ) -> Option<IndicatorDialogAction> {
         if star_res.clicked() {
             if is_favorite {
@@ -617,7 +665,9 @@ impl IndicatorDialog {
             return Some(IndicatorDialogAction::ToggleFavorite(indicator.id.clone()));
         }
 
-        let on_star = Self::star_rect(rect).contains(response.hover_pos().unwrap_or_default());
+        let on_star = star_res
+            .rect
+            .contains(response.hover_pos().unwrap_or_default());
         if response.clicked() && !on_star {
             let is_sel = self
                 .sel_indicator
@@ -637,6 +687,7 @@ impl IndicatorDialog {
 
     /// Select `indicator` and open its configuration panel with the study's own parameters.
     fn select(&mut self, indicator: &IndicatorInfo) {
+        self.source_error = None;
         self.params = Self::defaults(self.edited(&indicator.id));
         self.sel_indicator = Some(indicator.clone());
         self.show_config = true;
@@ -663,7 +714,20 @@ impl IndicatorDialog {
 
     /// Add the selected indicator with its parameters and close the dialog.
     fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
-        let study = self.create(&self.sel_indicator.as_ref()?.id)?;
+        let mut study = self.create(&self.sel_indicator.as_ref()?.id)?;
+        if let Some(source) = self.source {
+            if !study
+                .inputs()
+                .iter()
+                .any(|input| input.id == "source" && matches!(input.kind, InputKind::Source))
+            {
+                study = Box::new(ConfiguredStudy::new(study));
+            }
+            if let Err(error) = study.set_input("source", InputValue::Source(source)) {
+                self.source_error = Some(error);
+                return None;
+            }
+        }
         self.close();
         Some(IndicatorDialogAction::AddIndicator(study))
     }
@@ -681,13 +745,62 @@ impl IndicatorDialog {
                 .strong(),
         );
         let name = indicator.id.clone();
+        let default_source = self.create(&name).and_then(|study| study.source());
         ui.add_space(theme.spacing.lg);
 
         FormGrid::new("indicator_params").show(ui, |ui| {
             self.draw_indicator_params(ui, config, theme, &name);
+            if let Some(default) = default_source {
+                let mut value = self.source.unwrap_or(default);
+                let label = ui.label(l10n::text(ui.ctx(), "Source"));
+                let selected = match &value {
+                    StudySource::Price(price) => price.label().to_owned(),
+                    StudySource::Study { .. } => self
+                        .sources
+                        .iter()
+                        .find(|(source, _)| *source == value)
+                        .map(|(_, label)| label.clone())
+                        .unwrap_or_default(),
+                };
+                let response = egui::ComboBox::from_id_salt("new_study_source")
+                    .truncate()
+                    .selected_text(l10n::text(ui.ctx(), selected))
+                    .show_ui(ui, |ui| {
+                        for (source, label) in &self.sources {
+                            ui.selectable_value(&mut value, *source, l10n::text(ui.ctx(), label));
+                        }
+                        for price in crate::model::PriceSource::all() {
+                            ui.selectable_value(
+                                &mut value,
+                                StudySource::Price(price),
+                                l10n::text(ui.ctx(), price.label()),
+                            );
+                        }
+                    })
+                    .response;
+                response.labelled_by(label.id);
+                if value != self.source.unwrap_or(default) {
+                    self.source = Some(value);
+                    self.source_error = None;
+                }
+                ui.end_row();
+            }
         });
 
-        let (add, back) = DialogFooter::new("Add").secondary("Back").show(ui);
+        let accepts_source = self.source.is_none() || default_source.is_some();
+        if !accepts_source {
+            ui.label(l10n::text(
+                ui.ctx(),
+                "This indicator does not accept a source.",
+            ));
+        }
+        if let Some(error) = self.source_error {
+            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error));
+        }
+        let (add, back) = DialogFooter::new("Add")
+            .primary_enabled(accepts_source)
+            .secondary("Back")
+            .show(ui);
         if back {
             self.sel_indicator = None;
             self.show_config = false;
@@ -870,6 +983,7 @@ impl IndicatorDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scales::StudyFormat;
 
     #[test]
     fn metric_catalog_ignores_old_symbols_and_creates_host_studies() {
@@ -984,6 +1098,131 @@ mod tests {
         assert_eq!(
             saved,
             serde_json::to_string(&restored.preferences()).unwrap()
+        );
+        for category in [IndicatorCategory::BuiltIns, IndicatorCategory::Favorites] {
+            restored.sel_category = category;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                restored.draw_indicator_list(ui, &restored.config.clone(), &Theme::dark());
+            });
+            let first = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if restored
+                        .indicators
+                        .iter()
+                        .any(|info| info.name == text.galley.job.text) =>
+                {
+                    Some(text.galley.job.text.clone())
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            let favorite = restored
+                .indicators
+                .iter()
+                .find(|info| info.id == "BB")
+                .unwrap();
+            assert_eq!(
+                first.as_deref(),
+                Some(favorite.name.as_str()),
+                "{category:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn added_study_keeps_the_selected_source_and_reopening_clears_it() {
+        use crate::model::PriceSource;
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        let id = chart.add_indicator(Box::new(SMA::new(3)));
+        let mut dialog = IndicatorDialog::new();
+        for source in [
+            StudySource::Study { id: id.0, plot: 0 },
+            StudySource::Price(PriceSource::Open),
+        ] {
+            assert!(dialog.open_for_chart(&chart, Some(source)));
+            let info = dialog
+                .indicators
+                .iter()
+                .find(|info| info.id == "SMA")
+                .unwrap()
+                .clone();
+            dialog.select(&info);
+            dialog.params.period = 2;
+            let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add_selected() else {
+                panic!("a source-capable study is added");
+            };
+            assert_eq!(study.source(), Some(source));
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "period")
+                    .unwrap()
+                    .value,
+                InputValue::Length(2)
+            );
+        }
+        assert!(dialog.open_for_chart(&chart, Some(StudySource::Study { id: id.0, plot: 0 })));
+        let info = dialog
+            .indicators
+            .iter()
+            .find(|info| info.id == "ATR")
+            .unwrap()
+            .clone();
+        dialog.select(&info);
+        assert!(
+            dialog.add_selected().is_none(),
+            "OHLC studies cannot silently ignore the source"
+        );
+        dialog.open();
+        dialog.select(&info);
+        assert!(matches!(
+            dialog.add_selected(),
+            Some(IndicatorDialogAction::AddIndicator(_))
+        ));
+        assert!(!dialog.open_for_chart(&chart, Some(StudySource::Study { id: id.0, plot: 99 })));
+        assert!(!dialog.is_open());
+
+        let mut factory = IndicatorFactory::new();
+        factory.register("Host source", || {
+            let mut study = ConfiguredStudy::new(Box::new(SMA::new(3)));
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Hour1)),
+                )
+                .unwrap();
+            Box::new(study)
+        });
+        let mut dialog = IndicatorDialog::new().with_factory(factory);
+        let info = dialog
+            .indicators
+            .iter()
+            .find(|info| info.id == "Host source")
+            .unwrap()
+            .clone();
+        assert!(dialog.open_for_chart(&chart, Some(StudySource::Study { id: id.0, plot: 0 })));
+        dialog.select(&info);
+        assert!(
+            dialog.add_selected().is_none(),
+            "the host's source validation must be retained"
+        );
+        assert!(dialog.source_error.is_some());
+        assert!(dialog.is_open());
+        assert!(dialog.open_for_chart(&chart, Some(StudySource::Price(PriceSource::Open))));
+        dialog.select(&info);
+        let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add_selected() else {
+            panic!("a compatible price source is accepted");
+        };
+        assert!(dialog.source_error.is_none());
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|input| input.id == "calculation_timeframe")
+                .unwrap()
+                .value,
+            InputValue::Timeframe(Some(crate::model::Timeframe::Hour1))
         );
     }
 

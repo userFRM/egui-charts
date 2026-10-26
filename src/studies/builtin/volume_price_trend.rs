@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Volume Price Trend (VPT)
@@ -19,7 +19,7 @@ impl VolumePriceTrend {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            color: palette::UP, // Teal
             visible: true,
         }
     }
@@ -68,8 +68,8 @@ impl Indicator for VolumePriceTrend {
         ))
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn name(&self) -> &str {
@@ -174,8 +174,8 @@ impl NegativeVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.error, // Red
-            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::RED,           // Red
+            signal_color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -245,7 +245,7 @@ impl Indicator for NegativeVolumeIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -272,8 +272,8 @@ impl PositiveVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.success, // Green
-            signal_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::GREEN,         // Green
+            signal_color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -343,7 +343,7 @@ impl Indicator for PositiveVolumeIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -446,7 +446,7 @@ mod tests {
         ];
         for (mut study, expected) in cases {
             study.calculate(&data);
-            assert_eq!(study.line_cnt(), 2, "{}", study.name());
+            assert_eq!(study.line_count(), 2, "{}", study.name());
             assert_eq!(study.values().len(), expected.len(), "{}", study.name());
             for (bar, (value, &(index, signal))) in
                 study.values().to_rows().iter().zip(&expected).enumerate()

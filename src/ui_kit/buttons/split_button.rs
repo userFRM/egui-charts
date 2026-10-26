@@ -4,6 +4,7 @@
 //! Layout: the icon centred in the same square cell as an [`super::IconButton`], with a small
 //! downward chevron in its bottom-right corner.
 
+use crate::theme::ThemeExt;
 use egui::emath::GuiRounding;
 
 use super::{ButtonSize, ButtonVariant, finish};
@@ -85,7 +86,7 @@ impl SplitButton {
     pub fn show(self, ui: &mut Ui) -> Response {
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
         let show_active = self.expanded || self.selected == Some(true);
         if ui.is_rect_visible(rect) {
@@ -98,7 +99,7 @@ impl SplitButton {
             };
             ui.painter().rect_filled(
                 rect,
-                DESIGN_TOKENS.rounding.button,
+                ui.active_theme().radius.sm,
                 variant.bg_color(ui, hovered, pressed),
             );
 

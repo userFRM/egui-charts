@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Bollinger Bands Width - measures how wide the Bollinger Bands are.
@@ -24,7 +24,7 @@ impl BollingerBandsWidth {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.purple],
+            colors: vec![palette::PURPLE],
             visible: true,
         }
     }
@@ -48,8 +48,8 @@ impl Indicator for BollingerBandsWidth {
         std_dev: number("Std dev", 0.0, f64::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {

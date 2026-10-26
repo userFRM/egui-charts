@@ -18,8 +18,8 @@
 
 use super::RankCorrelationIndex;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// RCI Ribbon: short, middle and long Rank Correlation Index lines in a separate pane.
@@ -39,11 +39,7 @@ impl RciRibbon {
         Self {
             lengths: [short, middle, long].map(|length| length.max(2)),
             values: IndicatorValues::new(),
-            colors: vec![
-                DESIGN_TOKENS.semantic.extended.accent,
-                DESIGN_TOKENS.semantic.extended.error,
-                DESIGN_TOKENS.semantic.extended.success,
-            ],
+            colors: vec![palette::ACCENT, palette::RED, palette::GREEN],
             visible: true,
         }
     }
@@ -107,7 +103,7 @@ impl Indicator for RciRibbon {
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
-        let gray = DESIGN_TOKENS.semantic.extended.gray;
+        let gray = palette::GRAY;
         crate::studies::StudyPane {
             height: None,
             range: Some((-100.0, 100.0)),
@@ -136,7 +132,7 @@ impl Indicator for RciRibbon {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

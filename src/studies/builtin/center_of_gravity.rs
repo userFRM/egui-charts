@@ -1,6 +1,6 @@
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Center of Gravity Oscillator
@@ -23,8 +23,8 @@ impl CenterOfGravity {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.bullish,     // Teal - COG
-                DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
+                palette::UP,          // Teal - COG
+                palette::DEEP_ORANGE, // Deep Orange - Signal
             ],
             visible: true,
         }

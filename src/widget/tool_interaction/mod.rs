@@ -106,8 +106,11 @@ impl Chart {
             timescale.idx_to_coord_precise(bar_idx, rect_min_x, rect_width)
         };
         // x_to_bar_snapped: ROUNDED to nearest candle center (for line tools)
-        let x_to_bar_snapped =
-            |x: f32| -> f32 { timescale.coord_to_idx(x, rect_min_x, rect_width).round() };
+        let x_to_bar_snapped = |x: f32| -> f32 {
+            timescale
+                .coord_to_idx_precise(x, rect_min_x, rect_width)
+                .round() as f32
+        };
         // x_to_bar_precise: Full precision for freeform tools (Brush, Highlighter)
         // Prevents pixelation when zooming - preserves sub-pixel positioning
         let x_to_bar_precise =
@@ -185,7 +188,7 @@ impl Chart {
                     })
                     .map(|(_, study)| study)
                 {
-                    for line in (0..study.line_cnt()).filter(|line| {
+                    for line in (0..study.line_count()).filter(|line| {
                         let plot = study.plot_style(*line);
                         plot.visible
                             && !matches!(
@@ -358,7 +361,7 @@ mod tests {
                     })
                     .collect()
             })
-            .with_line_cnt(2)
+            .with_line_count(2)
             .with_overlay(kind != "pane")
             .with_offsets(vec![if kind == "displaced" { 1 } else { 0 }; 2])
             .with_plot_types(vec![
