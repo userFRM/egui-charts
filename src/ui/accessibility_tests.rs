@@ -358,7 +358,7 @@ fn dialogs_expose_titles_and_label_their_fields() {
                     "Volume Profile".into(),
                     DrawingProps::default(),
                 );
-                let mut drawing = crate::drawings::Drawing::new(
+                let drawing = crate::drawings::Drawing::new(
                     1,
                     crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
                 );
