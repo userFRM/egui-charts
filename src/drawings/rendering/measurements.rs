@@ -3,9 +3,9 @@
 //! Includes: measure, price range, date range, date and price range, info line, and bars pattern.
 
 use super::{ChartView, bars_between};
-use crate::chart::renderers::price_decimals;
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
+use crate::scales::price_decimals;
 use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;

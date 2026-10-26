@@ -138,7 +138,7 @@ impl ChartSettingsState {
         };
         settings.watermark.color = config.watermark_color;
         settings.scales_appearance.text_color = config.text_color;
-        settings.sync_legacy_fields();
+
         settings
     }
 

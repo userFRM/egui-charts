@@ -106,8 +106,8 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
         }
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Fixed(4)
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(4)
     }
 
     fn name(&self) -> &str {

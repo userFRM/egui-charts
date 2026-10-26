@@ -2,7 +2,7 @@
 
 use super::Chart;
 use crate::localization as l10n;
-use crate::studies::StudyFormat;
+use crate::scales::StudyFormat;
 use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
 

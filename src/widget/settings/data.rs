@@ -13,11 +13,17 @@ use egui::Color32;
 /// Candle color configuration (body, border, wick for up/down candles)
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CandleColorConfig {
+    /// Body color of rising candles.
     pub body_up: Color32,
+    /// Body color of falling candles.
     pub body_down: Color32,
+    /// Border color of rising candles.
     pub border_up: Color32,
+    /// Border color of falling candles.
     pub border_down: Color32,
+    /// Wick color of rising candles.
     pub wick_up: Color32,
+    /// Wick color of falling candles.
     pub wick_down: Color32,
 }
 
@@ -52,6 +58,7 @@ impl Default for CandleColorConfig {
 /// Status line display options
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StatusLineOptions {
+    /// Whether the legend shows the instrument title.
     pub show_symbol: bool,
     /// Display the description instead of the ticker.
     pub title_as_description: bool,
@@ -63,9 +70,13 @@ pub struct StatusLineOptions {
     pub show_indicator_inputs: bool,
     /// Display historical study output values.
     pub show_indicator_values: bool,
+    /// Whether the legend shows open, high, low and close.
     pub show_ohlc: bool,
+    /// Whether the legend shows the absolute price change.
     pub show_change: bool,
+    /// Whether the legend shows the percentage price change.
     pub show_change_percent: bool,
+    /// Whether the legend shows volume.
     pub show_volume: bool,
 }
 
@@ -89,10 +100,13 @@ impl Default for StatusLineOptions {
 /// Canvas tab: Chart basic styles settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartBasicStylesSettings {
+    /// Solid or gradient chart background.
     pub background_type: BackgroundType,
     /// `Color32::PLACEHOLDER` follows the active chart background until a colour is chosen.
     pub background_color: Color32,
+    /// First gradient endpoint color.
     pub background_gradient_top: Color32,
+    /// Second gradient endpoint color.
     pub background_gradient_bottom: Color32,
 }
 
@@ -110,8 +124,11 @@ impl Default for ChartBasicStylesSettings {
 /// Canvas tab: Grid lines settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GridLinesSettings {
+    /// Display mode.
     pub mode: GridLinesMode,
+    /// Color of horizontal grid lines.
     pub horizontal_color: Color32,
+    /// Color of vertical grid lines.
     pub vertical_color: Color32,
 }
 
@@ -128,8 +145,11 @@ impl Default for GridLinesSettings {
 /// Canvas tab: Crosshair settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CrosshairSettings {
+    /// Element color.
     pub color: Color32,
+    /// Stroke width in logical pixels.
     pub line_width: f32,
+    /// Stroke pattern.
     pub line_style: LineStyle,
 }
 
@@ -146,7 +166,9 @@ impl Default for CrosshairSettings {
 /// Canvas tab: Watermark settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WatermarkSettings {
+    /// Display mode.
     pub mode: WatermarkMode,
+    /// Element color.
     pub color: Color32,
 }
 
@@ -166,8 +188,11 @@ impl Default for WatermarkSettings {
 /// Canvas tab: Scales appearance settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScalesAppearanceSettings {
+    /// Text color.
     pub text_color: Color32,
+    /// Font size in logical pixels.
     pub font_size: u8,
+    /// Axis line color.
     pub lines_color: Color32,
 }
 
@@ -184,7 +209,9 @@ impl Default for ScalesAppearanceSettings {
 /// Canvas tab: Buttons visibility settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ButtonsSettings {
+    /// Visibility of chart navigation controls.
     pub navigation: ButtonVisibility,
+    /// Visibility of pane controls.
     pub pane: ButtonVisibility,
 }
 
@@ -200,8 +227,11 @@ impl Default for ButtonsSettings {
 /// Canvas tab: Margins settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MarginsSettings {
+    /// Empty space above prices, as a percentage of pane height.
     pub top_percent: f32,
+    /// Empty space below prices, as a percentage of pane height.
     pub bottom_percent: f32,
+    /// Empty space after the latest bar, in bars.
     pub right_bars: u32,
 }
 
@@ -218,9 +248,13 @@ impl Default for MarginsSettings {
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScalesAndLinesSettings {
+    /// Whether visible prices determine the scale range.
     pub auto_scale: bool,
+    /// Whether prices use a logarithmic scale.
     pub log_scale: bool,
+    /// Whether prices are shown as percentage changes.
     pub percentage_scale: bool,
+    /// Whether increasing prices run downward.
     pub invert_scale: bool,
     /// Show the price scale on the left instead of the right.
     pub price_scale_left: bool,
@@ -228,10 +262,15 @@ pub struct ScalesAndLinesSettings {
     pub show_last_price_label: bool,
     /// Display the previous session close tag independently of its line.
     pub show_prev_close_label: bool,
+    /// Whether to show price line.
     pub show_price_line: bool,
+    /// Whether to show countdown.
     pub show_countdown: bool,
+    /// Whether to show bid ask.
     pub show_bid_ask: bool,
+    /// Whether to show high low.
     pub show_high_low: bool,
+    /// Whether to show prev close.
     pub show_prev_close: bool,
 }
 
@@ -271,7 +310,7 @@ pub struct TradingSettings {
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
     pub play_execution_sound: bool,
     /// The name of the sound the host plays for fills, one of the
-    /// [`SettingsDialog::execution_sounds`](super::SettingsDialog::execution_sounds); empty for
+    /// [`SettingsDialog::execution_sounds`](crate::ui::top_toolbar::components::settings_menu::SettingsDialog::execution_sounds); empty for
     /// the host's first.
     pub execution_sound: String,
     /// Which trading events raise a notification.
@@ -346,8 +385,11 @@ impl TradingNotifications {
 /// Alerts tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AlertsSettings {
+    /// Whether to show alerts.
     pub show_alerts: bool,
+    /// Whether to show alert labels.
     pub show_alert_labels: bool,
+    /// Alert color.
     pub alert_color: Color32,
 }
 
@@ -361,47 +403,55 @@ impl Default for AlertsSettings {
     }
 }
 
-/// Event category visibility shared with the chart.
-pub type EventsSettings = crate::model::EventVisibility;
-
 /// Comprehensive chart settings state
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
     // Symbol tab
+    /// Candle body, border and wick colors.
     pub candle_colors: CandleColorConfig,
+    /// Price display precision.
     pub precision: PrecisionMode,
+    /// UTC, Local, or a supported zone name.
     pub timezone: String,
     /// Show analyst estimates answered by the host feed.
     #[serde(default)]
     pub show_price_targets: bool,
 
     // Status line tab
+    /// Legend content and quote controls.
     pub status_line: StatusLineOptions,
 
     // Scales and lines tab
+    /// Price scale and reference line settings.
     pub scales_and_lines: ScalesAndLinesSettings,
 
     // Canvas tab - grouped settings
+    /// Chart background settings.
     pub chart_basic_styles: ChartBasicStylesSettings,
+    /// Grid directions and colors.
     pub grid_lines: GridLinesSettings,
+    /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
+    /// Watermark appearance.
     pub watermark: WatermarkSettings,
+    /// Axis appearance.
     pub scales_appearance: ScalesAppearanceSettings,
+    /// Chart and pane control visibility.
     pub btns: ButtonsSettings,
+    /// Space around the visible prices.
     pub margins: MarginsSettings,
 
     // Trading tab
+    /// Host trading controls and overlays.
     pub trading: TradingSettings,
 
     // Alerts tab
+    /// Alert marks and labels.
     pub alerts: AlertsSettings,
 
     // Events tab
-    pub events: EventsSettings,
-
-    // Legacy compatibility fields (mapped to new structure)
-    pub background_color: Color32,
-    pub grid_color: Color32,
+    /// Visible event categories.
+    pub events: crate::model::EventVisibility,
 }
 
 impl Default for ChartSettingsState {
@@ -431,19 +481,7 @@ impl Default for ChartSettingsState {
 
             alerts: AlertsSettings::default(),
 
-            events: EventsSettings::default(),
-
-            // Legacy compatibility
-            background_color: chart_basic_styles.background_color,
-            grid_color: grid_lines.horizontal_color,
+            events: crate::model::EventVisibility::default(),
         }
-    }
-}
-
-impl ChartSettingsState {
-    /// Sync legacy fields with new structure
-    pub fn sync_legacy_fields(&mut self) {
-        self.background_color = self.chart_basic_styles.background_color;
-        self.grid_color = self.grid_lines.horizontal_color;
     }
 }

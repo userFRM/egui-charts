@@ -157,8 +157,8 @@ impl Indicator for TradingSessions {
         }
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Fixed(0)
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(0)
     }
 
     fn calculate(&mut self, data: &[Bar]) {

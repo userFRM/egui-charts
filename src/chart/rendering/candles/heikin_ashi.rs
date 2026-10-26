@@ -204,7 +204,8 @@ mod tests {
 
     #[test]
     fn streaming_updates_retain_the_prefix_and_match_a_fresh_transform() {
-        use crate::model::{BarData, ChartState};
+        use crate::model::BarData;
+        use crate::studies::ChartState;
         let mut state = ChartState::new(BarData::new());
         let check = |state: &ChartState| {
             let full = &state.data().bars;

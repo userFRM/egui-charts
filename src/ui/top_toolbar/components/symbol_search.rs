@@ -46,7 +46,6 @@
 use crate::localization as l10n;
 mod service;
 
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::model::{Instrument, SymbolType};
 use crate::services::{Storage, SymbolSearch};
@@ -55,6 +54,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
 use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};

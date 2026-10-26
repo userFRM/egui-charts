@@ -522,7 +522,7 @@ impl DemoApp {
         }
         self.refresh_active_chart();
         self.settings_state =
-            egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState::from_chart(&self.chart);
+            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
     }
 
     /// The settings the demo keeps between sessions.

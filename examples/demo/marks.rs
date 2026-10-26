@@ -4,8 +4,7 @@ use super::{DemoApp, DemoSymbol};
 use egui::{Color32, Vec2};
 use egui_charts::data::Reply;
 use egui_charts::drawings::FontWeight;
-use egui_charts::model::{
-    Bar, ChangeMarkers, EventKind, Marker, MarkerPos, MarkerShape, PriceLine, TimeScaleEvent};
+use egui_charts::model::{Bar, ChangeMarkers, EventKind, Marker, MarkerPos, MarkerShape, PriceLine, TimeScaleEvent};
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
 use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
 use std::sync::Arc;

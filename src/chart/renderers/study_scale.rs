@@ -136,7 +136,8 @@ pub(crate) fn render_study_axis(
 mod tests {
     use super::*;
     use crate::chart::renderers::{IndicatorRenderer, RenderContext};
-    use crate::studies::{CustomIndicator, IndicatorValue, StudyFormat};
+    use crate::scales::StudyFormat;
+    use crate::studies::{CustomIndicator, IndicatorValue};
 
     #[test]
     fn independent_and_hidden_scales_map_volume_without_price_units() {

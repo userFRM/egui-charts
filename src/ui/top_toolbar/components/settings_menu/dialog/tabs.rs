@@ -13,12 +13,12 @@ use crate::ui_kit::ColorPicker;
 
 use crate::styles::typography;
 
-use super::super::data::TradingNotifications;
-use super::super::types::{
-    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
-};
 use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::settings::TradingNotifications;
+use crate::widget::settings::{
+    BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
+};
 
 impl SettingsDialog {
     pub(super) fn draw_canvas_tab(&mut self, ui: &mut Ui, style: &SettingsDialogStyle) {

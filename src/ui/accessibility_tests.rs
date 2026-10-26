@@ -183,31 +183,31 @@ fn custom_controls_report_names_roles_and_states() {
             crate::ui_kit::list_item::ListItem::new().show_property(ui, "Price", "12.50");
         }),
         (Role::Label, "Export successful!", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.success_label("Export successful!");
         }),
         (Role::Label, "Unavailable", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.error_label("Unavailable");
         }),
         (Role::Label, "Warning", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.warning_label("Warning");
         }),
         (Role::Label, "Information", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.info_label("Information");
         }),
         (Role::Label, "Details", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.subdued_label("Details");
         }),
         (Role::Label, "Property", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.property_row("Property", |_| {});
         }),
         (Role::TextInput, "Search...", |ui, _| {
-            use crate::ext::UiExt;
+            use crate::ui_kit::ext::UiExt;
             ui.search_input(&mut String::new());
         }),
         (Role::Button, "Pane Settings", |ui, _| {
@@ -434,10 +434,10 @@ fn dialogs_expose_titles_and_label_their_fields() {
                     1,
                     crate::drawings::DrawingToolType::FixedRangeVolumeProfile,
                 );
-                let mut config = crate::drawings::VolumeProfileConfig::default()
+                let mut config = crate::data::VolumeProfileConfig::default()
                     .with_row_size(Some(1.0))
                     .unwrap();
-                config.display = crate::drawings::ProfileDisplay::UpDown;
+                config.display = crate::data::ProfileDisplay::UpDown;
                 drawing.volume_profile = Some(config);
                 dialog.props.tool_settings = Some(Box::new(
                     crate::drawings::DrawingTemplate::from_drawing(&drawing),

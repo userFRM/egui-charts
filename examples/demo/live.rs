@@ -1,15 +1,8 @@
 //! Synthetic executions delivered through the same feed contract as host market data.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use egui_charts::data::{
-    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
-    HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
-    MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink,
-    Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
-    aggregate_trades, resample};
-use egui_charts::model::{
-    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote,
-    Tick, Timeframe, OrderSide};
+use egui_charts::data::{CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink, Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails, aggregate_trades, resample};
+use egui_charts::model::{Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote, Quote, Tick, Timeframe, OrderSide};
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
 use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
 use std::collections::{BTreeMap, VecDeque};
@@ -757,7 +750,7 @@ impl Datafeed for LiveFeed {
                 id: "open_interest".into(),
                 name: "Open interest".into(),
                 unit: "contracts".into(),
-                format: egui_charts::studies::StudyFormat::Volume,
+                format: egui_charts::scales::StudyFormat::Volume,
             }]
         } else {
             Vec::new()
@@ -800,7 +793,7 @@ impl Datafeed for LiveFeed {
         sim.metrics.push(subscription);
     }
 
-    fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::services::PriceTargets>) {
+    fn price_targets(&self, symbol: &str, reply: Reply<egui_charts::data::PriceTargets>) {
         if symbol != "SAMPLE" {
             reply.send(Err(FeedError::NotSupported));
             return;
@@ -808,7 +801,7 @@ impl Datafeed for LiveFeed {
         let sim = self.state();
         let close = sim.price_ticks as f64 * sim.tick_size;
         let published = sim.now.date_naive();
-        reply.send(Ok(egui_charts::services::PriceTargets {
+        reply.send(Ok(egui_charts::data::PriceTargets {
             high: close * 1.20,
             average: close * 1.08,
             low: close * 0.85,

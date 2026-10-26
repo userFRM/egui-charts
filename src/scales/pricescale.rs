@@ -375,7 +375,7 @@ impl PriceScale {
     /// Shows `min..max` and switches to manual.
     ///
     /// The bounds are in the units of the transform the last fit returned
-    /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
+    /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
         if let Some(ratio) = &mut self.bar_ratio {
             let span = self.range.max - self.range.min;

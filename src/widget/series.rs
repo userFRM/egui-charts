@@ -234,7 +234,7 @@ impl Chart {
         let bars = self.bars(series);
         let shown = self.state.shown();
         let (first, last) = (bars.first()?, bars.last()?);
-        let index = |bar: &Bar| super::sync::index_at(shown, bar.time).unwrap_or(f64::NAN);
+        let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
         let left = f64::from(range.left).round();
         let right = f64::from(range.right).round();
         shown.first()?;

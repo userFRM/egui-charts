@@ -54,7 +54,7 @@
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
 //! | **Widget** | [`widget`] | `Chart` egui widget and `ChartBuilder`: pan and zoom, kinetic scrolling, keyboard and drawing input, indicator panes, loading from a feed |
-//! | **Extensions** | `ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
+//! | **Extensions** | `ui_kit::ext` | *(feature `ui`)* `UiExt`, `ResponseExt`, `ButtonWidgetExt`, `TextEditWidgetExt`, `RoundingExt` |
 //! | **Icons** | [`icons`] | Compile-time embedded SVG icons |
 //! | **App UI** | `ui`, `ui_kit` | *(feature `ui`)* Toolbars, panels, dialogs, reusable form/button primitives |
 //!
@@ -73,7 +73,7 @@
 //! | `drawings` | **on** | Drawing tools, rendering, hit tests, undo and persistence. Implies `widget`; enabled by `ui`. |
 //! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
-//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`. |
+//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`. |
 //! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
 //! | `timezones` | **on** | IANA zones and daylight-saving rules through optional chrono-tz. Without it UTC, system local time and fixed offsets remain available through [`model::TimezoneId`]; unavailable names are rejected. Named exchange presets require this feature. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
@@ -158,6 +158,8 @@ pub mod chart;
 #[warn(missing_docs)]
 pub mod drawings;
 pub mod model;
+#[cfg(feature = "widget")]
+mod painting;
 pub mod prelude;
 pub mod scales;
 #[warn(missing_docs)]
@@ -173,10 +175,6 @@ pub mod services;
 
 // ─── Theme & design system ───────────────────────────────────────────────────
 
-#[cfg(feature = "ui")]
-#[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-#[warn(missing_docs)]
-pub mod ext;
 #[cfg(feature = "icons")]
 #[cfg_attr(docsrs, doc(cfg(feature = "icons")))]
 pub mod icons;
@@ -225,7 +223,7 @@ pub mod ui;
 pub use model::ChartType;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
-pub use widget::localization;
+pub mod localization;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use widget::{Chart, ChartBuilder, RightClickTarget};

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::object_tree::format_price;
 use crate::icons::icons;
 use crate::model::{OrderSide, Tick, TimezoneId};
-use crate::studies::StudyFormat;
+use crate::scales::StudyFormat;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 

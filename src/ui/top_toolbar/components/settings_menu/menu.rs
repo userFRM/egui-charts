@@ -5,12 +5,12 @@
 
 use super::config::ChartSettings;
 use crate::config::ChartConfig;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::model::ChartType;
 use crate::scales::PriceScaleMode;
 use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 
 // ============================================================================

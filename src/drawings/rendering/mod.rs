@@ -68,7 +68,7 @@ mod trading;
 pub mod traits;
 // The painter the drawing renderers share with the chart.
 pub(crate) mod utils {
-    pub(crate) use crate::chart::rendering::draw_dashed_line;
+    pub(crate) use crate::painting::dashed_line::draw_dashed_line;
 }
 
 pub use traits::DrawingRenderer;
@@ -88,7 +88,7 @@ pub struct ChartView<'a> {
     pub instrument: Option<&'a crate::model::Instrument>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
-    /// [`ChartState::revision`](crate::model::ChartState::revision) of `bars`.
+    /// [`ChartState::revision`](crate::studies::ChartState::revision) of `bars`.
     /// Results computed from the bars are cached under it, so it must change
     /// whenever a bar before the last one changes.
     pub revision: u64,

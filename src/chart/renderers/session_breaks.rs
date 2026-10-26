@@ -14,9 +14,9 @@
 //! coordinate math used by the candles.
 
 use super::context::{ChartMapping, RenderContext};
-use crate::chart::rendering::draw_dashed_line;
 use crate::model::LineStyle;
 use crate::model::{Bar, SessionBreakType, SessionProvider, Timeframe, find_session_breaks};
+use crate::painting::dashed_line::draw_dashed_line;
 use egui::{Color32, Pos2, Stroke};
 
 /// Resolve explicit legacy hours, instrument metadata, then the displayed zone.

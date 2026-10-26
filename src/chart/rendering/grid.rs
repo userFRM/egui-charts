@@ -1,9 +1,9 @@
 //! Grid rendering logic
 //! Grid lines are fixed to bar indices and price levels, moving 1:1 with the chart
 
-use super::dashed_line::draw_dashed_line;
 use crate::chart::renderers::ChartMapping;
 use crate::model::LineStyle;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};

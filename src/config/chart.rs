@@ -471,3 +471,26 @@ impl Default for ChartConfig {
         }
     }
 }
+
+impl ChartConfig {
+    /// Apply this theme's background, grid, axis text and candle colours to `config`.
+    ///
+    /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
+    /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
+    /// keeps for that chart, so switch a chart's theme with
+    /// [`Chart::set_theme`](crate::Chart::set_theme) or
+    /// [`Chart::set_theme_override`](crate::Chart::set_theme_override), which apply these
+    /// colours too.
+    pub fn with_theme(mut self, theme: &Theme) -> Self {
+        self.background_color = theme.chart.bg;
+        self.grid_color = theme.chart.grid_line;
+        self.text_color = theme.chart.axis_text;
+        self.bullish_color = theme.chart.candle_up;
+        self.bearish_color = theme.chart.candle_down;
+        self.bullish_border_color = Some(theme.chart.candle_up);
+        self.bearish_border_color = Some(theme.chart.candle_down);
+        self.bullish_wick_color = Some(theme.chart.candle_up);
+        self.bearish_wick_color = Some(theme.chart.candle_down);
+        self
+    }
+}

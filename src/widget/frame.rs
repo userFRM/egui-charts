@@ -2543,7 +2543,7 @@ impl Chart {
                         axis_edge,
                         None,
                         Some(
-                            crate::studies::StudyFormat::Volume
+                            crate::scales::StudyFormat::Volume
                                 .format(map.y_to_price(pos.y), map.price_precision()),
                         ),
                     );
@@ -4706,9 +4706,8 @@ mod tests {
         assert_eq!(chart.config.navigation_buttons, Never);
         #[cfg(feature = "ui")]
         assert_eq!(
-            crate::ui::top_toolbar::components::settings_menu::ButtonsSettings::default()
-                .navigation,
-            crate::ui::top_toolbar::components::settings_menu::ButtonVisibility::Hidden,
+            crate::widget::settings::ButtonsSettings::default().navigation,
+            crate::widget::settings::ButtonVisibility::Hidden,
         );
         frame(&ctx, &mut chart, 0.0, Vec::new());
         for (i, (manual, mode, visibility, hover, selected)) in [

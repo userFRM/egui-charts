@@ -4,8 +4,8 @@
 use super::{Chart, ChartLayoutMode, PaneId};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{ChartType, ChartTypeParams, Timeframe};
-use crate::ui::dialogs::templates::StudyTemplate;
-use crate::ui::top_toolbar::components::settings_menu::ChartSettingsState;
+use crate::studies::StudyTemplate;
+use crate::widget::settings::ChartSettingsState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

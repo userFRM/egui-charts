@@ -4,20 +4,10 @@
 //! It tracks which bars are visible, manages price auto-scaling, and maintains
 //! a zoom-history stack for undo/redo.
 
-use super::{Bar, BarData, TimeScale};
+use crate::model::{Bar, BarData, TimeScale, next_revision};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::Indicator;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Source of [`ChartState::revision`] values, so that no two chart states or
-/// histories ever share one.
-static REVISIONS: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn next_revision() -> u64 {
-    REVISIONS.fetch_add(1, Ordering::Relaxed)
-}
-
 /// A snapshot of zoom parameters, used for undo/redo of zoom operations.
 ///
 /// The chart maintains a stack of these snapshots so the user can press
@@ -42,7 +32,8 @@ pub struct ZoomState {
 /// # Example
 ///
 /// ```
-/// use egui_charts::model::{BarData, ChartState};
+/// use egui_charts::model::{BarData};
+/// use egui_charts::studies::{ChartState};
 ///
 /// let data = BarData::new();
 /// let state = ChartState::new(data);
@@ -344,7 +335,7 @@ impl ChartState {
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_visible: bool,
-        autoscale: Option<&super::AutoscaleProvider>,
+        autoscale: Option<&crate::model::AutoscaleProvider>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {

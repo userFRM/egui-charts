@@ -65,7 +65,7 @@ pub struct CustomIndicator {
     line_count: usize,
     line_names: Vec<String>,
     visible: bool,
-    value_format: Option<super::StudyFormat>,
+    value_format: Option<crate::scales::StudyFormat>,
     scale: Option<super::StudyScale>,
     plot_types: Vec<super::PlotType>,
     offsets: Vec<isize>,
@@ -164,7 +164,7 @@ impl CustomIndicator {
     }
 
     /// Set the units used by every readout of this study.
-    pub fn with_value_format(mut self, format: super::StudyFormat) -> Self {
+    pub fn with_value_format(mut self, format: crate::scales::StudyFormat) -> Self {
         self.value_format = Some(format);
         self
     }
@@ -228,11 +228,11 @@ impl Indicator for CustomIndicator {
         Ok(())
     }
 
-    fn value_format(&self) -> super::StudyFormat {
+    fn value_format(&self) -> crate::scales::StudyFormat {
         self.value_format.unwrap_or(if self.is_overlay {
-            super::StudyFormat::Price
+            crate::scales::StudyFormat::Price
         } else {
-            super::StudyFormat::Fixed(2)
+            crate::scales::StudyFormat::Fixed(2)
         })
     }
 

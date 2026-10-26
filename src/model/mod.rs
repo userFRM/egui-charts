@@ -30,7 +30,6 @@ pub mod bar;
 mod box_size;
 mod chart_style;
 mod chart_type;
-mod chartstate;
 mod clock;
 mod color;
 mod date_range;
@@ -38,11 +37,14 @@ mod instrument;
 pub mod kagi;
 pub mod line_break;
 mod markers;
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) mod math;
 pub mod point_figure;
 mod price_source;
 pub mod quote;
 pub mod range_bar;
 pub mod renko;
+mod revision;
 mod series_scale;
 mod series_style;
 pub mod session;
@@ -63,6 +65,8 @@ pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
 pub use bar::{Bar, BarColors, BarData};
+#[cfg(feature = "widget")]
+pub(crate) use bar::{index_at, time_at};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
@@ -70,9 +74,6 @@ pub use chart_style::{
     LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
-#[cfg(feature = "widget")]
-pub(crate) use chartstate::next_revision;
-pub use chartstate::{ChartState, ZoomState};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
@@ -94,6 +95,7 @@ pub use quote::{
 };
 pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
+pub(crate) use revision::next_revision;
 pub use series_scale::SeriesScale;
 pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use session::{

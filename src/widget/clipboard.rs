@@ -2,8 +2,9 @@
 //! clipboard holds a study's name, inputs and presentation.
 
 use crate::drawings::persistence::{DrawingStorage, SaveError, stored_to_drawing};
+use crate::model::index_at;
 use crate::studies::{InputValue, StudyScale, StudySettings};
-use crate::widget::{Chart, SeriesId, sync::index_at};
+use crate::widget::{Chart, SeriesId};
 
 const PREFIX: &str = "egui-charts-drawings\n";
 const STUDY_PREFIX: &str = "egui-charts-study\n";

@@ -65,9 +65,7 @@ pub mod factory;
 mod format;
 pub mod helpers;
 mod indicator_trait;
-mod order_flow;
-pub use format::{StudyFormat, StudyScale};
-pub use order_flow::{OrderFlowInput, OrderFlowKind};
+pub use format::StudyScale;
 mod inputs;
 mod metric;
 pub use inputs::{InputKind, InputValue, StudyInput, StudySource};
@@ -80,12 +78,8 @@ pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use projection::StudyProjection;
 pub use settings::{ConfiguredStudy, PlotStyle, PlotType, StudySettings};
 pub use table::{StudyCell, StudyTable};
-mod volume_profile;
-pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 mod values;
 pub use values::IndicatorValues;
-#[cfg(any(feature = "studies", feature = "drawings"))]
-pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
 mod stepper;
@@ -199,3 +193,12 @@ impl Default for IndicatorRegistry {
         Self::new()
     }
 }
+
+mod chart_state;
+pub use chart_state::{ChartState, ZoomState};
+
+#[cfg(feature = "studies")]
+mod template;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use template::StudyTemplate;

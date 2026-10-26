@@ -1,10 +1,10 @@
 //! Coordinates tab - staged price and UTC time points.
 
 use crate::drawings::{ChartPoint, Drawing};
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 use crate::widget::Chart;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use egui::Ui;

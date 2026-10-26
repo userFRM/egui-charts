@@ -2,11 +2,13 @@
 
 use crate::drawings::{
     Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel, GannConfig, PitchforkConfig,
-    PitchforkLevel, PositionSize, ProfileDisplay, RegressionTrendConfig, VolumeProfileConfig,
+    PitchforkLevel, PositionSize, RegressionTrendConfig,
 };
-use crate::ext::UiExt;
+
+use crate::data::{ProfileDisplay, VolumeProfileConfig};
 use crate::localization as l10n;
 use crate::model::LineStyle;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
 use egui::Ui;
 

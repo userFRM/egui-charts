@@ -6,9 +6,9 @@
 //! - Magnifier: Circular zoom lens for detailed data inspection
 
 use super::context::{ChartMapping, RenderContext, StyleColors};
-use super::labels::price_decimals;
 use crate::config::{TooltipMode, TooltipOptions};
 use crate::model::{Bar, Instrument, percent_change};
+use crate::scales::price_decimals;
 use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
     instrument_price_precision,
@@ -30,7 +30,7 @@ pub struct StudyValue {
     /// Number of decimal places used by the study's legend.
     pub precision: usize,
     /// Value units used by this study.
-    pub format: crate::studies::StudyFormat,
+    pub format: crate::scales::StudyFormat,
     /// Plot colour.
     pub color: egui::Color32,
 }
@@ -613,7 +613,7 @@ mod tests {
                     let bar = Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0);
                     let studies = vec![
                         StudyValue {
-                            format: crate::studies::StudyFormat::Fixed(2),
+                            format: crate::scales::StudyFormat::Fixed(2),
                             study: "A very long study caption with several input parameters".into(),
                             plot: "Signal".into(),
                             value: Some(1234.567),

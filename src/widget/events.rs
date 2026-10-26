@@ -203,7 +203,7 @@ impl Chart {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
         let index = scale.coord_to_idx(pos.x, plot.left(), plot.width()).round() as f64;
-        let time = super::sync::time_at(shown, index)?;
+        let time = crate::model::time_at(shown, index)?;
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {

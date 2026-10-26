@@ -2,7 +2,8 @@
 
 use super::DemoApp;
 use egui_charts::studies::{InputValue, StudySource};
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate};
+use egui_charts::ui::dialogs::templates::{DrawingTemplate};
+use egui_charts::studies::{StudyTemplate};
 
 impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {

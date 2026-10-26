@@ -184,7 +184,7 @@ pub trait Datafeed: MaybeSend + 'static {
 
     /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
     /// which leaves the chart without targets and shows no error.
-    fn price_targets(&self, symbol: &str, reply: Reply<crate::services::PriceTargets>) {
+    fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
         let _ = symbol;
         reply.send(Err(FeedError::NotSupported));
     }
@@ -489,3 +489,10 @@ pub struct FeedState {
     /// negative size. Each one clears the book until the feed pushes a new snapshot.
     pub rejected_depth: u64,
 }
+
+mod order_flow;
+mod targets;
+mod volume_profile;
+pub use order_flow::{OrderFlowInput, OrderFlowKind};
+pub use targets::PriceTargets;
+pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};

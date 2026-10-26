@@ -105,9 +105,9 @@ use crate::config::{ChartConfig, ChartOptions};
 use crate::data::FeedState;
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
-use crate::model::ChartState;
 use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
+use crate::studies::ChartState;
 
 use crate::scales::{PriceMap, PriceScale};
 use crate::studies::IndicatorRegistry;
@@ -137,7 +137,6 @@ mod change_marks;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod clipboard;
 mod crosshair;
-pub mod localization;
 #[cfg(feature = "ui")]
 pub(crate) use crosshair::menu_value;
 mod events;
@@ -912,7 +911,7 @@ impl Chart {
     ///
     /// Other charts sharing the context keep their configured series colours until updated.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
-        self.config = theme.apply_to_config(self.config.clone());
+        self.config = self.config.clone().with_theme(&theme);
         self.theme_override = None;
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
@@ -925,7 +924,7 @@ impl Chart {
     /// retaining configured series colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
-            self.config = theme.apply_to_config(self.config.clone());
+            self.config = self.config.clone().with_theme(&theme);
         }
         self.theme_override = theme;
     }
@@ -1101,3 +1100,10 @@ pub(crate) mod test_frames {
         shapes(ctx, chart, time, events);
     }
 }
+
+/// Shared display settings used by the chart and its host controls.
+pub mod settings;
+
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod drawing_api;

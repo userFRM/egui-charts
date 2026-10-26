@@ -815,6 +815,27 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Runtime module dependencies are acyclic. Shared bar interpolation, streaming study inputs, profile calculations and formatting live below rendering; study geometry and timestamp drawing methods live with their chart and widget consumers. Chart settings and study recipes no longer depend on UI modules, localization is shared at the crate root, and UI extension traits live beside the UI kit. CI rejects module cycles. The crate remains one package. ([#93](https://github.com/userFRM/egui-charts/issues/93))
+
+  | Old path or member | New path or member |
+  | --- | --- |
+  | `model::{ChartState, ZoomState}` | `studies::{ChartState, ZoomState}` |
+  | `studies::{OrderFlowInput, OrderFlowKind, ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig}` | `data::{OrderFlowInput, OrderFlowKind, ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig}` |
+  | `drawings::{ProfileDisplay, VolumeProfileConfig}`, `drawings::domain::{ProfileDisplay, VolumeProfileConfig}`, `drawings::domain::options::{ProfileDisplay, VolumeProfileConfig}` | `data::{ProfileDisplay, VolumeProfileConfig}` |
+  | `studies::StudyFormat` | `scales::StudyFormat` |
+  | `services::PriceTargets` | `data::PriceTargets` |
+  | `ui::dialogs::templates::StudyTemplate` | `studies::StudyTemplate` |
+  | `widget::localization` | `localization` |
+  | `ext::{UiExt, ResponseExt, ButtonWidgetExt, TextEditWidgetExt, RoundingExt}` | `ui_kit::ext::{UiExt, ResponseExt, ButtonWidgetExt, TextEditWidgetExt, RoundingExt}` |
+  | `Theme::apply_to_config(config)` | `config.with_theme(&theme)` |
+  | `ChartSettingsState::{background_color, grid_color, sync_legacy_fields}` | Use `chart_basic_styles.background_color` and `grid_lines.horizontal_color` directly; the redundant mirrors and synchronization method are removed |
+  | `ui::top_toolbar::components::settings_menu::data::EventsSettings` and its settings-menu re-export | `model::EventVisibility` |
+  | `ui::top_toolbar::{CandleColorConfig, StatusLineOptions, ChartSettingsState, PrecisionMode}` | `widget::settings::{CandleColorConfig, StatusLineOptions, ChartSettingsState, PrecisionMode}` |
+  | `ui::top_toolbar::components::{CandleColorConfig, StatusLineOptions, ChartSettingsState, PrecisionMode}` | `widget::settings::{CandleColorConfig, StatusLineOptions, ChartSettingsState, PrecisionMode}` |
+  | `ui::top_toolbar::components::settings_menu::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState, BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` | `widget::settings::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState, BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` |
+  | `ui::top_toolbar::components::settings_menu::data::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState}` | `widget::settings::{CandleColorConfig, StatusLineOptions, ChartBasicStylesSettings, GridLinesSettings, CrosshairSettings, WatermarkSettings, ScalesAppearanceSettings, ButtonsSettings, MarginsSettings, ScalesAndLinesSettings, TradingSettings, TradingNotifications, AlertsSettings, ChartSettingsState}` |
+  | `ui::top_toolbar::components::settings_menu::types::{BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` | `widget::settings::{BackgroundType, GridLinesMode, ButtonVisibility, WatermarkMode, PrecisionMode}` |
+
 - Breaking API cleanup: interval controls, settings, drawings, studies and trading share the domain types below. The small `prelude` exports common host types and traits, with widget and UI exports following their features. There are no compatibility aliases. Symbol search returns the host's `Instrument` with its metadata intact. ([#95](https://github.com/userFRM/egui-charts/issues/95))
 
   | Old path or member | New path or member |

@@ -286,16 +286,21 @@ impl IndicatorRenderer {
     ) {
         #[cfg(feature = "drawings")]
         if !indicator.drawings().is_empty() {
-            crate::studies::plots::paint_drawings(context, indicator, price_scale, coords);
+            crate::chart::indicators::plots::paint_drawings(
+                context,
+                indicator,
+                price_scale,
+                coords,
+            );
             return;
         }
         if !indicator.candles().is_empty() {
-            crate::studies::plots::paint_candles(context, indicator, price_scale, coords);
+            crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
             return;
         }
         let visible = super::volume_profile::profile_range(coords);
         for plot in indicator.volume_profiles(visible) {
-            super::volume_profile::paint_profile(
+            crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
                 plot.config,
@@ -318,8 +323,8 @@ impl IndicatorRenderer {
             price_scale,
             coords,
         );
-        crate::studies::plots::paint_zones(&painter, indicator, price_scale, coords);
-        crate::studies::projection::paint(&painter, indicator, coords, price_scale);
+        crate::chart::indicators::plots::paint_zones(&painter, indicator, price_scale, coords);
+        crate::chart::indicators::projection::paint(&painter, indicator, coords, price_scale);
 
         // Handle multi-line indicators
         let line_count = indicator.line_count();

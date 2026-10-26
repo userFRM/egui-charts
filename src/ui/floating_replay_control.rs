@@ -3,12 +3,12 @@
 //! A floating toolbar for controlling bar replay.
 //! Displays play/pause, step controls, and speed selector.
 
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{
     Align2, Context, CursorIcon, FontId, Id, Key, Modifiers, Rect, RichText, Ui, Vec2, pos2,
 };

@@ -7,8 +7,9 @@
 
 use crate::model::LineStyle;
 use crate::model::{Bar, BarClock, Timeframe};
+use crate::scales::StudyFormat;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotStyle, PlotType, StudyData, StudyDataRequest, StudyFormat,
+    Indicator, IndicatorValues, PlotStyle, PlotType, StudyData, StudyDataRequest,
 };
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;

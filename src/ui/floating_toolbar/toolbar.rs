@@ -2,11 +2,11 @@
 //!
 //! Floating toolbar for object customization.
 
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
 
 /// Action that can be triggered from the floating toolbar

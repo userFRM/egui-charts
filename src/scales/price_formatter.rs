@@ -512,3 +512,15 @@ mod tests {
         assert!(currency_formatter.format(100.0).contains("$"));
     }
 }
+
+/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
+#[cfg(feature = "widget")]
+pub(crate) fn price_decimals(price: f64) -> usize {
+    if price.abs() >= 100.0 {
+        2
+    } else if price.abs() >= 1.0 {
+        4
+    } else {
+        6
+    }
+}

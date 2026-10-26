@@ -22,6 +22,7 @@
 //! factory.register("MySMA", || Box::new(egui_charts::studies::SMA::new(42)));
 //! ```
 
+use crate::data::OrderFlowKind;
 use crate::studies::*;
 use std::collections::HashMap;
 
@@ -372,6 +373,7 @@ impl Default for IndicatorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::OrderFlowKind;
     use crate::model::{Bar, TimezoneId};
     use chrono::{Duration, TimeZone, Utc};
 
@@ -774,7 +776,8 @@ mod tests {
         #[cfg(feature = "widget")]
         {
             use crate::chart::{coords::ChartMapping, indicators::hit_test_indicator};
-            use crate::model::{BarData, ChartState};
+            use crate::model::BarData;
+            use crate::studies::ChartState;
             use egui::{Rect, pos2, vec2};
 
             let mut bars = bars;

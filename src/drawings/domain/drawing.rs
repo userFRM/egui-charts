@@ -10,8 +10,10 @@
 
 use super::{
     ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
-    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility,
 };
+
+use crate::data::VolumeProfileConfig;
 use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 

@@ -10,8 +10,9 @@ use crate::model::{
     LineStyle, Marker, MarkerOptions, MarkerPos, MarkerZOrder, PriceLine, PriceLineSource,
     PriceSource, SeriesScale, SeriesStyle,
 };
+use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
-use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType, StudyFormat};
+use crate::studies::{Indicator, IndicatorValues, PlotStyle, PlotType};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Utc};
 use egui::{Color32, Pos2, Rect};
@@ -521,8 +522,8 @@ impl Chart {
     fn visible_times(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let logical = self.state.time_scale().visible_logical_range();
         let bars = self.state.shown();
-        super::sync::time_at(bars, logical.left.floor() as f64)
-            .zip(super::sync::time_at(bars, logical.right.floor() as f64))
+        crate::model::time_at(bars, logical.left.floor() as f64)
+            .zip(crate::model::time_at(bars, logical.right.floor() as f64))
             .filter(|(first, last)| first <= last)
     }
 
@@ -779,7 +780,7 @@ impl Chart {
         let x = |index: usize, _| {
             item.bars
                 .get(index)
-                .and_then(|bar| super::sync::index_at(main, bar.time))
+                .and_then(|bar| crate::model::index_at(main, bar.time))
                 .map_or(f32::NAN, |at| {
                     self.state.time_scale().idx_to_coord_precise(
                         at as f32,
@@ -851,7 +852,7 @@ impl Chart {
         }
         if let Some(marks) = &item.change_marks {
             marks.paint(plot, |time, close| {
-                let index = super::sync::index_at(main, time)?;
+                let index = crate::model::index_at(main, time)?;
                 let x = self.state.time_scale().idx_to_coord_precise(
                     index as f32,
                     rect.left(),
@@ -874,7 +875,7 @@ impl Chart {
         map: PriceMap,
     ) {
         for marker in &item.markers {
-            let Some(index) = super::sync::index_at(self.state.shown(), marker.time) else {
+            let Some(index) = crate::model::index_at(self.state.shown(), marker.time) else {
                 continue;
             };
             let at = item

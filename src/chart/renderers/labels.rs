@@ -2,6 +2,7 @@ use super::context::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, TIME_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
+use crate::scales::price_decimals;
 use crate::scales::{
     HorizontalScale, PriceFormatter, PriceMap, PriceMark, PriceScaleId, TickMark, TickMarkLayout,
 };
@@ -433,17 +434,6 @@ pub fn render_time_labels(
     context.painter.set(slot, labels);
 }
 
-/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
-pub(crate) fn price_decimals(price: f64) -> usize {
-    if price.abs() >= 100.0 {
-        2
-    } else if price.abs() >= 1.0 {
-        4
-    } else {
-        6
-    }
-}
-
 #[path = "legend/mod.rs"]
 mod legend;
 pub(crate) use legend::study_controls;
@@ -471,7 +461,7 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = chart(&[100.0], &[110.0]);
-            *chart.config_mut() = theme.apply_to_config(chart.config().clone());
+            *chart.config_mut() = chart.config().clone().with_theme(&theme);
             chart.config_mut().show_symbol_last_val = false;
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
@@ -1208,7 +1198,7 @@ mod tests {
                 let ctx = Context::default();
                 apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[200.0]);
-                chart.config = theme.apply_to_config(chart.config.clone());
+                chart.config = chart.config.clone().with_theme(&theme);
                 if let Some(custom) = custom {
                     chart.config.text_color = custom;
                 }

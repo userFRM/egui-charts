@@ -82,8 +82,7 @@
 //!
 //! ```
 //! use egui_charts::drawings::{
-//!     Drawing, DrawingToolType, DrawingManager, ChartPoint,
-//!     ArrowStyle, FibonacciConfig,
+//!     Drawing, DrawingToolType, DrawingManager, ChartPoint, ArrowStyle, FibonacciConfig,
 //! };
 //!
 //! use egui_charts::model::LineStyle;
@@ -101,15 +100,12 @@
 //! manager.set_active_tool(Some(DrawingToolType::FibonacciRetracement));
 //!
 //! // Services can be used independently
-//! use egui_charts::drawings::services::{
-//!     SelectionService, HistoryService, SnapService,
-//! };
+//! use egui_charts::drawings::services::{SelectionService, HistoryService, SnapService,};
 //!
 //! let mut selection = SelectionService::new();
 //! selection.select(drawing.id);
 //! ```
 
-mod api;
 /// Static category and toolbar grouping definitions for the drawing tools.
 pub mod categories;
 /// Pure domain types with minimal dependencies: `Drawing`, `ChartPoint`,
@@ -128,13 +124,14 @@ pub mod rendering;
 pub mod repositories;
 /// Business logic services: selection, undo/redo, snapping, handles, z-ordering.
 pub mod services;
+mod validation;
 
 // Re-export domain types at module root for convenience
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
     DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, ProfileDisplay,
-    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
+    TimeframeVisibility,
 };
 
 // Re-export manager types

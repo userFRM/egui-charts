@@ -1,9 +1,9 @@
 //! Fixed aggregations of executions, quotes and synchronized depth, never estimates from bars.
 
+use crate::data::{OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
-    Indicator, IndicatorValues, InputKind, InputValue, OrderFlowInput, OrderFlowKind, PlotStyle,
-    PlotType, StudyInput,
+    Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyInput,
 };
 use egui::Color32;
 

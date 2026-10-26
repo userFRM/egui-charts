@@ -27,6 +27,9 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Check module dependencies
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        run: python3 .github/check-module-cycles.py
       - name: Build (default features)
         run: cargo build
       - name: Build (no default features)
@@ -191,6 +194,9 @@ jobs:
           cp -r benches/frame benches/regression performance-base/benches/
           cp benches/frame_time.rs performance-base/benches/frame_time.rs
           cp examples/bare_chart.rs performance-base/examples/bare_chart.rs
+          if grep -q 'pub enum TradeSide' performance-base/src/model/quote.rs; then
+            sed -i 's/\bOrderSide\b/TradeSide/g' performance-base/benches/frame_time.rs
+          fi
           cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
           cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
       - name: Reject instruction growth over five percent

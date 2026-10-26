@@ -23,5 +23,5 @@ pub use crate::theme::{Theme, ThemeExt};
 #[cfg(feature = "widget")]
 pub use crate::widget::{Chart, ChartBuilder, SeriesId};
 
-#[cfg(feature = "ui")]
-pub use crate::ui::top_toolbar::components::settings_menu::ChartSettingsState;
+#[cfg(feature = "widget")]
+pub use crate::widget::settings::ChartSettingsState;

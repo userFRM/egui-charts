@@ -462,7 +462,7 @@ impl<'a> Legend<'a> {
                     }
                     let study_colors = study.colors();
                     let precision = study.precision().or_else(|| {
-                        (study.value_format() == crate::studies::StudyFormat::Price)
+                        (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
                     });
                     for index in (0..study.line_count()).filter(|index| {

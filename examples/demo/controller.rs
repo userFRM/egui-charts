@@ -28,7 +28,8 @@ mod storage;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate, TemplateDialog};
+use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
+use egui_charts::studies::{StudyTemplate};
 #[path = "feeds.rs"]
 mod feeds;
 #[path = "live.rs"]
@@ -43,35 +44,24 @@ use egui_charts::model::{Alert, AlertCondition};
 use egui_charts::model::{Bar, BarData, ChartType, RenkoConfig, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
-use egui_charts::ui::context_menu::{
-    ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry};
+use egui_charts::ui::context_menu::{ChartContextAction, ChartMenus, ContextMenuAction, HostMenuEntry};
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
-use egui_charts::ui::dialogs::{
-    AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
-    StudyContextMenuAction};
+use egui_charts::ui::dialogs::{AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog, KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog, StudyContextMenuAction};
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
 use egui_charts::ui::floating_replay_control::{FloatingReplayControl, ReplayControlAction};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplaySession, ReplayStartPicker};
-use egui_charts::ui::timeframe_toolbar::{
-    DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction};
+use egui_charts::ui::timeframe_toolbar::{DatePicker, DatePickerAction, SessionType, TimeframeToolbar, TimeframeToolbarAction};
 #[cfg(test)]
 use egui_charts::ui::top_toolbar::CompareAction;
 use egui_charts::ui::top_toolbar::components::SymbolSearchDialog;
-use egui_charts::ui::top_toolbar::components::indicator_dialog::{
-    IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog};
-use egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState;
+use egui_charts::ui::top_toolbar::components::indicator_dialog::{IndicatorDialog, IndicatorDialogAction, IndicatorSettingsDialog};
+use egui_charts::widget::settings::ChartSettingsState;
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
-use egui_charts::ui::widget_bar::panels::object_tree::{
-    DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
+use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
-use egui_charts::ui::widget_bar::{
-    CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
-    NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
-    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
-    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget};
+use egui_charts::ui::widget_bar::{CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction, NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel, ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist, WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
@@ -1588,8 +1578,7 @@ impl DemoApp {
         }
         self.drawing_toolbar.state.has_zoom_history = self.chart.state().has_zoom_history();
         use egui_charts::config::CrosshairStyle;
-        use egui_charts::ui::drawing_toolbar::{
-            DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType};
+        use egui_charts::ui::drawing_toolbar::{DrawingToolbarDomainState, MagnetType, categories::cursors::CursorType};
         let dm = self.chart.drawings();
         let magnet_type = if !dm.options.strong_magnet {
             MagnetType::Weak
@@ -2485,15 +2474,15 @@ impl DemoApp {
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.is_connected() {
                         self.broker_picker.open();
-                    } else if side == egui_charts::widget::OrderSide::Ticket {
+                    } else if side == egui_charts::widget::QuoteSide::Ticket {
                         self.trading.open_ticket(egui_charts::model::OrderRequest::new(
                             self.chart.symbol(), egui_charts::model::OrderSide::Buy,
                             self.trading.quantity, egui_charts::model::OrderType::Market));
                     } else {
                         let side = match side {
-                            egui_charts::widget::OrderSide::Buy => egui_charts::model::OrderSide::Buy,
-                            egui_charts::widget::OrderSide::Sell => egui_charts::model::OrderSide::Sell,
-                            egui_charts::widget::OrderSide::Ticket => unreachable!(),
+                            egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
+                            egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                            egui_charts::widget::QuoteSide::Ticket => unreachable!(),
                         };
                         self.trading.trade(self.chart.symbol().to_owned(), side);
                     }
@@ -4242,8 +4231,7 @@ mod tests {
     #[test]
     fn display_settings_apply_styles_and_read_back() {
         use egui_charts::config::{BackgroundStyle, LineStyle};
-        use egui_charts::ui::top_toolbar::components::settings_menu::{
-            BackgroundType, PrecisionMode, WatermarkMode};
+        use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         let mut state = app.settings_state.clone();
@@ -5096,9 +5084,8 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(!app.drawing_toolbar.state.lock_all);
-        use egui_charts::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
-            VolumeProfileConfig};
+        use egui_charts::drawings::{FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig};
+        use egui_charts::data::{VolumeProfileConfig};
         for tool in [
             DrawingToolType::FibonacciRetracement,
             DrawingToolType::Pitchfork,
@@ -5389,7 +5376,7 @@ mod tests {
         for (_, theme) in egui_charts::theme::presets() {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-            let mut config = theme.apply_to_config(app.chart.config().clone());
+            let mut config = app.chart.config().clone().with_theme(&theme);
             config.show_quote_boxes = false;
             config.show_left_axis = true;
             config.show_right_axis = false;

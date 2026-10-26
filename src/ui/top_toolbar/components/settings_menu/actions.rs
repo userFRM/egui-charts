@@ -1,6 +1,6 @@
 //! Actions emitted by settings UI components
 
-use super::data::ChartSettingsState;
+use crate::widget::settings::ChartSettingsState;
 
 /// Settings action (emitted by both SettingsMenu and SettingsDialog)
 #[derive(Clone)]

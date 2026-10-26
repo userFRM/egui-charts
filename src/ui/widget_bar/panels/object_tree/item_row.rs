@@ -14,8 +14,8 @@ use super::config::ObjectTreeConfig;
 use super::context_menu::render_item_menu;
 use super::state::ObjectTreeState;
 use super::types::{SourceItem, SourceType};
-use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 
 /// Render a single item row in the object tree
 pub fn render_item_row(

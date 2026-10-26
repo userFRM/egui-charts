@@ -1,10 +1,10 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::tick_decimals;
 use crate::chart::rendering::axes::paint_crosshair_tag;
-use crate::chart::rendering::draw_dashed_line;
 use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
 use crate::model::LineStyle;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};

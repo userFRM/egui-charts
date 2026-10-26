@@ -11,7 +11,9 @@
 //! they can also be used standalone:
 //!
 //! ```rust
-//! use egui_charts::widget::indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+//! use egui_charts::widget::indicator_pane::{
+//!     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig
+//! };
 //!
 //! # fn example(
 //! #     ui: &mut egui::Ui,
@@ -32,9 +34,9 @@
 //! right offset, and base index so that indicator panes draw their data points
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
-use crate::chart::rendering::draw_dashed_line;
 use crate::localization as l10n;
 use crate::model::Bar;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::Indicator;
 use crate::styles::typography;
@@ -1593,7 +1595,8 @@ mod tests {
 
     #[test]
     fn volume_units_reach_pane_axes_and_legends() {
-        use crate::studies::{OnBalanceVolume, StudyFormat};
+        use crate::scales::StudyFormat;
+        use crate::studies::OnBalanceVolume;
         let bars: Vec<_> = [10.0, 11.0, 12.0]
             .into_iter()
             .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))

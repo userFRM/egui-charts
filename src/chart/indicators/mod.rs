@@ -10,3 +10,6 @@ pub mod selection_render;
 
 pub use hit_test::{hit_test_indicator, hit_test_pane_indicator};
 pub use selection_render::{SelectionDotConfig, render_indicator_selection_dots};
+
+pub(crate) mod plots;
+pub(crate) mod projection;

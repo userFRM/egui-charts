@@ -335,7 +335,7 @@ impl Indicator for ConfiguredStudy {
         }
         self.aligned = Some(aligned);
     }
-    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
         self.study.order_flow_input()
     }
 
@@ -504,7 +504,7 @@ impl Indicator for ConfiguredStudy {
         self.settings = settings;
         Ok(())
     }
-    fn value_format(&self) -> super::StudyFormat {
+    fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()
     }
     fn scale(&self) -> super::StudyScale {
@@ -515,7 +515,7 @@ impl Indicator for ConfiguredStudy {
             .precision
             .or_else(|| self.study.precision())
             .or_else(|| {
-                (self.value_format() == super::StudyFormat::Price)
+                (self.value_format() == crate::scales::StudyFormat::Price)
                     .then_some(self.instrument_precision.map(usize::from))
                     .flatten()
             })
@@ -529,7 +529,7 @@ impl Indicator for ConfiguredStudy {
     fn markers(&self) -> &[super::IndicatorMarker] {
         self.study.markers()
     }
-    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
         self.study.volume_profiles(visible)
     }
     fn zones(&self) -> &[super::StudyZone] {
@@ -605,7 +605,7 @@ mod tests {
             (
                 Box::new(
                     super::super::CustomIndicator::new("Small", |_| Vec::new())
-                        .with_value_format(super::super::StudyFormat::Fixed(4)),
+                        .with_value_format(crate::scales::StudyFormat::Fixed(4)),
                 ),
                 Some(4),
             ),

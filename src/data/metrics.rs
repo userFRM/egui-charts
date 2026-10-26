@@ -2,7 +2,7 @@
 
 use super::{Sink, SubscriptionId};
 use crate::model::Bar;
-use crate::studies::StudyFormat;
+use crate::scales::StudyFormat;
 use chrono::{DateTime, Utc};
 
 /// One metric offered for an instrument, identified by a host-owned key.

@@ -8,7 +8,8 @@
 
 use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument};
-use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyFormat, StudyTable};
+use crate::scales::StudyFormat;
+use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyTable};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, Days, Months, NaiveDate};
 use egui::Color32;

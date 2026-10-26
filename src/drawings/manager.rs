@@ -1565,7 +1565,7 @@ impl DrawingManager {
     }
 
     pub(crate) fn validate_drawing(&self, drawing: &Drawing) -> Result<(), &'static str> {
-        super::api::validate(drawing)?;
+        super::validation::validate(drawing)?;
         if let Some(id) = &drawing.custom_tool {
             let tool = self.registry.get(id).ok_or("Unknown drawing tool")?;
             if drawing.tool_type != DrawingToolType::Polyline

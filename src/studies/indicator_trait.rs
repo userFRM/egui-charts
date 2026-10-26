@@ -239,13 +239,13 @@ pub trait Indicator: Send {
     }
 
     /// Units of this study's values. Placement defaults preserve price overlays and numeric panes.
-    fn value_format(&self) -> super::StudyFormat {
+    fn value_format(&self) -> crate::scales::StudyFormat {
         if self.is_volume() {
-            super::StudyFormat::Volume
+            crate::scales::StudyFormat::Volume
         } else if self.is_overlay() {
-            super::StudyFormat::Price
+            crate::scales::StudyFormat::Price
         } else {
-            super::StudyFormat::Fixed(2)
+            crate::scales::StudyFormat::Fixed(2)
         }
     }
 
@@ -266,7 +266,7 @@ pub trait Indicator: Send {
     /// Decimal places for study readouts, or the format's default precision.
     fn precision(&self) -> Option<usize> {
         match self.value_format() {
-            super::StudyFormat::Fixed(decimals) => Some(decimals.min(12)),
+            crate::scales::StudyFormat::Fixed(decimals) => Some(decimals.min(12)),
             _ => None,
         }
     }
@@ -342,7 +342,7 @@ pub trait Indicator: Send {
 
     /// Optional source for exact stream studies, connected before feed updates are coalesced.
     /// Hosts supplying their own events can push them through the returned handle.
-    fn order_flow_input(&self) -> Option<super::OrderFlowInput> {
+    fn order_flow_input(&self) -> Option<crate::data::OrderFlowInput> {
         None
     }
 
@@ -417,7 +417,7 @@ pub trait Indicator: Send {
     /// Price-row volume profiles intersecting a half-open visible source-bar range.
     /// Fixed and calendar profiles include their whole selected span, even offscreen bars.
     /// Visible-range studies recompute for this range; ordinary studies return no profiles.
-    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<super::StudyProfile> {
+    fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
         let _ = visible;
         Vec::new()
     }

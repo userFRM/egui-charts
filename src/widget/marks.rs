@@ -45,7 +45,7 @@ impl Chart {
                 .filter(|_| !self.chart_type.is_time_independent())
         {
             marks.paint(ctx.painter, |time, close| {
-                let index = super::sync::index_at(self.state.shown(), time)?;
+                let index = crate::model::index_at(self.state.shown(), time)?;
                 let x = coords.idx_to_x(0) + index as f32 * coords.bar_spacing;
                 Some(egui::Pos2::new(x, coords.price.price_to_y(close)))
             });
@@ -351,7 +351,7 @@ mod tests {
                 };
                 #[cfg(feature = "ui")]
                 {
-                    use crate::ui::top_toolbar::components::settings_menu::ChartSettingsState;
+                    use crate::widget::settings::ChartSettingsState;
                     let mut settings = ChartSettingsState::from_chart(&chart);
                     settings.events = visibility.clone();
                     settings.apply_to_chart(&mut chart).unwrap();

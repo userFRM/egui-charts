@@ -323,7 +323,7 @@ mod tests {
             .collect();
         let mut gaps = Gaps::default();
         gaps.calculate(&bars);
-        let mut state = crate::model::ChartState::new(crate::model::BarData::from_bars(bars));
+        let mut state = crate::studies::ChartState::new(crate::model::BarData::from_bars(bars));
         state.time_scale_mut().set_width(80.0);
         state.time_scale_mut().set_bar_spacing(8.0);
         let transform = state.fit_price_scale([&gaps as &dyn Indicator]);

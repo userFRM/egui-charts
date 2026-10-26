@@ -5,7 +5,7 @@
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
-//! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
+//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`]).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -331,8 +331,6 @@ impl FibonacciConfig {
     }
 }
 
-pub use crate::studies::{ProfileDisplay, VolumeProfileConfig};
-
 /// Settings of the regression trend drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RegressionTrendFields")]
@@ -422,6 +420,7 @@ impl Default for PositionSize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::VolumeProfileConfig;
 
     /// Reference: quantity = risked amount / |entry - stop| (reference.py);
     /// none when a size from the risk has its stop at the entry, or a setting

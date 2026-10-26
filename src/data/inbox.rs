@@ -103,7 +103,7 @@ struct Live {
     tick_size: Option<f64>,
     /// Samples the book for the chart's depth history, when it keeps one.
     sampler: Option<Sampler>,
-    study_inputs: Vec<crate::studies::OrderFlowInput>,
+    study_inputs: Vec<crate::data::OrderFlowInput>,
     taken: TakenIds,
     updates: Updates,
 }
@@ -273,7 +273,7 @@ impl Inbox {
     pub(crate) fn study_inputs(
         &self,
         id: SubscriptionId,
-        inputs: Vec<crate::studies::OrderFlowInput>,
+        inputs: Vec<crate::data::OrderFlowInput>,
     ) {
         if let Some(live) = self.state().subscriptions.get_mut(&id) {
             live.study_inputs = inputs;
@@ -1018,7 +1018,7 @@ mod tests {
         use crate::model::OrderSide::{Buy, Sell};
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(0.25));
-        let input = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
+        let input = crate::data::OrderFlowInput::new(crate::data::OrderFlowKind::BookSize {
             levels: 10,
             distance: 0.0,
         });

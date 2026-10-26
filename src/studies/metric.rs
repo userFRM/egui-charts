@@ -1,8 +1,10 @@
 //! Pane study for a scalar metric published by the host's data source.
 
-use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest, StudyFormat};
+use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
+
 use crate::data::MetricSeries;
 use crate::model::Bar;
+use crate::scales::StudyFormat;
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
