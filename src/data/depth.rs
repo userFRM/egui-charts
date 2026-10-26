@@ -271,50 +271,50 @@ mod tests {
         let deep = |levels: usize| book(&Vec::from_iter((0..levels).map(|i| (i as f64, 1.0))), &[]);
         #[rustfmt::skip]
         let cases = [
-            ("snapshot duplicates use the last size on both sides",
+            (None, "snapshot duplicates use the last size on both sides",
                 vec![Snapshot(1, book(&[(99.0, 5.0), (99.0, 0.0), (98.0, 0.0), (98.0, 2.0)],
                     &[(100.0, 5.0), (100.0, 0.0), (101.0, 0.0), (101.0, 3.0)]))],
                 vec![Ok(())], Some(book(&[(98.0, 2.0)], &[(101.0, 3.0)]))),
-            ("deltas apply in sequence; size 0 removes; a replay is ignored",
+            (None, "deltas apply in sequence; size 0 removes; a replay is ignored",
                 vec![initial(),
                     Delta(11, book(&[(99.0, 5.0), (98.0, 0.0), (-1.0, 1.0)], &[])),
                     Delta(12, book(&[], &[(101.0, 4.0), (102.0, 0.0)])),
                     Delta(11, book(&[(99.0, 7.0)], &[]))],
                 vec![Ok(()), Ok(()), Ok(()), Ok(())], Some(applied)),
-            ("rounded tick duplicates use the last zero size",
+            (Some(0.25), "rounded tick duplicates use the last zero size",
                 vec![Snapshot(1, book(&[(99.0, 5.0), (99.000000001, 0.0)],
                     &[(100.0, 5.0), (99.999999999, 0.0)]))],
                 vec![Ok(())], Some(book(&[], &[]))),
-            ("a gap clears the book and asks once",
+            (None, "a gap clears the book and asks once",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
                     Delta(13, book(&[(99.0, 6.0)], &[]))],
                 vec![Ok(()), lost(false, true), lost(false, false)], Some(book(&[], &[]))),
-            ("a delta before any snapshot asks once",
+            (None, "a delta before any snapshot asks once",
                 vec![Delta(1, book(&[(99.0, 5.0)], &[])), Delta(2, book(&[(99.0, 6.0)], &[]))],
                 vec![lost(false, true), lost(false, false)], None),
-            ("a snapshot answers the request and deltas resume",
+            (None, "a snapshot answers the request and deltas resume",
                 vec![Delta(1, book(&[], &[])), initial(), Delta(11, book(&[], &[(100.0, 0.0)]))],
                 vec![lost(false, true), Ok(()), Ok(())],
                 Some(book(&[(99.0, 1.0), (98.0, 2.0)], &[]))),
-            ("an invalid delta is rejected and loses the book",
+            (None, "an invalid delta is rejected and loses the book",
                 vec![initial(), Delta(11, book(&[(f64::NAN, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
-            ("a replayed invalid delta is ignored",
+            (None, "a replayed invalid delta is ignored",
                 vec![initial(), Delta(11, book(&[(99.0, 5.0)], &[])),
                     Delta(11, book(&[(f64::NAN, 1.0)], &[]))],
                 vec![Ok(()), Ok(()), Ok(())],
                 Some(book(&[(99.0, 5.0), (98.0, 2.0)], &[(100.0, 3.0)]))),
-            ("an invalid snapshot is rejected and asks once per loss",
+            (None, "an invalid snapshot is rejected and asks once per loss",
                 vec![Snapshot(10, book(&[], &[(100.0, -1.0)])), Delta(11, book(&[], &[])),
                     Snapshot(12, book(&[], &[(100.0, -1.0)]))],
                 vec![lost(true, true), lost(false, false), lost(true, false)], None),
-            ("a snapshot deeper than the limit is rejected",
+            (None, "a snapshot deeper than the limit is rejected",
                 vec![Snapshot(10, deep(MAX_LEVELS + 1))],
                 vec![lost(true, true)], None),
-            ("a delta that makes a side deeper than the limit loses the book",
+            (None, "a delta that makes a side deeper than the limit loses the book",
                 vec![Snapshot(10, deep(MAX_LEVELS)), Delta(11, book(&[(-1.0, 1.0)], &[]))],
                 vec![Ok(()), lost(true, true)], Some(book(&[], &[]))),
-            ("deltas pushed while waiting apply after an older snapshot",
+            (None, "deltas pushed while waiting apply after an older snapshot",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
                     Delta(13, book(&[(97.0, 9.0)], &[])), Delta(14, book(&[(98.0, 2.0)], &[])),
                     Snapshot(12, book(&[(99.0, 1.0)], &[(100.0, 3.0)])),
@@ -323,7 +323,7 @@ mod tests {
                     Ok(())],
                 Some(book(&[(99.0, 1.0), (98.0, 2.0), (97.0, 9.0)],
                     &[(100.0, 3.0), (101.0, 4.0)]))),
-            ("held deltas are bounded by their levels, the oldest dropped first",
+            (None, "held deltas are bounded by their levels, the oldest dropped first",
                 (1..=MAX_LEVELS as u64 / 2 + 1)
                     .map(|sequence| Delta(sequence, book(&[(99.0, 1.0)], &[(100.0, 1.0)])))
                     .chain([Snapshot(0, book(&[], &[]))]).collect(),
@@ -332,8 +332,8 @@ mod tests {
                     .chain([lost(false, true)]).collect(),
                 Some(book(&[], &[]))),
         ];
-        for (name, pushes, outcomes, expected) in cases {
-            let mut depth = Book::new(name.starts_with("rounded").then_some(0.25));
+        for (tick, name, pushes, outcomes, expected) in cases {
+            let mut depth = Book::new(tick);
             let got: Vec<_> = pushes
                 .into_iter()
                 .map(|push| match push {

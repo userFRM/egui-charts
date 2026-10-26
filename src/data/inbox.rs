@@ -508,9 +508,9 @@ impl Sink {
     /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
     /// history page. A feed must therefore not push trades that its history already counts; a feed
     /// that cannot tell pushes bars instead. Trades older than the last accepted execution or
-    /// forming bar are dropped, and so is a trade whose id is among those of the last trades the subscription folded, as many as its
-    /// trade store holds. A trade stamped too far ahead of the feed's current time is rejected, as
-    /// [`Sink::set_server_time`] describes.
+    /// forming bar are dropped, and so is a trade whose id is among those of the last trades the
+    /// subscription folded, as many as its trade store holds. A trade stamped too far ahead of
+    /// the feed's current time is rejected, as [`Sink::set_server_time`] describes.
     /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
     ///
     /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
