@@ -2,7 +2,9 @@
 
 /// Series with the same assignment share a range and scale options. Relative modes
 /// retain a separate first-visible-close reference for each series.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum SeriesScale {
     /// The pane's right axis.
     #[default]

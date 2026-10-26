@@ -126,5 +126,25 @@ mod tests {
             Some("120.00")
         );
         assert_eq!(chart.indicator_value_at(id, 0), None);
+        chart.set_volume_formatter(Some(std::sync::Arc::new(
+            crate::scales::CustomPriceFormatter::new(|value| format!("{value:.0} lots")),
+        )));
+        let volume = chart
+            .indicators()
+            .find(|(_, study)| study.is_volume())
+            .unwrap()
+            .0;
+        let values = chart.study_values_at(2);
+        assert!(
+            values
+                .iter()
+                .any(|row| row.study == "Volume" && row.formatted_value().ends_with(" lots"))
+        );
+        assert!(
+            chart
+                .indicator_value_text(volume, 25.0)
+                .unwrap()
+                .ends_with(" lots")
+        );
     }
 }

@@ -332,6 +332,7 @@ impl ChartState {
             indicators,
             true,
             None,
+            None,
             std::iter::empty(),
             std::iter::empty(),
         )
@@ -339,12 +340,14 @@ impl ChartState {
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
-    /// `series_values` are already in scale units.
+    /// `series_values` are already in scale units. `main_range` reuses a precomputed exact
+    /// visible range, when available, before calling the autoscale provider.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
         main_visible: bool,
         autoscale: Option<&super::AutoscaleProvider>,
+        main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
@@ -458,15 +461,17 @@ impl ChartState {
             });
         let main = main_visible
             .then(|| {
-                let range = visible
-                    .iter()
-                    .flat_map(|bar| [bar.low, bar.high])
-                    .filter(|value| value.is_finite())
-                    .fold(None, |range: Option<(f64, f64)>, value| {
-                        Some(range.map_or((value, value), |(min, max)| {
-                            (min.min(value), max.max(value))
-                        }))
-                    });
+                let range = main_range.or_else(|| {
+                    visible
+                        .iter()
+                        .flat_map(|bar| [bar.low, bar.high])
+                        .filter(|value| value.is_finite())
+                        .fold(None, |range: Option<(f64, f64)>, value| {
+                            Some(range.map_or((value, value), |(min, max)| {
+                                (min.min(value), max.max(value))
+                            }))
+                        })
+                });
                 match autoscale {
                     Some(provider) => provider.range(visible, range),
                     None => range,

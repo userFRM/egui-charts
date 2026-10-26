@@ -262,6 +262,11 @@ impl Chart {
 
             let height = panel_rect.height();
             let members = self.pane_layout.panes[pane_idx].members.clone();
+            let primary = if self.config.show_right_axis {
+                crate::model::SeriesScale::Right
+            } else {
+                crate::model::SeriesScale::Left
+            };
             let series: Vec<_> = members
                 .iter()
                 .filter_map(|id| {
@@ -292,7 +297,7 @@ impl Chart {
                 };
                 let study = studies.indicators()[idx].as_ref();
                 if study.is_visible()
-                    && !matches!(study.scale(), crate::studies::StudyScale::Shared(key) if key != if self.config.show_right_axis { crate::model::SeriesScale::Right } else { crate::model::SeriesScale::Left })
+                    && !matches!(study.scale(), crate::studies::StudyScale::Shared(key) if key != primary)
                 {
                     let range = IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
                         .calculate_y_range(study, &displayed_range);
@@ -360,7 +365,9 @@ impl Chart {
                         continue;
                     };
                     let study = studies.indicators()[idx].as_ref();
-                    if study.is_visible() {
+                    if study.is_visible()
+                        && !matches!(study.scale(), crate::studies::StudyScale::Shared(key) if key != primary)
+                    {
                         for line in (0..study.line_cnt()).filter(|line| {
                             let plot = study.plot_style(*line);
                             plot.visible
@@ -447,20 +454,31 @@ impl Chart {
                             let idx = self.study_ids.iter().position(|study| study == id)?;
                             let study = studies.indicators()[idx].as_ref();
                             let hit = super::primitives::primitive_at(
-                                self.primitives_of(*id)
-                                    .map(|item| (item, self.primitive_view(*id, pane_mapping))),
+                                self.primitives_of(*id).map(|item| {
+                                    (
+                                        item,
+                                        self.primitive_view(
+                                            *id,
+                                            crate::chart::renderers::study_mapping(
+                                                study,
+                                                &pane_mapping,
+                                            ),
+                                        ),
+                                    )
+                                }),
                                 pos,
                             )
                             .is_some();
-                            (hit || hit_test_pane_indicator(
-                                pos,
-                                study,
-                                idx,
-                                visible_range.clone(),
-                                pane_plot,
-                                &pane_mapping,
-                            )
-                            .is_some())
+                            (hit || (!self.has_renderer(*id)
+                                && hit_test_pane_indicator(
+                                    pos,
+                                    study,
+                                    idx,
+                                    visible_range.clone(),
+                                    pane_plot,
+                                    &pane_mapping,
+                                )
+                                .is_some()))
                             .then_some(*id)
                         }
                     })
@@ -794,40 +812,45 @@ impl Chart {
                                     .contains(&item.series)
                                     && self.is_series_visible(item.series)
                             })
-                            .map(|item| (item, self.primitive_view(item.series, pane_coords)))
+                            .map(|item| {
+                                let mut view = self.primitive_view(item.series, pane_coords);
+                                if let Some(study) = view.study {
+                                    view.mapping =
+                                        crate::chart::renderers::study_mapping(study, &pane_coords);
+                                }
+                                (item, view)
+                            })
                     };
-                    let primitive_hit = pointer
-                        .and_then(|pos| super::primitives::primitive_at(pane_primitives(), pos));
-                    let renderer_hit = pointer.and_then(|pos| {
+                    let primitive_hit = pointer.and_then(|pos| {
                         super::primitives::primitive_at(
-                            pane_primitives().filter(|(item, _)| item.replaces),
+                            pane_primitives().filter(|(item, _)| !item.replaces),
                             pos,
                         )
                     });
-                    let rendered: Vec<_> = self.pane_layout.panes[pane_idx]
-                        .members
-                        .iter()
-                        .copied()
-                        .filter(|id| self.has_renderer(*id))
-                        .collect();
 
                     // Resolve a click on this pane: a hit on the line selects
                     // it, an empty-pane click clears the whole selection. A
                     // close-"x" click is handled above and must not also
                     // change the selection.
                     let study_at = |pos| {
-                        if let Some(super::PointerTarget::Element(id)) = renderer_hit
-                            .filter(|_| Some(pos) == pointer)
-                            .map(|hit| hit.target)
-                        {
-                            return Some(id);
-                        }
                         self.pane_layout.panes[pane_idx]
                             .members
                             .iter()
                             .rev()
-                            .filter(|id| !rendered.contains(id))
                             .find_map(|id| {
+                                if self.has_renderer(*id) {
+                                    let hit = super::primitives::primitive_at(
+                                        pane_primitives().filter(|(item, _)| {
+                                            item.replaces && item.series == *id
+                                        }),
+                                        pos,
+                                    )?;
+                                    return match hit.target {
+                                        super::PointerTarget::Element(id) => Some(id),
+                                        _ => None,
+                                    };
+                                }
+
                                 if let Some(item) = self
                                     .price_series
                                     .iter()
@@ -870,7 +893,17 @@ impl Chart {
                         let drawing = self.drawings.hit_test(pos);
                         #[cfg(not(feature = "drawings"))]
                         let drawing: Option<usize> = None;
-                        if let Some(hit) = primitive_hit.filter(|_| {
+                        let renderer = study_at(pos).and_then(|element| {
+                            let ChartElementId::Indicator(id) = element else {
+                                return None;
+                            };
+                            super::primitives::primitive_at(
+                                pane_primitives()
+                                    .filter(|(item, _)| item.replaces && item.series == id),
+                                pos,
+                            )
+                        });
+                        if let Some(hit) = primitive_hit.or(renderer).filter(|_| {
                             drawing.is_none()
                                 && pane_response.hovered()
                                 && !pane_response.dragged()

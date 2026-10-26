@@ -672,5 +672,39 @@ mod tests {
             chart.selection.selected_id(),
             Some(ChartElementId::Indicator(id))
         );
+        let pane = chart.series_pane(id).unwrap();
+        chart.set_preserve_empty_pane(pane, true);
+        #[cfg(feature = "drawings")]
+        chart.drawings_mut().drawings.clear();
+        let cover = chart.add_indicator(Box::new(CustomIndicator::new("Cover", |bars| {
+            vec![IndicatorValue::Single(15.0); bars.len()]
+        })));
+        for (step, destination) in [super::super::PaneId::MAIN, pane].into_iter().enumerate() {
+            chart.move_series_to_pane(id, destination);
+            chart.move_series_to_pane(cover, destination);
+            for (layer, (order, expected)) in [
+                (super::super::VisualOrder::SendToBack, cover),
+                (super::super::VisualOrder::BringToFront, id),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                chart.drain_events().for_each(drop);
+                chart.reorder_indicator(id, order);
+                let time = 1.0 + step as f64 + layer as f64 * 0.2;
+                frame(&ctx, &mut chart, time, vec![]);
+                let map = if destination == super::super::PaneId::MAIN {
+                    chart.get_chart_mapping().price
+                } else {
+                    chart.series_price_map(cover).unwrap()
+                };
+                let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(70), map.price_to_y(15.0));
+                frame(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::CrosshairMoved(Some(pointer))
+                        if pointer.target == Some(PointerTarget::Element(ChartElementId::Indicator(expected)))
+                )), "{destination:?} {order:?}");
+            }
+        }
     }
 }

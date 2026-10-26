@@ -382,6 +382,7 @@ mod tests {
                     [&study as &dyn Indicator],
                     false,
                     None,
+                    None,
                     std::iter::empty(),
                     std::iter::empty(),
                 );

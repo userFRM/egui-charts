@@ -47,18 +47,9 @@ pub enum StudyScale {
     /// Share a named bar-series scale. Right and left share with other members assigned
     /// there; `Separate(id)` creates or joins an additional scale. Assignments are scoped
     /// to the study's pane. `Overlay(id)` shares a scale without an axis.
-    Shared(#[serde(with = "SavedSeriesScale")] crate::model::SeriesScale),
+    Shared(crate::model::SeriesScale),
     /// Fit this study's visible outputs independently and show its own axis.
     Independent,
     /// Fit independently without an axis or value tags.
     None,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(remote = "crate::model::SeriesScale")]
-enum SavedSeriesScale {
-    Right,
-    Left,
-    Overlay(u64),
-    Separate(u64),
 }

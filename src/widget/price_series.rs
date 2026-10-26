@@ -24,32 +24,32 @@ type AxisValue = (
     Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
 );
 
-fn shared_prices(study: &dyn Indicator, range: std::ops::Range<usize>) -> Vec<f64> {
-    let mut values = Vec::new();
-    for line in 0..study.line_cnt() {
-        let plot = study.plot_style(line);
-        if !plot.visible
-            || matches!(
-                plot.plot_type,
-                PlotType::BarColor | PlotType::BackgroundColor
-            )
-        {
-            continue;
-        }
-        values.extend(
+fn shared_prices(
+    study: &dyn Indicator,
+    range: std::ops::Range<usize>,
+) -> impl Iterator<Item = f64> + '_ {
+    (0..study.line_cnt())
+        .filter(move |line| {
+            let plot = study.plot_style(*line);
+            plot.visible
+                && !matches!(
+                    plot.plot_type,
+                    PlotType::BarColor | PlotType::BackgroundColor
+                )
+        })
+        .flat_map(move |line| {
+            let plot = study.plot_style(line);
             range
                 .clone()
-                .filter_map(|bar| study.plot_value(line, bar))
-                .filter(|value| value.is_finite()),
-        );
-        if matches!(
-            plot.plot_type,
-            PlotType::Histogram | PlotType::Columns | PlotType::Area
-        ) {
-            values.push(0.0);
-        }
-    }
-    values
+                .filter_map(move |bar| study.plot_value(line, bar))
+                .filter(|value| value.is_finite())
+                .chain(std::iter::once(0.0).filter(move |_| {
+                    matches!(
+                        plot.plot_type,
+                        PlotType::Histogram | PlotType::Columns | PlotType::Area
+                    )
+                }))
+        })
 }
 
 /// Display settings of a host-fed bar series.
@@ -731,22 +731,27 @@ impl Chart {
             }
         }
         let (start, end) = self.state.visible_range();
-        for (&id, study) in self
+        for ((&id, study), &autoscale) in self
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
+            .zip(&self.study_autoscale)
         {
             let crate::studies::StudyScale::Shared(key) = study.scale() else {
                 continue;
             };
-            if !study.is_visible() || self.in_pane(id) {
+            if !study.is_visible()
+                || self.in_pane(id)
+                || (key == self.main_series_scale && !autoscale)
+            {
                 continue;
             }
             let transform = self.shared_study_transform(study.as_ref(), key);
             let entry = values
                 .entry(key)
                 .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
-            for value in shared_prices(study.as_ref(), start..end) {
+            for value in shared_prices(study.as_ref(), start..end).chain(self.primitive_prices(id))
+            {
                 if transform.mode == PriceScaleMode::Logarithmic && value <= 0.0 {
                     continue;
                 }
@@ -1382,6 +1387,7 @@ impl Chart {
                         &coords,
                         axis,
                         self.config.show_indicator_last_val,
+                        self.percentage_formatter.as_deref(),
                     ));
                 }
                 continue;
@@ -1820,6 +1826,12 @@ mod tests {
                 chart.series_axis_keys().len(),
                 usize::from(key != SeriesScale::Right)
             );
+            if key == SeriesScale::Right {
+                assert!(chart.set_indicator_autoscale(second, false));
+                frame(&ctx, &mut chart, 0.05, vec![]);
+                assert!(mapping(&chart, first).range().max < 300.0);
+                assert!(chart.set_indicator_autoscale(second, true));
+            }
             // A manually fixed 100..300 scale places 200 halfway down the pane.
             if key == SeriesScale::Right {
                 chart.state.price_scale_mut().set_range(100.0, 300.0);
@@ -1834,6 +1846,32 @@ mod tests {
             let map = mapping(&chart, first);
             let rect = chart.last_rendered_price_rect;
             assert!((map.price_to_y(200.0) - rect.center().y).abs() < 0.01);
+            if key == SeriesScale::Left {
+                chart.series_scales.get_mut(&key).unwrap().reset();
+                chart
+                    .series_scales
+                    .get_mut(&key)
+                    .unwrap()
+                    .options_mut()
+                    .mode = PriceScaleMode::Percentage;
+                chart.set_percentage_formatter(Some(std::sync::Arc::new(
+                    crate::scales::CustomPriceFormatter::new(|value| format!("p {value:.2}")),
+                )));
+                let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.15, vec![]);
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with("p ")
+                            && text.pos.x < chart.last_rendered_price_rect.left()
+                    )),
+                    "shared study ticks use percentage units and the host formatter"
+                );
+                chart
+                    .series_scales
+                    .get_mut(&key)
+                    .unwrap()
+                    .options_mut()
+                    .mode = PriceScaleMode::Normal;
+            }
             // A group moved away from the main pane must not stretch the main price scale.
             let pane = chart.add_pane();
             assert!(chart.move_series_to_pane(first, pane));
@@ -1841,6 +1879,27 @@ mod tests {
             chart.state.price_scale_mut().reset();
             frame(&ctx, &mut chart, 0.2, vec![]);
             assert!(chart.state.price_scale().range().max < 200.0);
+            if key == SeriesScale::Left {
+                assert!(chart.set_indicator_scale(
+                    first,
+                    crate::studies::StudyScale::Shared(SeriesScale::Right)
+                ));
+                chart
+                    .pane_layout
+                    .panes
+                    .iter_mut()
+                    .find(|item| item.id == pane)
+                    .unwrap()
+                    .scale
+                    .options_mut()
+                    .mode = PriceScaleMode::Logarithmic;
+                frame(&ctx, &mut chart, 0.3, vec![]);
+                let map = chart.series_price_map(first).unwrap();
+                assert!(
+                    map.transform().to_price(map.range().max) < 300.0,
+                    "a secondary study cannot stretch the logarithmic primary pane scale"
+                );
+            }
         }
         // Hidden study axes do not consume a secondary scale's reserved gutter.
         for width in [45.0, 240.0, 800.0] {

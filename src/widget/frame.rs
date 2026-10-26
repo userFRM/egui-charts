@@ -209,7 +209,12 @@ impl Chart {
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     ) {
         self.volume_formatter = formatter.clone();
-        for study in self.studies.indicators_mut() {
+        for study in self
+            .studies
+            .indicators_mut()
+            .iter_mut()
+            .chain(self.element_studies.studies.indicators_mut().iter_mut())
+        {
             if study.value_format() == crate::studies::StudyFormat::Volume {
                 study.set_value_formatter(formatter.clone());
             }
@@ -263,22 +268,6 @@ impl Chart {
                 .map(|formatter| formatter.as_ref()),
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),
-        }
-    }
-
-    /// The host formatter for the labels of a price scale in `mode`.
-    pub(super) fn price_label_formatter(
-        &self,
-        mode: crate::scales::PriceScaleMode,
-    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
-        match mode {
-            crate::scales::PriceScaleMode::Percentage
-            | crate::scales::PriceScaleMode::IndexedTo100 => self.percentage_formatter.clone(),
-            _ => self
-                .series_formatters
-                .get(&super::SeriesId::MAIN)
-                .cloned()
-                .or_else(|| self.price_formatter.clone()),
         }
     }
 
@@ -1073,6 +1062,19 @@ impl Chart {
             }
         }
 
+        // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
+        let factor = super::merge::factor(
+            self.state.time_scale().bar_spacing(),
+            ui.ctx().pixels_per_point(),
+        )
+        .min(if time_based { usize::MAX } else { 1 });
+        self.merge_groups.update(
+            self.state.shown(),
+            self.state.revision(),
+            factor,
+            self.config.price_source,
+        );
+
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
         let primitive_prices = self.main_primitive_prices();
@@ -1101,6 +1103,12 @@ impl Chart {
             .map(|(study, _)| study.as_ref()),
             self.main_series_visible,
             self.main_series_style.autoscale.as_ref(),
+            (factor > 1)
+                .then(|| {
+                    self.merge_groups
+                        .price_range(self.state.shown(), start_idx..end_idx)
+                })
+                .flatten(),
             marker_prices
                 .into_iter()
                 .chain(primitive_prices)
@@ -1127,7 +1135,8 @@ impl Chart {
             .map(transform, price_rect.min.y, price_rect.max.y);
 
         self.update_shared_study_maps(price_rect);
-        let price_formatter = self.price_label_formatter(price_map.transform().mode);
+        let price_formatter =
+            self.series_label_formatter(super::SeriesId::MAIN, price_map.transform().mode);
 
         // Store the final price mapping and rects for external use (selection dots, hit testing)
         self.last_price_map = price_map;
@@ -1151,18 +1160,6 @@ impl Chart {
             return shown;
         }
 
-        // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
-        let factor = super::merge::factor(
-            self.state.time_scale().bar_spacing(),
-            ui.ctx().pixels_per_point(),
-        )
-        .min(if time_based { usize::MAX } else { 1 });
-        self.merge_groups.update(
-            self.state.shown(),
-            self.state.revision(),
-            factor,
-            self.config.price_source,
-        );
         let groups = (factor > 1).then(|| {
             let covering = self
                 .merge_groups
@@ -1475,14 +1472,21 @@ impl Chart {
         let pointer = ui
             .input(|input| input.pointer.interact_pos())
             .filter(|pos| chart_rect.contains(*pos));
-        let primitive_hit =
-            pointer.and_then(|pos| primitives::primitive_at(self.main_primitives(&coords), pos));
-        let renderer_hit = pointer.and_then(|pos| {
+        let primitive_hit = pointer.and_then(|pos| {
             primitives::primitive_at(
                 self.main_primitives(&coords)
-                    .filter(|(item, _)| item.replaces),
+                    .filter(|(item, _)| !item.replaces),
                 pos,
             )
+        });
+        let renderer_hit = pointer.and_then(|pos| {
+            self.pane_layout.main.iter().rev().find_map(|id| {
+                primitives::primitive_at(
+                    self.main_primitives(&coords)
+                        .filter(|(item, _)| item.replaces && item.series == *id),
+                    pos,
+                )
+            })
         });
         let rendered: Vec<_> = self
             .study_ids
@@ -1490,12 +1494,22 @@ impl Chart {
             .copied()
             .filter(|id| self.has_renderer(*id))
             .collect();
+        let hit_order: Vec<_> = self
+            .pane_layout
+            .main
+            .iter()
+            .copied()
+            .filter(|id| {
+                !rendered.contains(id) && (*id != super::SeriesId::MAIN || self.main_series_visible)
+            })
+            .collect();
         let last_bar = self.state.shown().len().saturating_sub(1);
         let secondary_hits = [pointer, response.interact_pointer_pos()].map(|pos| {
             pos.map(|pos| {
                 (
                     pos,
-                    self.main_pane_series().rev().find_map(|item| {
+                    hit_order.iter().rev().find_map(|id| {
+                        let item = self.main_pane_series().find(|item| item.id == *id)?;
                         self.hit_price_series(
                             item,
                             pos,
@@ -1508,17 +1522,20 @@ impl Chart {
             })
         });
         let element_at = |pos: Pos2| {
-            if let Some(super::PointerTarget::Element(id)) = renderer_hit
+            let renderer = renderer_hit
                 .filter(|_| Some(pos) == pointer)
-                .map(|hit| hit.target)
-            {
-                return Some((id, coords.x_to_idx(pos.x).min(last_bar)));
-            }
+                .and_then(|hit| {
+                    if let super::PointerTarget::Element(id) = hit.target {
+                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
+                    } else {
+                        None
+                    }
+                });
             let hit = hit_test_main_chart(
                 pos,
                 studies,
                 &self.study_ids,
-                behind,
+                &hit_order,
                 &coords,
                 volume_coords.as_ref(),
                 self.state.shown(),
@@ -1532,15 +1549,20 @@ impl Chart {
                 crate::widget::ChartElementId::Indicator(study) => !rendered.contains(study),
                 _ => self.main_series_visible,
             });
-            if matches!(hit, Some((super::ChartElementId::Indicator(id), _)) if !behind.contains(&id))
-            {
-                return hit;
-            }
-            secondary_hits
+            let secondary = secondary_hits
                 .iter()
                 .flatten()
-                .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten())
-                .or(hit)
+                .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
+            hit.into_iter()
+                .chain(secondary)
+                .chain(renderer)
+                .max_by_key(|(element, _)| {
+                    let id = match element {
+                        super::ChartElementId::Indicator(id)
+                        | super::ChartElementId::Series(id) => id,
+                    };
+                    self.pane_layout.main.iter().position(|member| member == id)
+                })
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
@@ -1820,14 +1842,20 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
-            if let Some(hit) = primitive_hit.filter(|_| {
-                drawing.is_none()
-                    && response.hovered()
-                    && !response.dragged()
-                    && !self.zoom_mode_active
-                    && !eraser_mode
-                    && !drawing_tool_active
-            }) {
+            if let Some(hit) = primitive_hit
+                .or(renderer_hit.filter(|hit| {
+                    element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
+                        == Some(hit.target)
+                }))
+                .filter(|_| {
+                    drawing.is_none()
+                        && response.hovered()
+                        && !response.dragged()
+                        && !self.zoom_mode_active
+                        && !eraser_mode
+                        && !drawing_tool_active
+                })
+            {
                 ui.ctx().set_cursor_icon(hit.cursor);
             }
             self.host_events.target = drawing
@@ -2140,6 +2168,7 @@ impl Chart {
                         &mapping,
                         axis,
                         self.config.show_indicator_last_val,
+                        None,
                     ));
             }
         }
@@ -3916,6 +3945,48 @@ mod tests {
             let positions = order.map(|color| first(&painted, color).unwrap());
             assert!(positions.is_sorted(), "{enabled} {price}: {positions:?}");
         }
+        let bars_at = |price| {
+            chart
+                .bars(super::super::SeriesId::MAIN)
+                .iter()
+                .map(|bar| crate::model::Bar::from_value(bar.time, price))
+                .collect::<Vec<_>>()
+        };
+        let overlapping = bars_at(150.0);
+        let original = bars_at(130.0);
+        chart.set_data(added, overlapping);
+        for (step, order, expected) in [
+            (
+                0,
+                super::super::VisualOrder::SendBackward,
+                super::super::ChartElementId::Series(added),
+            ),
+            (
+                1,
+                super::super::VisualOrder::BringToFront,
+                super::super::ChartElementId::Indicator(study_ids[0]),
+            ),
+        ] {
+            assert!(chart.reorder_indicator(study_ids[0], order));
+            chart.drain_events().for_each(drop);
+            frame(
+                &ctx,
+                &mut chart,
+                4.1 + step as f64 * 0.1,
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(90),
+                    map.price_to_y(150.0),
+                ))],
+            );
+            assert!(
+                chart.drain_events().any(|event| matches!(event,
+                    super::super::ChartEvent::CrosshairMoved(Some(pointer))
+                        if pointer.target == Some(super::super::PointerTarget::Element(expected))
+                )),
+                "visual order {order:?}"
+            );
+        }
+        chart.set_data(added, original);
         let pane = chart.add_pane();
         for id in study_ids.iter().copied().chain([added]) {
             assert!(chart.move_series_to_pane(id, pane));
