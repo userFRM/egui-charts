@@ -16,7 +16,8 @@ def code(text):
         r'r(?P<hashes>#{0,16})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
         " ", text, flags=re.S,
     )
-    while match := re.search(r"#\[cfg\([^]]*\btest\b[^]]*\)\]", text):
+    # Code enabled by either a feature or tests also belongs to the runtime graph.
+    while match := re.search(r"#\[cfg\((?:test|all\(\s*test\s*,[^]]*\))\)\]", text):
         start = match.start()
         item = re.search(r"[;{]", text[match.end():])
         assert item, "test configuration must decorate an item"
