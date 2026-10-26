@@ -78,7 +78,7 @@ impl DemoApp {
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
             "export" => {
-                self.export_generation += 1;
+                self.screenshot_requested = None;
                 self.export_dialog.open();
                 return;
             }

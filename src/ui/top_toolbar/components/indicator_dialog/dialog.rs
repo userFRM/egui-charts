@@ -67,6 +67,8 @@ pub struct IndicatorDialog {
     params: IndicatorParams,
     /// Show configuration panel
     show_config: bool,
+    /// Source selected by a study's Add indicator action, with its displayed name.
+    source: Option<(StudySource, String)>,
 }
 
 impl Default for IndicatorDialog {
@@ -109,6 +111,7 @@ impl IndicatorDialog {
             config: IndicatorDialogConfig::default(),
             params: IndicatorParams::default(),
             show_config: false,
+            source: None,
         }
     }
 
@@ -194,8 +197,15 @@ impl IndicatorDialog {
         self.open_tab(IndicatorTab::Indicators);
     }
 
+    /// Opens the chooser for studies that can consume `source`, preselected by its name.
+    pub fn open_on_source(&mut self, source: StudySource, name: impl Into<String>) {
+        self.open();
+        self.source = Some((source, name.into()));
+    }
+
     /// Open the dialog on `tab` with the search field focused
     pub fn open_tab(&mut self, tab: IndicatorTab) {
+        self.source = None;
         self.active_tab = tab;
         self.is_open = true;
         self.search.clear();
@@ -206,6 +216,7 @@ impl IndicatorDialog {
 
     /// Close the dialog
     pub fn close(&mut self) {
+        self.source = None;
         self.is_open = false;
         self.sel_indicator = None;
         self.show_config = false;
@@ -264,6 +275,13 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
+        if let Some((_, name)) = &self.source {
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Source: {name}",
+                &[("name", name.clone())],
+            ));
+        }
         if let Some(error) = &self.metric_error {
             ui.label(l10n::format_text(
                 ui.ctx(),
@@ -295,6 +313,20 @@ impl IndicatorDialog {
         }
 
         let mut action = IndicatorDialogAction::None;
+        if ui.available_width() < 600.0 {
+            egui::ComboBox::from_label(l10n::text(ui.ctx(), "Category"))
+                .selected_text(l10n::text(ui.ctx(), self.sel_category.name()))
+                .show_ui(ui, |ui| {
+                    for category in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
+                        ui.selectable_value(
+                            &mut self.sel_category,
+                            category,
+                            l10n::text(ui.ctx(), category.name()),
+                        );
+                    }
+                });
+            return self.draw_results(ui, config, theme);
+        }
         // The sidebar runs before the list, so the list shows a category clicked this frame.
         let category = Cell::new(self.sel_category);
         SidebarLayout::new(SIDEBAR_WIDTH).show(
@@ -348,6 +380,11 @@ impl IndicatorDialog {
         // offset and the focused row. A click on a row opens the panel from the next frame,
         // so the list and the panel are never wider than the dialog.
         let show_config = self.show_config;
+        if show_config && ui.available_width() < 480.0 {
+            return self
+                .draw_config_panel(ui, config, theme)
+                .unwrap_or(IndicatorDialogAction::None);
+        }
         let list_width = ui.available_width() * 0.5 - ui.spacing().item_spacing.x;
         let mut action = IndicatorDialogAction::None;
         ui.horizontal_top(|ui| {
@@ -371,6 +408,14 @@ impl IndicatorDialog {
 
     /// Whether `ind` belongs to the active tab and category and matches the search.
     fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
+        if self.source.is_some()
+            && self
+                .factory
+                .create(&ind.id)
+                .is_none_or(|study| study.source().is_none())
+        {
+            return false;
+        }
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
             .iter()
             .any(|text| self.search.matches(text) || self.search.matches(&l10n::text(ctx, text)));
@@ -396,12 +441,13 @@ impl IndicatorDialog {
         config: &IndicatorDialogConfig,
         theme: &Theme,
     ) -> IndicatorDialogAction {
-        let filtered: Vec<IndicatorInfo> = self
+        let mut filtered: Vec<IndicatorInfo> = self
             .indicators
             .iter()
             .filter(|ind| self.matches(ui.ctx(), ind))
             .cloned()
             .collect();
+        filtered.sort_by_key(|indicator| !self.favorites.contains(&indicator.id));
         if filtered.is_empty() {
             self.draw_empty_state(ui);
             return IndicatorDialogAction::None;
@@ -663,7 +709,15 @@ impl IndicatorDialog {
 
     /// Add the selected indicator with its parameters and close the dialog.
     fn add_selected(&mut self) -> Option<IndicatorDialogAction> {
-        let study = self.create(&self.sel_indicator.as_ref()?.id)?;
+        let mut study = self.create(&self.sel_indicator.as_ref()?.id)?;
+        if let Some((source, _)) = &self.source {
+            if !study.has_settings() {
+                study = Box::new(ConfiguredStudy::new(study));
+            }
+            study
+                .set_input("source", InputValue::Source(*source))
+                .ok()?;
+        }
         self.close();
         Some(IndicatorDialogAction::AddIndicator(study))
     }
@@ -771,8 +825,9 @@ impl IndicatorDialog {
         value: &mut usize,
         range: std::ops::RangeInclusive<usize>,
     ) {
-        ui.label(l10n::text(ui.ctx(), label));
-        ui.add(egui::DragValue::new(value).range(range));
+        let label = ui.label(l10n::text(ui.ctx(), label));
+        ui.add(egui::DragValue::new(value).range(range))
+            .labelled_by(label.id);
         ui.end_row();
     }
 
@@ -783,8 +838,9 @@ impl IndicatorDialog {
         range: std::ops::RangeInclusive<f64>,
         speed: f64,
     ) {
-        ui.label(l10n::text(ui.ctx(), label));
-        ui.add(egui::DragValue::new(value).range(range).speed(speed));
+        let label = ui.label(l10n::text(ui.ctx(), label));
+        ui.add(egui::DragValue::new(value).range(range).speed(speed))
+            .labelled_by(label.id);
         ui.end_row();
     }
 
@@ -960,6 +1016,64 @@ mod tests {
         dialog.set_metric_source(None, "CURRENT");
         assert!(dialog.create("Metric: funding").is_none());
         assert!(dialog.create("SMA").is_some());
+    }
+
+    #[test]
+    fn source_chooser_lists_favorites_first_and_adds_with_the_requested_source() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let source = StudySource::Study { id: 7, plot: 2 };
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [320.0, 640.0] {
+                let mut dialog = IndicatorDialog::new();
+                let name = dialog
+                    .indicators
+                    .iter()
+                    .find(|info| info.id == "SMA")
+                    .unwrap()
+                    .name
+                    .clone();
+                dialog.favorites.insert("SMA".into());
+                dialog.open_on_source(source, "Volume");
+                let mut added = None;
+                let style = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(width, 640.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &style);
+                    })
+                    .build_ui(|ui| {
+                        if let IndicatorDialogAction::AddIndicator(study) =
+                            dialog.show(ui.ctx(), &theme)
+                        {
+                            added = study.source();
+                        }
+                    });
+                harness.run();
+                let row = harness.get_by_role_and_label(Role::ListBoxOption, &name);
+                assert!(
+                    harness
+                        .query_all_by_role(Role::ListBoxOption)
+                        .all(|other| other.rect().top() >= row.rect().top())
+                );
+                row.click();
+                harness.run();
+                let add = harness.get_by_role_and_label(Role::Button, "Add");
+                assert!(
+                    harness.ctx.content_rect().contains_rect(add.rect()),
+                    "width {width}"
+                );
+                add.click();
+                harness.run();
+                drop(harness);
+                assert_eq!(added, Some(source));
+                dialog.open();
+                assert!(
+                    dialog.source.is_none(),
+                    "opening normally clears the previous source"
+                );
+            }
+        }
     }
 
     #[test]

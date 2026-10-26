@@ -17,8 +17,6 @@ use layouts::{DemoChart, LayoutTab};
 
 #[path = "comparison.rs"]
 mod comparison;
-#[path = "export.rs"]
-mod export;
 #[path = "marks.rs"]
 mod marks;
 #[path = "replay.rs"]
@@ -81,7 +79,7 @@ use egui_charts::ui::widget_bar::{
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use live::LiveFeed;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use crate::sampledata::{DemoSymbol, visible_bars_for_range};
 
@@ -244,9 +242,6 @@ enum ScreenshotTarget {
     Clipboard,
 }
 
-/// A captured screenshot and where it goes.
-type Screenshot = (Result<Arc<egui::ColorImage>, String>, ScreenshotTarget, u64);
-
 /// App state surfaced to the toolbars via `ChartAppState`.
 pub struct DemoAppState {
     pub symbol: String,
@@ -384,14 +379,7 @@ pub struct DemoApp {
     screenshot_requested: Option<(
         ScreenshotTarget,
         egui_charts::widget::export::ImageExportOptions,
-        u64,
     )>,
-    // Reopening the dialog must not adopt an earlier readback result.
-    export_generation: u64,
-    export_renderer: Option<Arc<eframe::glow::Context>>,
-    image_jobs: usize,
-    // GPU readback sends each image here for delivery on the next frame.
-    screenshots: (mpsc::Sender<Screenshot>, mpsc::Receiver<Screenshot>),
 
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
@@ -644,10 +632,6 @@ impl DemoApp {
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             screenshot_requested: None,
-            export_generation: 0,
-            export_renderer: cc.gl.clone(),
-            image_jobs: 0,
-            screenshots: mpsc::channel(),
             toasts: Toasts::new(),
             demo_level: None,
             api_samples: false,
@@ -1098,7 +1082,7 @@ impl DemoApp {
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
             ExportFormat::Csv => return self.export_csv(save_path),
         };
-        self.screenshot_requested = Some((target, config.image, self.export_generation));
+        self.screenshot_requested = Some((target, config.image));
         ctx.request_repaint();
     }
 
@@ -1574,8 +1558,13 @@ impl DemoApp {
                 } else {
                     ScreenshotTarget::File(None)
                 };
-                self.screenshot_requested =
-                    Some((target, Default::default(), self.export_generation));
+                self.screenshot_requested = Some((
+                    target,
+                    egui_charts::widget::export::ImageExportOptions {
+                        include_crosshair: true,
+                        ..Default::default()
+                    },
+                ));
                 ctx.request_repaint();
             }
             TopToolbarAction::ToggleFullscreen => {
@@ -2446,6 +2435,11 @@ impl DemoApp {
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
+                if self.api_samples
+                    && let Some(pointer) = &self.crosshair
+                {
+                    Self::show_pointer_readout(ui, pointer);
+                }
                 if let Some(flow) = &self.footprint {
                     let config = egui_charts::chart::overlays::FootprintConfig {
                         text_color: self.theme.ui.text,
@@ -2559,6 +2553,38 @@ impl DemoApp {
         }
     }
 
+    /// A host legend and tooltip built entirely from the last pointer event.
+    fn show_pointer_readout(ui: &mut egui::Ui, pointer: &egui_charts::widget::ChartPointer) {
+        let Some(bar) = pointer.bar.as_ref().filter(|bar| !bar.is_whitespace()) else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "O {:.2} H {:.2} L {:.2} C {:.2} V {:.0}",
+                bar.open, bar.high, bar.low, bar.close, bar.volume
+            ))
+            .on_hover_ui(|ui| {
+                ui.label(pointer.time.to_rfc3339());
+                ui.label(format!("Bar {} · Pane {}", pointer.index, pointer.pane));
+                for (id, bar) in &pointer.series_bars {
+                    ui.label(format!("Series {}: {:.2}", id.0, bar.close));
+                }
+                for (_, row) in &pointer.studies {
+                    ui.colored_label(
+                        row.color,
+                        format!("{} {}", row.label(), row.formatted_value()),
+                    );
+                }
+            });
+            for (_, row) in &pointer.studies {
+                ui.colored_label(
+                    row.color,
+                    format!("{} {}", row.label(), row.formatted_value()),
+                );
+            }
+        });
+    }
+
     fn handle_context_action(&mut self, ctx: &egui::Context, action: ChartContextAction) {
         match action {
             ChartContextAction::Host { id, .. } if id == "demo-level-remove" => {
@@ -2593,7 +2619,19 @@ impl DemoApp {
     ) {
         match action {
             StudyContextMenuAction::AddAlert(alert) => self.alerts.save(*alert),
-            StudyContextMenuAction::AddIndicator => self.indicator_dialog.open(),
+            StudyContextMenuAction::AddIndicator => {
+                if let Some(source) = self.chart.take_indicator_source_request() {
+                    let name = self
+                        .chart
+                        .indicators()
+                        .find(|(study, _)| *study == id)
+                        .map(|(_, study)| study.name().to_owned())
+                        .unwrap_or_default();
+                    self.indicator_dialog.open_on_source(source, name);
+                } else {
+                    self.indicator_dialog.open();
+                }
+            }
             StudyContextMenuAction::AddToFavorites(name) => {
                 self.indicator_dialog.favorites.insert(name);
             }
@@ -2868,52 +2906,32 @@ impl DemoApp {
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
-        if let Some((target, options, generation)) = self.screenshot_requested.take() {
-            let result = self
-                .export_renderer
-                .as_ref()
-                .ok_or_else(|| "Image export requires the GPU renderer".to_owned())
-                .and_then(|renderer| {
-                    let frame = self.chart.export_image(ctx, &options)?;
-                    export::render_image(
-                        renderer,
-                        frame,
-                        target,
-                        generation,
-                        self.screenshots.0.clone(),
-                        ctx.clone(),
-                    )
-                });
-            match result {
-                Ok(()) => self.image_jobs += 1,
-                Err(error) => {
-                    if generation == self.export_generation && self.export_dialog.is_open() {
-                        self.export_dialog.mark_error(error.clone());
-                    }
-                    self.notify(format!("Export failed: {error}"));
-                }
-            }
-        }
-        if self.image_jobs > 0 {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
-        while let Ok((image, target, generation)) = self.screenshots.1.try_recv() {
-            self.image_jobs = self.image_jobs.saturating_sub(1);
-            let result = image.and_then(|image| match target {
+        let Some((target, options)) = self.screenshot_requested.take() else {
+            return;
+        };
+        let result = self
+            .chart
+            .export_png(ctx, &options)
+            .and_then(|png| match target {
+                ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
                 ScreenshotTarget::Clipboard => {
-                    ctx.copy_image((*image).clone());
+                    let image = image::load_from_memory(&png)
+                        .map_err(|error| error.to_string())?
+                        .into_rgba8();
+                    ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(
+                        [image.width() as usize, image.height() as usize],
+                        image.as_raw(),
+                    ));
                     Ok("Image sent to clipboard".to_owned())
                 }
-                ScreenshotTarget::File(path) => self.save_screenshot(&image, path),
             });
-            if generation == self.export_generation && self.export_dialog.is_open() {
-                match &result {
-                    Ok(_) => self.export_dialog.mark_success(),
-                    Err(error) => self.export_dialog.mark_error(error.clone()),
-                }
+        if self.export_dialog.is_open() {
+            match &result {
+                Ok(_) => self.export_dialog.mark_success(),
+                Err(error) => self.export_dialog.mark_error(error.clone()),
             }
-            self.notify(result.unwrap_or_else(|error| format!("Export failed: {error}")));
         }
+        self.notify(result.unwrap_or_else(|error| format!("Export failed: {error}")));
     }
 
     fn show_notice(&mut self, ctx: &egui::Context) {
@@ -2924,7 +2942,7 @@ impl DemoApp {
 
     fn save_screenshot(
         &self,
-        image: &egui::ColorImage,
+        png: &[u8],
         path: Option<std::path::PathBuf>,
     ) -> Result<String, String> {
         let path = path.unwrap_or_else(|| {
@@ -2934,26 +2952,10 @@ impl DemoApp {
             #[cfg(target_arch = "wasm32")]
             std::path::PathBuf::from(filename)
         });
-        let (w, h) = (image.size[0] as u32, image.size[1] as u32);
-        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-        for px in &image.pixels {
-            rgba.extend_from_slice(&px.to_srgba_unmultiplied());
-        }
-        let result = image::RgbaImage::from_raw(w, h, rgba)
-            .ok_or_else(|| "Screenshot buffer size mismatch".to_string())
-            .and_then(|buf| {
-                #[cfg(not(target_arch = "wasm32"))]
-                return buf
-                    .save_with_format(&path, image::ImageFormat::Png)
-                    .map_err(|e| e.to_string());
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let mut png = std::io::Cursor::new(Vec::new());
-                    buf.write_to(&mut png, image::ImageFormat::Png)
-                        .map_err(|e| e.to_string())?;
-                    browser_download(png.get_ref(), &path)
-                }
-            });
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = std::fs::write(&path, png).map_err(|error| error.to_string());
+        #[cfg(target_arch = "wasm32")]
+        let result = browser_download(png, &path);
         result.map(|()| format!("Export successful: {}", path.display()))
     }
 }
@@ -4022,51 +4024,58 @@ mod tests {
     }
 
     #[test]
-    fn image_results_only_update_the_requesting_dialog() {
-        use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
-        for reopen in [false, true] {
-            for fail in [false, true] {
-                let ctx = egui::Context::default();
-                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-                app.handle_layout_action(LayoutAction::DownloadImage);
-                let generation = app.export_generation;
-                if reopen {
-                    app.export_dialog.close();
-                    app.execute_search_command(&ctx, "export");
-                }
-                let image = if fail {
-                    Err("Readback failed".to_owned())
-                } else {
-                    Ok(Arc::new(egui::ColorImage::filled(
-                        [1, 1],
-                        egui::Color32::WHITE,
-                    )))
-                };
-                assert!(
-                    app.screenshots
-                        .0
-                        .send((image, ScreenshotTarget::Clipboard, generation))
-                        .is_ok()
-                );
-                app.handle_screenshot(&ctx);
-                for _ in 0..2 {
-                    ctx.run_ui(Default::default(), |ui| {
-                        let _ = app.export_dialog.show(ui.ctx());
-                    })
-                    .drop_without_applying_deltas();
-                }
-                let output = ctx.run_ui(Default::default(), |ui| {
-                    let _ = app.export_dialog.show(ui.ctx());
-                });
-                let has_status = output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Text(text)
-                        if text.galley.text().starts_with("Export successful") || text.galley.text().contains("Readback failed"))
-                });
-                output.drop_without_applying_deltas();
-                assert_eq!(has_status, !reopen, "reopen={reopen}, fail={fail}");
-                assert_eq!(app.toasts.toasts().len(), 1);
-            }
+    fn png_exports_include_the_crosshair_without_a_renderer() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let bars: Vec<_> = (0..100)
+            .map(|index| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(index),
+                    100.0,
+                    110.0,
+                    90.0,
+                    105.0,
+                    1000.0,
+                )
+            })
+            .collect();
+        let time = bars[50].time;
+        app.chart = Chart::new(BarData::from_bars(bars));
+        app.chart.set_crosshair_position(Some((time, 103.0)));
+        for _ in 0..2 {
+            ctx.run_ui(Default::default(), |ui| {
+                app.chart.show(ui);
+            })
+            .drop_without_applying_deltas();
         }
+        let path = std::env::temp_dir().join(format!(
+            "egui-charts-export-test-{}.png",
+            std::process::id()
+        ));
+        let mut images = Vec::new();
+        for include_crosshair in [false, true] {
+            app.run_export(
+                &ctx,
+                egui_charts::ui::export::ExportConfig {
+                    image: egui_charts::widget::export::ImageExportOptions {
+                        size: [200, 120],
+                        include_timestamp: false,
+                        include_crosshair,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(path.clone()),
+            );
+            app.handle_screenshot(&ctx);
+            let png = std::fs::read(&path).unwrap();
+            assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+            let image = image::load_from_memory(&png).unwrap();
+            assert_eq!((image.width(), image.height()), (200, 120));
+            images.push(png);
+        }
+        std::fs::remove_file(path).unwrap();
+        assert_ne!(images[0], images[1]);
     }
 
     #[test]
@@ -5563,6 +5572,7 @@ mod tests {
                     .any(|text| text == "Invisible" || text.contains("Hidden plot")),
                 "{text:?}"
             );
+            let pointer = app.crosshair.clone().unwrap();
             let latest = bars.last().unwrap().close;
             frame(&mut app, vec![egui::Event::PointerGone]);
             assert_eq!(app.build_data_window().close, latest);
@@ -5580,6 +5590,70 @@ mod tests {
             assert_eq!(app.chart.get_time_scale_state(), view);
             app.open_chart_settings_dialog();
             assert_eq!(app.settings_state.timezone, "Europe/Paris");
+
+            // A saved event still renders its legend and tooltip after the chart is gone.
+            app.chart = Chart::new(BarData::new());
+            app.api_samples = true;
+            for theme in [Theme::light(), Theme::dark()] {
+                egui_charts::theme::apply_to_egui(&ctx, &theme);
+                for width in [320.0, 800.0] {
+                    let mut labels = Vec::new();
+                    let mut hover = egui::pos2(40.0, 15.0);
+                    for step in 0..4 {
+                        app.crosshair = Some(pointer.clone());
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                time: Some(100.0 + ctx.cumulative_frame_nr() as f64),
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 600.0),
+                                )),
+                                events: (step < 2)
+                                    .then_some(egui::Event::PointerMoved(hover))
+                                    .into_iter()
+                                    .collect(),
+                                ..Default::default()
+                            },
+                            |ui| app.show_chart(ui, theme.chart.bg),
+                        );
+                        if let Some(text) = output.shapes.iter().find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.text().starts_with("O ")
+                            {
+                                Some(text)
+                            } else {
+                                None
+                            }
+                        }) {
+                            hover = text.pos + text.galley.size() / 2.0;
+                        }
+                        labels = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| {
+                                if let egui::Shape::Text(text) = &shape.shape {
+                                    Some(text.galley.text().to_owned())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(
+                        labels.contains(&format!(
+                            "O {:.2} H {:.2} L {:.2} C {:.2} V {:.0}",
+                            info.open, info.high, info.low, info.close, info.volume
+                        )),
+                        "{labels:?}"
+                    );
+                    assert!(labels.contains(&pointer.time.to_rfc3339()), "{labels:?}");
+                    assert!(
+                        labels.iter().any(|label| label.starts_with("SMA: SMA(2) ")),
+                        "{labels:?}"
+                    );
+                }
+            }
         }
     }
 

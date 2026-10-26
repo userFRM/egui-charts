@@ -435,7 +435,7 @@ impl DemoApp {
             }
             LayoutAction::Save => self.save_layout(),
             LayoutAction::DownloadImage => {
-                self.export_generation += 1;
+                self.screenshot_requested = None;
                 self.export_dialog.open();
             }
             LayoutAction::None => {}
