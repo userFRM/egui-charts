@@ -1172,12 +1172,15 @@ mod tests {
         paper.connect(events);
         inbox.drain();
         paper.set_price("A", 200.0);
+        let mut accounts = 0;
         for (_, event) in inbox.drain().answers {
             if let AccountEvent::Account(account) = *event.downcast::<AccountEvent>().unwrap() {
+                accounts += 1;
                 assert_eq!(account.equity, Some(1_500.0));
                 assert_eq!(account.margin, Some(1_000.0));
             }
         }
+        assert!(accounts > 0, "matching must publish the account");
     }
 
     #[test]
@@ -1254,6 +1257,7 @@ mod tests {
         let mut request = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
         request.time_in_force = TimeInForce::GoodTillCancelled;
         let id = place(&paper, request.clone()).unwrap();
+        let before = snapshot(&paper);
         for time_in_force in [
             TimeInForce::Day,
             TimeInForce::Week,
@@ -1282,12 +1286,10 @@ mod tests {
                 .downcast::<Result<(), FeedError>>()
                 .unwrap();
             assert_eq!(result, Err(FeedError::NotSupported));
+            assert_eq!(snapshot(&paper), before);
         }
-        assert_eq!(
-            paper.lock().working[0].request.time_in_force,
-            TimeInForce::GoodTillCancelled
-        );
     }
+
     #[test]
     fn bracket_exits_only_reduce_the_remaining_position() {
         let terms = PaperAccount::new("USD", 0.0);
