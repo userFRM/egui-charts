@@ -36,6 +36,10 @@ mod footprint;
 )]
 pub(crate) mod inbox;
 mod market;
+mod options_volume;
+#[cfg(feature = "studies")]
+pub(crate) use options_volume::OptionsVolumeSource;
+pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -138,6 +142,14 @@ pub trait Datafeed: MaybeSend + 'static {
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Push complete options-volume snapshots for the underlying and inclusive expiry range.
+    /// Each push replaces the previous figures, including an empty snapshot. Sum contracts
+    /// across the requested expiries at each strike. Stop when `sink.is_active()` is false.
+    /// The default supplies none; the library never fetches options data itself.
+    fn options_volume(&self, query: OptionsVolumeQuery, sink: OptionsVolumeSink) {
+        let _ = (query, sink);
     }
 
     /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],

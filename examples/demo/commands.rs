@@ -21,6 +21,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("grid", "Toggle grid", "Settings"),
         ("samples", "Toggle API samples", "Settings"),
         ("targets", "Show analyst price targets", "Actions"),
+        ("options-volume", "Options volume profile", "Actions"),
         ("heatmap", "Market heatmap", "Actions"),
         ("pane", "Add a symbol in a new pane", "Actions"),
     ]
@@ -116,6 +117,31 @@ impl DemoApp {
             }
             "heatmap" => {
                 self.open_panel = Some(super::SidePanel::MarketHeatmap);
+                return;
+            }
+            "options-volume" => {
+                let expiry = chrono::Utc::now().date_naive() + chrono::TimeDelta::days(30);
+                let query = egui_charts::data::OptionsVolumeQuery {
+                    symbol: self.chart.symbol().into(),
+                    expiries: expiry..=expiry,
+                };
+                let price = self
+                    .chart
+                    .state()
+                    .shown()
+                    .last()
+                    .map_or(100.0, |bar| bar.close);
+                let row_size = 10_f64.powf((price.abs().max(1.0) * 0.002).log10().floor());
+                let repaint = ctx.clone();
+                let viewport = ctx.viewport_id();
+                if let Some(profile) = egui_charts::studies::OptionsVolumeProfile::new(
+                    self.live.as_ref(),
+                    query,
+                    row_size,
+                    move || repaint.request_repaint_of(viewport),
+                ) {
+                    self.chart.add_indicator(Box::new(profile));
+                }
                 return;
             }
             "targets" => {
