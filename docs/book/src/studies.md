@@ -1,0 +1,39 @@
+# Studies
+
+Enable `studies` for the built-in catalogue and `IndicatorFactory`. The `Indicator`
+trait, `IndicatorValue`, `CustomIndicator` and `IndicatorRegistry` are also available
+in the headless engine.
+
+## Attach a built-in study
+
+```rust
+use egui_charts::{Chart, model::BarData};
+use egui_charts::studies::EMA;
+
+let mut chart = Chart::new(BarData::new());
+let study = chart.add_indicator(Box::new(EMA::new(20)));
+```
+
+The returned id identifies the study's series. The chart manages recalculation
+when source bars change and places overlays or separate panes according to the
+indicator. Built-in implementations and their definitions are listed in the
+[API reference](api-reference.md).
+
+## Write a custom study
+
+`CustomIndicator` accepts a `Send + Sync` calculation closure. Return one value
+per source bar and use `IndicatorValue::None` during warm-up or when input is
+unavailable. The [builder guide](builder-guide.md#custom-studies) includes a
+complete one-bar-change example. Implement `Indicator` directly for incremental
+calculation; `studies::helpers` and `Stepper` support reusable scalar operations.
+
+## Supply additional data
+
+Some studies need another interval, another symbol, instrument metrics or actual
+executions. A connected feed loads declared study data; direct hosts answer
+`Chart::study_data_requests` with `set_study_data`. Read
+[calendar and viewport studies](study-data.md) for intrabar requirements and missing
+values, and [order flow](order-flow.md) for event-driven inputs.
+
+The host may evaluate scripts and expose their results through a custom study.
+The library does not provide a scripting runtime.

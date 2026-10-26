@@ -1,0 +1,37 @@
+# Theming and localization
+
+Themes are Rust values. `Theme` supplies dark, light and high-contrast presets,
+and public fields for customization. The token layer defines spacing, sizing and
+semantic colours used by the chart and application components.
+
+## Apply a theme
+
+```rust
+use egui_charts::{ChartBuilder, theme::{self, Theme}};
+
+let context = egui::Context::default();
+let theme = Theme::dark();
+theme::apply_to_egui(&context, &theme);
+let mut chart = ChartBuilder::new().with_theme(theme).build();
+```
+
+Apply the theme at startup to propagate tokens into egui. `Chart::set_theme`
+updates an existing chart and the context. Use `set_theme_override` for a local
+chart theme when multiple charts need different appearances. Enable `serde` to
+serialize `Theme` in host settings.
+
+## Fonts and images
+
+`apply_to_egui` installs the bundled Roboto face ahead of the application's
+proportional fonts. To replace it, call `Context::set_fonts` afterwards. The host
+supplies additional glyph coverage. The chart installs SVG image loading;
+applications displaying other image formats install their own loaders.
+
+## Translate the interface
+
+Install a host text lookup with `localization::set_translator` before drawing.
+Missing entries keep English text. Replacing or clearing the lookup takes effect
+on the next frame; translations and fonts belong to the host. UI labels and
+accessibility names use that lookup, while dates and numbers use the chart's
+formatters and locale. `Chart::set_locale` controls localized calendar labels;
+`locales` enables the locale tables.

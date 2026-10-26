@@ -1,0 +1,27 @@
+# Drawings and persistence
+
+Enable `drawings` for drawing tools, selection, handles, undo/redo and persistence.
+`DrawingToolType` identifies a tool and its interaction mode. The `ui` feature
+also provides a drawing toolbar for a host-composed layout.
+
+## Save through the chart
+
+Use `Chart::save_drawings`, then validate and serialize the returned drawing file
+before replacing a previous save. Restore with `Chart::load_drawings` after setting
+the matching symbol. Chart-level persistence retains timestamped anchors, so
+prepending history does not move a saved drawing to another bar.
+
+The [builder guide](builder-guide.md#save-and-load-drawings) includes a tested
+round trip. Unreadable files and symbol mismatches leave current drawings intact;
+report skipped records to the user rather than silently discarding them.
+
+## Keep durable storage in the host
+
+Store the JSON in your own file or service. Implement `services::Storage` and
+attach it with `Chart::set_storage` for automatic per-symbol persistence.
+With `ui`, `Chart::snapshot` and `Chart::restore` additionally preserve settings,
+studies and the view.
+
+The [drawing persistence example](https://github.com/userFRM/egui-charts/blob/main/examples/drawing_persistence.rs)
+shows save/load and error handling. Drawing types and programmatic construction
+are documented in the [API reference](api-reference.md).

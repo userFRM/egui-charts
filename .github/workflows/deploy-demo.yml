@@ -2,9 +2,8 @@ name: Pages
 
 # Builds the project site on every pull request and publishes it to GitHub
 # Pages on every push to `main`: the WebAssembly demo at /egui-charts/demo/,
-# and for now the same page at /egui-charts/.  Pages must be enabled for the
-# repository with the source set to "GitHub Actions" for the deploy job to
-# publish.
+# the same page at /egui-charts/, and the guide and API at /egui-charts/docs/.
+# Pages must use the "GitHub Actions" source for the deploy job to publish.
 
 on:
   push:
@@ -15,6 +14,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   TRUNK_VERSION: "0.21.14"
+  MDBOOK_VERSION: "0.5.2"
 
 # Allow only one concurrent deployment, cancelling in-progress runs of the same
 # ref so a newer commit always wins the Pages publish.
@@ -24,11 +24,11 @@ concurrency:
 
 jobs:
   # Build the native examples and the site exactly as it is published, so a
-  # broken demo never lands.
+  # broken demo or documentation build never lands.
   build:
     name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,6 +43,22 @@ jobs:
         uses: jetli/trunk-action@v0.5.0
         with:
           version: "v${{ env.TRUNK_VERSION }}"
+      - name: Install mdBook
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" mdbook
+          mkdir -p "$HOME/.local/bin"
+          install "$RUNNER_TEMP/mdbook" "$HOME/.local/bin/mdbook"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Test documentation examples
+        run: cargo test --doc --all-features
+      - name: Build guide
+        run: python3 docs/book/build.py
+      - name: Build API reference
+        env:
+          RUSTDOCFLAGS: -Dwarnings --extend-css docs/book/theme/api.css
+        run: cargo doc --no-deps --all-features
       - name: Build native examples
         run: cargo build --examples
       - name: Build wasm demo
@@ -55,6 +71,15 @@ jobs:
           mkdir _site
           cp -r examples/demo/dist _site/demo
           cp examples/demo/dist/index.html _site/index.html
+          cp -r target/book _site/docs
+          cp -r target/doc _site/docs/api
+          # rustdoc's crate index is nested; give /docs/api/ a stable entry point.
+          cat > _site/docs/api/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta http-equiv="refresh" content="0; url=egui_charts/index.html">
+          <title>egui-charts API reference</title><a href="egui_charts/index.html">Open the API reference</a></html>
+          HTML
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

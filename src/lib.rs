@@ -234,6 +234,39 @@ pub use widget::{Chart, ChartBuilder, RightClickTarget};
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
+// Compile the book examples, including the source guides expanded by mdBook.
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/chart-types.md")]
+pub struct BookChartTypesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/data-model.md")]
+pub struct BookDataModelDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/data.md")]
+pub struct BookDataDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/first-chart.md")]
+pub struct BookFirstChartDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/studies.md")]
+pub struct BookStudiesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/book/src/theming.md")]
+pub struct BookThemingDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/study-data.md")]
+pub struct StudyDataGuideDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/strategy-report.md")]
+pub struct StrategyReportGuideDoctests;
+
 #[cfg(all(test, feature = "ui"))]
 mod tests {
     use crate::drawings::DrawingToolType;

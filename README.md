@@ -4,7 +4,7 @@
 
 Financial charts for [egui](https://github.com/emilk/egui), from a single chart widget to a full trading terminal.
 
-**[Live demo](https://userfrm.github.io/egui-charts/demo/)** · [API docs](https://docs.rs/egui-charts) · [Examples](https://github.com/userFRM/egui-charts/tree/main/examples)
+[Documentation](https://userfrm.github.io/egui-charts/docs/) · **[Live demo](https://userfrm.github.io/egui-charts/demo/)** · [API docs](https://docs.rs/egui-charts) · [Examples](https://github.com/userFRM/egui-charts/tree/main/examples)
 
 [![CI](https://github.com/userFRM/egui-charts/workflows/CI/badge.svg)](https://github.com/userFRM/egui-charts/actions)
 [![crates.io](https://img.shields.io/crates/v/egui-charts.svg)](https://crates.io/crates/egui-charts)

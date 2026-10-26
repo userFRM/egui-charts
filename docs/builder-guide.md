@@ -105,7 +105,7 @@ Exchange UTC positions between charts, including charts with different intervals
 or history lengths. Local bar indices and spacing depend on each chart's data and
 width. After showing the source chart:
 
-```rust,no_run
+```rust
 # use egui_charts::{Chart, model::BarData};
 # let source = Chart::new(BarData::new());
 # let mut target = Chart::new(BarData::new());

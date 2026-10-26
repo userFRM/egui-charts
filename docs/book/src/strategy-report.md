@@ -1,0 +1,1 @@
+{{#include ../../strategy-report.md}}

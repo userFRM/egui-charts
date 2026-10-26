@@ -1,0 +1,31 @@
+# Scales and navigation
+
+The chart supplies time and price scales, pointer navigation and crosshair
+interaction. `ChartConfig` and `ChartOptions` configure behaviour; the
+[API reference](api-reference.md) documents their fields and defaults.
+
+## Choose a price scale
+
+The price scale supports normal, logarithmic, percentage and indexed modes.
+Use the instrument's precision and a price formatter for labels. A logarithmic
+scale needs positive drawable prices. Relative scales need a usable reference;
+when it is unavailable or zero, the renderer uses ordinary prices.
+
+## Exchange time, not bar indices
+
+Use `Chart::visible_time_range` and `Chart::apply_synced_time_range` to share
+UTC viewports. Use `hover_time` and `set_synced_crosshair_time` for crosshairs.
+Show each receiving chart once so its plot width is known. Select one source
+chart and propagate only its changes to avoid feedback loops.
+
+The [builder guide](builder-guide.md#synchronize-charts) includes the integration
+snippet; the [synchronized charts example](https://github.com/userFRM/egui-charts/blob/main/examples/synchronized_charts.rs)
+shows different intervals together. For deliberate future whitespace, use
+`set_visible_logical_range` with the chart's own logical coordinates.
+
+## Handle chart events
+
+After `Chart::show`, drain `Chart::drain_events` for pointer actions, crosshair
+movement and visible-range changes. Let the host decide whether a click opens
+another view or changes application selection. Keep that decision outside the
+renderer.

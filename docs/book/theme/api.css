@@ -1,0 +1,41 @@
+/* Use the same system typography as the guide while retaining rustdoc's layout. */
+:root {
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-family-code: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+body, h1, h2, h3, h4, h5, h6, .sidebar, .search-input, button, select {
+    font-family: var(--font-family);
+}
+.docblock { line-height: 1.7; }
+h1, h2, h3 { font-weight: 650; letter-spacing: -0.025em; }
+:root[data-theme="light"], :root:not([data-theme]) {
+    --main-background-color: #ffffff;
+    --main-color: #252b36;
+    --sidebar-background-color: #f7f8fa;
+    --sidebar-background-color-hover: #edf0f6;
+    --sidebar-border-color: #e5e8ee;
+    --code-block-background-color: #f6f8fb;
+    --headings-border-bottom-color: #e5e8ee;
+    --link-color: #285bd4;
+    --mod-link-color: #285bd4;
+    --sidebar-link-color: #285bd4;
+    --code-highlight-comment-color: #69788a;
+}
+:root[data-theme="dark"] {
+    --main-background-color: #15181e;
+    --main-color: #d9dfe9;
+    --sidebar-background-color: #11141a;
+    --sidebar-background-color-hover: #202734;
+    --sidebar-current-link-background-color: #202734;
+    --sidebar-border-color: #2b323e;
+    --code-block-background-color: #1b2029;
+    --headings-border-bottom-color: #2b323e;
+    --border-color: #303745;
+    --table-alt-row-background-color: #191e26;
+    --link-color: #8eafff;
+    --mod-link-color: #8eafff;
+    --sidebar-link-color: #8eafff;
+    --code-highlight-comment-color: #9ba9bf;
+    --code-highlight-string-color: #94c5a2;
+    --code-highlight-number-color: #d7ab88;
+}
