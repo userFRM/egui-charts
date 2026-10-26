@@ -1,11 +1,8 @@
-//! Desktop Toolbar Components
+//! Horizontal and vertical toolbar layouts with grouped buttons.
 //!
-//! Simplified toolbar abstractions for desktop-only applications.
-//!
-//! # Key Components
-//! - [`ResponsiveToolbar`]: Direct toolbar layout (no mobile scroll)
-//! - [`ButtonGroup`]: Groups toolbar buttons with optional separators
-//! - [`ToolbarLayout`]: Left/right split layout helper
+//! Use [`ResponsiveToolbar`] for a toolbar container, [`ButtonGroup`] for related
+//! actions and [`ToolbarLayout`] to split left and right controls. Toolbars lay out
+//! contents directly without adding scrolling.
 
 mod button_group;
 
@@ -27,9 +24,9 @@ pub enum Orientation {
     Vertical,
 }
 
-/// Desktop toolbar component (simplified from ResponsiveToolbar).
+/// Horizontal or vertical toolbar container with an egui state scope.
 ///
-/// Desktop-only: No scrolling or mobile adaptations.
+/// Contents use the available layout directly, without a scroll area.
 ///
 /// # Example
 /// ```
@@ -76,7 +73,7 @@ impl ResponsiveToolbar {
         self
     }
 
-    /// Show the toolbar (desktop-only: direct layout, no scroll)
+    /// Show the toolbar contents without a scroll area.
     ///
     /// The callback receives:
     /// - `ui`: The UI context to render into

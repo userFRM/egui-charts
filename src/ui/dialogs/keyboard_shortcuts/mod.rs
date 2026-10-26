@@ -36,6 +36,7 @@ impl Default for KeyboardShortcutsDialog {
 }
 
 impl KeyboardShortcutsDialog {
+    /// Create a [`KeyboardShortcutsDialog`] with default settings.
     pub fn new() -> Self {
         Self { is_open: false }
     }

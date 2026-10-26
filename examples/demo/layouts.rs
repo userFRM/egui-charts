@@ -80,6 +80,7 @@ impl DemoApp {
             self.activate_chart_slot(0);
         }
         self.top_toolbar.chart_grid_selector.set_layout(mode);
+        self.refresh_strategy_signals();
     }
 
     fn copy_chart(
@@ -188,6 +189,7 @@ impl DemoApp {
     }
 
     fn refresh_active_chart(&mut self) {
+        self.refresh_strategy_signals();
         self.last_chart_click = None;
         self.crosshair = None;
         self.pointer_readout = None;

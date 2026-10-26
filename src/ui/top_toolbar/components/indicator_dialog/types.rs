@@ -1,6 +1,6 @@
-//! Type definitions for the indicator dialog.
+//! Study browser tabs and category labels.
 //!
-//! Defines the indicator tabs and the sidebar categories.
+//! Use these values to select the dialog's section or group studies in a host picker.
 
 /// Indicator tabs in the dialog sidebar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

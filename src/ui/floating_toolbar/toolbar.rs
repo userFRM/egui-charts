@@ -33,7 +33,9 @@ pub enum FloatingToolbarAction {
 /// Configuration for color slots shown in toolbar
 #[derive(Clone, Debug)]
 pub struct ColorSlot {
+    /// Text displayed by the component.
     pub label: &'static str,
+    /// Color.
     pub color: Color32,
 }
 

@@ -1,4 +1,7 @@
-//! Readable, editable and serializable display settings of a chart.
+//! Editable and serializable chart display settings.
+//!
+//! Use [`ChartSettingsState`] to read, modify or persist the settings exposed by
+//! the chart settings dialog without depending on application UI components.
 
 mod apply;
 mod data;

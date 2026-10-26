@@ -112,8 +112,11 @@ pub enum AlertEvent {
     /// The alert fired at `time`, at `price` (finite) when the host knows it. The terminal shows a
     /// popup and logs it; push an `Upsert` as well when the alert's status changes.
     Triggered {
+        /// Identifier of the alert that fired.
         id: AlertId,
+        /// UTC instant of the trigger.
         time: DateTime<Utc>,
+        /// Price observed by the host when the alert fired, when available.
         price: Option<f64>,
     },
 }

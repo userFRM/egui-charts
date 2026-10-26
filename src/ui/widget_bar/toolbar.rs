@@ -33,26 +33,34 @@ pub enum WidgetBarSection {
 pub enum RightBarIcon {
     /// The watchlist and the details of the chart's symbol.
     Watchlist,
+    /// Alerts panel.
     Alerts,
     /// The object tree, with the data window.
     ObjectTree,
+    /// News highlights panel.
     Highlights,
+    /// Instrument screener.
     Screener,
+    /// Ranked instrument lists.
     Hotlists,
     /// A treemap of symbols sized and coloured by host-supplied values.
     MarketHeatmap,
     /// The economic and corporate event calendars.
     Calendar,
+    /// News headlines panel.
     News,
     /// The alert and event log.
     Notifications,
+    /// Host chat rooms.
     Chats,
     /// The products launcher, drawn as a filled round button.
     Products,
+    /// Host help action.
     Help,
 }
 
 impl RightBarIcon {
+    /// Icon representing this value.
     pub fn icon(&self) -> &'static Icon {
         match self {
             RightBarIcon::Watchlist => &embedded_icons::WIDGET_BAR_WATCHLIST,
@@ -71,6 +79,7 @@ impl RightBarIcon {
         }
     }
 
+    /// Help text for this value.
     pub fn tooltip(&self) -> &'static str {
         match self {
             RightBarIcon::Watchlist => "Watchlist and details",
@@ -150,7 +159,9 @@ pub struct WidgetBarWidget {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum WidgetBarAction {
+    /// No action requested.
     None,
+    /// A built-in bar entry was clicked.
     Clicked(RightBarIcon),
     /// A host widget was clicked, including when it was toggled closed.
     WidgetClicked(u64),
@@ -158,6 +169,7 @@ pub enum WidgetBarAction {
 
 /// Right Edge Icon Bar
 pub struct WidgetBar {
+    /// Display and layout options for this component.
     pub config: WidgetBarConfig,
     /// Built-in entries shown, drawn in [`RightBarIcon`] order.
     pub icons: Vec<RightBarIcon>,
@@ -168,6 +180,7 @@ pub struct WidgetBar {
     pub widgets: Vec<WidgetBarWidget>,
     /// Active host widget. Selecting a built-in entry clears it, and vice versa.
     pub active_widget: Option<u64>,
+    /// Badge counts keyed by built-in bar entry.
     pub notification_counts: std::collections::HashMap<RightBarIcon, u32>,
     /// Controls the host hid.
     hidden: HashSet<Control>,
@@ -206,10 +219,12 @@ impl Default for WidgetBar {
 }
 
 impl WidgetBar {
+    /// Create a [`WidgetBar`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: WidgetBarConfig) -> Self {
         self.config = config;
         self
@@ -288,6 +303,7 @@ impl WidgetBar {
         }
     }
 
+    /// Set the badge count for a built-in bar entry.
     pub fn set_notification_cnt(&mut self, icon: RightBarIcon, count: u32) {
         self.notification_counts.insert(icon, count);
     }

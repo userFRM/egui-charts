@@ -1,4 +1,4 @@
-//! UI styles: the keyboard focus ring and sizing, typography, icon and stroke constants.
+//! UI sizing, typography, icon sizes and keyboard focus helpers.
 //!
 //! UI colours, text, spacing and radii come from the applied [`Theme`](crate::theme::Theme).
 //! These modules retain fixed component dimensions and the default font sizes used by

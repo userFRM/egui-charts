@@ -23,6 +23,8 @@ mod marks;
 mod replay;
 #[path = "storage.rs"]
 mod storage;
+#[path = "strategy.rs"]
+mod strategy;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -328,6 +330,10 @@ pub struct DemoApp {
     export_dialog: ExportDialog,
     date_picker: DatePicker,
 
+    // A finished host-run sample, independent of subsequent chart navigation.
+    strategy_report: egui_charts::ui::strategy_report::StrategyReportPanel,
+    strategy_trade: Option<usize>,
+
     // Right-hand side panel.
     object_tree: ObjectTreePanel,
     open_panel: Option<SidePanel>,
@@ -552,6 +558,8 @@ impl DemoApp {
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
+            strategy_report: Default::default(),
+            strategy_trade: None,
             object_tree: ObjectTreePanel::new(),
             open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
@@ -1254,6 +1262,7 @@ impl eframe::App for DemoApp {
         if !narrow_account {
             self.show_account_panel(ui, panel_bg);
         }
+        self.show_strategy_report(ui, panel_bg);
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -2459,6 +2468,7 @@ impl DemoApp {
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
+                self.highlight_strategy_trade(ui);
                 if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts {
@@ -3957,16 +3967,21 @@ mod tests {
     fn quick_search_executes_studies_tools_and_settings() {
         use eframe::App;
         use egui::{Event, Key, Modifiers, RawInput};
-        for (query, same_frame, toolbar) in ["RSI", "Trend Line", "Chart settings"]
-            .into_iter()
-            .flat_map(|query| {
-                [
-                    (query, false, false),
-                    (query, true, false),
-                    (query, true, true),
-                ]
-            })
-        {
+        for (query, same_frame, toolbar) in [
+            "RSI",
+            "Trend Line",
+            "Chart settings",
+            "Sample backtest",
+            "Export chart",
+        ]
+        .into_iter()
+        .flat_map(|query| {
+            [
+                (query, false, false),
+                (query, true, false),
+                (query, true, true),
+            ]
+        }) {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
@@ -4075,6 +4090,23 @@ mod tests {
                     app.chart.drawings().active_tool,
                     Some(egui_charts::drawings::DrawingToolType::TrendLine)
                 ),
+                "Sample backtest" => {
+                    let output = ctx.run_ui(RawInput::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest());
+                    });
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == "Strategy report")));
+                    output.drop_without_applying_deltas();
+                }
+                "Export chart" => {
+                    assert!(app.export_dialog.is_open());
+                    let output = ctx.run_ui(RawInput::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest());
+                    });
+                    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with("Error:"))));
+                    output.drop_without_applying_deltas();
+                }
                 _ => assert!(app.settings_dialog.is_open),
             }
         }

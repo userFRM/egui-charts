@@ -1,7 +1,7 @@
-//! Icon mapping functions for drawing tools and categories.
+//! Icon lookup for drawing tools and toolbar categories.
 //!
-//! Pure mapping functions that translate DrawingToolType to SVG icons.
-//! No state, no dependencies - just mappings.
+//! Use these mappings when composing a host tool picker from the crate's drawing
+//! tool definitions.
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons};

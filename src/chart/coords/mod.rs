@@ -1,39 +1,27 @@
-//! Unified chart coordinate system.
+//! Coordinate mapping between bar indices, prices and screen positions.
 //!
-//! This module provides the single source of truth for all coordinate
-//! conversions between bar indices, prices, and screen positions.
-//!
-//! # Key Types
-//!
-//! - [`ChartMapping`]: The unified coordinate mapper for idx ↔ x and price ↔ y
-//!
-//! # Coordinate Formula
-//!
-//! ```text
-//! delta_from_right = base_idx + right_offset - bar_idx
-//! x = rect.min.x + rect.width() - (delta_from_right + 0.5) * bar_spacing - 1.0
-//! ```
+//! Use [`ChartMapping`] to share the same mapping across rendering, hit testing
+//! and host overlays.
 
 use crate::scales::PriceMap;
 use egui::{Pos2, Rect};
 
 /// Unified coordinate mapping for charts and indicator panes.
 ///
-/// This is the single source of truth for converting between:
+/// Converts between:
 /// - Bar indices ↔ X screen coordinates
 /// - Prices ↔ Y screen coordinates
 ///
-/// All chart components (main chart, indicator panes, hit testing, drawings)
-/// should use this struct for coordinate conversions.
+/// Share the mapping with overlays and hit tests to keep them aligned with the pane.
 #[derive(Clone, Copy, Debug)]
 pub struct ChartMapping {
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Spacing between bars in pixels
+    /// Spacing between bars in egui logical points.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
-    /// Index of the last visible bar (anchor point for x conversion)
+    /// Index of the final bar in the series, used as the horizontal anchor.
     pub base_idx: usize,
     /// Right-side offset for chart scrolling (in bar units)
     pub right_offset: f64,

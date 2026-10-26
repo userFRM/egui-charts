@@ -1,4 +1,8 @@
-//! Main indicator dialog implementation
+//! Study browser dialog backed by the configured factory.
+//!
+//! Use [`IndicatorDialog`] for search, category and favorite filtering, parameter
+//! editing and add-study actions. Host-provided metric series can be offered beside
+//! the factory catalogue.
 
 use super::{
     actions::IndicatorDialogAction,

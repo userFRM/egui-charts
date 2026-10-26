@@ -38,7 +38,9 @@ pub trait Notifications: MaybeSend + 'static {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Notification {
+    /// UTC timestamp supplied by the host.
     pub time: DateTime<Utc>,
+    /// Display title.
     pub title: String,
     /// Detail shown under the title. May be empty.
     pub body: String,

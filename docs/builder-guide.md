@@ -72,7 +72,7 @@ assert_eq!(change.values().value(0, 2), Some(-2.0));
 The chart recalculates the closure when bars change. Implement `studies::Indicator`
 directly when incremental calculation is needed. `CustomIndicator::with_inputs`
 declares validated editable settings. Additional symbol and interval histories use
-`studies::StudyDataRequest`; see the study-data guide in the repository.
+`studies::StudyDataRequest`.
 
 ## Save and load drawings
 
@@ -137,8 +137,8 @@ report compilation and execution errors in the host UI. A closure may capture an
 
 ## Runnable examples
 
-Run `cargo run --example <name>` from the repository. The examples use the public API and
-generated sample data.
+Run `cargo run --example <name>` from a source checkout. These examples use the
+public API and generated sample data.
 
 | Name | Workflow |
 |---|---|
@@ -150,5 +150,4 @@ generated sample data.
 | `synchronized_charts` | UTC crosshair and viewport sharing across different intervals |
 
 The backtest also runs without egui: `cargo run --example backtesting
---no-default-features`. The demo's execution-based history remains separate from
-the standalone examples' shared OHLCV generator.
+--no-default-features`.

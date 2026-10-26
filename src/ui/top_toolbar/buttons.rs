@@ -1,6 +1,6 @@
-//! Reusable button components for the top toolbar.
+//! Icon, text and dropdown buttons sized for the top toolbar.
 //!
-//! Eliminates ~180 lines of repetitive button rendering code.
+//! Use these components when extending the top toolbar with host controls.
 
 use crate::localization as l10n;
 use std::sync::Arc;
@@ -20,17 +20,20 @@ pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("me
 /// Small icon-only button (config-driven size)
 ///
 /// Used for: undo, redo, settings, theme, fullscreen, screenshot, save, etc.
-/// This component eliminates ~161 lines of duplication (used 7 times in show()).
 ///
 /// Note: This is the top-toolbar-specific variant that uses [`TopToolbarConfig`]
 /// for sizing. For a generic icon button, see [`crate::ui_kit::buttons::IconButton`].
 pub struct ToolbarIconButton<'a> {
+    /// Glyph displayed by the component.
     pub icon: &'a Icon,
+    /// Help text displayed on hover.
     pub tooltip: &'static str,
+    /// Display and layout options for this component.
     pub config: TopToolbarConfig,
 }
 
 impl<'a> ToolbarIconButton<'a> {
+    /// Create an icon button with hover text and toolbar sizing.
     pub fn new(icon: &'a Icon, tooltip: &'static str, config: &TopToolbarConfig) -> Self {
         Self {
             icon,
@@ -39,6 +42,7 @@ impl<'a> ToolbarIconButton<'a> {
         }
     }
 
+    /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
         // Match glyph ink bounds while preserving the host's configured icon scale.
         let icon_size = match self.icon.name() {
@@ -90,14 +94,17 @@ impl<'a> ToolbarIconButton<'a> {
 /// Icon button with text label
 ///
 /// Used for: Indicators, Alert, Replay btns.
-/// This component eliminates ~117 lines of duplication (used 3 times in show()).
 pub struct IconTextButton<'a> {
+    /// Glyph displayed by the component.
     pub icon: &'a Icon,
+    /// Text displayed by the component.
     pub label: &'static str,
+    /// Display and layout options for this component.
     pub config: TopToolbarConfig,
 }
 
 impl<'a> IconTextButton<'a> {
+    /// Create an icon and label button with toolbar sizing.
     pub fn new(icon: &'a Icon, label: &'static str, config: &TopToolbarConfig) -> Self {
         Self {
             icon,
@@ -115,6 +122,7 @@ impl<'a> IconTextButton<'a> {
         self.config.small_icon_size + self.config.padding * 3.0 + galley.size().x
     }
 
+    /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
         let icon_size = self.config.small_icon_size;
         let padding = self.config.padding;
@@ -192,12 +200,16 @@ impl<'a> IconTextButton<'a> {
 ///
 /// Displays text with hover/pressed background.
 pub struct TextButton {
+    /// Button label.
     pub text: String,
+    /// Help text displayed on hover.
     pub tooltip: Option<&'static str>,
+    /// Display and layout options for this component.
     pub config: TopToolbarConfig,
 }
 
 impl TextButton {
+    /// Create a text button with toolbar sizing.
     pub fn new(text: String, config: &TopToolbarConfig) -> Self {
         Self {
             text,
@@ -206,11 +218,13 @@ impl TextButton {
         }
     }
 
+    /// Set help text shown on hover.
     pub fn with_tooltip(mut self, tooltip: &'static str) -> Self {
         self.tooltip = Some(tooltip);
         self
     }
 
+    /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         // Measure actual text width
@@ -277,13 +291,18 @@ pub fn separator(ui: &mut Ui) {
 
 /// Text + icon dropdown button (Save dropdown, etc.)
 pub struct TextIconButton<'a> {
+    /// Button label.
     pub text: &'static str,
+    /// Glyph displayed by the component.
     pub icon: &'a crate::icons::Icon,
+    /// Help text displayed on hover.
     pub tooltip: &'static str,
+    /// Display and layout options for this component.
     pub config: TopToolbarConfig,
 }
 
 impl<'a> TextIconButton<'a> {
+    /// Create a text and icon button with hover text and toolbar sizing.
     pub fn new(
         text: &'static str,
         icon: &'a crate::icons::Icon,
@@ -308,6 +327,7 @@ impl<'a> TextIconButton<'a> {
         galley.rect.width() + self.config.padding * 3.0 + icon_sizes::XS
     }
 
+    /// Show the component and return its response.
     pub fn show(self, ui: &mut Ui) -> Response {
         let padding = self.config.padding;
         let icon_size = icon_sizes::XS;

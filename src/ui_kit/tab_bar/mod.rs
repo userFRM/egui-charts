@@ -38,6 +38,7 @@ use egui::{Role, Sense, Ui, WidgetInfo, vec2};
 ///
 /// Implement this on your tab enum so `TabBar` can render it.
 pub trait TabLabel: Copy + PartialEq {
+    /// Label displayed for this tab.
     fn tab_label(&self) -> &str;
 }
 
@@ -52,6 +53,7 @@ pub struct TabBar<'a, T: TabLabel> {
 }
 
 impl<'a, T: TabLabel> TabBar<'a, T> {
+    /// Bind the offered tabs to the current selection.
     pub fn new(tabs: &'a [T], active: &'a mut T) -> Self {
         Self {
             tabs,

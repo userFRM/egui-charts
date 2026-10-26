@@ -42,19 +42,29 @@ pub enum OrderEvent {
     /// Replaces price or remaining size. A changed price always loses priority; otherwise
     /// `keep_priority` preserves the position only when the venue says it does. Size zero cancels.
     Modify {
+        /// Venue identifier of the order to change.
         id: u64,
+        /// Replacement limit price, or `None` to retain the current price.
         price: Option<f64>,
+        /// Replacement remaining size, or `None` to retain it.
         size: Option<f64>,
+        /// Whether the venue preserves this order's queue position after the change.
         keep_priority: bool,
     },
     /// Cancels the remaining order.
-    Cancel { id: u64 },
+    Cancel {
+        /// Venue identifier of the order to change.
+        id: u64,
+    },
     /// Removes `size` from an order, keeping its priority on a partial fill. A known trade is
     /// pushed through the trade path with `resting_order_id` set. Never also push it without a
     /// unique trade id. Size must not exceed the order's remaining size.
     Execute {
+        /// Venue identifier of the order to change.
         id: u64,
+        /// Executed quantity to remove from the order.
         size: f64,
+        /// Execution associated with this fill, when supplied.
         trade: Option<Tick>,
     },
 }

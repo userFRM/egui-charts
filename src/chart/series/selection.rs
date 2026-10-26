@@ -2,7 +2,7 @@
 //!
 //! The chart owns selection; hosts read it with
 //! [`Chart::selected_element`](crate::Chart::selected_element).
-//! [`SeriesId`] identifies a price or volume series.
+//! [`SeriesId`] identifies a bar series, the volume series or a study.
 
 pub use crate::chart::selection::SeriesId;
 

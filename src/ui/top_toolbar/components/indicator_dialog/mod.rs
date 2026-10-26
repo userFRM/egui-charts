@@ -1,14 +1,8 @@
-//! Indicators Dialog
+//! Study search, selection, configuration and template controls.
 //!
-//! A modal dialog for searching, browsing, configuring and adding indicators to the chart.
-//! Features categories, favorites, search, tabs, and param configuration.
-//!
-//! ## Module Organization
-//! - `types`: Enum definitions (IndicatorTab, IndicatorCategory)
-//! - `data`: Data structures (IndicatorInfo, IndicatorParams)
-//! - `config`: Configuration struct
-//! - `actions`: Action enum
-//! - `dialog`: Main IndicatorDialog implementation
+//! Use [`IndicatorDialog`] with an `IndicatorFactory` to browse and add studies,
+//! and [`IndicatorSettingsDialog`] to edit an existing study. The host applies the
+//! returned actions and retains user preferences and templates.
 
 // Module declarations
 pub mod actions;

@@ -23,12 +23,16 @@ pub enum BackgroundStyle {
     Solid,
     /// Vertical gradient from top to bottom
     VerticalGradient {
+        /// Color at the top edge of the gradient.
         top_color: Color32,
+        /// Color at the bottom edge of the gradient.
         bottom_color: Color32,
     },
     /// Horizontal gradient from left to right
     HorizontalGradient {
+        /// Color at the left edge of the gradient.
         left_color: Color32,
+        /// Color at the right edge of the gradient.
         right_color: Color32,
     },
 }

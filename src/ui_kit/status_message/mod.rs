@@ -25,9 +25,13 @@ use egui::Ui;
 /// Kind of status message, determines color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageKind {
+    /// An operation failed.
     Error,
+    /// Successful completion.
     Success,
+    /// A warning requiring attention.
     Warning,
+    /// Informational status.
     Info,
 }
 

@@ -1,45 +1,8 @@
-//! Repository for drawing tools data access.
+//! Drawing tool category lookup and search.
 //!
-//! This module implements the Repository pattern to abstract data access
-//! for drawing tools, categories, and related metadata.
-//!
-//! ## Benefits
-//!
-//! - **Abstraction**: UI and services don't know where data comes from
-//! - **Testability**: Easy to mock/stub for testing
-//! - **Flexibility**: Can swap implementations (in-memory, JSON, database) without changing consumers
-//! - **Single responsibility**: All data access logic in one place
-//!
-//! ## Architecture
-//!
-//! ```text
-//! ┌─────────────┐
-//! │  UI Layer   │
-//! └──────┬──────┘
-//!        │ uses
-//! ┌──────▼─────────┐
-//! │  Service Layer │
-//! └──────┬─────────┘
-//!        │ uses
-//! ┌──────▼────────────────┐
-//! │  Repository (trait)   │ ← Interface
-//! └───────────────────────┘
-//!          △
-//!          │ implements
-//! ┌────────┴───────────────┐
-//! │  InMemoryRepository    │ ← Current implementation
-//! └────────────────────────┘
-//! ```
-//!
-//! ## Usage
-//!
-//! ```rust
-//! use egui_charts::drawings::repositories::{DrawingToolsRepository, InMemoryToolsRepository};
-//!
-//! let repo = InMemoryToolsRepository::new();
-//! let categories = repo.get_all_categories();
-//! let tools = repo.get_category_tools("Lines");
-//! ```
+//! [`DrawingToolsRepository`] supplies category sections and case-insensitive tool
+//! search for host pickers. [`InMemoryToolsRepository`] reads the crate's static
+//! category definitions.
 
 use crate::drawings::DrawingToolType;
 use crate::drawings::categories;
@@ -64,16 +27,7 @@ pub trait DrawingToolsRepository {
     fn search_tools(&self, query: &str) -> Vec<DrawingToolType>;
 }
 
-/// In-memory implementation of DrawingToolsRepository.
-///
-/// This implementation uses static data from the `data` module.
-/// It's fast, simple, and suitable for the current use case.
-///
-/// Future implementations could:
-/// - Load from JSON configuration files
-/// - Read from a database
-/// - Fetch from a remote API
-/// - Support user-defined custom tools
+/// Drawing tool lookup backed by [`categories`].
 pub struct InMemoryToolsRepository;
 
 impl InMemoryToolsRepository {

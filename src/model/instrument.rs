@@ -9,21 +9,37 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 pub enum SymbolType {
     #[default]
+    /// An equity security.
     Stock,
+    /// A market index.
     Index,
+    /// A currency pair.
     Forex,
+    /// A futures contract.
     Futures,
+    /// A cryptocurrency instrument.
     Crypto,
+    /// A contract for difference.
     Cfd,
+    /// A debt security.
     Bond,
+    /// An investment fund.
     Fund,
+    /// An options contract.
     Option,
+    /// A commodity instrument.
     Commodity,
+    /// An economic data series.
     Economic,
+    /// A depositary receipt.
     Dr,
+    /// A subscription right.
     Right,
+    /// A warrant.
     Warrant,
+    /// A host-defined expression over instruments.
     Expression,
+    /// A spread between instruments.
     Spread,
 }
 

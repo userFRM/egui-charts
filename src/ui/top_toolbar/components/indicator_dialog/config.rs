@@ -1,4 +1,6 @@
-//! Configuration for indicator dialog appearance and behavior
+//! Study browser layout dimensions.
+//!
+//! Use [`IndicatorDialogConfig`] when the host needs to override the dialog size.
 
 use crate::theme::Theme;
 use egui::Color32;

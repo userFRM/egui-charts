@@ -1,7 +1,7 @@
-//! Replay Status Indicator
+//! Replay progress and status display.
 //!
-//! Displays replay status when tick file replay is active.
-//! Development mode indicator.
+//! Pass host-managed [`ReplayStatus`] to [`ReplayStatusIndicator`] to show playback
+//! state, progress and optional execution counts.
 
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -28,9 +28,19 @@ pub enum ReplayStatus {
         speed: f32,
     },
     /// Replay paused
-    Paused { symbol: String, progress_pct: f32 },
+    Paused {
+        /// Instrument identifier used by the host.
+        symbol: String,
+        /// Playback progress in percent.
+        progress_pct: f32,
+    },
     /// Replay finished
-    Finished { symbol: String, total_ticks: u64 },
+    Finished {
+        /// Instrument identifier used by the host.
+        symbol: String,
+        /// Total number of executions processed by the finished replay.
+        total_ticks: u64,
+    },
 }
 
 impl From<(&ReplayProgress, &str, f32)> for ReplayStatus {

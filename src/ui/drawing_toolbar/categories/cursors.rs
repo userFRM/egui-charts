@@ -18,14 +18,20 @@ use crate::ui::drawing_toolbar::toolbar::CursorStateData;
 /// Cursor tool types (not drawing tools, but cursor modes)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorType {
+    /// Crosshair cursor.
     Cross,
+    /// Dot cursor.
     Dot,
+    /// Arrow cursor.
     Arrow,
+    /// Pointer with a presentation halo.
     Demonstration,
+    /// Click a drawing to delete it.
     Eraser,
 }
 
 impl CursorType {
+    /// Values in display order.
     pub fn all() -> &'static [CursorType] {
         &[
             CursorType::Cross,
@@ -36,6 +42,7 @@ impl CursorType {
         ]
     }
 
+    /// Display name for this value.
     pub fn name(&self) -> &'static str {
         match self {
             CursorType::Cross => "Cross",
@@ -46,6 +53,7 @@ impl CursorType {
         }
     }
 
+    /// Icon representing this value.
     pub fn icon(&self) -> &'static Icon {
         match self {
             CursorType::Cross => &icons::CROSSHAIR,
@@ -56,6 +64,7 @@ impl CursorType {
         }
     }
 
+    /// Keyboard shortcut label, when one is assigned.
     pub fn shortcut(&self) -> Option<&'static str> {
         match self {
             CursorType::Cross => None,

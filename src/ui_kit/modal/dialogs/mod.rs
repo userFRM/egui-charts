@@ -1,6 +1,7 @@
-//! Standard Dialog Components
+//! Confirmation and text-entry dialogs.
 //!
-//! Pre-built dialog patterns for common use cases.
+//! Use [`ConfirmDialog`] for a decision or [`PromptDialog`] for text input; their
+//! result enums distinguish submission, cancellation and an ongoing interaction.
 
 mod confirm;
 mod prompt;

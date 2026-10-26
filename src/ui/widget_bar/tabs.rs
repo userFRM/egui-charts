@@ -13,7 +13,9 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 /// Available tabs in the right panel
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RightPanelTab {
+    /// Alerts panel.
     Alerts,
+    /// Drawing and study object tree.
     ObjectTree,
 }
 
@@ -30,6 +32,7 @@ impl TryFrom<u8> for RightPanelTab {
 }
 
 impl RightPanelTab {
+    /// Icon representing this value.
     pub fn icon(&self) -> &'static Icon {
         match self {
             RightPanelTab::Alerts => &embedded_icons::BELL,
@@ -37,6 +40,7 @@ impl RightPanelTab {
         }
     }
 
+    /// Display label for this value.
     pub fn label(&self) -> &'static str {
         match self {
             RightPanelTab::Alerts => "Alerts",
@@ -48,15 +52,25 @@ impl RightPanelTab {
 /// Configuration for the right panel tabs
 #[derive(Clone, Debug)]
 pub struct RightPanelTabsConfig {
+    /// Tab bar width, in egui logical points.
     pub tab_bar_width: f32,
+    /// Tab button size, in egui logical points.
     pub tab_button_size: f32,
+    /// Background color.
     pub bg_color: Color32,
+    /// Tab bar background.
     pub tab_bar_bg: Color32,
+    /// Active tab background.
     pub active_tab_bg: Color32,
+    /// Hover background.
     pub hover_bg: Color32,
+    /// Pressed background.
     pub pressed_bg: Color32,
+    /// Icon color.
     pub icon_color: Color32,
+    /// Active icon color.
     pub active_icon_color: Color32,
+    /// Border color.
     pub border_color: Color32,
 }
 
@@ -102,15 +116,21 @@ theme_derived!(RightPanelTabsConfig {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum RightPanelAction {
+    /// No action requested.
     None,
+    /// Switch to the supplied panel tab.
     TabChanged(RightPanelTab),
+    /// Close the panel.
     Close,
 }
 
 /// Right Panel with Tab Navigation
 pub struct RightPanelTabs {
+    /// Currently selected tab.
     pub active_tab: RightPanelTab,
+    /// Display and layout options for this component.
     pub config: RightPanelTabsConfig,
+    /// Tabs offered in the panel, in display order.
     pub available_tabs: Vec<RightPanelTab>,
     /// Theme and config `config` was last derived from; `None` when the caller supplied it.
     config_theme: Option<(Theme, RightPanelTabsConfig)>,
@@ -128,16 +148,19 @@ impl Default for RightPanelTabs {
 }
 
 impl RightPanelTabs {
+    /// Create a [`RightPanelTabs`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: RightPanelTabsConfig) -> Self {
         self.config = config;
         self.config_theme = None;
         self
     }
 
+    /// Select the tab initially shown.
     pub fn with_active_tab(mut self, tab: RightPanelTab) -> Self {
         self.active_tab = tab;
         self
@@ -295,10 +318,12 @@ impl RightPanelTabs {
         response
     }
 
+    /// Select the tab to display.
     pub fn set_active_tab(&mut self, tab: RightPanelTab) {
         self.active_tab = tab;
     }
 
+    /// Currently selected panel tab.
     pub fn active_tab(&self) -> RightPanelTab {
         self.active_tab
     }

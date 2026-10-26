@@ -1,55 +1,8 @@
-//! Rendering implementations for all drawing tool types.
+//! Painting drawings against bars and a coordinate mapping.
 //!
-//! This module implements `Drawing::render()` and `Drawing::render_original()`,
-//! which dispatch to category-specific rendering methods based on
-//! [`DrawingToolType`]. Each category is
-//! implemented in its own sub-module as `impl Drawing` blocks that add private
-//! render methods (e.g., `render_trend_line`, `render_fibonacci`, etc.).
-//!
-//! # Category sub-modules
-//!
-//! | Module | Tools | Description |
-//! |---|---|---|
-//! | `lines` | 9 | Trend lines, rays, extended/horizontal/vertical lines |
-//! | `shapes` | 10 | Rectangles, circles, ellipses, triangles, arcs, curves |
-//! | `channels` | 4 | Parallel channels, regression, flat top/bottom, disjoint |
-//! | `pitchfork` | 4 | Andrews/Schiff/Modified Schiff/Inside pitchforks |
-//! | `fibonacci` | 11 | Retracements, extensions, fans, time zones, circles, spiral |
-//! | `gann` | 4 | Gann fan, box, square, fixed |
-//! | `patterns` | 6 | XABCD, cypher, head & shoulders, ABCD, triangle, three drives |
-//! | `elliott` | 5 | Impulse, correction, triangle, double/triple combo waves |
-//! | `cycles` | 3 | Cyclic lines, time cycles, sine line |
-//! | `annotations` | 11 | Text labels, notes, callouts, price labels, signposts |
-//! | `measurements` | 4 | Measure, price range, date range, date+price range |
-//! | `trading` | 9 | Long/short positions, forecasts, VWAP, volume profiles |
-//! | `media` | 3 | Image/tweet/idea placeholders |
-//!
-//! # Public API
-//!
-//! - `DrawingRenderer` trait (in `traits`) -- defines the interface for modular renderers
-//! - `Drawing::render()` -- the main entry point, dispatches to `render_original()`
-//! - `ChartView` -- the bars and coordinate mapping drawings are rendered against
-//!
-//! # Usage
-//!
-//! ```
-//! use egui_charts::drawings::{Drawing, DrawingToolType};
-//! use egui_charts::drawings::rendering::ChartView;
-//!
-//! # fn example(
-//! #     painter: &egui::Painter,
-//! #     price_rect: egui::Rect,
-//! #     bars: &[egui_charts::model::Bar],
-//! #     revision: u64,
-//! #     bar_to_x: impl Fn(f32) -> f32,
-//! #     price_to_y: impl Fn(f64) -> f32,
-//! # ) {
-//! let drawing = Drawing::new(1, DrawingToolType::TrendLine);
-//! // After setting up points and calling update_screen_coords:
-//! let view = ChartView { instrument: None, bars, revision, bar_to_x: &bar_to_x, price_to_y: &price_to_y, time_axis: true };
-//! drawing.render(painter, price_rect, &view);
-//! # }
-//! ```
+//! [`ChartView`] supplies data and mappings to [`Drawing::render`]; [`traits`]
+//! provides renderer contexts, handle geometry and hit-testing helpers for custom
+//! renderers. A chart invokes drawing rendering automatically.
 
 mod annotations;
 mod channels;
