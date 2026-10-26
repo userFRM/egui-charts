@@ -2057,7 +2057,9 @@ impl DemoApp {
     /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows
     /// as a notification.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
-        let now = chrono::Utc::now();
+        // The simulation clock rather than the wall clock, which the pause freezes: a paused
+        // demo must be able to go idle instead of repainting for a market that stands still.
+        let now = self.live.now();
         for entry in &mut self.market_heatmap.entries {
             if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
                 entry.change_percent = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
@@ -2075,7 +2077,7 @@ impl DemoApp {
             }
         }
         self.watchlist.set_selected(&selected);
-        self.quotes.publish(chrono::Utc::now());
+        self.quotes.publish(now);
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
             &self
@@ -6004,5 +6006,52 @@ mod tests {
             clock.bar_open(last_trade),
             "feed must use the selected local calendar"
         );
+    }
+
+    /// The demo published every subscribed quote once per frame, and the first push after a drain
+    /// wakes the UI, so the demo asked for a repaint on every frame forever: #852. A settled demo
+    /// with nothing on screen changing must ask for at most the once-a-second repaint of the bar
+    /// countdown and the toolbar clock, never an immediate one. The first second of frames is
+    /// left out: the scroll bars fade in and the settings service debounces its first write.
+    #[test]
+    fn a_settled_demo_does_not_repaint_every_frame() {
+        use eframe::App;
+        use std::time::Duration;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        // The startup toast lives on the wall clock and paints while it is up; it is not what
+        // this test measures.
+        app.toasts.toasts_mut().clear();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut time = 0.0f64;
+        let mut delays = Vec::new();
+        for _ in 0..60 {
+            time += 0.05;
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut frame),
+            );
+            delays.push(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
+            out.drop_without_applying_deltas();
+        }
+        for (index, delay) in delays.iter().enumerate().skip(24) {
+            assert_ne!(
+                *delay,
+                Duration::ZERO,
+                "frame {index} asked for an immediate repaint: {delays:?}"
+            );
+            assert!(
+                *delay <= Duration::from_secs(1),
+                "frame {index} asked for {delay:?}, more than the countdown's second"
+            );
+        }
     }
 }

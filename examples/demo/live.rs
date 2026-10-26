@@ -1,6 +1,6 @@
 //! Synthetic executions delivered through the same feed contract as host market data.
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use egui_charts::data::{
     CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
     HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
@@ -363,6 +363,11 @@ impl LiveFeed {
         self.state().paused = paused;
     }
 
+    /// The simulation clock, which stands still while the feed is paused.
+    pub(super) fn now(&self) -> DateTime<Utc> {
+        self.state().now
+    }
+
     /// Advance only when called by the scheduled frame. Pausing freezes simulation time.
     pub(super) fn advance(&self, now: DateTime<Utc>) -> std::time::Duration {
         let mut sim = self.state();
@@ -452,11 +457,14 @@ pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote>
 
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and a synthetic swing for the
-/// other catalog symbols. The demo has no background worker, so the controller publishes once
-/// per frame.
+/// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
+/// The demo has no background worker, so the controller publishes once per frame. Repeating a
+/// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Arc<LiveFeed>,
     stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
+    /// The last quote pushed per symbol, with times at display precision.
+    last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
 
 impl DemoQuotes {
@@ -464,6 +472,7 @@ impl DemoQuotes {
         Self {
             live,
             stream: Mutex::default(),
+            last_pushed: Mutex::default(),
         }
     }
 
@@ -477,22 +486,39 @@ impl DemoQuotes {
 
     fn push(&self, symbols: &[String], events: &Events<(String, Quote)>, now: DateTime<Utc>) {
         let chart = self.live.state().symbol.clone();
+        let mut last_pushed = self.last_pushed.lock().unwrap_or_else(|e| e.into_inner());
         for symbol in symbols {
             let quote = if symbol.eq_ignore_ascii_case(&chart) {
                 self.live.quote(now)
             } else {
                 watchlist_quote(symbol, now)
             };
-            if let Some(quote) = quote {
-                events.push((symbol.clone(), quote));
+            let Some(quote) = quote else {
+                continue;
+            };
+            // Panels use the whole quote, but details shows both update times only to the minute.
+            let mut pushed = quote.clone();
+            pushed.time = pushed.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
+            if let Some(extended) = &mut pushed.extended {
+                extended.time = extended.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
             }
+            if last_pushed.get(symbol) == Some(&pushed) {
+                continue;
+            }
+            last_pushed.insert(symbol.clone(), pushed);
+            events.push((symbol.clone(), quote));
         }
     }
 }
 
 impl Quotes for DemoQuotes {
     fn subscribe(&self, symbols: &[String], events: Events<(String, Quote)>) {
-        self.push(symbols, &events, chrono::Utc::now());
+        // A new stream starts from the current quotes, whatever was pushed to the one before.
+        self.last_pushed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.push(symbols, &events, self.live.now());
         *self.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some((symbols.to_vec(), events));
     }
 }
@@ -1157,5 +1183,178 @@ mod tests {
             bars,
             "resume must deliver executions"
         );
+    }
+
+    /// The controller publishes the subscribed quotes once per frame, and the first push after a
+    /// drain wakes the UI. A push that repeats the last quote therefore kept the demo repainting
+    /// every frame forever, even paused with nothing on screen changing: #852. An unchanged
+    /// market must now leave the UI idle.
+    #[test]
+    fn an_unchanged_market_lets_the_demo_go_idle() {
+        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use std::time::Duration;
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T19:07:05Z".parse().unwrap();
+        let live = Arc::new(LiveFeed::new("AAPL", now));
+        live.set_paused(true);
+        let quotes = Arc::new(DemoQuotes::new(live));
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
+        panel.set_service(quotes.clone());
+        let mut time = 0.0;
+        let mut delays = Vec::new();
+        for _ in 0..8 {
+            time += 1.0 / 60.0;
+            quotes.publish(now);
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+            );
+            delays.push(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
+            out.drop_without_applying_deltas();
+        }
+        // The first frame subscribes, which pushes the current quotes; egui then paints one more
+        // frame to let things settle, and the subscription stamps its quotes from the feed's
+        // clock, which differs from the fixed one of this test by one more push.
+        assert_eq!(
+            delays[0],
+            Duration::ZERO,
+            "the first frame subscribes and pushes"
+        );
+        for delay in &delays[2..] {
+            assert_eq!(
+                *delay,
+                Duration::MAX,
+                "publishing an unchanged quote only woke the UI"
+            );
+        }
+    }
+
+    /// The deduplication must not swallow a real move: once a subscribed symbol's rounded price
+    /// differs from the one pushed before, the push reaches the panel and wakes the UI.
+    #[test]
+    fn a_changed_quote_still_wakes_the_ui() {
+        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        use std::time::Duration;
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T22:07:05Z".parse().unwrap();
+        let live = Arc::new(LiveFeed::new("AAPL", now));
+        live.set_paused(true);
+        let quotes = Arc::new(DemoQuotes::new(live.clone()));
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
+        panel.set_service(quotes.clone());
+        let mut time = 0.0;
+        let mut frame = |panel: &mut WatchlistPanel, at: DateTime<Utc>| {
+            time += 1.0 / 60.0;
+            quotes.publish(at);
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    panel.poll(ui.ctx());
+                    panel.show(ui);
+                },
+            );
+            let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+            out.drop_without_applying_deltas();
+            delay
+        };
+        // The first two frames subscribe and settle, the third is idle.
+        assert_eq!(frame(&mut panel, now), Duration::ZERO);
+        frame(&mut panel, now);
+        assert_eq!(
+            frame(&mut panel, now),
+            Duration::MAX,
+            "an unchanged market must settle idle before the move"
+        );
+        let (moved, symbol) = (1..=120)
+            .map(|seconds| now + chrono::Duration::seconds(seconds))
+            .find_map(|at| {
+                ["MSFT", "BTCUSD"].iter().find_map(|symbol| {
+                    (watchlist_quote(symbol, now).map(|q| q.last)
+                        != watchlist_quote(symbol, at).map(|q| q.last))
+                    .then_some((at, *symbol))
+                })
+            })
+            .expect("the synthetic market moves within two minutes");
+        assert!(
+            frame(&mut panel, moved) < Duration::MAX,
+            "a changed price must wake the UI"
+        );
+        assert_eq!(
+            panel.quote(symbol).map(|quote| quote.last),
+            watchlist_quote(symbol, moved).map(|quote| quote.last),
+            "the panel shows the price that woke it"
+        );
+
+        // After hours the regular price is fixed, but details must receive the new trade and volume.
+        live.set_symbol("SAMPLE");
+        panel.set_selected("SAMPLE");
+        frame(&mut panel, now);
+        frame(&mut panel, now);
+        assert_eq!(frame(&mut panel, now), Duration::MAX);
+        let before = panel.quote("SAMPLE").unwrap().clone();
+        live.set_paused(false);
+        let after = now + TimeDelta::seconds(2);
+        live.advance(after);
+        live.set_paused(true);
+        let expected = live.quote(after).unwrap();
+        assert_eq!(
+            (before.last, before.prev_close),
+            (expected.last, expected.prev_close)
+        );
+        assert_ne!(before.extended, expected.extended);
+        assert_ne!(before.volume, expected.volume);
+        assert!(frame(&mut panel, after) < Duration::MAX);
+        assert_eq!(panel.quote("SAMPLE"), Some(&expected));
+        frame(&mut panel, after);
+        assert_eq!(frame(&mut panel, after), Duration::MAX);
+
+        // A trade timestamp within the displayed minute changes nothing; crossing it must refresh.
+        live.state().trades.back_mut().unwrap().ts += TimeDelta::milliseconds(1);
+        assert_eq!(frame(&mut panel, after), Duration::MAX);
+        live.state().trades.back_mut().unwrap().ts += TimeDelta::minutes(1);
+        assert!(frame(&mut panel, after) < Duration::MAX);
+        assert_eq!(panel.quote("SAMPLE"), live.quote(after).as_ref());
+
+        // A book update alone must reach the quote used by the order ticket.
+        for price in [76_500, 76_501] {
+            live.state().market = Some(Market::new("SAMPLE", 0.01, price, 42));
+            assert!(frame(&mut panel, after) < Duration::MAX);
+            assert_eq!(panel.quote("SAMPLE"), live.quote(after).as_ref());
+            frame(&mut panel, after);
+            assert_eq!(frame(&mut panel, after), Duration::MAX);
+        }
+
+        // Other live symbols stamp every frame, though details only displays hours and minutes.
+        live.set_symbol("AAPL");
+        panel = WatchlistPanel::new(vec![Watchlist::new("Watchlist")]);
+        panel.set_service(quotes.clone());
+        panel.set_selected("AAPL");
+        frame(&mut panel, after);
+        frame(&mut panel, after);
+        assert_eq!(frame(&mut panel, after), Duration::MAX);
+        assert_eq!(
+            frame(&mut panel, after + TimeDelta::milliseconds(1)),
+            Duration::MAX
+        );
+        let next_minute = after + TimeDelta::minutes(1);
+        assert!(frame(&mut panel, next_minute) < Duration::MAX);
+        assert_eq!(panel.quote("AAPL"), live.quote(next_minute).as_ref());
     }
 }
