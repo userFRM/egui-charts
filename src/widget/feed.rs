@@ -948,7 +948,7 @@ impl Chart {
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A feed that ignores `before` answers the newest bars again, and would be asked again
         // on every frame.
-        let stale = scroll_back && !empty && !older;
+        let stale = scroll_back && !empty && !older && !self.bar_limit_reached();
         if stale {
             log::warn!(
                 "the feed of {} sent no bar older than the oldest one held; scroll-back ended",
@@ -1046,6 +1046,11 @@ impl Chart {
         link.feed.depth_history(request, reply);
     }
 
+    fn bar_limit_reached(&self) -> bool {
+        self.bar_limit(SeriesId::MAIN)
+            .is_some_and(|limit| self.bars(SeriesId::MAIN).len() >= limit.get())
+    }
+
     /// Asks for the page before the oldest bar once the view nears it.
     fn scroll_back(&mut self, link: &mut FeedLink) {
         let feed = &self.feed;
@@ -1057,6 +1062,7 @@ impl Chart {
                 .any(|(_, request, _)| matches!(request, Request::History { .. }))
             || link.paging_stopped
             || !self.older_bars_drawn
+            || self.bar_limit_reached()
         {
             return;
         }
@@ -1281,6 +1287,68 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    /// A full retention window stops paging without claiming the feed has no more history.
+    /// Time and trade-count bars both keep their newest slots across per-frame tick batches.
+    #[test]
+    fn bar_limits_bound_feed_history_and_ticks() {
+        use std::num::NonZeroUsize;
+        for timeframe in [
+            Timeframe::Min1,
+            "1t".parse().unwrap(),
+            "2t".parse().unwrap(),
+        ] {
+            let feed = Arc::new(Script::default());
+            let mut chart = fed(&feed, Some("A"));
+            chart.set_timeframe(timeframe);
+            chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.page().send(page(bars(5), false));
+            frames.run(&mut chart);
+            assert_eq!(chart.bars(SeriesId::MAIN), &bars(5)[2..]);
+            assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+            assert!(
+                feed.pages.lock().unwrap().is_empty(),
+                "full window must not page"
+            );
+            chart.set_bar_limit(SeriesId::MAIN, None);
+            chart.set_start_idx(0);
+            frames.run(&mut chart);
+            assert_eq!(
+                feed.pages.lock().unwrap().len(),
+                1,
+                "clearing the limit resumes paging"
+            );
+            // This page was already in flight when the limit was restored.
+            chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
+            feed.page().send(page(bars(2), false));
+            frames.run(&mut chart);
+            assert!(!chart.feed_state(SeriesId::MAIN).unwrap().history_complete);
+            let sink = feed.sink();
+            let start = bars(5)[4].time;
+            for batch in 0..10 {
+                for i in 0..10 {
+                    let at = batch * 10 + i + 1;
+                    sink.push_tick(Tick::new(
+                        start + TimeDelta::minutes(at),
+                        1000.0 + at as f64,
+                        1.0,
+                        None,
+                    ));
+                }
+                frames.run(&mut chart);
+                assert_eq!(chart.bars(SeriesId::MAIN).len(), 3, "{timeframe}");
+                assert!(
+                    chart.from_ticks.len() <= 3,
+                    "tick provenance must also be evicted"
+                );
+            }
+            assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().close, 1100.0);
+            assert_eq!(chart.trades(SeriesId::MAIN).count(), 100);
         }
     }
 

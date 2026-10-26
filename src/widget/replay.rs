@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 
 pub(super) struct ReplayWindow {
     time: DateTime<Utc>,
-    bars: HashMap<SeriesId, Vec<Bar>>,
+    pub(super) bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
     feed_paused: bool,
     pub quote: Option<crate::model::Level1Quote>,
@@ -111,9 +111,12 @@ impl Chart {
     }
 
     pub(super) fn apply_replay_window(&mut self) {
-        let Some(replay) = self.replay.take() else {
+        let Some(mut replay) = self.replay.take() else {
             return;
         };
+        for (id, bars) in &mut replay.bars {
+            super::series::retain_bars(bars, self.bar_limits.get(id).copied());
+        }
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
