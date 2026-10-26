@@ -830,6 +830,8 @@ All notable changes to this project are documented in this file. The format is b
   | Complete literals of `config::{ChartConfig, ChartOptions, CrosshairOptions, TooltipOptions}`, `widget::ImageExportOptions` | Start from constructors or `Default` and assign fields; struct literals, including update syntax, are unavailable. Output geometry and image records are returned by the chart |
   | Complete literals of `widget::{RenderedIndicatorPane, ChartLayoutRects, PaneInteraction, ChartImage}` | Obtain output geometry and image records from the chart and pane methods; `PaneInteraction::default()` remains available |
   | Exhaustive matches on growing chart, timeframe, drawing, keyboard, event, study and UI intent enums | Add a fallback arm for future variants |
+  | `TimeframeSelectorConfig::{item_height, bg_color, hover_color, sel_color, text_color, muted_color, favorite_color}` | Removed unused options; rows use the menu layout and colours use the active theme. `btn_width` and `dropdown_width` remain supported |
+  | `TimeframeAction::AddCustom` | Removed unused intent; custom intervals emit `TimeframeAction::Select` |
 
 - Runtime module dependencies are acyclic. Shared bar interpolation, streaming study inputs, profile calculations and formatting live below rendering; study geometry and timestamp drawing methods live with their chart and widget consumers. Chart settings and study recipes no longer depend on UI modules, localization is shared at the crate root, and UI extension traits live beside the UI kit. CI rejects module cycles and inherent methods defined outside their type's module. The crate remains one package. ([#93](https://github.com/userFRM/egui-charts/issues/93))
 

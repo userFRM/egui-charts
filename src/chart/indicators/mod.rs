@@ -3,7 +3,7 @@
 //! Hit testing and selection-handle rendering for overlay indicators
 //! (SMA, EMA, Bollinger Bands, …) drawn on the main chart and for separate-pane
 //! indicators (RSI, MACD, …). Selection itself is tracked chart-wide by
-//! [`SelectionState<ChartElementId>`](crate::chart::selection::SelectionState).
+//! [`SelectionState`](crate::chart::selection::SelectionState).
 
 pub mod hit_test;
 pub mod selection_render;

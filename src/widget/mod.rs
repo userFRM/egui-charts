@@ -472,7 +472,7 @@ pub struct Chart {
     /// Chart-wide click selection, shared by series, overlay indicators, and
     /// pane indicators. Populated by click hit testing during rendering and
     /// readable by host apps via [`Chart::selected_element`].
-    pub(crate) selection: SelectionState<ChartElementId>,
+    pub(crate) selection: SelectionState,
     /// Right-click hit result captured during the last frame, drained by the
     /// host via [`Chart::take_right_click`] (or by `ChartMenus` with the `ui`
     /// feature). Holds no UI types so the core widget builds without the `ui`
