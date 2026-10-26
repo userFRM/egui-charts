@@ -910,8 +910,6 @@ impl DemoApp {
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(id) = self.quick_search.show(ctx) {
-            // Activation belongs to search, not the dialog the command opens.
-            ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             self.execute_search_command(ctx, &id);
         }
         self.indicator_dialog

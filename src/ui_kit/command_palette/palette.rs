@@ -122,7 +122,8 @@ impl CommandPalette {
 
     /// Show the command palette modal
     ///
-    /// Returns the ID of the executed command if any
+    /// Returns the ID of the executed command if any. Keyboard activation consumes its key so
+    /// the host can open another dialog in the same frame.
     pub fn show(&mut self, ctx: &Context, open: &mut bool) -> Option<String> {
         if !*open {
             return None;
@@ -159,6 +160,7 @@ impl CommandPalette {
         }
 
         if execute && !self.filtered.is_empty() {
+            ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
             let (cmd_idx, _) = self.filtered[self.selected_index];
             executed_command = Some(self.commands[cmd_idx].id.clone());
             *open = false;
@@ -222,6 +224,10 @@ impl CommandPalette {
             });
 
         if executed_command.is_some() || !*open {
+            ctx.input_mut(|i| {
+                i.consume_key(i.modifiers, Key::Enter);
+                i.consume_key(i.modifiers, Key::Space);
+            });
             *open = false;
             self.clear();
         }
@@ -442,24 +448,29 @@ mod tests {
     }
 
     #[test]
-    fn tab_leaves_search_and_enter_executes_the_focused_row() {
+    fn search_and_focused_rows_consume_their_activation_key() {
         for (_, theme) in crate::theme::presets() {
-            let ctx = Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            let mut palette = CommandPalette::new(vec![
-                Command::new("a", "First"),
-                Command::new("b", "Second"),
-            ]);
-            frame(&ctx, &mut palette, None);
-            frame(&ctx, &mut palette, None);
-            let search = ctx.memory(|m| m.focused());
-            frame(&ctx, &mut palette, Some(Key::Tab));
-            assert_ne!(ctx.memory(|m| m.focused()), search);
-            frame(&ctx, &mut palette, Some(Key::Tab));
-            assert_eq!(
-                frame(&ctx, &mut palette, Some(Key::Enter)).as_deref(),
-                Some("b")
-            );
+            for (focus_row, key) in [(false, Key::Enter), (true, Key::Enter), (true, Key::Space)] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut palette = CommandPalette::new(vec![
+                    Command::new("a", "First"),
+                    Command::new("b", "Second"),
+                ]);
+                frame(&ctx, &mut palette, None);
+                frame(&ctx, &mut palette, None);
+                if focus_row {
+                    let search = ctx.memory(|m| m.focused());
+                    frame(&ctx, &mut palette, Some(Key::Tab));
+                    assert_ne!(ctx.memory(|m| m.focused()), search);
+                    frame(&ctx, &mut palette, Some(Key::Tab));
+                }
+                assert_eq!(
+                    frame(&ctx, &mut palette, Some(key)).as_deref(),
+                    Some(if focus_row { "b" } else { "a" })
+                );
+                assert!(!ctx.input(|i| i.key_pressed(key)));
+            }
         }
     }
 
