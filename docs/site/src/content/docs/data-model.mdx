@@ -1,4 +1,6 @@
-# The data model
+---
+title: The data model
+---
 
 The core types live in `egui_charts::model`. Keep market data in UTC and let the
 chart's formatters and instrument calendar control its presentation.
@@ -45,4 +47,4 @@ without it.
 `Chart` owns the view, configured series, studies and interactions. `SeriesId::MAIN`
 identifies its main series. Keep local bar indices inside their chart: synchronized
 charts exchange UTC positions because intervals and history lengths can differ.
-See [scales and navigation](scales.md) and the [builder guide](builder-guide.md).
+See [scales and navigation](scales.mdx) and the [builder guide](../../../../builder-guide.md).

@@ -1,4 +1,6 @@
-# Historical and streaming data
+---
+title: Historical and streaming data
+---
 
 Choose the simplest path that fits your source: supply bars directly, or attach a
 `Datafeed` for asynchronous history and live subscriptions. The host owns credentials,
@@ -7,7 +9,7 @@ connections, retries and data acquisition.
 ## Bars already in memory
 
 Create a `Chart` from `BarData`. Replace history with `set_data`, or send forming
-bars through `update`. The [first chart](first-chart.md#replace-history-or-update-the-last-bar)
+bars through `update`. The [first chart](first-chart.mdx#replace-history-or-update-the-last-bar)
 shows both. Keep timestamps ordered and give a forming bar the same opening time
 on each update.
 
@@ -46,7 +48,7 @@ The chart asks for older pages as the viewport reaches the start of loaded histo
 Implement `subscribe` and retain its `Subscription::sink` in your producer. Push
 forming bars with `push_bar`, or executions with `push_tick` to build bars using
 the selected interval. The sink wakes the chart when data arrives. For execution
-history and book data, continue with [order flow](order-flow.md).
+history and book data, continue with [order flow](../../../../order-flow.md).
 
 Stop producing when `Sink::is_active` becomes false. Symbol and interval changes
 end the old subscription. Implement `unsubscribe` when your backend needs explicit
@@ -60,5 +62,5 @@ return failures through the reply rather than blocking a frame. Your host decide
 how to retry or present a disconnected source.
 
 The repository's [live feed example](https://github.com/userFRM/egui-charts/blob/main/examples/live_feed.rs)
-implements paging and a cancellable execution producer. The [builder guide](builder-guide.md)
+implements paging and a cancellable execution producer. The [builder guide](../../../../builder-guide.md)
 connects feed setup to events and the rest of the application.

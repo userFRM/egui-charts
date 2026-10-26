@@ -12,9 +12,9 @@ on:
     branches: [main]
 
 env:
+  ASTRO_TELEMETRY_DISABLED: "1"
   CARGO_TERM_COLOR: always
   TRUNK_VERSION: "0.21.14"
-  MDBOOK_VERSION: "0.5.2"
 
 # Allow only one concurrent deployment, cancelling in-progress runs of the same
 # ref so a newer commit always wins the Pages publish.
@@ -43,21 +43,24 @@ jobs:
         uses: jetli/trunk-action@v0.5.0
         with:
           version: "v${{ env.TRUNK_VERSION }}"
-      - name: Install mdBook
-        run: |
-          curl --fail --location --retry 3 \
-            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" mdbook
-          mkdir -p "$HOME/.local/bin"
-          install "$RUNNER_TEMP/mdbook" "$HOME/.local/bin/mdbook"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - name: Install documentation dependencies
+        working-directory: docs/site
+        run: npm ci
       - name: Test documentation examples
+        env:
+          RUSTDOCFLAGS: -Dwarnings
         run: cargo test --doc --all-features
-      - name: Build guide
-        run: mdbook build docs/book
+      - name: Build Starlight guide
+        working-directory: docs/site
+        run: npm run build
       - name: Build API reference
         env:
-          RUSTDOCFLAGS: -Dwarnings --extend-css docs/book/theme/api.css
+          RUSTDOCFLAGS: -Dwarnings
         run: cargo doc --no-deps --all-features
       - name: Build native examples
         run: cargo build --examples
@@ -71,7 +74,7 @@ jobs:
           mkdir _site
           cp -r examples/demo/dist _site/demo
           cp examples/demo/dist/index.html _site/index.html
-          cp -r target/book _site/docs
+          cp -r docs/site/dist _site/docs
           cp -r target/doc _site/docs/api
           # rustdoc's crate index is nested; give /docs/api/ a stable entry point.
           cat > _site/docs/api/index.html <<'HTML'

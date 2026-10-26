@@ -1,1 +1,0 @@
-{{#include ../../study-data.md}}

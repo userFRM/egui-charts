@@ -2,11 +2,9 @@
 
 ## Documentation site
 
-The guide built from `docs/book` bundles mdBook 0.5.2's theme, navigation and search scripts under the Mozilla Public License 2.0. Its inline Font Awesome Free 6.2.0 SVG icons are copyright 2022 Fonticons, Inc. and licensed under Creative Commons Attribution 4.0. The clipboard.js 2.0.4, mark.js 8.11.1 and elasticlunr.js 0.9.5 scripts and the Ayu and Tomorrow color themes use the MIT License; highlight.js 10.1.1 uses the BSD 3-Clause License. Their copyright notices, source links and full license texts are in [`docs/book/src/licenses.txt`](docs/book/src/licenses.txt), published at `/egui-charts/docs/licenses.txt` and linked from the guide.
+The guide built from `docs/site` ships Astro 7.4.0 and Starlight 0.42.6 styles and browser scripts, Expressive Code's code-block styles and copy button, and Pagefind 1.5.2 search (including its Svelte UI runtime and mark.js highlight helper), all under the MIT License. Starlight's inline interface icons come from Unicons (IconScout Simple License); the GitHub brand icon comes from Simple Icons (CC0). Copyright notices and license terms are in [`docs/site/public/licenses.txt`](docs/site/public/licenses.txt), published at `/egui-charts/docs/licenses.txt`. The guide uses system fonts and ships no font files.
 
-mdBook also distributes Open Sans under the Apache License 2.0 and Source Code Pro under the SIL Open Font License 1.1, with `fonts/OPEN-SANS-LICENSE.txt` and `fonts/SOURCE-CODE-PRO-LICENSE.txt` in the generated guide.
-
-The generated API reference retains rustdoc's scripts and styles under the MIT or Apache License 2.0, Fira, Source Code Pro, Source Serif 4 and Nanum Barun Gothic under the SIL Open Font License 1.1, and the Rust Foundation's logos under Creative Commons Attribution. Their copyright notices and license files ship in `/egui-charts/docs/api/static.files/` with rustdoc's generated filename suffixes. The Creative Commons Attribution 4.0 text is also included in the guide's license file.
+The generated API reference retains rustdoc's scripts and styles under the MIT or Apache License 2.0, Fira, Source Code Pro, Source Serif 4 and Nanum Barun Gothic under the SIL Open Font License 1.1, and the Rust Foundation's logos under Creative Commons Attribution. Their copyright notices and license files ship in `/egui-charts/docs/api/static.files/` with rustdoc's generated filename suffixes.
 
 ## Original interface icons
 
