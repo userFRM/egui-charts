@@ -80,7 +80,6 @@ impl StoredDocument {
     }
 
     /// Whether an unconfirmed write could still replace the stored document.
-    #[cfg(feature = "ui")]
     pub(crate) fn saving(&self) -> bool {
         self.writing.is_some()
     }
