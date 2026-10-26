@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-/// One profile over a half-open range of source bars.
+/// One price-row profile placed over a half-open span of chart bars.
 #[derive(Clone, Debug)]
 pub struct StudyProfile {
-    /// Source bars included in the distribution, including offscreen bars in fixed periods.
+    /// Full source span for bar profiles, including offscreen bars in fixed periods,
+    /// or the visible span for an options overlay.
     pub bars: Range<usize>,
     /// Immutable row volumes and price boundaries.
     pub profile: Arc<VolumeProfile>,
@@ -140,7 +141,7 @@ impl Default for VolumeProfileConfig {
     }
 }
 
-/// Volume traded at each price row of a span of bars.
+/// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
     /// Price at the bottom of row 0.
@@ -165,6 +166,68 @@ fn valid_bar(bar: &Bar) -> bool {
 }
 
 impl VolumeProfile {
+    /// Group host options turnover into rows centered on multiples of `row_size`.
+    /// A row at strike K includes [K - row_size/2, K + row_size/2); a boundary
+    /// goes to the higher row. Calls occupy [`Self::up`], puts [`Self::down`].
+    /// Duplicate strikes are summed. Empty, invalid, overflowing or unrepresentable
+    /// snapshots, including grids exceeding 10,000 rows, produce no profile.
+    pub fn from_options(data: &[crate::data::OptionsVolume], row_size: f64) -> Option<Self> {
+        if data.is_empty()
+            || !row_size.is_finite()
+            || row_size <= 0.0
+            || data.iter().any(|v| {
+                !v.strike.is_finite()
+                    || !v.calls.is_finite()
+                    || !v.puts.is_finite()
+                    || v.calls < 0.0
+                    || v.puts < 0.0
+            })
+        {
+            return None;
+        }
+        let key = |strike| grid_floor(strike / row_size + 0.5);
+        let first = data
+            .iter()
+            .map(|v| key(v.strike))
+            .fold(f64::INFINITY, f64::min);
+        let last = data
+            .iter()
+            .map(|v| key(v.strike))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let count = last - first + 1.0;
+        if !first.is_finite()
+            || !last.is_finite()
+            || first.abs() >= 2_f64.powi(52)
+            || last.abs() >= 2_f64.powi(52)
+            || !(1.0..=10_000.0).contains(&count)
+        {
+            return None;
+        }
+        let low = (first - 0.5) * row_size;
+        let high = low + count * row_size;
+        if !low.is_finite() || !high.is_finite() || high <= low {
+            return None;
+        }
+        let mut profile = Self {
+            low,
+            high,
+            row_height: row_size,
+            fixed_height: false,
+            volume: vec![0.0; count as usize],
+            up: vec![0.0; count as usize],
+            down: vec![0.0; count as usize],
+        };
+        let mut total = 0.0;
+        for v in data {
+            let row = (key(v.strike) - first) as usize;
+            profile.up[row] += v.calls;
+            profile.down[row] += v.puts;
+            profile.volume[row] = profile.up[row] + profile.down[row];
+            total += v.calls + v.puts;
+        }
+        total.is_finite().then_some(profile)
+    }
+
     /// Distribute finite, nonnegative-volume bars over their high-low ranges.
     /// Invalid bars are ignored. Returns no profile for an empty or unrepresentable grid.
     pub fn from_bars(bars: &[Bar], config: VolumeProfileConfig) -> Option<Self> {
@@ -186,11 +249,11 @@ impl VolumeProfile {
     pub fn volume(&self) -> &[f64] {
         &self.volume
     }
-    /// Up-bar volume per row; an unchanged close counts as up.
+    /// Up-bar volume per row (unchanged closes count as up), or calls for options.
     pub fn up(&self) -> &[f64] {
         &self.up
     }
-    /// Down-bar volume per row.
+    /// Down-bar volume per row, or puts for options.
     pub fn down(&self) -> &[f64] {
         &self.down
     }
@@ -491,5 +554,160 @@ mod tests {
         let decimal = VolumeProfile::of(&[boundary], 24, Some(0.1)).unwrap();
         assert_close(decimal.low(), 0.3);
         assert_eq!(decimal.volume(), [7.0]);
+    }
+
+    /// Four-unit rows centered at 100, 104 and 108 collect [98,102), [102,106)
+    /// and [106,110). Totals are 90+50=140, 60+140=200 and 75+25=100.
+    #[test]
+    fn options_profile_groups_strikes_and_scales_by_largest_total() {
+        use crate::data::OptionsVolume;
+        let data: Vec<_> = [
+            (99.0, 20.0, 10.0),
+            (100.0, 10.0, 5.0),
+            (100.0, 20.0, 15.0),
+            (101.0, 40.0, 20.0),
+            (102.0, 10.0, 40.0),
+            (103.0, 20.0, 50.0),
+            (104.0, 30.0, 50.0),
+            (107.0, 75.0, 25.0),
+        ]
+        .into_iter()
+        .map(|(strike, calls, puts)| OptionsVolume {
+            strike,
+            calls,
+            puts,
+        })
+        .collect();
+        let profile = VolumeProfile::from_options(&data, 4.0).unwrap();
+        assert_eq!(
+            (profile.low(), profile.high(), profile.row_height()),
+            (98.0, 110.0, 4.0)
+        );
+        let max = profile.volume().iter().copied().fold(0.0, f64::max);
+        for (row, (calls, puts, share)) in
+            [(90.0, 50.0, 0.7), (60.0, 140.0, 1.0), (75.0, 25.0, 0.5)]
+                .into_iter()
+                .enumerate()
+        {
+            assert_close(profile.up()[row], calls);
+            assert_close(profile.down()[row], puts);
+            assert_close(profile.volume()[row] / max, share);
+        }
+        #[cfg(feature = "widget")]
+        for right_aligned in [false, true] {
+            for direction in [-1.0, 1.0] {
+                let config = VolumeProfileConfig {
+                    display: ProfileDisplay::UpDown,
+                    ..VolumeProfileConfig::default()
+                };
+                let rgba =
+                    |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                    let painter = egui::Painter::new(
+                        ui.ctx().clone(),
+                        egui::LayerId::background(),
+                        egui::Rect::EVERYTHING,
+                    );
+                    crate::chart::renderers::volume_profile::paint_profile(
+                        &painter,
+                        &profile,
+                        config,
+                        [0, 0, 255, 255],
+                        100.0..300.0,
+                        right_aligned,
+                        &|price| price as f32 * direction,
+                    );
+                });
+                let rows: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(r)
+                            if r.fill == rgba(config.up_color)
+                                || r.fill == rgba(config.down_color) =>
+                        {
+                            Some(r)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(rows.len(), 6);
+                // Of 180 available points, the rows use 126, 180 and 90; each segment
+                // uses its own contract volume divided by the largest combined total, 200.
+                for (row, (call_width, put_width, strike)) in [
+                    (81.0, 45.0, 100.0),
+                    (54.0, 126.0, 104.0),
+                    (67.5, 22.5, 108.0),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let (calls, puts) = (rows[2 * row], rows[2 * row + 1]);
+                    assert!((calls.rect.width() - call_width).abs() < 1e-4);
+                    assert!((puts.rect.width() - put_width).abs() < 1e-4);
+                    assert!((calls.rect.top() - (strike * direction - 2.0)).abs() < 1e-4);
+                    assert_eq!(calls.fill, rgba(config.up_color));
+                    assert_eq!(puts.fill, rgba(config.down_color));
+                    if right_aligned {
+                        assert!((calls.rect.right() - 300.0).abs() < 1e-4);
+                        assert!((puts.rect.right() - calls.rect.left()).abs() < 1e-4);
+                    } else {
+                        assert!((calls.rect.left() - 100.0).abs() < 1e-4);
+                        assert!((puts.rect.left() - calls.rect.right()).abs() < 1e-4);
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+        // Exact and decimal strikes stay at row centers; half-row boundaries go up.
+        for (strike, size, center) in [
+            (100.0, 1.0, 100.0),
+            (0.3, 0.1, 0.3),
+            (0.35, 0.1, 0.4),
+            (-0.15, 0.1, -0.1),
+        ] {
+            let point = OptionsVolume {
+                strike,
+                calls: 3.0,
+                puts: 7.0,
+            };
+            let p = VolumeProfile::from_options(&[point], size).unwrap();
+            assert_close(p.low() + p.row_height() / 2.0, center);
+            assert_eq!(p.volume(), [10.0]);
+        }
+        for bad in [f64::NAN, f64::INFINITY, -1.0] {
+            let invalid = OptionsVolume {
+                strike: 100.0,
+                calls: bad,
+                puts: 0.0,
+            };
+            assert!(VolumeProfile::from_options(&[invalid], 1.0).is_none());
+            assert!(VolumeProfile::from_options(&data, bad).is_none());
+        }
+        assert!(VolumeProfile::from_options(&data, 0.0).is_none());
+        assert!(VolumeProfile::from_options(&data, 1e-12).is_none());
+        assert!(VolumeProfile::from_options(&[], 4.0).is_none());
+        assert!(
+            VolumeProfile::from_options(
+                &[-1e308, 1e308].map(|strike| OptionsVolume {
+                    strike,
+                    calls: 1.0,
+                    puts: 0.0,
+                }),
+                1e308,
+            )
+            .is_none()
+        );
+        assert!(
+            VolumeProfile::from_options(
+                &[OptionsVolume {
+                    strike: 100.0,
+                    calls: f64::MAX,
+                    puts: f64::MAX
+                }],
+                1.0
+            )
+            .is_none()
+        );
     }
 }
