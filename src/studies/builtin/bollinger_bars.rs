@@ -20,8 +20,8 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyCandle};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Bollinger Bars: full-width wick blocks under up or down bodies.
@@ -39,11 +39,7 @@ impl BollingerBars {
         Self {
             candles: Vec::new(),
             values: IndicatorValues::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.extended.accent,
-                DESIGN_TOKENS.semantic.chart.bullish,
-                DESIGN_TOKENS.semantic.chart.bearish,
-            ],
+            colors: [palette::ACCENT, palette::UP, palette::DOWN],
             visible: true,
         }
     }

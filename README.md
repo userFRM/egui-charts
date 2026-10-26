@@ -22,13 +22,13 @@ The chart widget alone, without the toolbars, the built-in studies, the icons or
 
 ```toml
 [dependencies]
-egui-charts = { version = "0.2", default-features = false, features = ["widget"] }
+egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
 eframe = "0.37"
 ```
 
 This example uses eframe 0.37, which matches the egui version egui-charts builds on; another eframe version brings a second egui whose types do not match.
 
-This README describes the `main` branch, which is not published yet. Until the next release, use `git = "https://github.com/userFRM/egui-charts"` in place of `version = "0.2"`, or `cargo add egui-charts --git https://github.com/userFRM/egui-charts`. The documentation of the published 0.2.0 is at <https://docs.rs/egui-charts/0.2.0>.
+This README describes the `main` branch, which is not published yet. Until the next release, use `git = "https://github.com/userFRM/egui-charts"` in place of `version = "0.3"`, or `cargo add egui-charts --git https://github.com/userFRM/egui-charts`. The documentation of the published 0.2.0 is at <https://docs.rs/egui-charts/0.2.0>.
 
 ```rust,no_run
 use eframe::egui;
@@ -207,16 +207,16 @@ The default features are `ui`, `locales` and `timezones`. `ui` enables `icons`, 
 
 ```toml
 # The chart with toolbars, panels, dialogs, icons and built-in studies (default)
-egui-charts = "0.2"
+egui-charts = "0.3"
 
 # The chart widget alone: no toolbars, built-in studies, icons or egui_extras
-egui-charts = { version = "0.2", default-features = false, features = ["widget"] }
+egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
 
 # The chart widget with the built-in studies
-egui-charts = { version = "0.2", default-features = false, features = ["widget", "studies"] }
+egui-charts = { version = "0.3", default-features = false, features = ["widget", "studies"] }
 
 # The engine with the built-in studies, without egui
-egui-charts = { version = "0.2", default-features = false, features = ["studies"] }
+egui-charts = { version = "0.3", default-features = false, features = ["studies"] }
 ```
 
 `timezones` (on by default) supplies IANA zones and daylight-saving rules through the optional `chrono-tz` dependency. Without it, UTC, system local time and fixed offsets remain available: `TimezoneMode::Timezone("+05:45".parse()?)` and `TimezoneId::fixed_offset(5 * 3600 + 45 * 60)` need no database. Named zones are rejected when the feature is off; Trading Sessions uses fixed standard-time offsets (+09:00, +00:00 and -05:00) for its default sessions, which the host can override with `with_session`; the exchange presets (`TimezoneMode::{nyse,lse,jse,hkex}` and `DailySessionProvider::nyse`) require it. Session configuration presets and the settings time zone list use fixed offsets when the feature is off. Add `"timezones"` to the feature list above when the host supplies named exchange zones. Time zone APIs use the crate's `model::TimezoneId`; callers no longer depend on a particular `chrono-tz` version. Persisted named-zone strings keep their format.

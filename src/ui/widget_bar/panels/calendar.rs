@@ -65,6 +65,7 @@ impl CalendarRange {
 
 /// An action the host performs for the calendar panel.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum CalendarAction {
     /// No host action.
     #[default]

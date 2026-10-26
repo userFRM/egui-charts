@@ -27,9 +27,9 @@ mod tooltip;
 
 pub use chart::{
     BackgroundStyle, ChartConfig, NavigationButtons, PriceAxisOptions, RealtimeButtonPos,
-    SessionBreakStyle, SessionConfig, WatermarkPos,
+    SessionConfig, WatermarkPos,
 };
-pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
@@ -48,6 +48,7 @@ pub use crate::scales::TimezoneMode;
 /// that can be passed to the chart widget.  Each field corresponds to a
 /// focused configuration sub-module.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartOptions {
     /// Time scale (horizontal) options
     pub time_scale: TimeScaleOptions,

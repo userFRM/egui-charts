@@ -1,9 +1,10 @@
 //! Actions emitted by settings UI components
 
-use super::data::ChartSettingsState;
+use crate::widget::settings::ChartSettingsState;
 
 /// Settings action (emitted by both SettingsMenu and SettingsDialog)
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum SettingsAction {
     /// No action taken
     None,

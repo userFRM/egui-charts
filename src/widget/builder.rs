@@ -41,9 +41,10 @@ use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
 #[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
-use crate::model::{BarClock, BarData, ChartState, Timeframe};
+use crate::model::{BarClock, BarData, Timeframe};
 use crate::model::{ChartType, ChartTypeParams};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
+use crate::studies::ChartState;
 use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
 
@@ -123,6 +124,7 @@ impl Chart {
             main_series_present: true,
             main_series_scale: Default::default(),
             price_series: Vec::new(),
+            heikin_ashi: Default::default(),
             series_scales: Default::default(),
             study_ids: Vec::new(),
             study_inputs: Vec::new(),
@@ -855,7 +857,7 @@ impl ChartBuilder {
     /// first [`show`](Chart::show) asks the feed for the instrument and history.
     pub fn build(mut self) -> Chart {
         // Apply theme to config
-        self.config = self.theme.apply_to_config(self.config);
+        self.config = self.config.with_theme(&self.theme);
 
         let mut chart =
             Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);

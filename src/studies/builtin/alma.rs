@@ -24,8 +24,8 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Arnaud Legoux Moving Avg indicator
@@ -57,7 +57,7 @@ impl ALMA {
             offset,
             sigma,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange
+            color: palette::DEEP_ORANGE, // Deep Orange
             visible: true,
         }
     }
@@ -151,7 +151,7 @@ impl Indicator for ALMA {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

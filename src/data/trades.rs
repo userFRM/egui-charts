@@ -7,7 +7,7 @@
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice.
 
-use crate::model::{Tick, TradeSide};
+use crate::model::{OrderSide, Tick};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -33,7 +33,7 @@ pub struct CombinedTrade {
     /// Number of retained fills.
     pub fills: usize,
     /// Aggressor side, unknown if fills disagree.
-    pub side: Option<TradeSide>,
+    pub side: Option<OrderSide>,
 }
 
 /// Combines explicit aggressor ids, in order of their first fill. Unknown ids stay separate.

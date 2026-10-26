@@ -4,6 +4,7 @@ use super::DateRange;
 
 /// Actions returned from bottom panel interactions
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TimeframeToolbarAction {
     /// No action taken
     None,

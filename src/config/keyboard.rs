@@ -33,6 +33,7 @@ impl Default for KeyboardOptions {
 
 /// Keyboard actions that can be performed on the chart
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyboardAction {
     /// Pan left by a page.
     PanLeftFast,

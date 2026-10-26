@@ -28,12 +28,12 @@
 //! ```
 
 use super::actions::DrawingToolbarAction;
-use crate::ext::UiExt;
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::styles::{focus::focus_ring_color, icons as icon_sizes};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{
     Align2, FontId, Frame, Id, Key, Modifiers, Popup, PopupCloseBehavior, Pos2, Rect, RectAlign,
     Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,
@@ -315,7 +315,7 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
     let hovered = row_response.hovered() || star_response.as_ref().is_some_and(Response::hovered);
 
     if ui.is_rect_visible(rect) {
-        let radius = DESIGN_TOKENS.rounding.sm;
+        let radius = ui.active_theme().radius.sm;
         let painter = ui.painter();
         let fill = match (row.selected, hovered) {
             (true, true) => Some(theme.ui.accent_hover),

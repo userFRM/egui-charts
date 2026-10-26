@@ -1,9 +1,10 @@
 use super::context::{ChartMapping, RenderContext};
 use super::labels::tick_decimals;
 use crate::chart::rendering::axes::paint_crosshair_tag;
-use crate::chart::rendering::draw_dashed_line;
-use crate::config::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;
+use crate::model::LineStyle;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
@@ -24,7 +25,7 @@ pub fn render_crosshair_full(
     style: CrosshairStyle,
     crosshair_color: Color32,
     line_width: f32,
-    line_style: CrosshairLineStyle,
+    line_style: LineStyle,
     label_bg: Color32,
     label_text: Color32,
     chart_bottom: f32,
@@ -140,19 +141,15 @@ pub(crate) fn render_crosshair_lines(
     let line = |from, to, color, width, style| {
         let stroke = Stroke::new(width, color);
         match style {
-            CrosshairLineStyle::Solid => {
+            LineStyle::Solid => {
                 context.painter.line_segment([from, to], stroke);
             }
-            CrosshairLineStyle::Dashed => {
-                draw_dashed_line(context.painter, from, to, stroke, 5.0, 5.0)
-            }
-            CrosshairLineStyle::Dotted => {
-                draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0)
-            }
-            CrosshairLineStyle::LargeDashed => {
+            LineStyle::Dashed => draw_dashed_line(context.painter, from, to, stroke, 5.0, 5.0),
+            LineStyle::Dotted => draw_dashed_line(context.painter, from, to, stroke, 1.0, 3.0),
+            LineStyle::LargeDashed => {
                 draw_dashed_line(context.painter, from, to, stroke, 10.0, 10.0)
             }
-            CrosshairLineStyle::SparseDotted => {
+            LineStyle::SparseDotted => {
                 draw_dashed_line(context.painter, from, to, stroke, 1.0, 7.0)
             }
         }
@@ -339,7 +336,7 @@ mod tests {
                         style,
                         Color32::GRAY,
                         1.0,
-                        CrosshairLineStyle::Dotted,
+                        LineStyle::Dotted,
                         Color32::BLACK,
                         Color32::WHITE,
                         300.0,
@@ -428,8 +425,8 @@ mod tests {
                             horz_line_color: Color32::BLUE,
                             vert_line_width: 2.0,
                             horz_line_width: 3.0,
-                            vert_line_style: CrosshairLineStyle::Solid,
-                            horz_line_style: CrosshairLineStyle::Dotted,
+                            vert_line_style: LineStyle::Solid,
+                            horz_line_style: LineStyle::Dotted,
                             vert_label_background_color: Color32::DARK_RED,
                             horz_label_background_color: Color32::DARK_GREEN,
                             ..Default::default()

@@ -42,7 +42,7 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
         0.0,
         ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
-    ui.add_space(DESIGN_TOKENS.spacing.hairline);
+    ui.add_space(DESIGN_TOKENS.stroke.hairline);
 }
 
 /// Draw a styled separator for the drawing toolbar.
@@ -55,7 +55,7 @@ pub fn draw_separator_with_margin(ui: &mut Ui, width: f32, margin: f32) {
 /// * `ui` - The egui UI context
 /// * `toolbar_width` - Total width of the toolbar (e.g., 52px)
 pub fn draw_separator_styled(ui: &mut Ui, toolbar_width: f32) {
-    let margin = DESIGN_TOKENS.sizing.toolbar.separator_margin;
+    let margin = ui.active_theme().spacing.lg;
     let gap = ui.active_theme().spacing.lg;
 
     // Add gap above

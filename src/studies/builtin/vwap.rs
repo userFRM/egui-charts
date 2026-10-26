@@ -31,15 +31,15 @@
 //!     .with_session(Session::new([SessionWindow::new(weekdays, hour(17), hour(16))]))
 //!     .with_std_dev_bands([1.0, 2.0]);
 //! vwap.calculate(&bars);
-//! assert_eq!(vwap.line_cnt(), 5);
+//! assert_eq!(vwap.line_count(), 5);
 //! # }
 //! ```
 
 use super::clamp_param;
 use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
 use egui::Color32;
 
@@ -156,7 +156,7 @@ impl VolumeWeightedAvgPrice {
             shared: None,
             daily: true,
             timeframe: None,
-            colors: vec![DESIGN_TOKENS.semantic.extended.favorite_gold], // Amber
+            colors: vec![palette::GOLD], // Amber
             visible: true,
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),
@@ -202,7 +202,7 @@ impl VolumeWeightedAvgPrice {
             .collect();
         let band_color = self.colors[0].gamma_multiply(0.5);
         self.colors.truncate(1);
-        self.colors.resize(self.line_cnt(), band_color);
+        self.colors.resize(self.line_count(), band_color);
         self
     }
 
@@ -451,7 +451,7 @@ impl Indicator for VolumeWeightedAvgPrice {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1 + 2 * self.bands.len()
     }
 
@@ -741,7 +741,7 @@ mod tests {
             study.calculate(&bars);
 
             let lines = 1 + 2 * case.bands.len();
-            assert_eq!(study.line_cnt(), lines, "{}", case.name);
+            assert_eq!(study.line_count(), lines, "{}", case.name);
             assert_eq!(study.line_names().len(), lines, "{}", case.name);
             assert_eq!(study.colors().len(), lines, "{}", case.name);
             assert_eq!(study.values().len(), case.want.len(), "{}", case.name);

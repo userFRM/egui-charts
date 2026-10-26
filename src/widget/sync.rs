@@ -1,8 +1,8 @@
 //! Multi-chart crosshair and time-scale synchronization.
 
 use super::Chart;
-use crate::model::Bar;
-use chrono::{DateTime, Duration, Utc};
+use crate::model::{index_at, time_at};
+use chrono::{DateTime, Utc};
 
 /// UTC timestamps at the left and right edges of a chart's plot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +62,12 @@ impl Chart {
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
         let bars = self.state.shown();
+        // Keep fractional indices in f64: a rounded edge can move minutes across a session gap.
         Some(VisibleTimeRange {
-            from: time_at(bars, scale.coord_to_idx(0.0, 0.0, scale.width()) as f64)?,
+            from: time_at(bars, scale.coord_to_idx_precise(0.0, 0.0, scale.width()))?,
             to: time_at(
                 bars,
-                scale.coord_to_idx(scale.width() - 1.0, 0.0, scale.width()) as f64,
+                scale.coord_to_idx_precise(scale.width() - 1.0, 0.0, scale.width()),
             )?,
         })
     }
@@ -86,8 +87,7 @@ impl Chart {
         if to <= from || scale.width() <= 1.0 {
             return false;
         }
-        scale.set_bar_spacing(((scale.width() - 1.0) as f64 / (to - from)) as f32);
-        scale.set_right_offset((to - scale.base_idx() as f64 - 0.5) as f32);
+        scale.fit_logical_range(from, to);
         self.tracking_mode_active = false;
         self.kinetic_scroll = super::state::KineticScrollState::new();
         true
@@ -128,70 +128,11 @@ impl Chart {
     }
 }
 
-// Use differences relative to an actual bar, preserving sub-millisecond execution times.
-fn seconds(duration: Duration) -> f64 {
-    duration.num_seconds() as f64 + duration.subsec_nanos() as f64 / 1e9
-}
-
-fn segment(bars: &[Bar], index: usize) -> (usize, usize) {
-    let mut right = index + 1;
-    while right < bars.len() && bars[right].time == bars[index].time {
-        right += 1;
-    }
-    if right < bars.len() {
-        return (index, right);
-    }
-    let left = bars.partition_point(|bar| bar.time < bars[index].time);
-    (if left == 0 { index } else { left - 1 }, index)
-}
-
-pub(crate) fn time_at(bars: &[Bar], index: f64) -> Option<DateTime<Utc>> {
-    if bars.is_empty() || !index.is_finite() {
-        return None;
-    }
-    let at = index.floor().clamp(0.0, (bars.len() - 1) as f64) as usize;
-    let (left, right) = if index >= 0.0 && at + 1 < bars.len() {
-        (at, at + 1)
-    } else {
-        segment(bars, at)
-    };
-    let step = if left == right {
-        1.0
-    } else {
-        seconds(bars[right].time - bars[left].time) / (right - left) as f64
-    };
-    let nanos = (index - at as f64) * step * 1e9;
-    if !nanos.is_finite() || nanos.abs() >= i64::MAX as f64 {
-        return None;
-    }
-    bars[at]
-        .time
-        .checked_add_signed(Duration::nanoseconds(nanos.round() as i64))
-}
-
-pub(crate) fn index_at(bars: &[Bar], time: DateTime<Utc>) -> Option<f64> {
-    bars.first()?;
-    let at = bars
-        .partition_point(|bar| bar.time < time)
-        .min(bars.len() - 1);
-    if bars[at].time == time {
-        return Some(at as f64);
-    }
-    let beyond = time > bars[at].time;
-    let (left, right) = segment(bars, if beyond { at } else { at.saturating_sub(1) });
-    let step = if bars[left].time == bars[right].time {
-        1.0
-    } else {
-        seconds(bars[right].time - bars[left].time) / (right - left) as f64
-    };
-    let origin = if beyond { at } else { left };
-    Some(origin as f64 + seconds(time - bars[origin].time) / step)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::BarData;
+    use crate::model::{Bar, BarData};
+    use chrono::Duration;
 
     fn chart(times: &[i64], width: f32) -> Chart {
         let bars = times
@@ -282,6 +223,37 @@ mod tests {
                 to: range.from
             }));
             assert_eq!(receiver.get_time_scale_state(), before);
+        }
+        // A 65.5-hour closure: the requested edges are 8 and 32 hours (less one second)
+        // after its first bar, at fractions 28_800/235_800 and 115_199/235_800.
+        let mut times: Vec<i64> = (0..=4096).map(|index| index * 60).collect();
+        let start = *times.last().unwrap();
+        times.extend((0..1024).map(|index| start + 235_800 + index * 60));
+        let range = VisibleTimeRange {
+            from: time(start + 28_800),
+            to: time(start + 115_199),
+        };
+        for width in [251.0, 592.125] {
+            let mut receiver = chart(&times, width);
+            assert!(receiver.apply_synced_time_range(range));
+            let actual = receiver.visible_time_range().unwrap();
+            assert!((actual.from - range.from).num_milliseconds().abs() < 1);
+            assert!((actual.to - range.to).num_milliseconds().abs() < 1);
+        }
+        // A day inside a three-day session gap spans one third of a bar, even after long history.
+        for count in [2, 20_000] {
+            let mut times: Vec<_> = (0..count).map(|i| i * 60).collect();
+            let last = times[count as usize - 1];
+            times.push(last + 3 * 86_400);
+            let mut receiver = chart(&times, 1001.0);
+            let range = VisibleTimeRange {
+                from: time(last + 86_400),
+                to: time(last + 2 * 86_400),
+            };
+            assert!(receiver.apply_synced_time_range(range));
+            let actual = receiver.visible_time_range().unwrap();
+            assert!((actual.from - range.from).num_milliseconds().abs() < 10);
+            assert!((actual.to - range.to).num_milliseconds().abs() < 10);
         }
         assert!(!chart(&[], 501.0).apply_synced_time_range(range));
         // Execution bars need sub-millisecond precision; no epoch-sized float conversion.

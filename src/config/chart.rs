@@ -45,22 +45,6 @@ pub enum NavigationButtons {
     Never,
 }
 
-/// Style for session break lines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum SessionBreakStyle {
-    /// Solid line
-    #[default]
-    Solid,
-    /// Dashed line
-    Dashed,
-    /// Dotted line
-    Dotted,
-    /// Dashes twice as long as `Dashed`, with twice the gap
-    LargeDashed,
-    /// Dots with twice the spacing of `Dotted`
-    SparseDotted,
-}
-
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; study panes draw their own axes.
 ///
@@ -220,6 +204,7 @@ impl SessionConfig {
 ///
 /// Defaults follow a common dark-theme charting palette.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartConfig {
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,
@@ -342,7 +327,7 @@ pub struct ChartConfig {
     /// Color for session break lines
     pub session_break_color: Color32,
     /// Style for session break lines
-    pub session_break_style: SessionBreakStyle,
+    pub session_break_style: LineStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
     /// Shade bars identified as extended hours by the session metadata.
@@ -472,7 +457,7 @@ impl Default for ChartConfig {
             // Session breaks disabled by default
             show_session_breaks: false,
             session_break_color: chart.grid_line_major,
-            session_break_style: SessionBreakStyle::Dashed,
+            session_break_style: LineStyle::Dashed,
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
@@ -485,5 +470,28 @@ impl Default for ChartConfig {
             // Background enabled by default (set false when inside a container)
             skip_background: false,
         }
+    }
+}
+
+impl ChartConfig {
+    /// Apply the theme's background, grid, axis text and candle colours to this configuration.
+    ///
+    /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
+    /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
+    /// keeps for that chart, so switch a chart's theme with
+    /// [`Chart::set_theme`](crate::Chart::set_theme) or
+    /// [`Chart::set_theme_override`](crate::Chart::set_theme_override), which apply these
+    /// colours too.
+    pub fn with_theme(mut self, theme: &Theme) -> Self {
+        self.background_color = theme.chart.bg;
+        self.grid_color = theme.chart.grid_line;
+        self.text_color = theme.chart.axis_text;
+        self.bullish_color = theme.chart.candle_up;
+        self.bearish_color = theme.chart.candle_down;
+        self.bullish_border_color = Some(theme.chart.candle_up);
+        self.bearish_border_color = Some(theme.chart.candle_down);
+        self.bullish_wick_color = Some(theme.chart.candle_up);
+        self.bearish_wick_color = Some(theme.chart.candle_down);
+        self
     }
 }

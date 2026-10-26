@@ -26,8 +26,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Stochastic RSI indicator
@@ -58,8 +58,8 @@ impl StochasticRSI {
             smooth_k: smooth_k.max(1),
             smooth_d: smooth_d.max(1),
             values: IndicatorValues::new(),
-            k_color: DESIGN_TOKENS.semantic.extended.info,
-            d_color: DESIGN_TOKENS.semantic.extended.error,
+            k_color: palette::BLUE,
+            d_color: palette::RED,
             visible: true,
         }
     }
@@ -241,7 +241,7 @@ impl Indicator for StochasticRSI {
         false // StochRSI is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // %K and %D
     }
 

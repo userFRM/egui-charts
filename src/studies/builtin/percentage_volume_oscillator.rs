@@ -3,7 +3,7 @@ use super::price_oscillator::percentage_oscillator;
 use crate::model::Bar;
 use crate::studies::Indicator;
 use crate::studies::IndicatorValues;
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
 use egui::Color32;
 
 /// Percentage Volume Oscillator (PVO): the [`PriceOscillator`](super::PriceOscillator)
@@ -38,9 +38,9 @@ impl PercentageVolumeOscillator {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - PVO
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
-                DESIGN_TOKENS.semantic.extended.success, // Green - Histogram
+                palette::BLUE,   // Blue - PVO
+                palette::ORANGE, // Orange - Signal
+                palette::GREEN,  // Green - Histogram
             ],
             visible: true,
         }
@@ -78,8 +78,8 @@ impl Indicator for PercentageVolumeOscillator {
         signal_period: length("Signal period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {
@@ -125,7 +125,7 @@ impl Indicator for PercentageVolumeOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

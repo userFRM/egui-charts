@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Acceleration Bands (Price Headley), a price envelope that widens on wide bars.
@@ -29,9 +29,9 @@ impl AccelerationBands {
             factor: clamp_param(factor, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::GOLD,  // Amber - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }
@@ -116,7 +116,7 @@ impl Indicator for AccelerationBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
@@ -185,8 +185,8 @@ mod tests {
         ab.calculate(&data);
 
         let mut failures = Vec::new();
-        if ab.line_cnt() != 3 {
-            failures.push(format!("line_cnt {}, want 3", ab.line_cnt()));
+        if ab.line_count() != 3 {
+            failures.push(format!("line_count {}, want 3", ab.line_count()));
         }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(

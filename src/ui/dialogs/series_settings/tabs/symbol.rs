@@ -1,12 +1,12 @@
 //! Symbol tab - chart type, price source, and line/candle style settings.
 
 use crate::chart::series::SeriesSettings;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, LinePlotStyle, LineStyle, PriceBasedSource,
     PriceSource,
 };
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use egui::{Color32, RichText, Ui};
 

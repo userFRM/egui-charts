@@ -26,9 +26,9 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// SuperTrend indicator
@@ -78,8 +78,8 @@ impl SuperTrend {
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            bullish_color: DESIGN_TOKENS.semantic.extended.success, // Green
-            bearish_color: DESIGN_TOKENS.semantic.extended.error,   // Red
+            bullish_color: palette::GREEN, // Green
+            bearish_color: palette::RED,   // Red
             visible: true,
         }
     }

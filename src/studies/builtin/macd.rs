@@ -24,9 +24,9 @@
 //!
 //! # Default colours
 //!
-//! - MACD line: blue (`indicators.macd_line`)
-//! - Signal line: orange (`indicators.macd_signal`)
-//! - Histogram: green (`extended.success`)
+//! - MACD line: blue ([`palette::BLUE`](crate::studies::palette::BLUE))
+//! - Signal line: orange ([`palette::ORANGE`](crate::studies::palette::ORANGE))
+//! - Histogram: green ([`palette::GREEN`](crate::studies::palette::GREEN))
 //!
 //! # Example
 //!
@@ -43,9 +43,9 @@
 //! ```
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Moving Average Convergence Divergence (MACD) indicator.
@@ -86,9 +86,9 @@ impl MACD {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.macd_line, // MACD line
-                DESIGN_TOKENS.semantic.indicators.macd_signal, // Signal line
-                DESIGN_TOKENS.semantic.extended.success,     // Histogram
+                palette::BLUE,   // MACD line
+                palette::ORANGE, // Signal line
+                palette::GREEN,  // Histogram
             ],
             visible: true,
         }
@@ -119,7 +119,7 @@ impl Indicator for MACD {
         crate::studies::PlotStyle {
             color: self.colors[line],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 2 {
                 crate::studies::PlotType::Columns
             } else {
@@ -129,8 +129,8 @@ impl Indicator for MACD {
         }
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -207,11 +207,7 @@ impl Indicator for MACD {
         crate::studies::StudyPane {
             height: None,
             range: None,
-            levels: vec![(
-                0.0,
-                crate::tokens::DESIGN_TOKENS.semantic.extended.chart_text,
-                "Zero Line",
-            )],
+            levels: vec![(0.0, palette::WHITE, "Zero Line")],
             fill_between_levels: false,
         }
     }
@@ -220,7 +216,7 @@ impl Indicator for MACD {
         false // MACD is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

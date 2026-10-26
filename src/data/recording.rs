@@ -1,7 +1,7 @@
 //! Versioned, length-framed binary recordings. Hosts supply files or any `Read`/`Write` stream.
 
 use super::{MarketEvent, OrderEvent, ReplayEvent, RestingOrder};
-use crate::model::{Level1Quote, OrderBook, OrderBookLevel, Tick, TradeConditions, TradeSide};
+use crate::model::{Level1Quote, OrderBook, OrderBookLevel, OrderSide, Tick, TradeConditions};
 use chrono::{DateTime, Utc};
 use std::io::{self, Cursor, Read, Write};
 
@@ -290,8 +290,8 @@ fn put_tick(bytes: &mut Vec<u8>, trade: &Tick) {
     put_f64(bytes, trade.size);
     bytes.push(match trade.side {
         None => 0,
-        Some(TradeSide::Buy) => 1,
-        Some(TradeSide::Sell) => 2,
+        Some(OrderSide::Buy) => 1,
+        Some(OrderSide::Sell) => 2,
     });
     for id in [trade.id, trade.aggressor_order_id, trade.resting_order_id] {
         bytes.push(u8::from(id.is_some()));
@@ -307,8 +307,8 @@ fn get_tick(reader: &mut impl Read) -> io::Result<Tick> {
     let size = get_f64(reader)?;
     let side = match get_byte(reader)? {
         0 => None,
-        1 => Some(TradeSide::Buy),
-        2 => Some(TradeSide::Sell),
+        1 => Some(OrderSide::Buy),
+        2 => Some(OrderSide::Sell),
         _ => return Err(invalid()),
     };
     let mut trade = Tick::new(time, price, size, side);
@@ -320,7 +320,7 @@ fn get_tick(reader: &mut impl Read) -> io::Result<Tick> {
 }
 fn put_order(bytes: &mut Vec<u8>, order: &RestingOrder) {
     put_u64(bytes, order.id);
-    bytes.push(u8::from(order.side == TradeSide::Sell));
+    bytes.push(u8::from(order.side == OrderSide::Sell));
     put_f64(bytes, order.price);
     put_f64(bytes, order.size);
 }
@@ -328,9 +328,9 @@ fn get_order(reader: &mut impl Read) -> io::Result<RestingOrder> {
     Ok(RestingOrder::new(
         get_u64(reader)?,
         if get_bool(reader)? {
-            TradeSide::Sell
+            OrderSide::Sell
         } else {
-            TradeSide::Buy
+            OrderSide::Buy
         },
         get_f64(reader)?,
         get_f64(reader)?,
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn binary_recording_round_trips_market_data_and_rejects_truncation() {
         let time = DateTime::from_timestamp(1_700_000_000, 123).unwrap();
-        let trade = Tick::new(time, 101.25, 3.0, Some(TradeSide::Buy))
+        let trade = Tick::new(time, 101.25, 3.0, Some(OrderSide::Buy))
             .with_id(7)
             .with_aggressor_order_id(8)
             .with_resting_order_id(9)
@@ -378,7 +378,7 @@ mod tests {
             }],
             asks: vec![],
         };
-        let order = RestingOrder::new(9, TradeSide::Sell, 101.25, 5.0);
+        let order = RestingOrder::new(9, OrderSide::Sell, 101.25, 5.0);
         let events = vec![
             MarketEvent::Trade(trade.clone()),
             MarketEvent::Quote(Level1Quote {

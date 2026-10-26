@@ -2,10 +2,10 @@
 
 use super::Chart;
 use crate::chart::coords::ChartMapping;
+use crate::data::PriceTargets;
 use crate::data::{FeedError, inbox::Inbox};
 use crate::localization as l10n;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, PriceScaleMode};
-use crate::services::PriceTargets;
 use crate::theme::ThemeExt;
 use egui::{FontId, Pos2, Sense, Stroke, Vec2};
 use std::sync::Arc;

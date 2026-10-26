@@ -24,8 +24,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Accumulation/Distribution Line indicator
@@ -41,7 +41,7 @@ impl AccumulationDistribution {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }
@@ -92,8 +92,8 @@ impl Default for AccumulationDistribution {
 }
 
 impl Indicator for AccumulationDistribution {
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Volume
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
     fn name(&self) -> &str {
@@ -135,7 +135,7 @@ impl Indicator for AccumulationDistribution {
         false // A/D is a separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

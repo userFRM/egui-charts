@@ -1,6 +1,6 @@
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Typical Price (HLC/3)
@@ -20,7 +20,7 @@ impl TypicalPrice {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -104,7 +104,7 @@ impl WeightedClose {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }
@@ -190,7 +190,7 @@ impl MedianPrice {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }

@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Percent B (%B)
@@ -25,7 +25,7 @@ impl PercentB {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
+            color: palette::CYAN, // Cyan
             visible: true,
         }
     }

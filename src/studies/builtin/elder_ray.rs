@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Elder Ray Index (Bull Power / Bear Power)
@@ -25,8 +25,8 @@ impl ElderRay {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Bull Power
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Bear Power
+                palette::GREEN, // Green - Bull Power
+                palette::RED,   // Red - Bear Power
             ],
             visible: true,
         }
@@ -85,8 +85,8 @@ impl Indicator for ElderRay {
         period: length("Period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {

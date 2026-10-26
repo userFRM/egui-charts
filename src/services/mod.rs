@@ -30,7 +30,6 @@ mod search;
 mod settings;
 mod signals;
 mod storage;
-mod targets;
 
 pub use alerts::{AlertEvent, Alerts};
 pub use broker::{AccountEvent, Broker};
@@ -48,4 +47,3 @@ pub use search::{SymbolQuery, SymbolSearch};
 pub use settings::{SettingsStore, UserSettings};
 pub use signals::{SignalEvent, Signals};
 pub use storage::{Storage, StoreKind};
-pub use targets::PriceTargets;

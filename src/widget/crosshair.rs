@@ -48,7 +48,7 @@ impl Chart {
                     && study.scale() == crate::studies::StudyScale::Main
             })
             .flat_map(|study| {
-                (0..study.line_cnt())
+                (0..study.line_count())
                     .filter(|line| {
                         let plot = study.plot_style(*line);
                         plot.visible
@@ -111,7 +111,7 @@ impl Chart {
 /// The output and value a study's menu refers to at `bar`: its first visible plot with a value
 /// there, which for volume is the bar's column.
 pub(crate) fn menu_value(study: &dyn Indicator, bar: usize) -> Option<(usize, f64)> {
-    (0..study.line_cnt())
+    (0..study.line_count())
         .filter(|line| {
             let plot = study.plot_style(*line);
             plot.visible

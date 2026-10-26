@@ -1,8 +1,8 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Squeeze Momentum Indicator
@@ -37,10 +37,10 @@ impl SqueezeMomentum {
             momentum_period: 12,
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Momentum positive
-                DESIGN_TOKENS.semantic.extended.disabled, // Gray - Squeeze on
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Momentum negative
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Squeeze off
+                palette::GREEN,    // Green - Momentum positive
+                palette::DISABLED, // Gray - Squeeze on
+                palette::RED,      // Red - Momentum negative
+                palette::BLUE,     // Blue - Squeeze off
             ],
             visible: true,
         }
@@ -189,8 +189,8 @@ impl Indicator for SqueezeMomentum {
         momentum_period: length("Momentum period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {

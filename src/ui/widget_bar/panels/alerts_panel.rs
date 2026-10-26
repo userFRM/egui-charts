@@ -31,6 +31,7 @@ impl Default for AlertsPanelConfig {
 
 /// An action the host handles using its shared alert dialog or file export.
 #[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
 pub enum AlertPanelAction {
     /// No host action.
     #[default]
