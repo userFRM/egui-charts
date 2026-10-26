@@ -550,7 +550,13 @@ mod tests {
                 value,
             });
         }
-        settle(&mut chart);
+        for frame in 0..60 {
+            let mut last = bars(&[1.0; 5], 30).pop().unwrap();
+            last.close = 1.0 + frame as f64 * 0.001;
+            last.high = last.close;
+            chart.update(super::super::SeriesId::MAIN, last);
+            shapes(&ctx, &mut chart, 12.0 + frame as f64 / 60.0, Vec::new());
+        }
         assert_eq!(
             output(&chart, metric),
             [None, Some(14.0), Some(14.0), Some(20.0), Some(30.0)]
