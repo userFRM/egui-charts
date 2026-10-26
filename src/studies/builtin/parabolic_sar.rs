@@ -14,6 +14,9 @@
 //! - SAR above price: Downtrend (SAR acts as resistance/trailing stop)
 //! - When price crosses SAR: Trend reversal signal
 //!
+//! The SAR is output as two lines, the uptrend SAR and the downtrend SAR; each bar has a
+//! value on exactly one of them, the other is NaN.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -23,10 +26,10 @@
 //! psar.calculate(&bars);
 //! ```
 
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Parabolic SAR indicator
@@ -35,7 +38,7 @@ pub struct ParabolicSAR {
     initial_af: f64,
     af_step: f64,
     max_af: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     bullish_color: Color32,
     bearish_color: Color32,
     visible: bool,
@@ -57,9 +60,9 @@ impl ParabolicSAR {
             initial_af,
             af_step: clamp_param(af_step, 0.001, 1.0),
             max_af: clamp_param(max_af, initial_af, 1.0),
-            values: Vec::new(),
-            bullish_color: DESIGN_TOKENS.semantic.extended.bullish,
-            bearish_color: DESIGN_TOKENS.semantic.extended.bearish,
+            values: IndicatorValues::new(),
+            bullish_color: palette::UP,
+            bearish_color: palette::DOWN,
             visible: true,
         }
     }
@@ -84,23 +87,15 @@ impl Default for ParabolicSAR {
     }
 }
 
-impl Indicator for ParabolicSAR {
-    fn name(&self) -> &str {
-        "PSAR"
-    }
-
-    fn desc(&self) -> &str {
-        "Parabolic SAR - Trend following stop-and-reverse"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ParabolicSAR {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < 2 {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         let mut sar = vec![0.0; data.len()];
@@ -183,18 +178,55 @@ impl Indicator for ParabolicSAR {
             }
         }
 
-        // Build output: [sar, trend]
+        // Build output: [uptrend SAR, downtrend SAR]
         for i in 0..data.len() {
             if i == 0 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
+            } else if trend[i] == 1 {
+                values.push_lines(&[sar[i], f64::NAN]);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![sar[i], trend[i] as f64]));
+                values.push_lines(&[f64::NAN, sar[i]]);
             }
+        }
+
+        values
+    }
+}
+
+impl Indicator for ParabolicSAR {
+    crate::studies::inputs::study_inputs!(self;
+        initial_af: number("Initial af", 0.001, 1.0),
+        af_step: number("Af step", 0.001, 1.0),
+        max_af: number("Max af", 0.001, 1.0)
+    ; { self.max_af = self.max_af.max(self.initial_af); });
+
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors()[line],
+            width: 1.0,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: crate::studies::PlotType::Circles,
+            visible: true,
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn name(&self) -> &str {
+        "PSAR"
+    }
+
+    fn desc(&self) -> &str {
+        "Parabolic SAR - Trend following stop-and-reverse"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -215,10 +247,6 @@ impl Indicator for ParabolicSAR {
         true // PSAR is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
-        1 // Single SAR line (dots, color changes with trend)
-    }
-
     fn is_visible(&self) -> bool {
         self.visible
     }
@@ -232,9 +260,6 @@ impl Indicator for ParabolicSAR {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!(
-            "PSAR({}, {}, {})",
-            self.initial_af, self.af_step, self.max_af
-        )]
+        vec!["Up Trend".to_string(), "Down Trend".to_string()]
     }
 }

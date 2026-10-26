@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 
 /// Actions that can be performed during replay mode
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub enum ReplayAction {
     /// No action
     #[default]
@@ -62,8 +63,11 @@ pub enum ReplayAction {
     // Data Loading
     /// Load replay data from source
     LoadData {
+        /// Instrument identifier used by the host.
         symbol: String,
+        /// Start time of the requested range, when specified.
         start: Option<DateTime<Utc>>,
+        /// End time of the requested range, when specified.
         end: Option<DateTime<Utc>>,
     },
     /// Unload current replay data
@@ -76,28 +80,24 @@ pub enum ReplayAction {
     SetEndDate(DateTime<Utc>),
     /// Set both start and end dates
     SetDateRange {
+        /// Start time of the requested range.
         start: DateTime<Utc>,
+        /// End time of the requested range.
         end: DateTime<Utc>,
     },
 
     // Markers and Annotations
     /// Add marker at current position
     AddMarker {
+        /// Optional label for the replay marker.
         label: Option<String>,
+        /// Optional RGBA color for the replay marker.
         color: Option<[u8; 4]>,
     },
     /// Remove marker at bar index
     RemoveMarker(usize),
     /// Clear all markers
     ClearMarkers,
-
-    // Trading Simulation
-    /// Enable trading simulation during replay
-    EnableTradingSimulation,
-    /// Disable trading simulation
-    DisableTradingSimulation,
-    /// Reset trading simulation state
-    ResetTradingSimulation,
 }
 
 impl ReplayAction {

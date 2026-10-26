@@ -22,15 +22,15 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Rate of Change indicator
 #[derive(Clone)]
 pub struct RateOfChange {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -43,8 +43,8 @@ impl RateOfChange {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.success,
+            values: IndicatorValues::new(),
+            color: palette::GREEN,
             visible: true,
         }
     }
@@ -64,6 +64,20 @@ impl Default for RateOfChange {
 }
 
 impl Indicator for RateOfChange {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "ROC"
     }
@@ -97,7 +111,7 @@ impl Indicator for RateOfChange {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

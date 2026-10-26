@@ -2,6 +2,7 @@
 //!
 //! A standard confirmation dialog with confirm/cancel buttons.
 
+use crate::localization as l10n;
 use egui::{Context, Id};
 
 use crate::tokens::DESIGN_TOKENS;
@@ -92,7 +93,7 @@ impl ConfirmDialog {
         let Some(response) = Modal::new(self.id, &self.title)
             .width(DESIGN_TOKENS.sizing.dialog.confirm_width)
             .show(ctx, open, |ui| {
-                ui.label(&self.message);
+                ui.label(l10n::text(ui.ctx(), &self.message));
                 footer.show(ui)
             })
         else {

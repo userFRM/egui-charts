@@ -12,11 +12,13 @@ use egui::{Context, Id, Pos2};
 /// Distance between the pointer and the menu corner, enough to clear the handle under the
 /// pointer: half the 8 px handle plus 2 px.
 // shortcut: assumes the default handle size, upgrade when the hit result carries the handle rect.
-const DRAWING_MENU_OFFSET: f32 = 6.0;
+pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// Actions from the drawing context menu
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DrawingContextMenuAction {
+    /// No action requested.
     None,
     /// Open drawing settings dialog
     Edit,
@@ -28,8 +30,6 @@ pub enum DrawingContextMenuAction {
     Lock,
     /// Toggle drawing visibility
     Hide,
-    /// Copy drawing to clipboard
-    Copy,
     /// Clone drawing with offset
     Clone,
     /// Delete drawing
@@ -107,7 +107,10 @@ impl DrawingContextMenu {
     }
 
     /// Build menu items for the drawing context menu
-    fn build_menu_items(&self) -> Vec<MenuEntry<DrawingContextMenuAction>> {
+    pub(crate) fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
         vec![
             // Edit section
             MenuEntry::Item(
@@ -149,15 +152,13 @@ impl DrawingContextMenu {
                 }),
             ),
             MenuEntry::Separator,
-            // Clipboard operations
-            MenuEntry::Item(MenuItem::new("Copy", DrawingContextMenuAction::Copy)),
             MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
             MenuEntry::Separator,
             // Delete (last item, potentially destructive)
             MenuEntry::Item(
                 MenuItem::new("Delete", DrawingContextMenuAction::Delete)
                     .with_icon(&embedded_icons::TRASH)
-                    .with_shortcut(KeyboardAction::DeleteSelectedDrawing.shortcut())
+                    .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
                     .danger(),
             ),
         ]
@@ -165,10 +166,20 @@ impl DrawingContextMenu {
 
     /// Show the context menu
     pub fn show(&mut self, ctx: &Context, theme: &Theme) {
+        self.show_with_shortcuts(ctx, theme, &crate::widget::ShortcutMap::default());
+    }
+
+    /// Show menu hints from the same bindings used by chart input.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        theme: &Theme,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items();
+        let entries = self.build_menu_items(shortcuts);
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("drawing_context_menu");
         if let Some(action) = show_menu(

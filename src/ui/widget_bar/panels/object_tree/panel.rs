@@ -3,18 +3,19 @@
 //! Ties together all subcomponents into the complete Object Tree panel.
 
 use crate::icons::icons;
-use crate::styles::icons as icon_sizes;
-use crate::ui_kit::PanelHeader;
-use egui::{Frame, RichText, TextEdit, Ui, Vec2, vec2};
+use crate::localization as l10n;
+use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
+use egui::{Frame, RichText, Ui, vec2};
 
+use super::super::controls::dropdown;
 use super::actions::ObjectTreeAction;
 use super::config::ObjectTreeConfig;
-use super::context_menu::{handle_keyboard_shortcuts, render_context_menu};
+use super::context_menu::handle_keyboard_shortcuts;
 use super::data_window::show_data_window;
 use super::source_tree::render_source_tree;
 use super::state::ObjectTreeState;
 use super::types::{DataWindowInfo, SourceItem, SourceType};
-use crate::ext::UiExt;
+use crate::ui_kit::ext::UiExt;
 
 /// Object Tree panel widget
 ///
@@ -100,12 +101,23 @@ impl ObjectTreePanel {
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
 
-        // Collect source IDs for keyboard shortcuts
-        let source_ids: Vec<usize> = sources.iter().map(|s| s.id).collect();
+        if self.config.group_by_type {
+            sources.sort_by_key(|s| {
+                let group = match s.source_type {
+                    SourceType::DataSource => 0,
+                    SourceType::Indicator => 1,
+                    SourceType::Drawing => 2,
+                    SourceType::Template => 3,
+                };
+                (group, std::cmp::Reverse(s.z_index))
+            });
+        } else {
+            sources.sort_by_key(|s| std::cmp::Reverse(s.z_index));
+        }
 
         // Handle keyboard shortcuts
         if self.config.enable_keyboard_shortcuts {
-            let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, &source_ids);
+            let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, sources);
             if !kb_action.is_none() {
                 action = kb_action;
             }
@@ -114,7 +126,7 @@ impl ObjectTreePanel {
         // Main panel frame
         Frame::new().fill(ui.visuals().panel_fill).show(ui, |ui| {
             // Header
-            self.show_header(ui, sources, &mut action);
+            self.show_header(ui, &mut action);
 
             ui.separator();
 
@@ -132,22 +144,34 @@ impl ObjectTreePanel {
 
             ui.space_sm();
 
-            // Source tree
-            let tree_action = render_source_tree(ui, sources, &self.config, &mut self.state);
-            if !tree_action.is_none() {
-                action = tree_action;
-            }
-
-            // Footer
-            ui.separator();
-            self.show_footer(ui, sources);
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                self.show_footer(ui, sources);
+                ui.separator();
+                let mut tree_config = self.config.clone();
+                tree_config.max_height = tree_config.max_height.min(ui.available_height());
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    let tree_action =
+                        render_source_tree(ui, sources, &tree_config, &mut self.state);
+                    if !tree_action.is_none() {
+                        action = tree_action;
+                    }
+                });
+            });
         });
 
-        // Context menu (rendered on top)
-        if self.state.context_menu_open {
-            let menu_action = render_context_menu(ui, sources, &mut self.state);
-            if !menu_action.is_none() {
-                action = menu_action;
+        if let Some(id) = self.state.renaming_id {
+            use crate::ui_kit::modal::dialogs::{PromptDialog, PromptResult};
+            let mut open = true;
+            match PromptDialog::new(ui.scope_id().with(("rename_object", id)), "Rename object")
+                .initial_value(&self.state.rename_text)
+                .show(ui.ctx(), &mut open)
+            {
+                PromptResult::Submitted(name) if !name.trim().is_empty() => {
+                    self.state.cancel_rename();
+                    action = ObjectTreeAction::Rename(id, name);
+                }
+                PromptResult::Cancelled | PromptResult::Submitted(_) => self.state.cancel_rename(),
+                PromptResult::None => {}
             }
         }
 
@@ -158,135 +182,173 @@ impl ObjectTreePanel {
     }
 
     /// Render header with title and controls
-    fn show_header(&mut self, ui: &mut Ui, _sources: &[SourceItem], action: &mut ObjectTreeAction) {
+    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
         PanelHeader::new("Objects")
             .strong()
             .no_separator()
             .show(ui, |ui| {
                 // Settings menu
-                ui.menu_button("S", |ui| {
-                    ui.checkbox(&mut self.config.show_data_window, "Show Data Window");
-                    ui.checkbox(&mut self.config.group_by_type, "Group by Type");
-                    ui.checkbox(&mut self.config.show_color_indicators, "Show Colors");
-                    ui.checkbox(&mut self.config.show_item_counts, "Show Counts");
+                let settings = IconButton::new(&icons::SETTINGS)
+                    .tooltip("Object tree settings")
+                    .show(ui);
+                egui::Popup::menu(&settings).show(|ui| {
+                    ui.checkbox(
+                        &mut self.config.show_data_window,
+                        l10n::text(ui.ctx(), "Show Data Window"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.group_by_type,
+                        l10n::text(ui.ctx(), "Group by Type"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.show_color_indicators,
+                        l10n::text(ui.ctx(), "Show Colors"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.show_item_counts,
+                        l10n::text(ui.ctx(), "Show Counts"),
+                    );
                 });
 
                 // Expand all
-                if ui.small_button("+").on_hover_text("Expand all").clicked() {
+                if IconButton::new(&icons::CHEVRON_DOWN)
+                    .tooltip("Expand all")
+                    .show(ui)
+                    .clicked()
+                {
                     self.state.expand_all_groups();
                 }
 
                 // Collapse all
-                if ui.small_button("-").on_hover_text("Collapse all").clicked() {
+                if IconButton::new(&icons::CHEVRON_UP)
+                    .tooltip("Collapse all")
+                    .show(ui)
+                    .clicked()
+                {
                     self.state.collapse_all_groups();
                 }
 
                 // Bulk actions menu
-                ui.menu_button(
-                    icons::UI_MORE_HORIZONTAL.as_image(Vec2::splat(icon_sizes::SM)),
-                    |ui| {
-                        if ui.button("Show All").clicked() {
-                            *action = ObjectTreeAction::ShowAll;
-                            ui.close();
-                        }
-                        if ui.button("Hide All").clicked() {
-                            *action = ObjectTreeAction::HideAll;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Lock All").clicked() {
-                            *action = ObjectTreeAction::LockAll;
-                            ui.close();
-                        }
-                        if ui.button("Unlock All").clicked() {
-                            *action = ObjectTreeAction::UnlockAll;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if self.state.selection_count() > 0
-                            && ui.button("Delete Selected").clicked()
-                        {
-                            *action = ObjectTreeAction::DeleteSelected;
-                            ui.close();
-                        }
-                    },
-                );
+                let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
+                    .tooltip("Object actions")
+                    .show(ui);
+                egui::Popup::menu(&more).show(|ui| {
+                    if ui.button(l10n::text(ui.ctx(), "Show all")).clicked() {
+                        *action = ObjectTreeAction::ShowAll;
+                        ui.close();
+                    }
+                    if ui.button(l10n::text(ui.ctx(), "Hide all")).clicked() {
+                        *action = ObjectTreeAction::HideAll;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(l10n::text(ui.ctx(), "Lock all")).clicked() {
+                        *action = ObjectTreeAction::LockAll;
+                        ui.close();
+                    }
+                    if ui.button(l10n::text(ui.ctx(), "Unlock all")).clicked() {
+                        *action = ObjectTreeAction::UnlockAll;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if self.state.selection_count() > 0
+                        && ui.button(l10n::text(ui.ctx(), "Delete selected")).clicked()
+                    {
+                        *action = ObjectTreeAction::DeleteSelected;
+                        ui.close();
+                    }
+                });
             });
     }
 
     /// Render filter controls
     fn show_filter_controls(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            // Search input
-            let _search_response = ui.add_sized(
-                vec2(120.0, 20.0),
-                TextEdit::singleline(&mut self.state.filter_text).hint_text("Filter..."),
-            );
-
-            // Type filter dropdown
-            ui.combo_select_width(
-                "object_tree_type_filter",
-                &mut self.state.filter_type,
-                [
-                    None,
-                    Some(SourceType::DataSource),
-                    Some(SourceType::Indicator),
-                    Some(SourceType::Drawing),
-                    Some(SourceType::Template),
-                ],
-                |v| match v {
-                    None => "All".to_string(),
-                    Some(st) => st.display_name().to_string(),
-                },
-                95.0,
-            );
-
-            // Clear filter button
-            if self.state.has_filter()
-                && ui.small_button("X").on_hover_text("Clear filter").clicked()
-            {
-                self.state.clear_filter();
-            }
+            let type_width = 108.0;
+            let field_width =
+                (ui.available_width() - type_width - ui.spacing().item_spacing.x).max(0.0);
+            ui.allocate_ui(vec2(field_width, 28.0), |ui| {
+                ui.spacing_mut().interact_size.y = 28.0;
+                filter_input(ui, &mut self.state.filter_text);
+            });
+            ui.spacing_mut().interact_size.y = 28.0;
+            ui.allocate_ui(vec2(type_width, 28.0), |ui| {
+                dropdown(
+                    ui,
+                    "object_tree_type_filter",
+                    self.state.filter_type.map_or("All", |t| t.display_name()),
+                    |ui| {
+                        for source_type in [
+                            None,
+                            Some(SourceType::DataSource),
+                            Some(SourceType::Indicator),
+                            Some(SourceType::Drawing),
+                            Some(SourceType::Template),
+                        ] {
+                            let label = source_type.map_or("All", |t| t.display_name());
+                            ui.selectable_value(
+                                &mut self.state.filter_type,
+                                source_type,
+                                l10n::text(ui.ctx(), label),
+                            );
+                        }
+                    },
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Object type"));
+            });
         });
     }
 
     /// Render footer with stats
     fn show_footer(&self, ui: &mut Ui, sources: &[SourceItem]) {
-        ui.horizontal(|ui| {
-            let total = sources.len();
-            let visible = sources.iter().filter(|s| s.visible).count();
-            let selected = self.state.selection_count();
-            let indicators = sources
-                .iter()
-                .filter(|s| s.source_type == SourceType::Indicator)
-                .count();
-            let drawings = sources
-                .iter()
-                .filter(|s| s.source_type == SourceType::Drawing)
-                .count();
+        let total = sources.len();
+        let visible = sources.iter().filter(|s| s.visible).count();
+        let selected = self.state.selection_count();
+        let indicators = sources
+            .iter()
+            .filter(|s| s.source_type == SourceType::Indicator)
+            .count();
+        let drawings = sources
+            .iter()
+            .filter(|s| s.source_type == SourceType::Drawing)
+            .count();
 
-            ui.label(
-                RichText::new(format!(
-                    "{} objects • {} indicators • {} drawings • {} visible{}",
-                    total,
-                    indicators,
-                    drawings,
-                    visible,
-                    if selected > 0 {
-                        format!(" • {selected} selected")
-                    } else {
-                        String::new()
-                    }
+        ui.add(
+            egui::Label::new(
+                RichText::new(l10n::format_text(
+                    ui.ctx(),
+                    "{0} objects • {1} indicators • {2} drawings • {3} visible{4}",
+                    &[
+                        ("0", format!("{}", total)),
+                        ("1", format!("{}", indicators)),
+                        ("2", format!("{}", drawings)),
+                        ("3", format!("{}", visible)),
+                        (
+                            "4",
+                            (if selected > 0 {
+                                format!(" • {selected} selected")
+                            } else {
+                                String::new()
+                            })
+                            .to_string(),
+                        ),
+                    ],
                 ))
-                .weak()
-                .small(),
-            );
-        });
+                .color(ui.visuals().weak_text_color())
+                .size(11.0),
+            )
+            .wrap(),
+        );
     }
 
     /// Handle selection state updates based on action
     fn handle_selection_action(&mut self, action: &ObjectTreeAction, sources: &[SourceItem]) {
-        let source_ids: Vec<usize> = sources.iter().map(|s| s.id).collect();
+        let filter = self.state.filter_text.to_lowercase();
+        let source_ids: Vec<usize> = sources
+            .iter()
+            .filter(|s| super::source_tree::matches_filter(s, &filter, &self.state))
+            .map(|s| s.id)
+            .collect();
 
         match action {
             ObjectTreeAction::Select(id) => {
@@ -316,5 +378,110 @@ impl ObjectTreePanel {
     /// Clear all state
     pub fn reset(&mut self) {
         self.state = ObjectTreeState::new();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_all_and_range_selection_respect_the_filter() {
+        let mut panel = ObjectTreePanel::new();
+        let sources = [
+            SourceItem::indicator(1, "Fast", egui::Color32::BLUE),
+            SourceItem::data_source(2, "Other"),
+            SourceItem::indicator(3, "Slow", egui::Color32::BLUE),
+        ];
+        panel.state.filter_type = Some(SourceType::Indicator);
+        for action in [
+            ObjectTreeAction::SelectAll,
+            ObjectTreeAction::RangeSelect(3),
+        ] {
+            panel.state.select(1);
+            panel.handle_selection_action(&action, &sources);
+            assert!(panel.state.is_selected(1));
+            assert!(panel.state.is_selected(3));
+            assert!(!panel.state.is_selected(2));
+        }
+    }
+
+    #[test]
+    fn filter_controls_align_and_footer_stays_inside_a_narrow_panel() {
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 220.0),
+            (crate::theme::Theme::light(), 280.0),
+            (crate::theme::Theme::dark(), 220.0),
+            (crate::theme::Theme::dark(), 280.0),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut panel = ObjectTreePanel::new();
+            let mut sources: Vec<_> = (0..30)
+                .map(|id| SourceItem::indicator(id, "SMA", egui::Color32::BLUE))
+                .collect();
+            panel.state.select_all(&(0..30).collect::<Vec<_>>());
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(width, 360.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel.show(ui, None, &mut sources);
+                    },
+                );
+                output.textures_delta.clear();
+                let controls: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.width() > 70.0
+                                && (20.0..32.0).contains(&rect.rect.height()) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!controls.is_empty(), "{controls:?}");
+                assert_eq!(controls[0].height(), 28.0, "filter at {width}");
+                let dropdown = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "All" => {
+                            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    (dropdown.center().y - controls[0].center().y).abs() < 2.0,
+                    "dropdown and filter must align at {width}"
+                );
+                assert!(dropdown.right() <= width, "dropdown at {width}");
+                let footer = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().starts_with("30 objects") => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    footer.pos.y + footer.galley.rect.bottom() <= 360.0,
+                    "footer at {width}: bottom {}",
+                    footer.pos.y + footer.galley.rect.bottom()
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 }

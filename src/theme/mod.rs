@@ -15,15 +15,13 @@
 //! apply_to_egui(ctx, &theme);
 //! ```
 
-pub mod components;
 mod context;
 mod presets;
 
-pub use components::{ContextMenuStyle, DialogStyle, SettingsDialogStyle};
 pub use context::ThemeExt;
-pub(crate) use context::applied_theme;
 #[cfg(feature = "ui")]
 pub(crate) use context::{ThemeDerived, follow_active_theme, theme_derived};
+pub(crate) use context::{ThemeScope, applied_theme};
 pub use presets::presets;
 
 use crate::tokens::DESIGN_TOKENS;
@@ -31,15 +29,12 @@ use egui::Color32;
 
 /// The colours and scales of the UI and the chart.
 ///
-/// With the `serde` feature, a theme serialises with any serde format, and fields
-/// missing from the input take their value from [`Theme::dark`]. Colours are egui's
-/// premultiplied `[r, g, b, a]` arrays.
+/// With the `serde` feature, a theme serialises with any serde format. The `dark`
+/// flag and both complete colour palettes are required; omitted text, spacing and
+/// radius scales use their defaults. Colours are egui's premultiplied `[r, g, b, a]`
+/// arrays.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Theme {
     /// Whether the UI is dark: selects egui's base visuals and the shadow strength.
     pub dark: bool,
@@ -47,11 +42,14 @@ pub struct Theme {
     pub ui: UiColors,
     /// Colours of the chart surface.
     pub chart: ChartColors,
-    /// Type scale. Not yet applied to egui's text styles.
+    /// Type scale and chart text roles, also applied to egui's built-in text styles.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub text: TextSizes,
     /// Spacing scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub spacing: Spacing,
     /// Corner radius scale.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub radius: Radii,
 }
 
@@ -63,11 +61,7 @@ impl Default for Theme {
 
 /// Colours of the UI chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UiColors {
     /// Panels, toolbars and inputs.
     pub panel_bg: Color32,
@@ -75,9 +69,11 @@ pub struct UiColors {
     pub panel_bg_secondary: Color32,
     /// Windows, menus, popups and tooltips.
     pub panel_bg_floating: Color32,
+    /// Scrim behind modal dialogs; transparent when the border alone separates them.
+    pub modal_overlay: Color32,
     /// Primary text.
     pub text: Color32,
-    /// Labels, and icons at rest.
+    /// Secondary labels.
     pub text_secondary: Color32,
     /// Hints, shortcuts and other weak text.
     pub text_muted: Color32,
@@ -97,7 +93,7 @@ pub struct UiColors {
     pub selection_text: Color32,
     /// Keyboard focus ring.
     pub focus: Color32,
-    /// Fill of primary actions, and the colour of links and active icons.
+    /// Primary action fill and active icon colour; links derive a readable shade.
     pub accent: Color32,
     /// `accent` when hovered.
     pub accent_hover: Color32,
@@ -115,12 +111,27 @@ pub struct UiColors {
     pub danger_text: Color32,
     /// Success text and icons.
     pub success: Color32,
+    /// Take-profit lines, labels and controls.
+    #[cfg_attr(feature = "serde", serde(default = "default_take_profit"))]
+    pub take_profit: Color32,
+    /// Stop-loss lines, labels and controls.
+    #[cfg_attr(feature = "serde", serde(default = "default_stop_loss"))]
+    pub stop_loss: Color32,
     /// Warning text and icons.
     pub warning: Color32,
     /// Error text and icons.
     pub error: Color32,
     /// Informational text and icons.
     pub info: Color32,
+}
+
+#[cfg(feature = "serde")]
+fn default_take_profit() -> Color32 {
+    Color32::from_rgb(0, 166, 147)
+}
+#[cfg(feature = "serde")]
+fn default_stop_loss() -> Color32 {
+    Color32::from_rgb(255, 166, 0)
 }
 
 impl Default for UiColors {
@@ -131,11 +142,7 @@ impl Default for UiColors {
 
 /// Colours of the chart surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChartColors {
     /// Plot background.
     pub bg: Color32,
@@ -161,7 +168,7 @@ pub struct ChartColors {
     pub candle_up: Color32,
     /// Falling candles and bars: body, border and wick.
     pub candle_down: Color32,
-    /// Opacity of volume bars, which take the candle colours.
+    /// Opacity of the volume colours returned by [`Self::volume_up`] and [`Self::volume_down`].
     pub volume_alpha: u8,
 }
 
@@ -172,20 +179,21 @@ impl Default for ChartColors {
 }
 
 impl ChartColors {
-    /// Rising volume bars: `candle_up` at `volume_alpha`.
+    /// Rising volume bars: #26a69a at `volume_alpha`.
     pub fn volume_up(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_up.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(38, 166, 154, self.volume_alpha)
     }
 
-    /// Falling volume bars: `candle_down` at `volume_alpha`.
+    /// Falling volume bars: #ef5350 at `volume_alpha`.
     pub fn volume_down(&self) -> Color32 {
-        let [r, g, b, _] = self.candle_down.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, self.volume_alpha)
+        Color32::from_rgba_unmultiplied(239, 83, 80, self.volume_alpha)
     }
 }
 
 /// Font sizes, in points.
+///
+/// Components choose a role; the built-in egui text styles use the same scale.
+/// Use `..Default::default()` in struct literals to keep defaults for the other roles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     feature = "serde",
@@ -193,11 +201,15 @@ impl ChartColors {
     serde(default)
 )]
 pub struct TextSizes {
+    /// Small badges.
+    pub micro: f32,
+    /// Chart markers and compact annotations.
+    pub marker: f32,
     /// Badges and footnotes.
     pub tiny: f32,
-    /// Secondary labels and axis text.
+    /// Secondary labels.
     pub small: f32,
-    /// Control labels.
+    /// Control labels and axis text.
     pub label: f32,
     /// Body text and buttons.
     pub body: f32,
@@ -205,17 +217,40 @@ pub struct TextSizes {
     pub title: f32,
     /// Section headings.
     pub heading: f32,
+    /// Modal dialog titles.
+    pub dialog_title: f32,
+    /// In-pane chart title, independently of its OHLC values.
+    pub chart_title: f32,
+    /// Toolbar labels, including Save.
+    pub toolbar: f32,
+    /// OHLC values and supplementary legend rows.
+    pub ohlc: f32,
+    /// Price and time axis labels.
+    pub axis: f32,
+    /// Price tags on the axis.
+    pub price_tag: f32,
+    /// Bottom range and status bar labels.
+    pub bottom_bar: f32,
 }
 
 impl Default for TextSizes {
     fn default() -> Self {
         Self {
+            micro: 8.0,
+            marker: 9.0,
+            dialog_title: 18.0,
             tiny: 10.0,
             small: 11.0,
             label: 12.0,
             body: 13.0,
             title: 14.0,
             heading: 16.0,
+            chart_title: 16.0,
+            toolbar: 14.0,
+            ohlc: 13.0,
+            axis: 12.0,
+            price_tag: 12.0,
+            bottom_bar: 14.0,
         }
     }
 }
@@ -224,12 +259,21 @@ impl TextSizes {
     /// Every size multiplied by `factor`.
     pub fn scaled(self, factor: f32) -> Self {
         Self {
+            micro: self.micro * factor,
+            marker: self.marker * factor,
             tiny: self.tiny * factor,
             small: self.small * factor,
             label: self.label * factor,
             body: self.body * factor,
             title: self.title * factor,
             heading: self.heading * factor,
+            dialog_title: self.dialog_title * factor,
+            chart_title: self.chart_title * factor,
+            toolbar: self.toolbar * factor,
+            ohlc: self.ohlc * factor,
+            axis: self.axis * factor,
+            price_tag: self.price_tag * factor,
+            bottom_bar: self.bottom_bar * factor,
         }
     }
 }
@@ -242,25 +286,32 @@ impl TextSizes {
     serde(default)
 )]
 pub struct Spacing {
+    /// Extra small, in egui logical points.
     pub xs: f32,
+    /// Small, in egui logical points.
     pub sm: f32,
+    /// Medium, in egui logical points.
     pub md: f32,
+    /// Large, in egui logical points.
     pub lg: f32,
+    /// Extra large, in egui logical points.
     pub xl: f32,
+    /// Double extra large, in egui logical points.
     pub xxl: f32,
+    /// Triple extra large, in egui logical points.
     pub xxxl: f32,
 }
 
 impl Default for Spacing {
     fn default() -> Self {
         Self {
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 12.0,
-            xxl: 16.0,
-            xxxl: 24.0,
+            xs: DESIGN_TOKENS.spacing.xs,
+            sm: DESIGN_TOKENS.spacing.sm,
+            md: DESIGN_TOKENS.spacing.md,
+            lg: DESIGN_TOKENS.spacing.lg,
+            xl: DESIGN_TOKENS.spacing.xl,
+            xxl: DESIGN_TOKENS.spacing.xxl,
+            xxxl: DESIGN_TOKENS.spacing.xxxl,
         }
     }
 }
@@ -273,74 +324,98 @@ impl Default for Spacing {
     serde(default)
 )]
 pub struct Radii {
+    /// Extra small, in egui logical points.
     pub xs: f32,
+    /// Small, in egui logical points.
     pub sm: f32,
+    /// Medium, in egui logical points.
     pub md: f32,
+    /// Large, in egui logical points.
     pub lg: f32,
+    /// Extra large, in egui logical points.
     pub xl: f32,
 }
 
 impl Default for Radii {
     fn default() -> Self {
         Self {
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 12.0,
+            xs: DESIGN_TOKENS.rounding.xs,
+            sm: DESIGN_TOKENS.rounding.sm,
+            md: DESIGN_TOKENS.rounding.md,
+            lg: DESIGN_TOKENS.rounding.lg,
+            xl: DESIGN_TOKENS.rounding.xl,
         }
+    }
+}
+
+/// The shared buy and sell colours of trading controls and execution marks.
+pub(crate) fn trading_side_color(theme: &Theme, side: crate::model::OrderSide) -> Color32 {
+    match side {
+        crate::model::OrderSide::Buy => theme.ui.accent,
+        crate::model::OrderSide::Sell => theme.chart.candle_down,
     }
 }
 
 impl Theme {
     /// This theme with `accent` as its accent colour.
     ///
-    /// Also sets the colours derived from it: black or white `accent_text`, whichever
-    /// reads better on `accent`; hover and pressed shades 10% and 20% further from that
-    /// text colour; and the selection. Dark themes select with `accent` and white text
-    /// when white reads on it, else with `accent` darkened; light themes with a pale
-    /// `accent` over `panel_bg`. Text on the accent and the selection reads at 4.5:1 or
-    /// better, not the 7:1 of [`Theme::high_contrast`].
+    /// Also derives opaque hover and pressed shades at least 1.2:1 apart, black or
+    /// white text reading at 4.5:1 on every shade, a selection at least 1.3:1 from
+    /// the panel, and a light theme's focus ring. These overrides promise 4.5:1
+    /// text contrast rather than the high-contrast preset's 7:1.
     pub fn with_accent(mut self, accent: Color32) -> Self {
-        let white_text = contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent);
-        let (on_accent, away) = if white_text {
-            (Color32::WHITE, Color32::BLACK)
-        } else {
-            (Color32::BLACK, Color32::WHITE)
-        };
         let ui = &mut self.ui;
-        ui.accent = accent;
-        ui.accent_hover = accent.lerp_to_gamma(away, 0.1);
-        ui.accent_active = accent.lerp_to_gamma(away, 0.2);
-        ui.accent_text = on_accent;
-        (ui.selection_bg, ui.selection_text) = match (self.dark, white_text) {
-            (true, true) => (accent, Color32::WHITE),
-            // egui outlines a focused text input with the selection text, so it stays light.
-            (true, false) => (accent.lerp_to_gamma(Color32::BLACK, 0.6), Color32::WHITE),
-            (false, true) => (
-                ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0),
-                ui.accent_active,
-            ),
-            (false, false) => (ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0), ui.text),
+        let accent = ui.panel_bg.blend(accent);
+        let (on_accent, away) =
+            if contrast(Color32::WHITE, accent) >= contrast(Color32::BLACK, accent) {
+                (Color32::WHITE, Color32::BLACK)
+            } else {
+                (Color32::BLACK, Color32::WHITE)
+            };
+        // Near black or white, move towards the text instead so both steps have room.
+        let towards = if contrast(accent, away) >= 1.5 {
+            away
+        } else {
+            on_accent
         };
+        let shade = |fill: Color32| {
+            (1..=255)
+                .map(|step| fill.lerp_to_gamma(towards, step as f32 / 255.0))
+                .find(|&next| contrast(next, fill) >= 1.2 && contrast(on_accent, next) >= 4.5)
+                .unwrap_or(fill)
+        };
+        ui.accent = accent;
+        ui.accent_hover = shade(accent);
+        ui.accent_active = shade(ui.accent_hover);
+        ui.accent_text = on_accent;
+        ui.selection_text = if self.dark && ui.text == Color32::WHITE {
+            ui.text_secondary
+        } else if self.dark {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        let selection = if self.dark {
+            accent
+        } else {
+            ui.panel_bg.lerp_to_gamma(accent, 1.0 / 6.0)
+        };
+        let selection = readable_color(selection, ui.text, &[ui.panel_bg], 1.3);
+        ui.selection_bg = readable_color(selection, ui.panel_bg, &[ui.selection_text], 4.5);
+        if !self.dark {
+            ui.focus = readable_color(
+                accent,
+                ui.text,
+                &[
+                    ui.panel_bg,
+                    ui.panel_bg_secondary,
+                    ui.panel_bg_floating,
+                    ui.btn_bg_hover,
+                ],
+                3.0,
+            );
+        }
         self
-    }
-
-    /// Apply theme to chart config
-    pub fn apply_to_config(
-        &self,
-        mut config: crate::config::ChartConfig,
-    ) -> crate::config::ChartConfig {
-        config.background_color = self.chart.bg;
-        config.grid_color = self.chart.grid_line;
-        config.text_color = self.chart.axis_text;
-        config.bullish_color = self.chart.candle_up;
-        config.bearish_color = self.chart.candle_down;
-        config.bullish_border_color = Some(self.chart.candle_up);
-        config.bearish_border_color = Some(self.chart.candle_down);
-        config.bullish_wick_color = Some(self.chart.candle_up);
-        config.bearish_wick_color = Some(self.chart.candle_down);
-        config
     }
 }
 
@@ -354,12 +429,21 @@ pub(crate) fn contrast(fg: Color32, bg: Color32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
-///
-/// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
-/// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
-/// panels shown in that `Ui` to use the theme in the same frame.
-pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
+/// Move `color` towards `text` only as far as needed to read on every background.
+pub(crate) fn readable_color(
+    color: Color32,
+    text: Color32,
+    backgrounds: &[Color32],
+    min: f32,
+) -> Color32 {
+    (0..=255)
+        .map(|step| color.lerp_to_gamma(text, step as f32 / 255.0))
+        .find(|&candidate| backgrounds.iter().all(|&bg| contrast(candidate, bg) >= min))
+        .unwrap_or(text)
+}
+
+/// Applies the same palette and spacing to a local UI or to the global styles.
+pub(crate) fn apply_to_style(style: &mut egui::Style, theme: &Theme) {
     let mut visuals = if theme.dark {
         egui::Visuals::dark()
     } else {
@@ -383,8 +467,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.widgets.hovered.bg_fill = ui.btn_bg_hover;
     visuals.widgets.active.bg_fill = ui.btn_bg_active;
     visuals.widgets.open.bg_fill = ui.btn_bg_active;
-    // egui fills the top window's title bar, an open combo box and an open submenu button with it.
-    visuals.widgets.open.weak_bg_fill = ui.btn_bg_hover;
+    // Buttons, combo boxes and headers paint weak fills rather than bg_fill.
+    let widgets = &mut visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.weak_bg_fill = state.bg_fill;
+    }
 
     // Widget borders
     visuals.widgets.noninteractive.bg_stroke =
@@ -396,17 +489,22 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.accent);
 
+    visuals.widgets.open.bg_stroke =
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.border_control);
+
     // Text/foreground colors
     visuals.widgets.noninteractive.fg_stroke =
-        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text_secondary);
-    visuals.widgets.inactive.fg_stroke =
-        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text_secondary);
+        egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
+    visuals.widgets.inactive.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
+
+    visuals.widgets.open.fg_stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.text);
 
     // Selection: egui paints selected labels in `selection.stroke`, on top of `bg_fill`, and
     // outlines a focused text input with `selection.stroke`. Dark themes use white on the accent,
     // light themes accent text on a pale accent fill.
+    visuals.text_cursor.stroke.color = ui.text;
     visuals.selection.bg_fill = ui.selection_bg;
     visuals.selection.stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.selection_text);
 
@@ -416,7 +514,17 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     visuals.warn_fg_color = ui.warning;
 
     // Hyperlinks
-    visuals.hyperlink_color = ui.accent;
+    visuals.hyperlink_color = readable_color(
+        ui.accent,
+        ui.text,
+        &[
+            ui.panel_bg,
+            ui.panel_bg_floating,
+            ui.panel_bg_secondary,
+            ui.btn_bg_hover,
+        ],
+        7.0,
+    );
 
     // Floating chrome: hairline border, small radius and a tight shadow that stays close to
     // the surface instead of smearing over neighbouring toolbars.
@@ -447,20 +555,57 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
         &mut widgets.active,
         &mut widgets.open,
     ] {
-        state.corner_radius = theme.radius.xs.into();
+        state.corner_radius = theme.radius.sm.into();
     }
 
-    // egui keeps a dark and a light style and follows the system appearance by default, so
-    // style both: the theme then stays when the system switches.
     let spacing = &theme.spacing;
-    ctx.all_styles_mut(|style| {
-        style.visuals = visuals.clone();
-        style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
-        style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
-        style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
-        style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
-        style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
-    });
+    style.visuals = visuals;
+    for (role, size) in [
+        (egui::TextStyle::Small, theme.text.small),
+        (egui::TextStyle::Body, theme.text.body),
+        (egui::TextStyle::Button, theme.text.body),
+        (egui::TextStyle::Heading, theme.text.heading),
+        (egui::TextStyle::Monospace, theme.text.body),
+    ] {
+        if let Some(font) = style.text_styles.get_mut(&role) {
+            font.size = size;
+        }
+    }
+    style.spacing.window_margin = egui::Margin::same(spacing.xl as i8);
+    style.spacing.menu_margin = egui::Margin::symmetric(spacing.lg as i8, spacing.sm as i8);
+    style.spacing.item_spacing = egui::vec2(spacing.lg, spacing.sm);
+    style.spacing.button_padding = egui::vec2(spacing.sm, DESIGN_TOKENS.spacing.hairline);
+    style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
+}
+
+/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
+/// Also install Roboto ahead of the application's proportional fonts.
+///
+/// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
+/// `Ui` already exists, so follow the call with `ui.set_style(ui.ctx().global_style())` for the
+/// panels shown in that `Ui` to use the theme in the same frame.
+pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
+    // Style both appearances so system changes keep the applied theme.
+    ctx.all_styles_mut(|style| apply_to_style(style, theme));
+
+    // Interface text: Roboto, whose default digits are tabular, so prices keep their width.
+    ctx.add_font(egui::FontInsert::new(
+        "Roboto",
+        egui::FontData::from_static(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/fonts/Roboto-Latin.ttf"
+        ))),
+        vec![
+            egui::InsertFontFamily {
+                family: egui::FontFamily::Proportional,
+                priority: egui::FontPriority::Highest,
+            },
+            egui::InsertFontFamily {
+                family: egui::FontFamily::Monospace,
+                priority: egui::FontPriority::Lowest,
+            },
+        ],
+    ));
 
     // Store the theme so components resolve their colours from it while painting.
     context::set_active_theme(ctx, theme.clone());
@@ -471,7 +616,235 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chart_theme_changes_keep_data_and_viewport_and_refresh_overlays() {
+        use crate::{
+            chart::selection::SeriesId,
+            model::{Bar, BarData},
+            widget::Chart,
+        };
+        let bars = vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            1.0,
+            2.0,
+            1.0,
+            2.0,
+            10.0,
+        )];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let ctx = egui::Context::default();
+        let offset = chart.state().time_scale().right_offset();
+        for (_, theme) in presets() {
+            chart.set_theme(&ctx, &theme);
+            assert_eq!(chart.bars(SeriesId::MAIN), bars);
+            assert_eq!(chart.state().time_scale().right_offset(), offset);
+            assert_eq!(chart.config().background_color, theme.chart.bg);
+            let crosshair = chart.chart_options().crosshair.resolved(&ctx);
+            assert_eq!(
+                crosshair.vert_label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(
+                crosshair.horz_label_background_color,
+                theme.chart.crosshair_label_bg
+            );
+            assert_eq!(crosshair.label_text_color, theme.chart.crosshair_label_text);
+            let tooltip = chart.chart_options().tooltip.resolved(&ctx);
+            assert_eq!(tooltip.background_color, theme.chart.bg_tooltip);
+        }
+        // A builder theme must reach text and overlays locally, leaving the host palette and
+        // egui styles intact for the next chart in the same frame.
+        let global = Theme::dark();
+        apply_to_egui(&ctx, &global);
+        let original_style = ctx.global_style();
+        let mut local = Theme::light();
+        local.text.label = 19.0;
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_symbol("Scoped")
+            .with_theme(local.clone())
+            .build();
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        let mut chart_id = None;
+        for clear_globally in [false, true] {
+            if clear_globally {
+                chart.set_theme_override(Some(local.clone()));
+            }
+            for clear in [false, true] {
+                if clear {
+                    if clear_globally {
+                        chart.set_theme(&ctx, &global);
+                    } else {
+                        chart.set_theme_override(None);
+                    }
+                }
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            let response = chart.show(ui);
+                            if let Some(id) = chart_id {
+                                assert_eq!(
+                                    response.id, id,
+                                    "theme changes must retain chart UI state"
+                                );
+                                assert!(response.has_focus());
+                            } else {
+                                chart_id = Some(response.id);
+                                response.request_focus();
+                            }
+                        });
+                    },
+                );
+                let sizes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok() => {
+                            Some(text.galley.job.sections[0].format.font_id.size)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!sizes.is_empty());
+                assert_eq!(sizes.contains(&local.text.label), !clear, "{sizes:?}");
+                if clear {
+                    assert!(sizes.contains(&global.text.label), "{sizes:?}");
+                }
+                assert_eq!(ctx.active_theme(), global);
+                assert_eq!(ctx.global_style().visuals, original_style.visuals);
+                assert_eq!(ctx.global_style().spacing, original_style.spacing);
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn partial_light_palettes_are_rejected_instead_of_mixing_presets() {
+        let partial = serde_json::json!({"dark": false, "ui": {
+            "panel_bg": [255, 255, 255, 255],
+            "panel_bg_floating": [255, 255, 255, 255],
+            "text": [19, 23, 34, 255]
+        }});
+        assert!(serde_json::from_value::<Theme>(partial).is_err());
+        for (_, theme) in presets() {
+            let mut saved = serde_json::to_value(&theme).unwrap();
+            for scale in ["text", "spacing", "radius"] {
+                saved.as_object_mut().unwrap().remove(scale);
+            }
+            assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
+        for (role, default) in [
+            ("micro", 8.0),
+            ("marker", 9.0),
+            ("dialog_title", 18.0),
+            ("chart_title", 16.0),
+            ("toolbar", 14.0),
+            ("ohlc", 13.0),
+            ("axis", 12.0),
+            ("price_tag", 12.0),
+            ("bottom_bar", 14.0),
+        ] {
+            for override_size in [None, Some(19.0)] {
+                let mut saved = serde_json::to_value(Theme::dark()).unwrap();
+                saved["text"] = serde_json::json!({"body": 17.0});
+                if let Some(size) = override_size {
+                    saved["text"][role] = serde_json::json!(size);
+                }
+                let mut theme: Theme = serde_json::from_value(saved).unwrap();
+                theme.text = theme.text.scaled(1.5);
+                let saved = serde_json::to_value(&theme).unwrap();
+                assert_eq!(
+                    saved["text"][role],
+                    serde_json::json!(override_size.unwrap_or(default) * 1.5),
+                    "{role}: {override_size:?}"
+                );
+                assert_eq!(saved["text"]["body"], serde_json::json!(25.5));
+                assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_font_keeps_prices_tabular() {
+        let ctx = egui::Context::default();
+        for theme in [Theme::dark(), Theme::light(), Theme::dark()] {
+            apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                ctx.fonts(|fonts| {
+                    assert_eq!(
+                        fonts.definitions().families[&egui::FontFamily::Proportional][0],
+                        "Roboto",
+                        "the bundled face must be the first proportional font"
+                    );
+                });
+                for (size, weight) in [(12.0, None), (13.0, None), (13.0, Some(600.0))] {
+                    let mut format = egui::text::TextFormat::simple(
+                        egui::FontId::proportional(size),
+                        Color32::WHITE,
+                    );
+                    if let Some(weight) = weight {
+                        format.coords.push("wght", weight);
+                    }
+                    let widths: Vec<_> = ('0'..='9')
+                        .map(|digit| {
+                            ui.painter()
+                                .layout_job(egui::text::LayoutJob::single_section(
+                                    digit.to_string(),
+                                    format.clone(),
+                                ))
+                                .size()
+                                .x
+                        })
+                        .collect();
+                    assert!(
+                        widths.iter().all(|width| *width == widths[0]),
+                        "digits must keep their width at size {size}, weight {weight:?}: {widths:?}"
+                    );
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
     fn text_and_control_outlines_are_readable_in_every_preset() {
+        let dark = Theme::dark();
+        for (role, actual, expected) in [
+            ("panel", dark.ui.panel_bg, [0, 0, 0]),
+            ("plot", dark.chart.bg, [0, 0, 0]),
+            ("axis", dark.chart.bg_axis, [0, 0, 0]),
+            ("separator", dark.ui.border, [42, 42, 42]),
+            ("text", dark.ui.text, [219, 219, 219]),
+            ("secondary text", dark.ui.text_secondary, [184, 184, 184]),
+            ("disabled text", dark.ui.text_disabled, [87, 87, 87]),
+            ("price text", dark.chart.axis_text, [255, 255, 255]),
+            (
+                "secondary axis text",
+                dark.chart.axis_text_secondary,
+                [184, 184, 184],
+            ),
+            ("grid", dark.chart.grid_line, [34, 34, 34]),
+            ("up candle", dark.chart.candle_up, [8, 153, 129]),
+            ("down candle", dark.chart.candle_down, [242, 54, 69]),
+            ("active toggle", dark.ui.accent, [41, 98, 255]),
+        ] {
+            assert_eq!(
+                actual,
+                Color32::from_rgb(expected[0], expected[1], expected[2]),
+                "dark {role}"
+            );
+        }
         let orange = Color32::from_rgb(255, 120, 0);
         let purple = Color32::from_rgb(110, 60, 200);
         let mut themes = presets()
@@ -491,6 +864,20 @@ mod tests {
                 Theme::light().with_accent(purple),
             ),
         ]);
+        for (name, base) in presets() {
+            for (accent_name, accent) in [
+                ("white", Color32::WHITE),
+                ("black", Color32::BLACK),
+                ("yellow", Color32::YELLOW),
+                ("blue", Color32::BLUE),
+                ("navy", Color32::from_rgb(10, 10, 30)),
+            ] {
+                themes.push((
+                    format!("{name}, {accent_name} accent"),
+                    base.clone().with_accent(accent),
+                ));
+            }
+        }
         let focus_ring_of = |ctx: &egui::Context| {
             let mut focus_ring = Color32::TRANSPARENT;
             ctx.run_ui(Default::default(), |ui| {
@@ -507,6 +894,46 @@ mod tests {
             apply_to_egui(&ctx, &theme);
             let visuals = ctx.global_style().visuals.clone();
             let ui = &theme.ui;
+            if visuals.text_cursor.stroke.color != ui.text {
+                failures.push(format!("{name}: caret does not use the theme text colour"));
+            }
+            for state in [
+                &visuals.widgets.inactive,
+                &visuals.widgets.hovered,
+                &visuals.widgets.active,
+                &visuals.widgets.open,
+            ] {
+                if state.corner_radius != egui::CornerRadius::from(theme.radius.sm)
+                    || DESIGN_TOKENS.rounding.button != theme.radius.sm
+                {
+                    failures.push(format!("{name}: interactive radii differ"));
+                }
+            }
+            for (role, fg) in [
+                ("text", ui.text),
+                ("secondary text", ui.text_secondary),
+                ("price text", theme.chart.axis_text),
+                ("secondary axis text", theme.chart.axis_text_secondary),
+            ] {
+                assert!(contrast(fg, theme.chart.bg) >= 4.5, "{name}: {role}");
+            }
+            assert_eq!(visuals.widgets.noninteractive.fg_stroke.color, ui.text);
+            for (state, fill) in [
+                (&visuals.widgets.noninteractive, ui.panel_bg),
+                (&visuals.widgets.inactive, ui.panel_bg),
+                (&visuals.widgets.hovered, ui.btn_bg_hover),
+                (&visuals.widgets.active, ui.btn_bg_active),
+                (&visuals.widgets.open, ui.btn_bg_active),
+            ] {
+                assert_eq!(state.weak_bg_fill, fill, "{name}: widget fill");
+            }
+            assert_eq!(visuals.widgets.open.fg_stroke.color, ui.text);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::timeframe_toolbar::TimeframeBarConfig::from_theme(&theme)
+                    .active_text_color,
+                ui.text
+            );
             let focus_ring = focus_ring_of(&ctx);
             // High contrast holds every text level to 7:1 and outlines to 4.5:1 (WCAG AAA).
             let (text_min, outline_min) = if name == "high-contrast" {
@@ -544,16 +971,49 @@ mod tests {
                 check("on-danger text", ui.danger_text, fill, bg, text_min);
             }
             // Hover must read on a panel, and pressed must sit further from it than hover.
-            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.bg_fill);
+            let (panel, hovered) = (visuals.panel_fill, visuals.widgets.hovered.weak_bg_fill);
             check("hover fill", hovered, "panels", panel, 1.2);
             let pressed_min = contrast(hovered, panel) + 0.05;
             check(
                 "pressed fill",
-                visuals.widgets.active.bg_fill,
+                visuals.widgets.active.weak_bg_fill,
                 "panels",
                 panel,
                 pressed_min,
             );
+            check(
+                "pressed fill",
+                visuals.widgets.active.weak_bg_fill,
+                "hover fill",
+                hovered,
+                1.2,
+            );
+            check(
+                "pressed text",
+                ui.text,
+                "pressed fill",
+                ui.btn_bg_active,
+                text_min,
+            );
+            check(
+                "open outline",
+                visuals.widgets.open.bg_stroke.color,
+                "panels",
+                panel,
+                outline_min,
+            );
+            if name.contains("accent") {
+                check("selection fill", ui.selection_bg, "panels", panel, 1.3);
+                check("accent hover", ui.accent_hover, "accent", ui.accent, 1.2);
+                check(
+                    "accent pressed",
+                    ui.accent_active,
+                    "accent hover",
+                    ui.accent_hover,
+                    1.2,
+                );
+                assert_ne!(ui.selection_text, ui.text, "{name}: selected glyphs");
+            }
             // egui outlines a focused text input with the selection stroke.
             check(
                 "focused input outline",
@@ -565,7 +1025,10 @@ mod tests {
             for (surface, bg) in [
                 ("panels", visuals.panel_fill),
                 ("windows", visuals.window_fill),
+                ("secondary panels", ui.panel_bg_secondary),
+                ("hover fill", ui.btn_bg_hover),
             ] {
+                check("links", visuals.hyperlink_color, surface, bg, 7.0);
                 check("text", ui.text, surface, bg, text_min);
                 check("label text", visuals.text_color(), surface, bg, text_min);
                 check("muted text", ui.text_muted, surface, bg, text_min);
@@ -576,6 +1039,7 @@ mod tests {
                     bg,
                     text_min,
                 );
+                check("success text", ui.success, surface, bg, text_min);
                 check("error text", visuals.error_fg_color, surface, bg, text_min);
                 check("warning text", visuals.warn_fg_color, surface, bg, text_min);
                 check(
@@ -586,6 +1050,13 @@ mod tests {
                     outline_min,
                 );
                 check("keyboard focus ring", focus_ring, surface, bg, outline_min);
+                check(
+                    "text cursor",
+                    visuals.text_cursor.stroke.color,
+                    surface,
+                    bg,
+                    3.0,
+                );
             }
         }
         // An app that styles egui itself and never applies a theme keeps a visible ring.

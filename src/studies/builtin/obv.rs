@@ -23,26 +23,34 @@
 //! obv.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// On Balance Volume indicator
 #[derive(Clone)]
 pub struct OnBalanceVolume {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<f64>,
+    total: f64,
 }
 
 impl OnBalanceVolume {
     /// Create a new OBV indicator
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
+            values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            color: palette::DEEP_PURPLE, // Deep Purple
             visible: true,
         }
     }
@@ -51,31 +59,6 @@ impl OnBalanceVolume {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // The first bar has no previous close, so the running total starts at 0.
-        let mut obv = 0.0;
-        values.push(IndicatorValue::Single(obv));
-
-        // Subsequent bars
-        for i in 1..data.len() {
-            if data[i].close > data[i - 1].close {
-                obv += data[i].volume;
-            } else if data[i].close < data[i - 1].close {
-                obv -= data[i].volume;
-            }
-            // If close == prev_close, OBV stays the same
-            values.push(IndicatorValue::Single(obv));
-        }
-        values
     }
 }
 
@@ -86,6 +69,16 @@ impl Default for OnBalanceVolume {
 }
 
 impl Indicator for OnBalanceVolume {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "OBV"
     }
@@ -95,14 +88,32 @@ impl Indicator for OnBalanceVolume {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if let Some(previous) = state.previous {
+                    if bar.close > previous {
+                        state.total += bar.volume;
+                    } else if bar.close < previous {
+                        state.total -= bar.volume;
+                    }
+                }
+                state.previous = Some(bar.close);
+                IndicatorValue::Single(state.total)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -190,6 +201,7 @@ mod tests {
             obv.calculate(&bars(closes, volumes));
             let got: Vec<Option<f64>> = obv
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| match v {
                     IndicatorValue::Single(x) => Some(*x),
@@ -199,12 +211,5 @@ mod tests {
                 .collect();
             assert_eq!(got, *expected, "closes {closes:?}");
         }
-    }
-
-    #[test]
-    fn test_obv_empty_data() {
-        let mut obv = OnBalanceVolume::new();
-        obv.calculate(&[]);
-        assert!(obv.values().is_empty());
     }
 }

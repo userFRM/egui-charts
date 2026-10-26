@@ -13,7 +13,7 @@ impl ZOrderService {
     pub fn bring_to_front(drawings: &mut [Drawing], id: usize) {
         let max_z = drawings.iter().map(|d| d.z_order()).max().unwrap_or(0);
         if let Some(drawing) = drawings.iter_mut().find(|d| d.id == id) {
-            drawing.set_z_order(max_z + 1);
+            drawing.set_z_order(max_z.saturating_add(1));
         }
     }
 
@@ -21,7 +21,7 @@ impl ZOrderService {
     pub fn send_to_back(drawings: &mut [Drawing], id: usize) {
         let min_z = drawings.iter().map(|d| d.z_order()).min().unwrap_or(0);
         if let Some(drawing) = drawings.iter_mut().find(|d| d.id == id) {
-            drawing.set_z_order(min_z - 1);
+            drawing.set_z_order(min_z.saturating_sub(1));
         }
     }
 
@@ -51,7 +51,7 @@ impl ZOrderService {
             }
             None => {
                 // Already at the top, bump up by 1
-                drawings[target_idx].set_z_order(current_z + 1);
+                drawings[target_idx].set_z_order(current_z.saturating_add(1));
             }
         }
     }
@@ -82,7 +82,7 @@ impl ZOrderService {
             }
             None => {
                 // Already at the bottom, push down by 1
-                drawings[target_idx].set_z_order(current_z - 1);
+                drawings[target_idx].set_z_order(current_z.saturating_sub(1));
             }
         }
     }
@@ -91,6 +91,14 @@ impl ZOrderService {
     pub fn sort_by_z_order(drawings: &mut [Drawing]) {
         drawings.sort_by_key(|d| d.z_order());
     }
+}
+
+/// `drawings` from the bottom layer to the top: ascending z-order, and in list order where the
+/// z-order is the same.
+pub(crate) fn in_z_order(drawings: &[Drawing]) -> Vec<&Drawing> {
+    let mut ordered: Vec<_> = drawings.iter().collect();
+    ordered.sort_by_key(|d| d.z_order());
+    ordered
 }
 
 #[cfg(test)]

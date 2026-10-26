@@ -1,15 +1,14 @@
 //! Drawing options and configuration types.
 //!
-//! Contains styling enums ([`LineStyle`], [`ArrowStyle`], [`FontWeight`]),
+//! Contains styling enums ([`LineStyle`](crate::model::LineStyle), [`ArrowStyle`], [`FontWeight`]),
 //! interaction configuration ([`DrawingOptions`], [`HandlePos`]),
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
-//! ([`VolumeProfileConfig`], [`RegressionTrendConfig`], [`PositionSize`]).
+//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`]).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::ops::RangeInclusive;
 
 /// Identifies a selection handle position on a drawing.
 ///
@@ -35,33 +34,6 @@ pub enum HandlePos {
     /// Indexed anchor point for multi-point drawings (e.g., `Point(2)` is the
     /// third point in an XABCD pattern).
     Point(usize),
-}
-
-/// Line style for drawing strokes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
-pub enum LineStyle {
-    #[default]
-    Solid,
-    Dashed,
-    Dotted,
-}
-
-impl LineStyle {
-    /// Get the dash pattern for rendering
-    /// Returns (dash_len, gap_len) or None for solid
-    #[inline]
-    pub fn dash_pattern(&self) -> Option<(f32, f32)> {
-        match self {
-            LineStyle::Solid => None,
-            LineStyle::Dashed => Some((8.0, 4.0)),
-            LineStyle::Dotted => Some((2.0, 3.0)),
-        }
-    }
-
-    /// All available line styles
-    pub fn all() -> &'static [LineStyle] {
-        &[LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
-    }
 }
 
 /// Arrow/arrowhead style for line drawings
@@ -114,13 +86,7 @@ impl ArrowStyle {
     }
 }
 
-/// Font weight for text annotations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
-pub enum FontWeight {
-    #[default]
-    Normal,
-    Bold,
-}
+pub use crate::config::FontWeight;
 
 /// Per-timeframe visibility configuration
 ///
@@ -267,6 +233,9 @@ pub struct FibonacciConfig {
     pub extend_right: bool,
     /// Reverse the direction (flip vertically)
     pub reverse: bool,
+    /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
+    #[serde(default)]
+    pub logarithmic: bool,
 }
 
 impl Default for FibonacciConfig {
@@ -287,6 +256,7 @@ impl Default for FibonacciConfig {
             extend_left: false,
             extend_right: false,
             reverse: false,
+            logarithmic: false,
         }
     }
 }
@@ -309,6 +279,7 @@ impl FibonacciConfig {
             extend_left: false,
             extend_right: true,
             reverse: false,
+            logarithmic: false,
         }
     }
 
@@ -318,7 +289,7 @@ impl FibonacciConfig {
     }
 
     /// Position of retracement level `value` between the first anchor `start`
-    /// and the second anchor `end`, as a price or a screen coordinate.
+    /// and the second anchor `end`, in price units.
     ///
     /// Level 0 sits on the second anchor and level 1 on the first, so levels
     /// measure back from the end of the move; `reverse` swaps the two anchors.
@@ -328,82 +299,35 @@ impl FibonacciConfig {
         } else {
             (end, start)
         };
-        from + (to - from) * value
+        if self.logarithmic && from > 0.0 && to > 0.0 {
+            (from.ln() + (to.ln() - from.ln()) * value).exp()
+        } else {
+            from + (to - from) * value
+        }
     }
 
     /// Price of each visible level, in config order, between the anchor prices `start` and `end`:
     /// a retracement's as [`Self::retracement_position`] places them, an extension's projected
-    /// from `start` by `end - start`.
+    /// from `origin` by `end - start`, or by the log swing when all three prices are positive.
     pub(crate) fn level_prices(
         &self,
         start: f64,
         end: f64,
         extension: bool,
+        origin: f64,
     ) -> impl Iterator<Item = f64> + '_ {
         self.visible_levels().map(move |level| {
             let value = f64::from(level.value);
             if extension {
-                start + (end - start) * value
+                if self.logarithmic && start > 0.0 && end > 0.0 && origin > 0.0 {
+                    (origin.ln() + (end.ln() - start.ln()) * value).exp()
+                } else {
+                    origin + (end - start) * value
+                }
             } else {
                 self.retracement_position(start, end, value)
             }
         })
-    }
-}
-
-/// Settings of the fixed range and anchored volume profile drawings.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "VolumeProfileFields")]
-pub struct VolumeProfileConfig {
-    rows: usize,
-    value_area: f64,
-}
-
-/// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
-#[derive(Deserialize)]
-struct VolumeProfileFields {
-    rows: usize,
-    value_area: f64,
-}
-
-impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
-    type Error = &'static str;
-
-    fn try_from(fields: VolumeProfileFields) -> Result<Self, Self::Error> {
-        Self::new(fields.rows, fields.value_area).ok_or("volume profile settings out of bounds")
-    }
-}
-
-impl VolumeProfileConfig {
-    /// Price rows a profile may have.
-    pub const ROWS: RangeInclusive<usize> = 1..=1000;
-
-    /// A profile of `rows` equal price rows whose value area holds the
-    /// `value_area` share of its volume (above 0, at most 1); `None` when
-    /// either is out of bounds.
-    pub fn new(rows: usize, value_area: f64) -> Option<Self> {
-        (Self::ROWS.contains(&rows) && value_area > 0.0 && value_area <= 1.0)
-            .then_some(Self { rows, value_area })
-    }
-
-    /// Number of price rows.
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    /// Share of the volume inside the value area.
-    pub fn value_area(&self) -> f64 {
-        self.value_area
-    }
-}
-
-impl Default for VolumeProfileConfig {
-    /// 24 rows and a value area of 70% of the volume.
-    fn default() -> Self {
-        Self {
-            rows: 24,
-            value_area: 0.7,
-        }
     }
 }
 
@@ -496,6 +420,7 @@ impl Default for PositionSize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::VolumeProfileConfig;
 
     /// Reference: quantity = risked amount / |entry - stop| (reference.py);
     /// none when a size from the risk has its stop at the entry, or a setting
@@ -533,17 +458,17 @@ mod tests {
         for (rows, value_area) in [(0, 0.7), (1001, 0.7), (24, 0.0), (24, 1.01), (24, f64::NAN)] {
             assert!(VolumeProfileConfig::new(rows, value_area).is_none());
         }
+        for height in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(
+                VolumeProfileConfig::default()
+                    .with_row_size(Some(height))
+                    .is_none()
+            );
+        }
         assert!(RegressionTrendConfig::new(10.0).is_some());
         for deviations in [0.0, -1.0, 10.5, f64::INFINITY, f64::NAN] {
             assert!(RegressionTrendConfig::new(deviations).is_none());
         }
-    }
-
-    #[test]
-    fn test_line_style_dash_pattern() {
-        assert!(LineStyle::Solid.dash_pattern().is_none());
-        assert!(LineStyle::Dashed.dash_pattern().is_some());
-        assert!(LineStyle::Dotted.dash_pattern().is_some());
     }
 
     #[test]
@@ -584,6 +509,36 @@ mod tests {
                 (got - want).abs() < 1e-9,
                 "reverse {reverse}, level {value}: got {got}, want {want}"
             );
+        }
+        // With 0 at 10 and 1 at 1000, log10(price) = 1 + 2*r.
+        // Rounded independently: 10^1.472, 10^2, 10^2.236.
+        for (logarithmic, low, ratio, want) in [
+            (true, 10.0, 0.236, 29.64831389524342),
+            (true, 10.0, 0.5, 100.0),
+            (true, 10.0, 0.618, 172.1868574986006),
+            (false, 10.0, 0.236, 243.64),
+            (false, 10.0, 0.5, 505.0),
+            (false, 10.0, 0.618, 621.82),
+            (true, 0.0, 0.5, 500.0),
+            (true, -10.0, 0.5, 495.0),
+        ] {
+            for reverse in [false, true] {
+                let config = FibonacciConfig {
+                    logarithmic,
+                    reverse,
+                    ..Default::default()
+                };
+                let (start, end) = if reverse {
+                    (low, 1000.0)
+                } else {
+                    (1000.0, low)
+                };
+                let got = config.retracement_position(start, end, ratio);
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "log {logarithmic}, reverse {reverse}, ratio {ratio}: {got} != {want}"
+                );
+            }
         }
     }
 }

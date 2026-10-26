@@ -18,15 +18,20 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use egui::Ui;
 
 /// Kind of status message, determines color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageKind {
+    /// An operation failed.
     Error,
+    /// Successful completion.
     Success,
+    /// A warning requiring attention.
     Warning,
+    /// Informational status.
     Info,
 }
 
@@ -41,5 +46,5 @@ pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
     };
 
     ui.add_space(theme.spacing.sm);
-    ui.colored_label(color, text);
+    ui.colored_label(color, l10n::text(ui.ctx(), text));
 }

@@ -23,16 +23,17 @@
 //! cmf.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Chaikin Money Flow indicator
 #[derive(Clone)]
 pub struct ChaikinMoneyFlow {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     positive_color: Color32,
     negative_color: Color32,
     visible: bool,
@@ -46,9 +47,9 @@ impl ChaikinMoneyFlow {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            positive_color: DESIGN_TOKENS.semantic.extended.success,
-            negative_color: DESIGN_TOKENS.semantic.extended.error,
+            values: IndicatorValues::new(),
+            positive_color: palette::GREEN,
+            negative_color: palette::RED,
             visible: true,
         }
     }
@@ -73,20 +74,12 @@ impl Default for ChaikinMoneyFlow {
     }
 }
 
-impl Indicator for ChaikinMoneyFlow {
-    fn name(&self) -> &str {
-        "CMF"
-    }
-
-    fn desc(&self) -> &str {
-        "Chaikin Money Flow - Measures buying/selling pressure over period"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ChaikinMoneyFlow {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Calculate Money Flow Volume for each bar
@@ -108,7 +101,7 @@ impl Indicator for ChaikinMoneyFlow {
         // Calculate CMF for each period
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -122,11 +115,40 @@ impl Indicator for ChaikinMoneyFlow {
                 0.0
             };
 
-            self.values.push(IndicatorValue::Single(cmf));
+            values.push(IndicatorValue::Single(cmf));
         }
+
+        values
+    }
+}
+
+impl Indicator for ChaikinMoneyFlow {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "CMF"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Chaikin Money Flow - Measures buying/selling pressure over period"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -147,7 +169,7 @@ impl Indicator for ChaikinMoneyFlow {
         false // CMF is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

@@ -4,8 +4,6 @@
 //! serialization-friendly format that integrates with both egui's `Color32`
 //! and CSS-style hex strings.
 
-/// Color type abstraction.
-/// Provides a generic way for users to specify colors in various formats.
 use egui::Color32;
 use serde::{Deserialize, Serialize};
 
@@ -29,13 +27,17 @@ pub enum ColorType {
 
     /// Vertical gradient from top to bottom
     VerticalGradient {
+        /// Color at the top edge of the gradient.
         top_color: Color32,
+        /// Color at the bottom edge of the gradient.
         bottom_color: Color32,
     },
 
     /// Horizontal gradient from left to right (rarely used)
     HorizontalGradient {
+        /// Color at the left edge of the gradient.
         left_color: Color32,
+        /// Color at the right edge of the gradient.
         right_color: Color32,
     },
 }

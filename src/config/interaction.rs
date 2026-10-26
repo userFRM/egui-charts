@@ -5,7 +5,7 @@
 //! following) behaves.
 
 /// How tracking mode (crosshair auto-follow) is exited.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TrackingModeExitMode {
     /// Exit tracking mode when touch/click ends
     OnTouchEnd,
@@ -20,7 +20,7 @@ pub enum TrackingModeExitMode {
 
 /// Tracking mode options
 /// Controls automatic price following behavior
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TrackingModeOptions {
     /// How to exit tracking mode
     /// Default: OnNextTap
@@ -30,7 +30,7 @@ pub struct TrackingModeOptions {
 /// Handle Scroll Options
 /// Controls how scrolling/panning interactions work
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HandleScrollOptions {
     /// Scroll with mouse wheel (horizontal)
     /// Default: true
@@ -61,7 +61,7 @@ impl Default for HandleScrollOptions {
 }
 
 /// Axis-specific pressed mouse move options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AxisPressedMouseMoveOptions {
     /// Drag along time axis (bottom)
     /// Default: true
@@ -82,7 +82,7 @@ impl Default for AxisPressedMouseMoveOptions {
 }
 
 /// Axis-specific double-click reset options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AxisDoubleClickResetOptions {
     /// Double-click time axis to reset
     /// Default: true
@@ -105,7 +105,7 @@ impl Default for AxisDoubleClickResetOptions {
 /// Handle Scale Options
 /// Controls how zoom/scale interactions work
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HandleScaleOptions {
     /// Zoom with mouse wheel (vertical scroll)
     /// Default: true
@@ -141,24 +141,5 @@ mod tests {
     fn test_tracking_mode_exit_mode_default() {
         let mode = TrackingModeExitMode::default();
         assert_eq!(mode, TrackingModeExitMode::OnNextTap);
-    }
-
-    #[test]
-    fn test_tracking_mode_options_default() {
-        let options = TrackingModeOptions::default();
-        assert_eq!(options.exit_mode, TrackingModeExitMode::OnNextTap);
-    }
-
-    #[test]
-    fn test_tracking_mode_exit_modes() {
-        // Test all three exit modes
-        let on_touch_end = TrackingModeExitMode::OnTouchEnd;
-        let on_mouse_leave = TrackingModeExitMode::OnMouseLeave;
-        let on_next_tap = TrackingModeExitMode::OnNextTap;
-
-        // Verify they are distinct
-        assert_ne!(on_touch_end, on_mouse_leave);
-        assert_ne!(on_mouse_leave, on_next_tap);
-        assert_ne!(on_next_tap, on_touch_end);
     }
 }

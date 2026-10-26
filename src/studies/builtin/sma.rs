@@ -19,7 +19,7 @@
 //!
 //! # Default colour
 //!
-//! Orange (from the design-token `indicators.ma`).
+//! Orange from [`palette::ORANGE`](crate::studies::palette::ORANGE).
 //!
 //! # Example
 //!
@@ -30,13 +30,13 @@
 //! let mut sma = SMA::new(20);
 //! sma.calculate(&bars);
 //! // The first 19 values are warmup.
-//! assert!(sma.values()[..19].iter().all(|v| matches!(v, IndicatorValue::None)));
-//! assert!(matches!(sma.values()[19], IndicatorValue::Single(_)));
+//! assert!(sma.values().to_rows()[..19].iter().all(|v| matches!(v, IndicatorValue::None)));
+//! assert!(matches!(sma.values().to_rows()[19], IndicatorValue::Single(_)));
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Simple Moving Average indicator.
@@ -46,7 +46,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct SMA {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -59,8 +59,8 @@ impl SMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.indicators.ma, // Orange for MA
+            values: IndicatorValues::new(),
+            color: palette::ORANGE, // Orange for MA
             visible: true,
         }
     }
@@ -80,6 +80,16 @@ impl Default for SMA {
 }
 
 impl Indicator for SMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "SMA"
     }
@@ -110,7 +120,7 @@ impl Indicator for SMA {
         true
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -166,6 +176,8 @@ mod tests {
                     low: c,
                     close: c,
                     volume: 1.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect();
@@ -175,6 +187,7 @@ mod tests {
 
         let got: Vec<Option<f64>> = sma
             .values()
+            .to_rows()
             .iter()
             .map(|v| match v {
                 IndicatorValue::Single(x) => Some(*x),

@@ -1,29 +1,85 @@
 //! Shared driver for studies computed one bar at a time.
-//! Also the rolling highest and lowest values that window studies share.
 
+#[cfg(feature = "studies")]
+pub(crate) use super::helpers::{
+    highest as rolling_max, lowest as rolling_min, sma as rolling_mean,
+};
 use crate::model::Bar;
 use crate::studies::IndicatorValue;
-use std::collections::VecDeque;
+use crate::studies::IndicatorValues;
 
 /// Runs a causal study one `step` per bar and keeps the state before the last bar, so a
 /// last-bar update or an append resumes instead of recomputing the whole series.
 /// `calculate` is `run(data, 0, ..)`, so batch and streaming share one code path.
+///
+/// A custom study with a three-bar mean of squared closes, available without
+/// the `studies` feature:
+///
+/// ```
+/// use egui_charts::model::Bar;
+/// use egui_charts::studies::{helpers, Indicator, IndicatorValue, IndicatorValues, Stepper};
+/// use std::collections::VecDeque;
+///
+/// #[derive(Clone, Default)]
+/// struct MeanSquare {
+///     driver: Stepper<VecDeque<f64>>,
+///     values: IndicatorValues,
+/// }
+/// impl Indicator for MeanSquare {
+///     fn name(&self) -> &str { "Mean square" }
+///     fn calculate(&mut self, bars: &[Bar]) { self.update(bars, 0); }
+///     fn update(&mut self, bars: &[Bar], from: usize) {
+///         self.driver.run(bars, from, &mut self.values, |window, bar| {
+///             window.push_back(bar.close * bar.close);
+///             if window.len() > 3 { window.pop_front(); }
+///             let mean = helpers::sma(window.make_contiguous(), 3);
+///             IndicatorValue::Single(*mean.last().unwrap())
+///         });
+///     }
+///     fn is_incremental(&self) -> bool { true }
+///     fn values(&self) -> &IndicatorValues { &self.values }
+///     fn colors(&self) -> Vec<ecolor::Color32> { vec![ecolor::Color32::YELLOW] }
+///     fn set_colors(&mut self, _: Vec<ecolor::Color32>) {}
+///     fn set_visible(&mut self, _: bool) {}
+///     fn clone_box(&self) -> Box<dyn Indicator> { Box::new(self.clone()) }
+/// }
+/// let mut bars: Vec<_> = [1.0, 2.0, 4.0].into_iter().enumerate().map(|(i, p)| {
+///     Bar::new(chrono::DateTime::from_timestamp(i as i64, 0).unwrap(), p, p, p, p, 1.0)
+/// }).collect();
+/// let mut study = MeanSquare::default();
+/// study.calculate(&bars);
+/// assert_eq!(study.values().value(0, 2), Some(7.0)); // (1 + 4 + 16) / 3
+/// bars[2].close = 5.0;
+/// study.update(&bars, 2);
+/// let mut fresh = MeanSquare::default();
+/// fresh.calculate(&bars);
+/// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
+/// bars.push(Bar::new(chrono::DateTime::from_timestamp(3, 0).unwrap(), 6.0, 6.0, 6.0, 6.0, 1.0));
+/// study.update(&bars, 3);
+/// fresh.calculate(&bars);
+/// assert_eq!(format!("{:?}", study.values()), format!("{:?}", fresh.values()));
+/// ```
 #[derive(Clone, Default)]
-pub(crate) struct Stepper<S> {
+pub struct Stepper<S> {
     state: S,
     before_last: S,
     len: usize,
 }
 
 impl<S: Clone + Default> Stepper<S> {
+    /// The state after the previous run's last bar.
+    pub fn state(&self) -> &S {
+        &self.state
+    }
+
     /// Recomputes `out[from..]`, given that `data[..from]` is unchanged since the previous run.
     /// Resumes when `from >= len - 1` (last bar changed or bars appended), restarts from bar 0
     /// otherwise (correction deep in history, prepended page, removed bars).
-    pub(crate) fn run(
+    pub fn run(
         &mut self,
         data: &[Bar],
         from: usize,
-        out: &mut Vec<IndicatorValue>,
+        out: &mut IndicatorValues,
         mut step: impl FnMut(&mut S, &Bar) -> IndicatorValue,
     ) {
         let start = if self.len > 0 && from >= self.len - 1 && data.len() >= self.len {
@@ -46,149 +102,49 @@ impl<S: Clone + Default> Stepper<S> {
     }
 }
 
-/// Highest value of each window `values[i + 1 - period..=i]`, shorter for the first bars, in
-/// linear time. Like folding the window with `f64::max` from negative infinity, NaN never wins
-/// and a window holding only NaN gives negative infinity. `period` must be at least 1.
-pub(crate) fn rolling_max(values: impl IntoIterator<Item = f64>, period: usize) -> Vec<f64> {
-    rolling(values, period, f64::NEG_INFINITY, |kept, new| kept <= new)
+/// Recomputes `values[from..]` of a window study, given that `data[..from]` is unchanged, from
+/// `compute(&data[read..])`, where `read = read_from(data, from)` is the first bar the values
+/// from `from` on depend on. Equals a full `compute` bit for bit when `compute` evaluates every
+/// window afresh and no value from `from` on depends on a bar before `read`.
+#[cfg(feature = "studies")]
+pub(crate) fn update_window(
+    values: &mut IndicatorValues,
+    data: &[Bar],
+    from: usize,
+    read_from: impl FnOnce(&[Bar], usize) -> usize,
+    compute: impl FnOnce(&[Bar]) -> IndicatorValues,
+) {
+    let from = from.min(values.len()).min(data.len());
+    values.truncate(from);
+    if from < data.len() {
+        let read = read_from(data, from).min(from);
+        values.append_from(&compute(&data[read..]), from - read);
+    }
 }
 
-/// Lowest value of each window, as [`rolling_max`] with `f64::min` and positive infinity.
-pub(crate) fn rolling_min(values: impl IntoIterator<Item = f64>, period: usize) -> Vec<f64> {
-    rolling(values, period, f64::INFINITY, |kept, new| kept >= new)
-}
-
-/// Keeps the window's candidates in a deque, best first: a new value removes every candidate
-/// it beats, since none of them can be the extreme while it stays in the window.
-fn rolling(
-    values: impl IntoIterator<Item = f64>,
-    period: usize,
-    empty: f64,
-    beaten: impl Fn(f64, f64) -> bool,
-) -> Vec<f64> {
-    let mut window = VecDeque::<(usize, f64)>::new();
-    values
-        .into_iter()
-        .enumerate()
-        .map(|(i, v)| {
-            if window.front().is_some_and(|&(j, _)| i - j >= period) {
-                window.pop_front();
-            }
-            if !v.is_nan() {
-                while window.back().is_some_and(|&(_, kept)| beaten(kept, v)) {
-                    window.pop_back();
-                }
-                window.push_back((i, v));
-            }
-            window.front().map_or(empty, |&(_, best)| best)
-        })
-        .collect()
+/// `read_from` for a study whose value at a bar depends on that bar and the `count` usable bars
+/// before it.
+#[cfg(feature = "studies")]
+pub(crate) fn usable_behind(
+    count: usize,
+    usable: impl Fn(&Bar) -> bool,
+) -> impl FnOnce(&[Bar], usize) -> usize {
+    move |data, from| {
+        let (mut read, mut left) = (from, count);
+        while left > 0 && read > 0 {
+            read -= 1;
+            left -= usize::from(usable(&data[read]));
+        }
+        read
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{rolling_max, rolling_min};
-    use crate::model::Bar;
-    use crate::studies::{EMA, Indicator, IndicatorValue, SMA};
-    use chrono::{Duration, TimeZone, Utc};
+    use crate::studies::helpers;
+    use crate::studies::helpers::{highest as rolling_max, lowest as rolling_min};
 
-    /// xorshift64*, so the event sequence is the same on every platform and run.
-    struct Rng(u64);
-
-    impl Rng {
-        fn next(&mut self) -> u64 {
-            self.0 ^= self.0 >> 12;
-            self.0 ^= self.0 << 25;
-            self.0 ^= self.0 >> 27;
-            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
-        }
-
-        /// Uniform in [0, 1).
-        fn unit(&mut self) -> f64 {
-            (self.next() >> 11) as f64 / (1u64 << 53) as f64
-        }
-    }
-
-    fn bar(rng: &mut Rng, i: usize, prev_close: f64) -> Bar {
-        let close = prev_close + rng.unit() - 0.5;
-        Bar {
-            time: Utc.timestamp_opt(1_700_000_000, 0).unwrap() + Duration::minutes(i as i64),
-            open: prev_close,
-            high: prev_close.max(close) + rng.unit() * 0.2,
-            low: prev_close.min(close) - rng.unit() * 0.2,
-            close,
-            volume: 100.0 + rng.unit() * 900.0,
-        }
-    }
-
-    fn same(a: &IndicatorValue, b: &IndicatorValue) -> bool {
-        let close = |x: f64, y: f64| (x.is_nan() && y.is_nan()) || (x - y).abs() <= 1e-9;
-        match (a, b) {
-            (IndicatorValue::Single(x), IndicatorValue::Single(y)) => close(*x, *y),
-            (IndicatorValue::Multiple(x), IndicatorValue::Multiple(y)) => {
-                x.len() == y.len() && x.iter().zip(y).all(|(x, y)| close(*x, *y))
-            }
-            (IndicatorValue::None, IndicatorValue::None) => true,
-            _ => false,
-        }
-    }
-
-    /// Streaming equals batch: after every last-bar update, append, correction or removal,
-    /// `update(data, from)` leaves the same values as a fresh `calculate(data)`.
-    /// Each incremental study adds a row here.
-    #[test]
-    fn update_matches_fresh_calculate() {
-        let studies: &[fn() -> Box<dyn Indicator>] =
-            &[|| Box::new(SMA::new(14)), || Box::new(EMA::new(10))];
-        for make in studies {
-            let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-            let mut data = Vec::new();
-            let mut close = 100.0;
-            for i in 0..300 {
-                let b = bar(&mut rng, i, close);
-                close = b.close;
-                data.push(b);
-            }
-            let mut study = make();
-            let name = study.line_names().remove(0);
-            assert!(study.is_incremental(), "{name} must be incremental");
-            study.calculate(&data);
-
-            for event in 0..200 {
-                let roll = rng.unit();
-                let last = data.len() - 1;
-                let from = if roll < 0.70 {
-                    data[last] = bar(&mut rng, last, data[last].open);
-                    last
-                } else if roll < 0.93 {
-                    data.push(bar(&mut rng, last + 1, data[last].close));
-                    last + 1
-                } else if roll < 0.98 {
-                    let i = last - 1 - (rng.next() % 5) as usize;
-                    data[i] = bar(&mut rng, i, data[i].open);
-                    i
-                } else {
-                    data.pop();
-                    last
-                };
-                study.update(&data, from);
-
-                let mut fresh = make();
-                fresh.calculate(&data);
-                assert_eq!(
-                    study.values().len(),
-                    fresh.values().len(),
-                    "{name} event {event}"
-                );
-                for (i, (a, b)) in study.values().iter().zip(fresh.values()).enumerate() {
-                    assert!(same(a, b), "{name} event {event} bar {i}: {a:?} != {b:?}");
-                }
-            }
-        }
-    }
-
-    /// The rolling extremes equal a scan of every window, folded with `f64::max` and `f64::min`
-    /// as the window studies did, including when an extreme leaves the window.
+    /// Scalar helpers match their definitions through warm-up, gaps and expiring values.
     #[test]
     fn rolling_extremes_match_a_window_scan() {
         let (nan, inf) = (f64::NAN, f64::INFINITY);
@@ -198,6 +154,7 @@ mod tests {
             (&[1.0, 5.0, 2.0, 5.0, 3.0, 1.0, 1.0, 0.0], 3),
             (&[2.0, 7.0, 1.0, 8.0], 1),
             (&[3.0, 1.0, 2.0], 10),
+            (&[1e16, 1.0, 1.0], 2),
             (&[4.0, nan, 1.0, nan, nan, nan, 2.0], 3),
             (&[nan, nan, nan], 2),
             (&[1.0, inf, 2.0, -inf, 3.0, 0.5, 0.25], 2),
@@ -225,5 +182,95 @@ mod tests {
                 "min {case}"
             );
         }
+        // Every complete-window helper is compared with its definition, not another helper.
+        for &(values, period) in cases {
+            let actual = [
+                helpers::sma(values, period),
+                helpers::sum(values, period),
+                helpers::wma(values, period),
+                helpers::stdev(values, period),
+            ];
+            for i in 0..values.len() {
+                let window = &values[(i + 1).saturating_sub(period)..=i];
+                let expected = if window.len() == period && window.iter().all(|v| v.is_finite()) {
+                    let sum = window.iter().sum::<f64>();
+                    let mean = sum / period as f64;
+                    [
+                        mean,
+                        sum,
+                        window
+                            .iter()
+                            .enumerate()
+                            .map(|(j, v)| (j + 1) as f64 * v)
+                            .sum::<f64>()
+                            / (period as f64 * (period as f64 + 1.0) / 2.0),
+                        (window.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / period as f64)
+                            .sqrt(),
+                    ]
+                } else {
+                    [nan; 4]
+                };
+                for (got, want) in actual.iter().map(|line| line[i]).zip(expected) {
+                    assert!(
+                        got == want
+                            || (got.is_nan() && want.is_nan())
+                            || (got - want).abs() < 1e-10,
+                        "{values:?}, period {period}, bar {i}: {got} != {want}"
+                    );
+                }
+            }
+            for (line, alpha, seed_len) in [
+                (helpers::ema(values, period), 2.0 / (period as f64 + 1.0), 1),
+                (
+                    helpers::ema_sma(values, period),
+                    2.0 / (period as f64 + 1.0),
+                    period,
+                ),
+                (helpers::rma(values, period), 1.0 / period as f64, period),
+            ] {
+                for (i, &got) in line.iter().enumerate() {
+                    let inputs: Vec<_> = values[..=i]
+                        .iter()
+                        .copied()
+                        .filter(|v| v.is_finite())
+                        .collect();
+                    // Expand the recurrence as a geometrically weighted sum from the seed.
+                    let want = if !values[i].is_finite() || inputs.len() < seed_len {
+                        nan
+                    } else {
+                        let seed = inputs[..seed_len].iter().sum::<f64>() / seed_len as f64;
+                        let tail = inputs.len() - seed_len;
+                        seed * (1.0 - alpha).powf(tail as f64)
+                            + inputs[seed_len..]
+                                .iter()
+                                .enumerate()
+                                .map(|(j, v)| alpha * v * (1.0 - alpha).powf((tail - 1 - j) as f64))
+                                .sum::<f64>()
+                    };
+                    assert!(
+                        got == want
+                            || (got.is_nan() && want.is_nan())
+                            || (got - want).abs() <= 1e-10 * want.abs().max(1.0),
+                        "average {values:?}, period {period}, bar {i}: {got} != {want}"
+                    );
+                }
+            }
+            for (i, got) in helpers::change(values, period).into_iter().enumerate() {
+                let want = i.checked_sub(period).map_or(nan, |j| values[i] - values[j]);
+                assert!(got == want || (got.is_nan() && !want.is_finite()));
+            }
+        }
+        // A touch, a return to the same side and a gap produce no crossing.
+        let a = [-1.0, 0.0, -1.0, 1.0, 0.0, 1.0, -1.0, nan, 1.0];
+        let b = [0.0; 9];
+        assert_eq!(
+            helpers::crossover(&a, &b),
+            [false, false, false, true, false, false, false, false, false]
+        );
+        assert_eq!(
+            helpers::crossunder(&a, &b),
+            [false, false, false, false, false, false, true, false, false]
+        );
+        assert_eq!(helpers::sma(&[2.0, 4.0], 0), [2.0, 4.0]);
     }
 }

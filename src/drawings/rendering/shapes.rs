@@ -2,62 +2,115 @@
 //!
 //! Includes: rotated rect, double curve, brush, highlighter, path, curve, and sine line.
 
-use crate::drawings::domain::Drawing;
+use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Color32, Pos2, Shape, Stroke};
 
 impl Drawing {
-    /// Render Rotated Rectangle
-    ///
-    /// Rotation is not yet supported; currently draws an axis-aligned rectangle.
-    /// A full implementation would require a third control point or rotation angle.
-    pub(crate) fn render_rotated_rect(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
-            return;
+    /// The first anchor is the center, the second fixes the radius, and the third fixes
+    /// the end ray. Positive screen angles sweep clockwise, including sectors over 180°.
+    pub(super) fn sector_points(&self) -> Option<Vec<Pos2>> {
+        let [center, start, end, ..] = *self.points else {
+            return None;
+        };
+        let radius = center.distance(start);
+        if radius < 1e-6 || center.distance_sq(end) < 1e-12 {
+            return None;
         }
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // For now, draw as regular rect (rotation would require additional control point)
-        let rect = Rect::from_two_pos(p1, p2);
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(self.stroke_width, color),
-            StrokeKind::Inside,
-        );
+        let from = (start - center).angle();
+        let sweep = ((end - center).angle() - from).rem_euclid(std::f32::consts::TAU);
+        let steps = ((sweep / std::f32::consts::TAU * 128.0).ceil() as usize).max(1);
+        let mut points = vec![center];
+        points.extend((0..=steps).map(|i| {
+            let angle = from + sweep * i as f32 / steps as f32;
+            center + egui::Vec2::angled(angle) * radius
+        }));
+        Some(points)
     }
 
-    pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
-        if self.points.len() < 2 {
+    pub(super) fn render_sector(&self, painter: &egui::Painter) {
+        let Some(points) = self.sector_points() else {
             return;
+        };
+        if let Some(fill) = self.fill_color32() {
+            // One mesh keeps translucent fill continuous across the fan's internal edges.
+            let mut mesh = egui::Mesh::default();
+            for &point in &points {
+                mesh.colored_vertex(point, fill);
+            }
+            for i in 1..points.len() - 1 {
+                mesh.add_triangle(0, i as u32, (i + 1) as u32);
+            }
+            painter.add(Shape::mesh(mesh));
         }
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
+        painter.add(Shape::closed_line(points, self.stroke()));
+    }
 
-        // Draw S-curve between points
-        let segments = 32;
-        let mut prev = p1;
-        for i in 1..=segments {
-            let t = i as f32 / segments as f32;
-            let x = p1.x + (p2.x - p1.x) * t;
-            let offset = ((t * std::f32::consts::PI * 2.0).sin()) * 20.0;
-            let y = p1.y + (p2.y - p1.y) * t + offset;
-            let point = Pos2::new(x, y);
-            painter.line_segment([prev, point], Stroke::new(self.stroke_width, color));
-            prev = point;
+    /// A rectangle whose first two anchors form its base and whose third sets the width.
+    pub(crate) fn render_rotated_rect(&self, painter: &egui::Painter) {
+        let Some(corners) = self.rotated_rect_corners() else {
+            return;
+        };
+        let fill = self.fill_color.map_or(Color32::TRANSPARENT, |c| {
+            Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+        });
+        painter.add(egui::Shape::convex_polygon(
+            corners.to_vec(),
+            fill,
+            Stroke::new(self.stroke_width, self.color32()),
+        ));
+    }
+
+    pub(super) fn rotated_rect_corners(&self) -> Option<[Pos2; 4]> {
+        let &[a, b, c, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let base = b - a;
+        if base.length_sq() < 1e-6 {
+            return None;
+        }
+        let normal = egui::vec2(-base.y, base.x);
+        let offset = normal * ((c - a).dot(normal) / base.length_sq());
+        Some([a, b, b + offset, a + offset])
+    }
+
+    /// Cubic Bezier curve with two independently placed control points.
+    pub(crate) fn render_double_curve(&self, painter: &egui::Painter) {
+        let Some(points) = self.double_curve_points() else {
+            return;
+        };
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(self.stroke_width, self.color32()),
+        ));
+    }
+
+    pub(super) fn double_curve_points(&self) -> Option<Vec<Pos2>> {
+        let &[a, b, c, d, ..] = self.points.as_slice() else {
+            return None;
+        };
+        Some(
+            (0..=64)
+                .map(|i| {
+                    let t = i as f32 / 64.0;
+                    let u = 1.0 - t;
+                    (a.to_vec2() * u * u * u
+                        + b.to_vec2() * 3.0 * u * u * t
+                        + c.to_vec2() * 3.0 * u * t * t
+                        + d.to_vec2() * t * t * t)
+                        .to_pos2()
+                })
+                .collect(),
+        )
+    }
+
+    /// The width a brush is drawn at: twice the stroke width for the brush,
+    /// eight times for the highlighter; `None` for other tools.
+    pub(crate) fn brush_width(&self) -> Option<f32> {
+        match self.tool_type {
+            DrawingToolType::Brush => Some(self.stroke_width * 2.0),
+            DrawingToolType::Highlighter => Some(self.stroke_width * 8.0),
+            _ => None,
         }
     }
 
@@ -72,7 +125,7 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment(
                     [self.points[i - 1], point],
-                    Stroke::new(self.stroke_width * 2.0, color),
+                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
                 );
             }
         }
@@ -85,7 +138,7 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment(
                     [self.points[i - 1], point],
-                    Stroke::new(self.stroke_width * 8.0, color),
+                    Stroke::new(self.brush_width().unwrap_or(self.stroke_width), color),
                 );
             }
         }
@@ -111,8 +164,10 @@ impl Drawing {
             if i > 0 {
                 painter.line_segment([self.points[i - 1], point], stroke);
             }
-            // Draw small circles at each vertex
-            painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            // Keep the endpoint clear for its arrowhead.
+            if i + 1 < self.points.len() || !self.arrow_end_style.is_visible() {
+                painter.circle_filled(point, DESIGN_TOKENS.rounding.sm, color);
+            }
         }
 
         // Larger circle at start point
@@ -126,20 +181,8 @@ impl Drawing {
         if self.points.len() < 2 {
             return;
         }
-        let p0 = self.points[0];
-        let p2 = self.points[self.points.len() - 1];
-
-        // Control point is either the middle point or calculated
-        let p1 = if self.points.len() >= 3 {
-            self.points[1]
-        } else {
-            // Auto-generate control point for smooth curve
-            let mid_x = (p0.x + p2.x) / 2.0;
-            let mid_y = (p0.y + p2.y) / 2.0;
-            let dx = p2.x - p0.x;
-            let dy = p2.y - p0.y;
-            // Perpendicular offset
-            Pos2::new(mid_x - dy * 0.3, mid_y + dx * 0.3)
+        let Some([p0, p1, p2]) = self.curve_controls() else {
+            return;
         };
 
         let color = Color32::from_rgba_unmultiplied(
@@ -150,16 +193,8 @@ impl Drawing {
         );
         let stroke = Stroke::new(self.stroke_width, color);
 
-        // Draw Bezier curve using segments
-        let segments = 32;
-        let mut prev_point: Option<Pos2> = None;
-        for i in 0..=segments {
-            let t = i as f32 / segments as f32;
-            let point = Self::quadratic_bezier(p0, p1, p2, t);
-            if let Some(prev) = prev_point {
-                painter.line_segment([prev, point], stroke);
-            }
-            prev_point = Some(point);
+        for pair in curve_points(p0, p1, p2).windows(2) {
+            painter.line_segment([pair[0], pair[1]], stroke);
         }
 
         // Draw anchor points
@@ -171,5 +206,115 @@ impl Drawing {
             DESIGN_TOKENS.rounding.sm,
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 128),
         );
+    }
+
+    /// The curve's start, control and end points: the control point is the
+    /// second anchor of three, or else set off to the side of the midpoint.
+    /// `None` below two anchors.
+    pub(super) fn curve_controls(&self) -> Option<[Pos2; 3]> {
+        let (&p0, &p2) = (self.points.first()?, self.points.last()?);
+        if self.points.len() < 2 {
+            return None;
+        }
+        let p1 = if self.points.len() >= 3 {
+            self.points[1]
+        } else {
+            let mid = Pos2::new((p0.x + p2.x) / 2.0, (p0.y + p2.y) / 2.0);
+            Pos2::new(mid.x - (p2.y - p0.y) * 0.3, mid.y + (p2.x - p0.x) * 0.3)
+        };
+        Some([p0, p1, p2])
+    }
+}
+
+/// The quadratic Bezier curve from `p0` to `p2` pulled towards `p1`.
+pub(super) fn curve_points(p0: Pos2, p1: Pos2, p2: Pos2) -> Vec<Pos2> {
+    (0..=32)
+        .map(|i| Drawing::quadratic_bezier(p0, p1, p2, i as f32 / 32.0))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_and_fan_geometry_uses_the_placed_controls() {
+        let rect = egui::Rect::from_min_max(egui::pos2(-400.0, -400.0), egui::pos2(400.0, 400.0));
+        for (tool, anchors, want) in [
+            (
+                DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
+                vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
+            ),
+            (
+                DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 50.0)],
+                vec![(200.0, 100.0), (0.0, 100.0), (100.0, 0.0)],
+            ),
+            (
+                DrawingToolType::RotatedRect,
+                vec![(0.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+                vec![(50.0, 150.0), (-50.0, 50.0)],
+            ),
+            (
+                DrawingToolType::DoubleCurve,
+                vec![(0.0, 0.0), (0.0, 100.0), (100.0, -100.0), (100.0, 0.0)],
+                vec![(50.0, 0.0), (100.0, 0.0)],
+            ),
+            (
+                DrawingToolType::Arc,
+                vec![(-50.0, 0.0), (50.0, 0.0), (0.0, 50.0)],
+                vec![(-50.0, 0.0), (50.0, 0.0), (0.0, 50.0)],
+            ),
+            (
+                DrawingToolType::Pitchfan,
+                vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)],
+                vec![(400.0, 0.0), (400.0, 200.0), (400.0, 400.0)],
+            ),
+        ] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.points = anchors.into_iter().map(Pos2::from).collect();
+            let outline = drawing.outline(rect).unwrap();
+            for point in want.into_iter().map(Pos2::from) {
+                assert!(
+                    outline
+                        .lines
+                        .iter()
+                        .flatten()
+                        .any(|p| p.distance(point) < 1e-3),
+                    "{tool:?} missing {point:?}"
+                );
+            }
+        }
+        let mut sector = Drawing::new(0, DrawingToolType::Sector);
+        for points in [
+            vec![Pos2::ZERO; 3],
+            vec![Pos2::ZERO, Pos2::new(100.0, 0.0), Pos2::ZERO],
+        ] {
+            sector.points = points;
+            assert!(sector.outline(rect).is_none());
+        }
+        for category in crate::drawings::categories::CATEGORY_ORDER {
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::drawing_toolbar::data::get_category_sections(category),
+                crate::drawings::categories::get_category_sections(category),
+            );
+            for (_, tools) in crate::drawings::categories::get_category_sections(category) {
+                for tool in tools {
+                    assert!(
+                        !matches!(
+                            tool,
+                            DrawingToolType::Table
+                                | DrawingToolType::Image
+                                | DrawingToolType::Tweet
+                                | DrawingToolType::Idea
+                                | DrawingToolType::GhostFeed
+                        ),
+                        "unfinished {tool:?} in {category}"
+                    );
+                }
+            }
+        }
     }
 }

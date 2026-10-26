@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Standard Error Bands - upper/middle (linear regression)/lower bands
@@ -10,7 +10,7 @@ use egui::Color32;
 pub struct StandardErrorBands {
     period: usize,
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -21,11 +21,11 @@ impl StandardErrorBands {
         Self {
             period: period.max(2),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.bb_upper,
-                DESIGN_TOKENS.semantic.indicators.bb_middle,
-                DESIGN_TOKENS.semantic.indicators.bb_lower,
+                palette::PURPLE,
+                Color32::from_rgb(120, 123, 134),
+                palette::PURPLE,
             ],
             visible: true,
         }
@@ -82,6 +82,17 @@ impl Default for StandardErrorBands {
 }
 
 impl Indicator for StandardErrorBands {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdErrBands"
     }
@@ -112,12 +123,11 @@ impl Indicator for StandardErrorBands {
             let upper = middle + self.multiplier * se;
             let lower = middle - self.multiplier * se;
 
-            self.values
-                .push(IndicatorValue::Multiple(vec![upper, middle, lower]));
+            self.values.push_lines(&[upper, middle, lower]);
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -137,7 +147,7 @@ impl Indicator for StandardErrorBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

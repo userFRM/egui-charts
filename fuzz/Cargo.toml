@@ -1,0 +1,39 @@
+[package]
+name = "egui-charts-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+chrono = "0.4.43"
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
+egui-charts = { path = ".." }
+libfuzzer-sys = "0.4"
+
+# Not a member of the library's workspace; cargo-fuzz builds it on its own.
+[workspace]
+
+[[bin]]
+name = "bars"
+path = "fuzz_targets/bars.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "studies"
+path = "fuzz_targets/studies.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drawings"
+path = "fuzz_targets/drawings.rs"
+test = false
+doc = false
+bench = false

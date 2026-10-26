@@ -28,24 +28,34 @@ pub struct SignalId(
 /// Where a signal sits on the chart, anchored by time so it keeps its place through zoom,
 /// interval changes and history loads. Prices are finite and in the symbol's price units.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum SignalShape {
     /// A mark on the bar containing `time`, at `price` or, without one, beside the bar.
     Marker {
+        /// UTC time at which the marker is anchored.
         time: DateTime<Utc>,
+        /// Marker price; `None` uses the direction's default placement.
         price: Option<f64>,
+        /// Direction used for marker placement and color.
         direction: Direction,
     },
     /// A horizontal line at `price`, starting at `from` or, without one, across the whole chart.
     Level {
+        /// Price of the horizontal level.
         price: f64,
+        /// Start time, or `None` for a level across the whole chart.
         from: Option<DateTime<Utc>>,
     },
     /// The prices from `low` to `high` between `from` and `to`, or from `from` onward without
     /// `to`. `low` is at most `high`.
     Zone {
+        /// Start time of the zone.
         from: DateTime<Utc>,
+        /// End time, or `None` for an open-ended zone.
         to: Option<DateTime<Utc>>,
+        /// Lower boundary of the zone.
         low: f64,
+        /// Upper boundary of the zone.
         high: f64,
     },
 }

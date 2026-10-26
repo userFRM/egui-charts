@@ -1,12 +1,13 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
@@ -17,71 +18,39 @@ pub struct StochasticMomentumIndex {
     smooth2: usize,
     /// Signal line period (typically 10)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [SMI, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl StochasticMomentumIndex {
+    /// Create with `period`, `smooth1`, `smooth2`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(period: usize, smooth1: usize, smooth2: usize, signal_period: usize) -> Self {
         Self {
             period: period.max(1),
             smooth1: smooth1.max(1),
             smooth2: smooth2.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - SMI
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - SMI
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        let mut first_valid = None;
-        for (i, &value) in data.iter().enumerate() {
-            if !value.is_nan() && first_valid.is_none() {
-                first_valid = Some(i);
-            }
-        }
-
-        let start = first_valid.unwrap_or(0);
-
-        for i in 0..data.len() {
-            if i < start {
-                ema.push(f64::NAN);
-            } else if i == start {
-                ema.push(data[i]);
-            } else {
-                let prev = ema[i - 1];
-                if prev.is_nan() || data[i].is_nan() {
-                    ema.push(f64::NAN);
-                } else {
-                    ema.push((data[i] - prev) * multiplier + prev);
-                }
-            }
-        }
-
-        ema
-    }
-
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -132,11 +101,11 @@ impl StochasticMomentumIndex {
         }
 
         // Double EMA smoothing
-        let distance_ema1 = Self::calculate_ema(&distance, self.smooth1);
-        let distance_ema2 = Self::calculate_ema(&distance_ema1, self.smooth2);
+        let distance_ema1 = helpers::ema(&distance, self.smooth1);
+        let distance_ema2 = helpers::ema(&distance_ema1, self.smooth2);
 
-        let range_ema1 = Self::calculate_ema(&range, self.smooth1);
-        let range_ema2 = Self::calculate_ema(&range_ema1, self.smooth2);
+        let range_ema1 = helpers::ema(&range, self.smooth1);
+        let range_ema2 = helpers::ema(&range_ema1, self.smooth2);
 
         // Calculate SMI
         let mut smi = Vec::with_capacity(data.len());
@@ -150,16 +119,14 @@ impl StochasticMomentumIndex {
         }
 
         // Calculate signal line
-        let signal = Self::calculate_ema(&smi, self.signal_period);
+        let signal = helpers::ema(&smi, self.signal_period);
 
         // Store results
         for i in 0..data.len() {
             if smi[i].is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                values.push(IndicatorValue::Single(smi[i]));
             } else {
-                values.push(IndicatorValue::Multiple(vec![smi[i], signal[i]]));
+                values.push_lines(&[smi[i], signal[i]]);
             }
         }
 
@@ -174,6 +141,13 @@ impl Default for StochasticMomentumIndex {
 }
 
 impl Indicator for StochasticMomentumIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth1: length("Smooth1", 1, usize::MAX),
+        smooth2: length("Smooth2", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "SMI"
     }
@@ -190,7 +164,7 @@ impl Indicator for StochasticMomentumIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -241,6 +215,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -259,6 +235,7 @@ mod tests {
         // Should have valid values
         let valid_cnt = smi
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

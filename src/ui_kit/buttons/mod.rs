@@ -1,33 +1,9 @@
-//! Unified button components for open-trading-charts-rs
+//! Icon buttons, split buttons and button styling helpers.
 //!
-//! Consolidates scattered button implementations into a consistent API.
-//!
-//! # Components
-//!
-//! - [`IconButton`] - Simple icon button (most common)
-//! - [`SplitButton`] - Icon + dropdown arrow (category buttons)
-//! - [`Button`] - Text, icon or both, in a [`ButtonVariant`]
-//!
-//! # Usage
-//!
-//! ```
-//! use egui_charts::icons::icons;
-//! use egui_charts::ui_kit::buttons::IconButton;
-//!
-//! # egui::__run_test_ui(|ui| {
-//! # let is_selected = false;
-//! // Simple icon button
-//! let response = IconButton::new(&icons::TREND_LINE)
-//!     .tooltip("Trend Line (Alt+T)")
-//!     .selected(is_selected)
-//!     .show(ui);
-//!
-//! if response.clicked() {
-//!     // handle click
-//! }
-//! # });
-//! ```
+//! Use [`IconButton`] for an individual action and [`SplitButton`] for an action
+//! with a separate dropdown trigger.
 
+use crate::localization as l10n;
 mod button;
 mod icon_button;
 mod split_button;
@@ -44,19 +20,19 @@ use egui::{Response, Role, Ui, WidgetInfo};
 /// Button sizes
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ButtonSize {
-    /// 24x24 - small buttons
+    /// Small buttons.
     SM,
-    /// 28x28 - standard toolbar buttons
+    /// Medium toolbar buttons.
     #[default]
     MD,
-    /// 36x36 - large buttons
+    /// Large buttons.
     LG,
-    /// 40x40 - extra large
+    /// Extra-large buttons.
     XL,
 }
 
 impl ButtonSize {
-    /// Get the pixel size
+    /// Side length in egui logical points.
     #[inline]
     pub fn pixels(&self) -> f32 {
         match self {
@@ -81,16 +57,30 @@ impl ButtonSize {
 }
 
 /// Report a button to accessibility tools and attach its tooltip, which also shows while disabled.
-fn finish(response: Response, selected: bool, label: &str, tooltip: Option<&str>) -> Response {
+fn finish(
+    response: Response,
+    selected: Option<bool>,
+    label: &str,
+    tooltip: Option<&str>,
+) -> Response {
+    let translated_label = l10n::text(&response.ctx, label);
     response.widget_info(|| {
-        if selected {
-            WidgetInfo::selected(Role::Button, response.enabled(), true, label)
+        if let Some(selected) = selected {
+            WidgetInfo::selected(
+                Role::Button,
+                response.enabled(),
+                selected,
+                &translated_label,
+            )
         } else {
-            WidgetInfo::labeled(Role::Button, response.enabled(), label)
+            WidgetInfo::labeled(Role::Button, response.enabled(), &translated_label)
         }
     });
     match tooltip {
-        Some(tip) => response.on_hover_text(tip).on_disabled_hover_text(tip),
+        Some(tip) => {
+            let tip = l10n::text(&response.ctx, tip);
+            response.on_hover_text(&tip).on_disabled_hover_text(&tip)
+        }
         None => response,
     }
 }
@@ -118,4 +108,22 @@ pub fn dialog_close_button(ui: &mut Ui) -> Response {
     IconButton::new(&crate::icons::icons::CLOSE)
         .tooltip("Close")
         .show(ui)
+}
+
+/// The kit disclosure icon for egui combo boxes.
+pub(crate) fn combo_chevron(
+    ui: &Ui,
+    rect: egui::Rect,
+    visuals: &egui::style::WidgetVisuals,
+    _open: bool,
+) {
+    use egui::emath::GuiRounding;
+    let rect = egui::Rect::from_center_size(
+        rect.center(),
+        egui::Vec2::splat(DESIGN_TOKENS.sizing.icon_sm),
+    )
+    .round_to_pixels(ui.pixels_per_point());
+    crate::icons::icons::CHEVRON_DOWN
+        .as_image_tinted(rect.size(), visuals.fg_stroke.color)
+        .paint_at(ui, rect);
 }

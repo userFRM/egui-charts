@@ -3,7 +3,9 @@
 //! Displays a tabbed interface for Alerts and Object Tree panels.
 
 use crate::icons::{Icon, icons as embedded_icons};
-use crate::styles::{icons, stroke, typography};
+use crate::localization as l10n;
+use crate::styles::{icons, stroke};
+use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -11,7 +13,9 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 /// Available tabs in the right panel
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RightPanelTab {
+    /// Alerts panel.
     Alerts,
+    /// Drawing and study object tree.
     ObjectTree,
 }
 
@@ -28,6 +32,7 @@ impl TryFrom<u8> for RightPanelTab {
 }
 
 impl RightPanelTab {
+    /// Icon representing this value.
     pub fn icon(&self) -> &'static Icon {
         match self {
             RightPanelTab::Alerts => &embedded_icons::BELL,
@@ -35,6 +40,7 @@ impl RightPanelTab {
         }
     }
 
+    /// Display label for this value.
     pub fn label(&self) -> &'static str {
         match self {
             RightPanelTab::Alerts => "Alerts",
@@ -46,15 +52,25 @@ impl RightPanelTab {
 /// Configuration for the right panel tabs
 #[derive(Clone, Debug)]
 pub struct RightPanelTabsConfig {
+    /// Tab bar width, in egui logical points.
     pub tab_bar_width: f32,
+    /// Tab button size, in egui logical points.
     pub tab_button_size: f32,
+    /// Background color.
     pub bg_color: Color32,
+    /// Tab bar background.
     pub tab_bar_bg: Color32,
+    /// Active tab background.
     pub active_tab_bg: Color32,
+    /// Hover background.
     pub hover_bg: Color32,
+    /// Pressed background.
     pub pressed_bg: Color32,
+    /// Icon color.
     pub icon_color: Color32,
+    /// Active icon color.
     pub active_icon_color: Color32,
+    /// Border color.
     pub border_color: Color32,
 }
 
@@ -98,16 +114,23 @@ theme_derived!(RightPanelTabsConfig {
 
 /// Action returned by the right panel tabs
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum RightPanelAction {
+    /// No action requested.
     None,
+    /// Switch to the supplied panel tab.
     TabChanged(RightPanelTab),
+    /// Close the panel.
     Close,
 }
 
 /// Right Panel with Tab Navigation
 pub struct RightPanelTabs {
+    /// Currently selected tab.
     pub active_tab: RightPanelTab,
+    /// Display and layout options for this component.
     pub config: RightPanelTabsConfig,
+    /// Tabs offered in the panel, in display order.
     pub available_tabs: Vec<RightPanelTab>,
     /// Theme and config `config` was last derived from; `None` when the caller supplied it.
     config_theme: Option<(Theme, RightPanelTabsConfig)>,
@@ -125,16 +148,19 @@ impl Default for RightPanelTabs {
 }
 
 impl RightPanelTabs {
+    /// Create a [`RightPanelTabs`] with default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: RightPanelTabsConfig) -> Self {
         self.config = config;
         self.config_theme = None;
         self
     }
 
+    /// Select the tab initially shown.
     pub fn with_active_tab(mut self, tab: RightPanelTab) -> Self {
         self.active_tab = tab;
         self
@@ -172,19 +198,25 @@ impl RightPanelTabs {
             Stroke::new(stroke::HAIRLINE, self.config.border_color),
         );
 
-        let mut y = rect.min.y + DESIGN_TOKENS.spacing.lg;
+        let mut y = rect.min.y + ui.active_theme().spacing.lg;
 
         // Draw each tab button
         for tab in &self.available_tabs {
             let is_active = *tab == self.active_tab;
             let btn_rect = Rect::from_min_size(
-                Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.sm, y),
+                Pos2::new(rect.min.x + ui.active_theme().spacing.sm, y),
                 Vec2::new(self.config.tab_button_size, self.config.tab_button_size),
             );
 
             // Check for clicks
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
-            crate::styles::focus::draw_focus_ring(ui, &btn_res);
+            let translated_label = l10n::text(ui.ctx(), tab.label());
+            btn_res.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Tab, btn_res.enabled(), &translated_label)
+            });
+            ui.ctx()
+                .accesskit_node_builder(btn_res.id, |node| node.set_selected(is_active));
+            crate::styles::focus::draw_focus_ring(ui, &btn_res, ui.active_theme().radius.md);
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
 
@@ -192,7 +224,7 @@ impl RightPanelTabs {
             if is_active {
                 painter.rect_filled(
                     btn_rect,
-                    DESIGN_TOKENS.rounding.md,
+                    ui.active_theme().radius.md,
                     self.config.active_tab_bg,
                 );
                 // Active indicator on left edge
@@ -208,9 +240,13 @@ impl RightPanelTabs {
                     self.config.active_icon_color,
                 );
             } else if is_pressed {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.config.pressed_bg);
+                painter.rect_filled(
+                    btn_rect,
+                    ui.active_theme().radius.md,
+                    self.config.pressed_bg,
+                );
             } else if is_hovered {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.config.hover_bg);
+                painter.rect_filled(btn_rect, ui.active_theme().radius.md, self.config.hover_bg);
             }
 
             // Draw icon
@@ -235,10 +271,10 @@ impl RightPanelTabs {
 
             // Tooltip
             if is_hovered {
-                btn_res.on_hover_text(tab.label());
+                btn_res.on_hover_text(l10n::text(ui.ctx(), tab.label()));
             }
 
-            y += self.config.tab_button_size + DESIGN_TOKENS.spacing.sm;
+            y += self.config.tab_button_size + ui.active_theme().spacing.sm;
         }
 
         action
@@ -266,13 +302,13 @@ impl RightPanelTabs {
 
         // Tab title
         let title_galley = painter.layout_no_wrap(
-            self.active_tab.label().to_string(),
-            egui::FontId::proportional(typography::SM),
+            l10n::text(ui.ctx(), self.active_tab.label()),
+            egui::FontId::proportional(ui.active_theme().text.small),
             ui.visuals().text_color(),
         );
         painter.galley(
             Pos2::new(
-                rect.min.x + DESIGN_TOKENS.spacing.xl,
+                rect.min.x + ui.active_theme().spacing.xl,
                 rect.center().y - title_galley.size().y / 2.0,
             ),
             title_galley,
@@ -282,10 +318,12 @@ impl RightPanelTabs {
         response
     }
 
+    /// Select the tab to display.
     pub fn set_active_tab(&mut self, tab: RightPanelTab) {
         self.active_tab = tab;
     }
 
+    /// Currently selected panel tab.
     pub fn active_tab(&self) -> RightPanelTab {
         self.active_tab
     }

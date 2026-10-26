@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Percentage Price Oscillator (PPO): MACD taken as a percentage of the long average.
@@ -24,35 +24,38 @@ pub struct PriceOscillator {
     long_period: usize,
     /// Signal line EMA period (typically 9)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [PPO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl PriceOscillator {
+    /// Create with `short_period`, `long_period`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(short_period: usize, long_period: usize, signal_period: usize) -> Self {
         Self {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - PPO
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
-                DESIGN_TOKENS.semantic.extended.success, // Green - Histogram
+                palette::BLUE,   // Blue - PPO
+                palette::ORANGE, // Orange - Signal
+                palette::GREEN,  // Green - Histogram
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.set_colors(colors);
         self
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
         percentage_oscillator(
             &closes,
@@ -61,28 +64,6 @@ impl PriceOscillator {
             self.signal_period,
         )
     }
-}
-
-/// An EMA of `period` over `values` that skips `None`: it is seeded with the mean of the first
-/// `period` values and carries over a missing one, which has no EMA.
-fn ema_of(values: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
-    let (mut seed, mut ema) = (Vec::new(), None);
-    values
-        .iter()
-        .map(|&v| {
-            let v = v?;
-            match ema {
-                Some(prev) => ema = Some(prev + (v - prev) * 2.0 / (period as f64 + 1.0)),
-                None => {
-                    seed.push(v);
-                    if seed.len() == period {
-                        ema = Some(seed.iter().sum::<f64>() / period as f64);
-                    }
-                }
-            }
-            ema
-        })
-        .collect()
 }
 
 /// The percentage oscillator of `values` as MACD defines it, taken as a percentage of the long
@@ -94,24 +75,31 @@ pub(super) fn percentage_oscillator(
     short: usize,
     long: usize,
     signal: usize,
-) -> Vec<IndicatorValue> {
-    let values: Vec<Option<f64>> = values.iter().map(|&v| Some(v)).collect();
-    let (short, long) = (ema_of(&values, short), ema_of(&values, long));
-    let line: Vec<Option<f64>> = short
+) -> IndicatorValues {
+    let (short, long) = (
+        crate::studies::helpers::ema_sma(values, short),
+        crate::studies::helpers::ema_sma(values, long),
+    );
+    let line: Vec<_> = short
         .iter()
         .zip(&long)
-        .map(|(s, l)| match (s, l) {
-            (Some(s), Some(l)) if *l != 0.0 => Some((s - l) / l * 100.0),
-            _ => None,
+        .map(|(s, l)| {
+            if *l == 0.0 {
+                f64::NAN
+            } else {
+                (s - l) / l * 100.0
+            }
         })
         .collect();
-    let signal = ema_of(&line, signal);
+    let signal = crate::studies::helpers::ema_sma(&line, signal);
     line.iter()
         .zip(&signal)
-        .map(|(line, signal)| match (line, signal) {
-            (Some(l), Some(s)) => IndicatorValue::Multiple(vec![*l, *s, l - s]),
-            (Some(l), None) => IndicatorValue::Single(*l),
-            _ => IndicatorValue::None,
+        .map(|(&line, &signal)| {
+            if line.is_finite() {
+                IndicatorValue::Multiple(vec![line, signal, line - signal])
+            } else {
+                IndicatorValue::None
+            }
         })
         .collect()
 }
@@ -124,6 +112,22 @@ impl Default for PriceOscillator {
 }
 
 impl Indicator for PriceOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "PPO"
     }
@@ -136,7 +140,7 @@ impl Indicator for PriceOscillator {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -167,7 +171,7 @@ impl Indicator for PriceOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
@@ -193,6 +197,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -209,6 +215,7 @@ mod tests {
         // Should have valid values after long period warmup
         let valid_cnt = ppo
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();
@@ -226,7 +233,7 @@ mod tests {
         ppo.calculate(&data);
 
         // PPO should be positive in uptrend
-        if let Some(last_val) = ppo.values.last() {
+        if let Some(last_val) = ppo.values.to_rows().last() {
             let ppo_val = match last_val {
                 IndicatorValue::Multiple(vals) => vals[0],
                 IndicatorValue::Single(val) => *val,

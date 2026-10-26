@@ -1,15 +1,15 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Moving Average Channel
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Moving Average Channel
 #[derive(Clone)]
 pub struct MAChannel {
     period: usize,
     offset_percent: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -20,11 +20,11 @@ impl MAChannel {
         Self {
             period: period.max(1),
             offset_percent: clamp_param(offset_percent, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::BLUE,  // Blue - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }
@@ -38,6 +38,17 @@ impl Default for MAChannel {
 }
 
 impl Indicator for MAChannel {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        offset_percent: number("Offset percent", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MA Channel"
     }
@@ -69,13 +80,12 @@ impl Indicator for MAChannel {
                 let upper = sma * (1.0 + multiplier);
                 let lower = sma * (1.0 - multiplier);
 
-                self.values
-                    .push(IndicatorValue::Multiple(vec![upper, sma, lower]));
+                self.values.push_lines(&[upper, sma, lower]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -93,7 +103,7 @@ impl Indicator for MAChannel {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

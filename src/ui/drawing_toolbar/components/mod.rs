@@ -1,10 +1,7 @@
-//! Reusable UI components for the drawing toolbar.
+//! Buttons, separators and SVG helpers for composing drawing toolbars.
 //!
-//! This module provides DRY components used throughout the toolbar:
-//! - `PairButton` - Split button with icon and arrow (used for categories, dropdowns)
-//! - `icon_btn` - Single icon btns with theme-aware styling
-//! - `separator` - Visual separator lines
-//! - `svg_helpers` - SVG rendering utilities with theme colors
+//! Use [`PairButton`] for a tool button with a separate flyout trigger, or the
+//! button functions for individual tools and toggles.
 
 pub mod icon_button;
 pub mod pair_button;

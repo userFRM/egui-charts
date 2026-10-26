@@ -14,7 +14,7 @@ pub struct StayInDrawingButton;
 impl StayInDrawingButton {
     /// Render the stay-in-drawing button and return any action.
     pub fn show(ui: &mut Ui, is_active: bool) -> Option<DrawingToolbarAction> {
-        let response = draw_tool_button(ui, &icons::MAGNET, "Keep drawing", is_active);
+        let response = draw_tool_button(ui, &icons::DRAWING_KEEP, "Keep drawing", is_active);
 
         if response.clicked() {
             Some(DrawingToolbarAction::ToggleStayInDrawingMode)

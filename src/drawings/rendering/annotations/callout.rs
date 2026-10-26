@@ -1,7 +1,7 @@
 //! Callout and comment rendering
 
 use crate::drawings::domain::Drawing;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -33,7 +33,7 @@ impl Drawing {
 
         // Callout box
         let text = self.text.as_deref().unwrap_or("Callout text here");
-        let font = egui::FontId::proportional(typography::MD);
+        let font = self.annotation_font();
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
         let text_size = galley.size();
         let padding = egui::vec2(
@@ -177,7 +177,7 @@ impl Drawing {
         if let Some(text) = &self.text
             && !text.is_empty()
         {
-            let font = egui::FontId::proportional(typography::SM);
+            let font = self.annotation_font();
             let galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
             let text_size = galley.size();
 

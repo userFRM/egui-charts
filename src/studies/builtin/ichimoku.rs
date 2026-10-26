@@ -6,9 +6,9 @@
 //! # Components
 //! - Tenkan-sen (Conversion Line): (9-period high + 9-period low) / 2
 //! - Kijun-sen (Base Line): (26-period high + 26-period low) / 2
-//! - Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, plotted 26 periods ahead
-//! - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 26 periods ahead
-//! - Chikou Span (Lagging Span): Close plotted 26 periods back
+//! - Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, plotted 25 bars ahead with displacement 26
+//! - Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, plotted 25 bars ahead with displacement 26
+//! - Chikou Span (Lagging Span): Close plotted 25 bars back with displacement 26
 //!
 //! # Interpretation
 //! - Price above cloud: Bullish trend
@@ -25,28 +25,27 @@
 //! ichimoku.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Ichimoku Cloud indicator
 ///
-/// Each value is `[tenkan, kijun, senkou_a, senkou_b, chikou]`, with NaN for a
-/// line that has no value at that bar, and `None` where no line has one. The
-/// value at bar `i` holds Senkou Span A and B computed on bar `i - displacement`
-/// and the close of bar `i + displacement` as the Chikou Span, so the spans are
-/// already displaced. There is one value per bar, so the leading spans computed
-/// on the last `displacement` bars, which fall after the last bar, are not
-/// output, and the Chikou Span is NaN on the last `displacement` bars.
+/// Each row holds `[tenkan, kijun, senkou_a, senkou_b, close]` computed at its
+/// source bar, with NaN during warmup. Leading spans use a positive plot offset
+/// and Chikou a negative one. Displacement counts the current bar as period one:
+/// 26 shifts by 25 bars. Zero and one leave the spans unshifted. All leading
+/// values are retained, including those drawn beyond the last price bar.
 #[derive(Clone)]
 pub struct IchimokuCloud {
     tenkan_period: usize,
     kijun_period: usize,
     senkou_b_period: usize,
     displacement: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     tenkan_color: Color32,
     kijun_color: Color32,
     span_a_color: Color32,
@@ -69,18 +68,18 @@ impl IchimokuCloud {
             kijun_period,
             senkou_b_period: senkou_b_period.max(1),
             displacement: kijun_period,
-            values: Vec::new(),
-            tenkan_color: DESIGN_TOKENS.semantic.extended.info, // Blue
-            kijun_color: DESIGN_TOKENS.semantic.extended.error, // Red
+            values: IndicatorValues::new(),
+            tenkan_color: palette::BLUE, // Blue
+            kijun_color: palette::RED,   // Red
             span_a_color: {
-                let success = DESIGN_TOKENS.semantic.extended.success;
+                let success = palette::GREEN;
                 Color32::from_rgba_unmultiplied(success.r(), success.g(), success.b(), 100)
             }, // Green cloud (transparent)
             span_b_color: {
-                let error = DESIGN_TOKENS.semantic.extended.error;
+                let error = palette::RED;
                 Color32::from_rgba_unmultiplied(error.r(), error.g(), error.b(), 100)
             }, // Red cloud (transparent)
-            chikou_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            chikou_color: palette::PURPLE, // Purple
             visible: true,
         }
     }
@@ -90,8 +89,8 @@ impl IchimokuCloud {
         Self::new(9, 26, 52)
     }
 
-    /// Set the number of bars Senkou Span A and B are plotted ahead and the
-    /// Chikou Span behind (the Kijun period by default; 0 plots them unshifted)
+    /// Set displacement periods, counting the current bar as the first.
+    /// The Kijun period is the default; 0 and 1 both leave spans unshifted.
     pub fn with_displacement(mut self, displacement: usize) -> Self {
         self.displacement = displacement;
         self
@@ -105,18 +104,10 @@ impl Default for IchimokuCloud {
     }
 }
 
-impl Indicator for IchimokuCloud {
-    fn name(&self) -> &str {
-        "Ichimoku"
-    }
-
-    fn desc(&self) -> &str {
-        "Ichimoku Cloud - Comprehensive trend indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl IchimokuCloud {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Midpoint of the highest high and lowest low of each full window
         let mid = |period: usize| -> Vec<Option<f64>> {
             let highest = rolling_max(data.iter().map(|b| b.high), period);
@@ -131,27 +122,70 @@ impl Indicator for IchimokuCloud {
         let tenkan_line = mid(self.tenkan_period);
         let kijun_line = mid(self.kijun_period);
         let senkou_b_line = mid(self.senkou_b_period);
-        let d = self.displacement;
         for i in 0..data.len() {
             let tenkan = tenkan_line[i];
             let kijun = kijun_line[i];
-            // Leading spans: computed on bar i - d, plotted on bar i
-            let base = i.checked_sub(d);
-            let span_a = base.and_then(|j| Some((tenkan_line[j]? + kijun_line[j]?) / 2.0));
-            let span_b = base.and_then(|j| senkou_b_line[j]);
-            // Lagging span: the close of bar i + d, plotted on bar i
-            let chikou = i.checked_add(d).and_then(|j| data.get(j)).map(|b| b.close);
+            let span_a = tenkan
+                .zip(kijun)
+                .map(|(tenkan, kijun)| (tenkan + kijun) / 2.0);
+            let span_b = senkou_b_line[i];
+            let chikou = Some(data[i].close);
 
             let row = [tenkan, kijun, span_a, span_b, chikou];
-            self.values.push(if row.iter().all(Option::is_none) {
+            values.push(if row.iter().all(Option::is_none) {
                 IndicatorValue::None
             } else {
                 IndicatorValue::Multiple(row.map(|v| v.unwrap_or(f64::NAN)).to_vec())
             });
         }
+
+        values
+    }
+}
+
+impl Indicator for IchimokuCloud {
+    crate::studies::inputs::study_inputs!(self;
+        tenkan_period: length("Tenkan period", 1, usize::MAX),
+        kijun_period: length("Kijun period", 1, usize::MAX),
+        senkou_b_period: length("Senkou b period", 1, usize::MAX),
+        displacement: length("Displacement", 0, usize::MAX)
+    ; {});
+
+    fn plot_offset(&self, line: usize) -> isize {
+        let shift = self.displacement.saturating_sub(1).min(isize::MAX as usize) as isize;
+        match line {
+            2 | 3 => shift,
+            4 => -shift,
+            _ => 0,
+        }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(2),
+            second: crate::studies::FillBoundary::Plot(3),
+            color: self.span_a_color,
+            inverted_color: Some(self.span_b_color),
+        }]
+    }
+
+    fn name(&self) -> &str {
+        "Ichimoku"
+    }
+
+    fn desc(&self) -> &str {
+        "Ichimoku Cloud - Comprehensive trend indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -187,7 +221,7 @@ impl Indicator for IchimokuCloud {
         true // Ichimoku is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         5 // Tenkan, Kijun, Senkou A, Senkou B, Chikou
     }
 
@@ -219,10 +253,7 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
-    /// Tenkan(3), Kijun(5), Senkou B(8) and a displacement of 5 on 20 bars,
-    /// against values computed by hand from the textbook definitions: Senkou A
-    /// and B are plotted 5 bars after the bar they are computed on, and Chikou
-    /// is the close of the bar 5 bars later.
+    /// Source values calculated by hand; displacement includes the current period.
     #[test]
     fn spans_are_displaced() {
         let highs = [
@@ -246,38 +277,50 @@ mod tests {
                 low: lows[i],
                 close: closes[i],
                 volume: 1.0,
+                colors: None,
+                payload: None,
             })
             .collect();
         let n = f64::NAN;
         // [tenkan, kijun, senkou A, senkou B, chikou] per bar
         let expected = [
-            [n, n, n, n, 15.0],
-            [n, n, n, n, 17.0],
-            [12.0, n, n, n, 19.0],
-            [13.0, n, n, n, 18.0],
-            [14.0, 13.5, n, n, 20.0],
-            [14.5, 14.0, n, n, 22.0],
-            [16.0, 14.5, n, n, 20.0],
-            [17.0, 16.0, n, n, 19.0],
-            [17.5, 17.0, n, n, 18.0],
-            [19.0, 17.5, 13.75, n, 20.0],
-            [20.0, 19.0, 14.25, n, 23.0],
-            [20.5, 20.0, 15.25, n, 24.0],
-            [20.5, 20.0, 16.5, 15.0, 22.0],
-            [19.5, 20.0, 17.25, 15.5, 21.0],
-            [19.0, 20.0, 18.25, 16.0, 25.0],
-            [20.5, 20.5, 19.5, 17.5, n],
-            [21.5, 21.0, 20.25, 18.5, n],
-            [23.0, 21.0, 20.25, 18.5, n],
-            [22.5, 21.5, 19.75, 19.0, n],
-            [23.0, 23.0, 19.5, 20.0, n],
+            [n, n, n, n, 11.0],
+            [n, n, n, n, 13.0],
+            [12.0, n, n, n, 12.0],
+            [13.0, n, n, n, 14.0],
+            [14.0, 13.5, 13.75, n, 16.0],
+            [14.5, 14.0, 14.25, n, 15.0],
+            [16.0, 14.5, 15.25, n, 17.0],
+            [17.0, 16.0, 16.5, 15.0, 19.0],
+            [17.5, 17.0, 17.25, 15.5, 18.0],
+            [19.0, 17.5, 18.25, 16.0, 20.0],
+            [20.0, 19.0, 19.5, 17.5, 22.0],
+            [20.5, 20.0, 20.25, 18.5, 20.0],
+            [20.5, 20.0, 20.25, 18.5, 19.0],
+            [19.5, 20.0, 19.75, 19.0, 18.0],
+            [19.0, 20.0, 19.5, 20.0, 20.0],
+            [20.5, 20.5, 20.5, 20.5, 23.0],
+            [21.5, 21.0, 21.25, 21.0, 24.0],
+            [23.0, 21.0, 22.0, 21.0, 22.0],
+            [22.5, 21.5, 22.0, 21.0, 21.0],
+            [23.0, 23.0, 23.0, 21.5, 25.0],
         ];
 
         let mut ichimoku = IchimokuCloud::new(3, 5, 8);
         ichimoku.calculate(&bars);
 
         assert_eq!(ichimoku.values().len(), bars.len());
-        for (i, (value, row)) in ichimoku.values().iter().zip(expected).enumerate() {
+        assert_eq!(ichimoku.plot_offset(2), 4);
+        assert_eq!(ichimoku.plot_offset(4), -4);
+        assert_eq!(ichimoku.plot_value(2, 8), Some(13.75));
+        assert_eq!(ichimoku.plot_value(2, 23), Some(23.0));
+        assert_eq!(ichimoku.plot_value(4, 0), Some(16.0));
+        for (periods, offset) in [(0, 0), (1, 0), (26, 25), (usize::MAX, isize::MAX)] {
+            let study = IchimokuCloud::default().with_displacement(periods);
+            assert_eq!(study.plot_offset(2), offset);
+            assert_eq!(study.plot_offset(4), -offset);
+        }
+        for (i, (value, row)) in ichimoku.values().to_rows().iter().zip(expected).enumerate() {
             let IndicatorValue::Multiple(got) = value else {
                 panic!("bar {i}: {value:?}");
             };

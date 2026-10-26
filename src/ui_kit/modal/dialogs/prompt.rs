@@ -2,6 +2,8 @@
 //!
 //! A dialog with a text input field.
 
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Context, Id, TextEdit, Widget};
 
 use crate::tokens::DESIGN_TOKENS;
@@ -126,8 +128,8 @@ impl PromptDialog {
             .width(width)
             .show(ctx, open, |ui| {
                 if let Some(msg) = &self.message {
-                    ui.label(msg);
-                    ui.add_space(DESIGN_TOKENS.spacing.sm);
+                    ui.label(l10n::text(ui.ctx(), msg));
+                    ui.add_space(ctx.active_theme().spacing.sm);
                 }
 
                 let text_edit = if self.multiline {
@@ -136,7 +138,7 @@ impl PromptDialog {
                     TextEdit::singleline(&mut value)
                 };
                 let input = text_edit
-                    .hint_text(&self.placeholder)
+                    .hint_text(l10n::text(ui.ctx(), &self.placeholder))
                     .desired_width(f32::INFINITY)
                     .ui(ui);
                 // Enter in a single-line input surrenders focus; read that before refocusing.

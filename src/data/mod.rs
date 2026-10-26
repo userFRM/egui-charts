@@ -1,411 +1,90 @@
-//! Data source abstraction for flexible data fetching.
+//! Historical and streaming market data contracts, aggregation and order flow data.
 //!
-//! This module defines the [`DataSource`] trait -- the primary integration point
-//! for connecting external market data to the chart engine.  Any struct that
-//! implements `DataSource` can feed OHLCV bars into the chart, whether the data
-//! comes from a WebSocket stream, a REST API, a local CSV file, or an in-memory
-//! buffer.
+//! Implement [`Datafeed`] to connect a chart to your backend, or use the data
+//! containers and aggregation functions independently of a widget.
 //!
-//! # Architecture
+//! # Connecting a feed
 //!
-//! ```text
-//!  ┌─────────────┐       ┌──────────────┐       ┌──────────────┐
-//!  │  WebSocket   │       │  REST API    │       │  CSV / File  │
-//!  └──────┬───────┘       └──────┬───────┘       └──────┬───────┘
-//!         │                      │                      │
-//!         └──────────┬───────────┴──────────┬───────────┘
-//!                    │                      │
-//!               impl DataSource        impl DataSource
-//!                    │                      │
-//!                    └──────────┬───────────┘
-//!                               │
-//!                      ┌────────▼────────┐
-//!                      │   Chart Engine  │
-//!                      └─────────────────┘
-//! ```
+//! Attach a feed with `ChartBuilder::with_feed`. Only [`Datafeed::history`] is
+//! required. The chart calls the feed on the UI thread; implementations should
+//! return promptly, answer each request once through [`Reply`] and push live updates
+//! into the [`Sink`] of a [`Subscription`]. Replies and pushes can come from another
+//! thread, runtime or browser task. No network connection or data provider is built in.
 //!
-//! # Implementing a DataSource
+//! [`Subscription::clock`] and [`HistoryRequest::clock`] carry the same bar boundaries
+//! so history and streaming aggregation agree. Symbol search is a separate
+//! [`SymbolSearch`](crate::services::SymbolSearch) service.
 //!
-//! At minimum, implement [`symbols`](DataSource::symbols),
-//! [`subscribe`](DataSource::subscribe), [`unsubscribe`](DataSource::unsubscribe),
-//! [`poll`](DataSource::poll), [`fetch_historical`](DataSource::fetch_historical)
-//! and [`get_timeframe`](DataSource::get_timeframe). A source that serves history
-//! also returns `true` from [`supports_historical`](DataSource::supports_historical);
-//! the default is `false`, and the chart then never calls `fetch_historical`. The
-//! other methods default to not offering search, marks or server time.
+//! # Order flow and derived data
 //!
-//! # Provided types
+//! Push executions, quotes and book updates through [`Sink`]. [`Footprint`] holds
+//! executed volume at price; [`DepthHistory`] holds the book over time.
+//! [`ReplayClock`] coordinates host-supplied recorded events. [`resample`] aggregates
+//! bars into a longer interval, and [`VolumeProfile`] describes volume by price.
 //!
-//! | Type                     | Purpose                                          |
-//! |--------------------------|--------------------------------------------------|
-//! | [`DataSourceError`]      | Error enum for all data source operations         |
-//! | [`DataUpdate`]           | Enum of possible updates returned by `poll()`     |
-//! | [`HistoricalDataRequest`]| Parameters for a historical data fetch            |
-//! | [`SymbolSearchResult`]   | Single result from a symbol search                |
-//! | [`PaginatedSearchResult`]| Paginated wrapper around search results           |
-//! | [`BarMark`]              | Event marker attached to a specific bar           |
-//! | [`TimescaleMark`]        | Event marker on the time axis                     |
+//! The optional feed methods provide auxiliary study data and records for host UI,
+//! including news, calendars, hotlists and screener rows. Unsupported requests use
+//! [`FeedError::NotSupported`].
 
 pub use crate::model::Bar;
 pub use crate::model::Timeframe;
-use crate::model::{Instrument, Tick};
+use crate::model::{BarClock, Instrument, Tick};
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
 pub(crate) mod depth;
+mod depth_history;
+mod footprint;
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+    not(any(test, feature = "widget")),
+    expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod inbox;
+mod market;
+mod metrics;
+pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod merge;
+mod options_volume;
+mod order_flow;
+mod orders;
+mod recording;
+mod replay;
 mod resample;
+mod targets;
+mod volume_profile;
+pub use depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig};
+pub use footprint::{Footprint, FootprintBar, FootprintLevel};
+pub use market::{
+    CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
+    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
+    ScreenerRow,
+};
+#[cfg(feature = "studies")]
+pub(crate) use options_volume::OptionsVolumeSource;
+pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "`Chart` does not consume a `Datafeed` yet")
+    not(any(test, feature = "widget")),
+    expect(dead_code, reason = "only the chart widget consumes a feed")
 )]
 pub(crate) mod trades;
 
-pub use inbox::{Reply, Sink};
-pub use resample::resample;
-
-/// Error types for data source operations.
-///
-/// All fallible [`DataSource`] methods return this error type.  Use
-/// [`is_recoverable`](DataSourceError::is_recoverable) to decide whether an
-/// automatic retry is appropriate.
-#[derive(Debug, Clone)]
-pub enum DataSourceError {
-    /// Failed to connect to data source
-    ConnError(String),
-    /// Failed to fetch data
-    FetchError(String),
-    /// Symbol not found
-    SymbolNotFound(String),
-    /// Invalid time range
-    InvalidTimeRange(String),
-    /// IO error (cannot be cloned, stores error message)
-    IoError(String),
-    /// Parse error
-    ParseError(String),
-    /// Request was rate limited
-    RateLimited,
-    /// Feature not supported by this data source
-    NotSupported(String),
-}
-
-impl fmt::Display for DataSourceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataSourceError::ConnError(msg) => write!(f, "Conn error: {msg}"),
-            DataSourceError::FetchError(msg) => write!(f, "Fetch error: {msg}"),
-            DataSourceError::SymbolNotFound(msg) => write!(f, "Symbol not found: {msg}"),
-            DataSourceError::InvalidTimeRange(msg) => write!(f, "Invalid time range: {msg}"),
-            DataSourceError::IoError(msg) => write!(f, "IO error: {msg}"),
-            DataSourceError::ParseError(msg) => write!(f, "Parse error: {msg}"),
-            DataSourceError::RateLimited => write!(f, "Rate limited"),
-            DataSourceError::NotSupported(msg) => write!(f, "Not supported: {msg}"),
-        }
-    }
-}
-
-impl Error for DataSourceError {}
-
-impl From<std::io::Error> for DataSourceError {
-    fn from(err: std::io::Error) -> Self {
-        DataSourceError::IoError(err.to_string())
-    }
-}
-
-impl DataSourceError {
-    /// Check if this error is recoverable (can retry)
-    pub fn is_recoverable(&self) -> bool {
-        matches!(
-            self,
-            DataSourceError::ConnError(_)
-                | DataSourceError::FetchError(_)
-                | DataSourceError::IoError(_)
-        )
-    }
-
-    /// Check if this error is a conn-related error
-    pub fn is_conn_error(&self) -> bool {
-        matches!(self, DataSourceError::ConnError(_))
-    }
-
-    /// Get the error message
-    pub fn message(&self) -> &str {
-        match self {
-            DataSourceError::ConnError(msg)
-            | DataSourceError::FetchError(msg)
-            | DataSourceError::SymbolNotFound(msg)
-            | DataSourceError::InvalidTimeRange(msg)
-            | DataSourceError::IoError(msg)
-            | DataSourceError::ParseError(msg)
-            | DataSourceError::NotSupported(msg) => msg,
-            DataSourceError::RateLimited => "Rate limited",
-        }
-    }
-}
-
-/// An incremental data update returned by [`DataSource::poll`].
-///
-/// The chart engine pattern-matches on these variants to decide how to merge
-/// incoming data into its internal bar buffer.
-#[derive(Debug, Clone)]
-pub enum DataUpdate {
-    /// New bars appended to the right edge (live / streaming data).
-    NewBars {
-        /// Symbol the bars belong to.
-        symbol: String,
-        /// One or more new bars, ordered oldest-first.
-        bars: Vec<Bar>,
-    },
-
-    /// Historical bars prepended to the left edge (lazy-loaded older data).
-    HistoricalBars {
-        /// Symbol the bars belong to.
-        symbol: String,
-        /// Older bars, ordered oldest-first.
-        bars: Vec<Bar>,
-    },
-
-    /// Full dataset replacement (initial load or symbol/timeframe change).
-    FullDataset {
-        /// Symbol the dataset belongs to.
-        symbol: String,
-        /// Complete bar series, ordered oldest-first.
-        bars: Vec<Bar>,
-    },
-
-    /// The set of available symbols has changed.
-    SymbolsChanged(Vec<String>),
-
-    /// Connection status changed (`true` = connected, `false` = disconnected).
-    ConnStatus(bool),
-}
-
-/// Parameters for a historical data fetch via [`DataSource::fetch_historical`].
-///
-/// The chart engine creates this request when the user scrolls left beyond the
-/// currently loaded data range and the data source supports historical fetching.
-#[derive(Debug, Clone)]
-pub struct HistoricalDataRequest {
-    /// Symbol to fetch data for.
-    pub symbol: String,
-    /// Timeframe (bar interval) to fetch.
-    pub timeframe: Timeframe,
-    /// End timestamp in Unix milliseconds (exclusive) -- fetch bars *before* this point.
-    pub end_ts_millis: i64,
-    /// Maximum number of bars to return.
-    pub limit: usize,
-}
-
-/// Symbol search result
-#[derive(Debug, Clone)]
-pub struct SymbolSearchResult {
-    /// Symbol name (e.g., "AAPL")
-    pub symbol: String,
-    /// Full symbol name with exchange (e.g., "NASDAQ:AAPL")
-    pub full_name: String,
-    /// Symbol description
-    pub description: String,
-    /// Exchange name
-    pub exchange: String,
-    /// Symbol type (stock, crypto, forex, etc.)
-    pub symbol_type: String,
-}
-
-/// Bar mark (event on a bar)
-#[derive(Debug, Clone)]
-pub struct BarMark {
-    /// Bar timestamp (Unix milliseconds)
-    pub time: i64,
-    /// Mark color
-    pub color: String,
-    /// Mark label text
-    pub label: String,
-    /// Mark tooltip text
-    pub tooltip: String,
-}
-
-/// Timescale mark (event on the timescale)
-#[derive(Debug, Clone)]
-pub struct TimescaleMark {
-    /// Mark timestamp (Unix milliseconds)
-    pub time: i64,
-    /// Mark color
-    pub color: String,
-    /// Mark label
-    pub label: String,
-    /// Mark tooltip
-    pub tooltip: String,
-}
-
-/// Paginated symbol search result
-#[derive(Debug, Clone)]
-pub struct PaginatedSearchResult {
-    /// Search results for this page
-    pub results: Vec<SymbolSearchResult>,
-    /// Total number of matching results
-    pub total: usize,
-    /// Current offset (number of results skipped)
-    pub offset: usize,
-    /// Whether there are more results available
-    pub has_more: bool,
-}
-
-/// Data source trait -- the primary integration point for feeding market data
-/// into the chart engine.
-///
-/// Implementors supply OHLCV bars from any source (WebSocket, REST, CSV, etc.).
-/// The chart engine calls methods on this trait to subscribe to symbols, poll for
-/// live updates, and request historical data when the user scrolls back in time.
-///
-/// # Required methods
-///
-/// | Method              | Purpose                                         |
-/// |---------------------|-------------------------------------------------|
-/// | `symbols`           | List available instrument identifiers            |
-/// | `subscribe`         | Begin receiving live data for a symbol           |
-/// | `unsubscribe`       | Stop receiving live data for a symbol            |
-/// | `poll`              | Non-blocking check for new data updates          |
-/// | `fetch_historical`  | Load older bars when the user scrolls left       |
-/// | `get_timeframe`     | Timeframe a symbol was subscribed with           |
-///
-/// # Optional capabilities
-///
-/// Override the `supports_*` / `get_*` method pairs to enable:
-/// - **Symbol search** -- typeahead search across instruments
-/// - **Bar marks** -- event annotations on individual bars
-/// - **Timescale marks** -- event annotations on the time axis
-/// - **Server time** -- accurate exchange clock for countdown widget
-///
-/// # Thread safety
-///
-/// `DataSource` requires `Send` so it can be owned by the chart state which may
-/// be passed across threads.  If your implementation wraps a connection handle
-/// that is not `Send`, consider using a channel-based architecture.
-pub trait DataSource: Send {
-    /// Returns the list of symbol identifiers available from this data source.
-    fn symbols(&self) -> Vec<String>;
-
-    /// Subscribe to live updates for `symbol` at the given `timeframe`.
-    ///
-    /// After subscribing, subsequent calls to [`poll`](DataSource::poll) should
-    /// return [`DataUpdate::NewBars`] or [`DataUpdate::FullDataset`] for this
-    /// symbol.
-    fn subscribe(&mut self, symbol: String, timeframe: Timeframe) -> Result<(), DataSourceError>;
-
-    /// Unsubscribe from live updates for `symbol`.
-    fn unsubscribe(&mut self, symbol: String) -> Result<(), DataSourceError>;
-
-    /// Non-blocking poll for data updates since the last call.
-    ///
-    /// The chart engine calls this on every frame.  Return an empty `Vec` when
-    /// there is nothing new.
-    fn poll(&mut self) -> Vec<DataUpdate>;
-
-    /// Fetch historical bars older than the data already loaded.
-    ///
-    /// Called when the user scrolls left beyond the currently loaded range, and
-    /// when the chart is built or its symbol or timeframe changes. The chart
-    /// calls it synchronously on the UI thread, so a slow implementation stalls
-    /// rendering; fetch in the background and return what is already loaded.
-    fn fetch_historical(
-        &mut self,
-        request: HistoricalDataRequest,
-    ) -> Result<Vec<Bar>, DataSourceError>;
-
-    /// Whether this data source supports [`fetch_historical`](DataSource::fetch_historical).
-    ///
-    /// Return `false` (default) if the data source only provides a fixed dataset.
-    fn supports_historical(&self) -> bool {
-        false
-    }
-
-    /// Whether the data source is currently connected and able to deliver data.
-    ///
-    /// Defaults to `true`. Override to reflect real connection state for
-    /// WebSocket / network-based sources.
-    fn is_connected(&self) -> bool {
-        true
-    }
-
-    /// Returns the timeframe the given symbol was subscribed with, or `None` if
-    /// the symbol is not currently subscribed.
-    fn get_timeframe(&self, symbol: &str) -> Option<Timeframe>;
-
-    /// Search for symbols matching `_user_input`.
-    ///
-    /// Override together with [`supports_symbol_search`](DataSource::supports_symbol_search)
-    /// to enable the symbol-search dialog in the UI.
-    fn search_symbols(
-        &self,
-        _user_input: &str,
-        _exchange: &str,
-        _symbol_type: &str,
-        _max_records: usize,
-    ) -> Result<Vec<SymbolSearchResult>, DataSourceError> {
-        Ok(Vec::new())
-    }
-
-    /// Whether this data source supports the symbol search API.
-    fn supports_symbol_search(&self) -> bool {
-        false
-    }
-
-    /// Returns event marks attached to bars in the time range `[_from, _to]`
-    /// (Unix milliseconds).
-    fn get_marks(
-        &self,
-        _symbol: &str,
-        _from: i64,
-        _to: i64,
-    ) -> Result<Vec<BarMark>, DataSourceError> {
-        Ok(Vec::new())
-    }
-
-    /// Whether this data source provides bar marks.
-    fn supports_marks(&self) -> bool {
-        false
-    }
-
-    /// Returns event marks on the timescale in the range `[_from, _to]`
-    /// (Unix milliseconds).
-    fn get_timescale_marks(
-        &self,
-        _symbol: &str,
-        _from: i64,
-        _to: i64,
-    ) -> Result<Vec<TimescaleMark>, DataSourceError> {
-        Ok(Vec::new())
-    }
-
-    /// Whether this data source provides timescale marks.
-    fn supports_timescale_marks(&self) -> bool {
-        false
-    }
-
-    /// Returns the exchange server time as a Unix timestamp (seconds).
-    ///
-    /// Used by the countdown-to-next-bar widget.  Defaults to the local
-    /// system clock.
-    fn get_server_time(&self) -> Result<i64, DataSourceError> {
-        Ok(chrono::Utc::now().timestamp())
-    }
-
-    /// Whether this data source provides authoritative server time.
-    fn supports_server_time(&self) -> bool {
-        false
-    }
-}
+pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
+pub use order_flow::{OrderFlowInput, OrderFlowKind};
+pub use orders::{OrderEvent, OrderQueue, RestingOrder};
+pub use recording::{RecordingReader, RecordingWriter};
+pub use replay::{MarketEvent, ReplayClock, ReplayEvent};
+#[cfg(feature = "studies")]
+pub(crate) use resample::resample_periods;
+pub use resample::{resample, resample_with_session};
+pub use targets::PriceTargets;
+pub use trades::{CombinedTrade, combine_trades};
+pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.
 #[cfg(not(target_arch = "wasm32"))]
@@ -418,8 +97,8 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> MaybeSend for T {}
 
-/// Source of instrument metadata, history and live updates. No chart consumes it yet;
-/// `TradingChart` reads a [`DataSource`].
+/// Source of instrument metadata, history and live updates for a chart, given to it with
+/// `ChartBuilder::with_feed`.
 ///
 /// Methods are called on the UI thread and must return promptly. Do the work elsewhere and answer
 /// through the [`Reply`] or [`Sink`] you were given, from any thread, runtime or browser task.
@@ -461,6 +140,21 @@ pub trait Datafeed: MaybeSend + 'static {
 
     /// Stops what `subscribe` started. Pushes that arrive afterwards are ignored. The default does
     /// nothing; a producer can then poll [`Sink::is_active`] to know when to stop.
+    ///
+    /// Also called when the chart is dropped, which an application may do while egui holds the
+    /// lock of its `Context`, for example inside `Context::input` or `Ui::input`. A push into a
+    /// [`Sink`] or an answer through a [`Reply`] may wake a chart, and waking waits for that lock
+    /// until the application's closure returns. So:
+    ///
+    /// - Return without waiting for a thread that pushes or answers: do not join it, and do not
+    ///   take a lock it holds while it pushes or answers.
+    /// - Answer or drop here only the replies of the chart that held `id`, and push into no other
+    ///   subscription's `Sink`: another chart would be woken on this thread, which holds the
+    ///   lock. A feed that cannot tell which chart a `Reply` is for keeps its replies and answers
+    ///   them as usual; an answer for a dropped chart is never read.
+    ///
+    /// When the chart held the last reference to the feed, the feed's own `Drop` runs right
+    /// after this call and must not wait for such a thread either.
     fn unsubscribe(&self, id: SubscriptionId) {
         let _ = id;
     }
@@ -469,6 +163,85 @@ pub trait Datafeed: MaybeSend + 'static {
     /// `None`, so order flow survives a reload. The default answers [`FeedError::NotSupported`].
     fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
         let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Push complete options-volume snapshots for the underlying and inclusive expiry range.
+    /// Each push replaces the previous figures, including an empty snapshot. Sum contracts
+    /// across the requested expiries at each strike. Stop when `sink.is_active()` is false.
+    /// The default supplies none; the library never fetches options data itself.
+    fn options_volume(&self, query: OptionsVolumeQuery, sink: OptionsVolumeSink) {
+        let _ = (query, sink);
+    }
+
+    /// One page of recorded depth on the requested grid. The default answers
+    /// [`FeedError::NotSupported`]; live-only feeds need not implement this method.
+    fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Metrics offered for `symbol`, in display order. The default offers none.
+    /// The host publishes the values; the library computes no instrument metrics.
+    fn metrics(&self, symbol: &str, reply: Reply<Vec<MetricSeries>>) {
+        let _ = symbol;
+        reply.send(Ok(Vec::new()));
+    }
+
+    /// Metric history. The default answers [`FeedError::NotSupported`].
+    fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+        let _ = request;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Start publishing metric points until [`Self::unsubscribe`]. The default does nothing.
+    fn subscribe_metric(&self, subscription: MetricSubscription) {
+        let _ = subscription;
+    }
+
+    /// Analyst price targets for `symbol`. The default answers [`FeedError::NotSupported`],
+    /// which leaves the chart without targets and shows no error.
+    fn price_targets(&self, symbol: &str, reply: Reply<crate::data::PriceTargets>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Key statistics and the company or contract profile of `symbol`, for the symbol details
+    /// panel. The default answers [`FeedError::NotSupported`], and the panel then shows neither.
+    fn symbol_details(&self, symbol: &str, reply: Reply<SymbolDetails>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` stories, newest first, for the news and highlights panels. Answer
+    /// [`FeedError::NotSupported`] (the default) to have the panels say the feed has none.
+    fn news(&self, query: NewsQuery, reply: Reply<Vec<NewsStory>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// The events of one calendar that pass `query`'s filters, in time order, for the calendar
+    /// panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the feed has
+    /// none.
+    fn calendar(&self, query: CalendarQuery, reply: Reply<Vec<CalendarEvent>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` symbols that meet every filter of `query`, sorted as it asks, each
+    /// with the values of its columns, for the screener. The feed does the screening. Answer
+    /// [`FeedError::InvalidData`] for a filter it cannot apply, and [`FeedError::NotSupported`]
+    /// (the default) to have the panel say the feed has none.
+    fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
+        let _ = query;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Up to `query.limit` symbols of the hotlist `query.list`, in the list's order, for the
+    /// hotlists panel. Answer [`FeedError::NotSupported`] (the default) to have the panel say the
+    /// feed has none.
+    fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
+        let _ = query;
         reply.send(Err(FeedError::NotSupported));
     }
 
@@ -488,12 +261,18 @@ pub trait Datafeed: MaybeSend + 'static {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HistoryRequest {
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Bar interval requested from the feed.
     pub timeframe: Timeframe,
+    /// Calendar boundaries selected by the chart, shared by historical and streaming aggregation.
+    pub clock: BarClock,
     /// Only bars that open strictly before this instant. `None` asks for the latest bars.
     pub before: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
 }
 
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, so a
@@ -501,9 +280,9 @@ pub struct HistoryRequest {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
-    /// close time lands in the next bar. A bar of a day or longer covers a UTC period of
-    /// [`BarClock`](crate::model::BarClock), such as a UTC day, a week from Monday or a calendar
-    /// month: stamp it inside that period, for example at 00:00 UTC on its trading date. A
+    /// close time lands in the next bar. A bar of a day or longer covers a calendar period of
+    /// [`HistoryRequest::clock`], such as a day, a week from Monday or a calendar
+    /// month, in UTC by default: stamp it inside that period, for example at its local midnight. A
     /// session open on the evening before can fall in the period of the bar before, and one of
     /// the two bars is then dropped. The chart sorts, deduplicates and validates them.
     pub bars: Vec<Bar>,
@@ -516,6 +295,7 @@ pub struct HistoryPage {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TradeRequest {
+    /// Instrument identifier used by the host.
     pub symbol: String,
     /// Only trades strictly before this instant. `None` asks for the latest trades.
     pub before: Option<DateTime<Utc>>,
@@ -549,12 +329,104 @@ impl TradePage {
     }
 }
 
+/// One page of recorded depth for a symbol, using the same price and time grid as live columns.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DepthRequest {
+    /// Instrument requested.
+    pub symbol: String,
+    /// Columns opening strictly before this instant, or the latest columns with `None`.
+    pub before: Option<DateTime<Utc>>,
+    /// Maximum columns wanted.
+    pub count: usize,
+    /// Cadence, row grouping and limits of the receiving store.
+    pub config: DepthHistoryConfig,
+    /// Price of one tick, finite and positive.
+    pub tick_size: f64,
+}
+
+impl DepthRequest {
+    /// Requests the latest `count` columns using `config` and the instrument's `tick_size`.
+    pub fn new(
+        symbol: impl Into<String>,
+        count: usize,
+        config: DepthHistoryConfig,
+        tick_size: f64,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            before: None,
+            count,
+            config,
+            tick_size,
+        }
+    }
+}
+
+/// Recorded depth columns. Empty pages end paging, including when `end_of_history` is false.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DepthPage {
+    /// Columns on the requested grid; held live columns win on overlap. Gaps remain gaps.
+    pub columns: Vec<DepthColumn>,
+    /// Nothing exists before the oldest returned column.
+    pub end_of_history: bool,
+}
+
+impl DepthPage {
+    /// A page of `columns`, the last one when `end_of_history`.
+    pub fn new(columns: Vec<DepthColumn>, end_of_history: bool) -> Self {
+        Self {
+            columns,
+            end_of_history,
+        }
+    }
+}
+
+/// Facts about one symbol as labelled values, already formatted for display, in the order to
+/// show them. Supply only what is known: the panel shows a section only when it has values.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct SymbolDetails {
+    /// Key statistics, such as `("Market capitalization", "2.95T USD")`.
+    pub statistics: Vec<(String, String)>,
+    /// The company or contract profile, such as `("Sector", "Technology")`.
+    pub profile: Vec<(String, String)>,
+    /// A page about the instrument, linked beside its name.
+    pub url: Option<String>,
+}
+
+impl SymbolDetails {
+    /// Details made of `statistics` and `profile`.
+    pub fn new(statistics: Vec<(String, String)>, profile: Vec<(String, String)>) -> Self {
+        Self {
+            statistics,
+            profile,
+            url: None,
+        }
+    }
+
+    /// Sets [`url`](Self::url).
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+}
+
 /// A live subscription: push its updates into `sink` until [`Datafeed::unsubscribe`] gets `id`.
 #[non_exhaustive]
 pub struct Subscription {
+    /// Identifier passed back to the feed when unsubscribing.
     pub id: SubscriptionId,
+    /// Instrument identifier used by the host.
     pub symbol: String,
+    /// Bar interval requested from the feed.
     pub timeframe: Timeframe,
+    /// The same calendar boundaries supplied to history requests.
+    pub clock: BarClock,
+    /// Include the instrument's extended trading hours, as well as regular hours.
+    pub extended_hours: bool,
+    /// Destination for updates; stop publishing when it becomes inactive.
     pub sink: Sink,
 }
 
@@ -566,8 +438,11 @@ pub struct SubscriptionId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FeedStatus {
+    /// A connection attempt is in progress.
     Connecting,
+    /// The feed reports live data.
     Live,
+    /// The connection is closed.
     Disconnected,
 }
 
@@ -577,15 +452,31 @@ pub enum FeedStatus {
 pub enum FeedError {
     /// The feed or service does not offer this request.
     NotSupported,
+    /// The service could not find the requested instrument.
     SymbolNotFound(String),
+    /// The service has limited the request rate.
     RateLimited {
+        /// Suggested delay before retrying, when supplied by the service.
         retry_after: Option<Duration>,
     },
+    /// A transport error with a service-supplied message.
     Network(String),
+    /// Invalid input or data, described by the service.
     InvalidData(String),
     /// The feed or service dropped a [`Reply`] without answering.
     Unanswered,
+    /// A service error outside the other categories.
     Other(String),
+}
+
+impl FeedError {
+    /// Whether retrying the same request can succeed without changing its inputs.
+    pub fn is_recoverable(&self) -> bool {
+        matches!(
+            self,
+            Self::Network(_) | Self::RateLimited { .. } | Self::Unanswered
+        )
+    }
 }
 
 impl fmt::Display for FeedError {
@@ -613,14 +504,20 @@ impl Error for FeedError {}
 pub struct FeedState {
     /// Last status pushed by the feed. `None` without a live subscription.
     pub status: Option<FeedStatus>,
+    /// Catalog-change notifications received for this subscription, for host search refreshes.
+    pub symbol_catalog_revision: u64,
+    /// Whether a historical page is currently being requested.
     pub loading_history: bool,
+    /// Whether the feed has reported that no older history remains.
     pub history_complete: bool,
+    /// Most recent feed error, when present.
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
     /// the open and close, negative volume, a tick that would overflow its bar's volume, a time
-    /// too far ahead of the feed's clock (see `Sink::set_server_time`).
+    /// too far ahead of the feed's clock (see `Sink::set_server_time`), or pending bar slots
+    /// evicted after overflow (also reported in `last_error`).
     pub rejected_bars: u64,
-    /// Trades older than the forming bar, dropped.
+    /// Trades older than the last accepted execution or forming bar, dropped.
     pub late_ticks: u64,
     /// Trades whose id is among those of the last trades the subscription folded, as many as its
     /// trade store holds, dropped: a feed replaying its last trades after a reconnect.

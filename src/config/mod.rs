@@ -1,23 +1,12 @@
-//! Complete chart configuration options.
+//! Appearance and interaction options for the chart widget.
 //!
-//! This module provides comprehensive configuration for all aspects of chart
-//! behavior and appearance, organized into focused sub-modules:
-//!
-//! | Sub-module     | Key types                        | Purpose                        |
-//! |----------------|----------------------------------|--------------------------------|
-//! | `chart`        | [`ChartConfig`], [`SessionConfig`] | Visual styling, session hours |
-//! | `crosshair`    | [`CrosshairOptions`]             | Crosshair mode and colors      |
-//! | `interaction`  | [`HandleScrollOptions`], [`HandleScaleOptions`] | Scroll/zoom behavior |
-//! | `keyboard`     | [`KeyboardOptions`], [`KeyboardAction`] | Keyboard shortcuts      |
-//! | `kinetic`      | [`KineticScrollOptions`]         | Inertial scroll animation      |
-//! | `timescale`    | [`TimeScaleOptions`], [`TimezoneMode`] | Horizontal axis config   |
-//! | `tooltip`      | [`TooltipOptions`], [`TooltipMode`] | Data tooltip display        |
-//!
-//! All sub-module types are re-exported at this level.  Use the top-level
-//! [`ChartOptions`] struct to configure everything in one place.
+//! [`ChartConfig`] controls visual styling, while [`ChartOptions`] groups time scale,
+//! scrolling, zoom, keyboard, crosshair and tooltip behavior. Start with `Default`
+//! and set the fields needed by your application.
 
 mod chart;
 mod crosshair;
+mod drawing_tool;
 mod interaction;
 mod keyboard;
 mod kinetic;
@@ -25,9 +14,11 @@ mod timescale;
 mod tooltip;
 
 pub use chart::{
-    BackgroundStyle, ChartConfig, RealtimeButtonPos, SessionBreakStyle, SessionConfig, WatermarkPos,
+    BackgroundStyle, ChartConfig, NavigationButtons, PriceAxisOptions, RealtimeButtonPos,
+    SessionConfig, WatermarkPos,
 };
-pub use crosshair::{CrosshairLineStyle, CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
+pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
     HandleScrollOptions, TrackingModeExitMode, TrackingModeOptions,
@@ -41,10 +32,10 @@ pub use crate::scales::TimezoneMode;
 
 /// Top-level chart interaction options.
 ///
-/// Bundles all behavioural and interaction configuration into a single struct
-/// that can be passed to the chart widget.  Each field corresponds to a
-/// focused configuration sub-module.
-#[derive(Debug, Clone, Default)]
+/// Groups time scale, scrolling, zoom, keyboard, crosshair and tooltip settings
+/// for the chart widget. Visual styling is configured separately with [`ChartConfig`].
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ChartOptions {
     /// Time scale (horizontal) options
     pub time_scale: TimeScaleOptions,
@@ -69,4 +60,21 @@ pub struct ChartOptions {
 
     /// Tooltip display options (Floating, Tracking, Magnifier)
     pub tooltip: TooltipOptions,
+
+    /// Draw the main series or overlay study under the pointer above the others in the main
+    /// pane, in the priority a click selects them.
+    /// Default: false
+    pub hovered_series_on_top: bool,
+}
+
+/// Font weight shared by chart watermarks and drawing annotations.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FontWeight {
+    /// Regular weight.
+    #[default]
+    Normal,
+    /// Bold weight.
+    Bold,
 }

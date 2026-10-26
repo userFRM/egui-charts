@@ -1,43 +1,45 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Fisher Transform
 /// Converts prices into a Gaussian normal distribution
 /// Creates sharper turning points for identifying reversals
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct FisherTransform {
     /// Lookback period
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Fisher, Signal/Trigger]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl FisherTransform {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - Fisher
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -84,7 +86,12 @@ impl FisherTransform {
 
             // Apply Fisher Transform
             let fisher = 0.5 * ((1.0 + value) / (1.0 - value)).ln() + 0.5 * prev_fisher;
-            let signal = prev_fisher;
+            // The first value has no previous one to trigger on.
+            let signal = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                prev_fisher
+            };
 
             prev_val = value;
             prev_fisher = fisher;
@@ -96,10 +103,8 @@ impl FisherTransform {
         for (fisher, signal) in fisher_values {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
-            } else if signal.is_nan() || signal == 0.0 {
-                values.push(IndicatorValue::Single(fisher));
             } else {
-                values.push(IndicatorValue::Multiple(vec![fisher, signal]));
+                values.push_lines(&[fisher, signal]);
             }
         }
         values
@@ -114,6 +119,16 @@ impl Default for FisherTransform {
 }
 
 impl Indicator for FisherTransform {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Fisher Transform"
     }
@@ -130,7 +145,7 @@ impl Indicator for FisherTransform {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -178,20 +193,22 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
     /// (high, low, expected (fisher, trigger)) for length 5, from Ehlers'
     /// published construction computed independently. The series rises long
     /// enough for the smoothed value to reach the clamp, stays flat until the
-    /// window has no range, then falls.
+    /// window has no range, then falls. The first value has no trigger.
     #[allow(clippy::type_complexity)]
     const REFERENCE: &[(f64, f64, Option<(f64, f64)>)] = &[
         (101.0, 99.0, None),
         (102.0, 100.0, None),
         (103.0, 101.0, None),
         (104.0, 102.0, None),
-        (105.0, 103.0, Some((0.342828254415394, 0.0))),
+        (105.0, 103.0, Some((0.342828254415394, f64::NAN))),
         (106.0, 104.0, Some((0.791373872129106, 0.342828254415394))),
         (107.0, 105.0, Some((1.26149294935091, 0.791373872129106))),
         (108.0, 106.0, Some((1.7251749834508, 1.26149294935091))),
@@ -224,17 +241,17 @@ mod tests {
         ft.calculate(&data);
 
         assert_eq!(ft.values.len(), REFERENCE.len());
-        for (i, (value, &(_, _, expected))) in ft.values.iter().zip(REFERENCE).enumerate() {
-            // A zero trigger is reported as a single line.
+        for (i, (value, &(_, _, expected))) in ft.values.to_rows().iter().zip(REFERENCE).enumerate()
+        {
             let actual = match value {
-                IndicatorValue::None => None,
-                IndicatorValue::Single(f) => Some((*f, 0.0)),
                 IndicatorValue::Multiple(v) => Some((v[0], v[1])),
+                _ => None,
             };
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-9 || a.is_nan() && b.is_nan();
             match (actual, expected) {
                 (None, None) => {}
                 (Some((f, t)), Some((ef, et))) => assert!(
-                    (f - ef).abs() < 1e-9 && (t - et).abs() < 1e-9,
+                    near(f, ef) && near(t, et),
                     "bar {i}: got ({f}, {t}), expected ({ef}, {et})"
                 ),
                 _ => panic!("bar {i}: got {actual:?}, expected {expected:?}"),

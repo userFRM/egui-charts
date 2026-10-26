@@ -1,23 +1,24 @@
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Standard Error of the linear regression of close prices over a rolling window.
 #[derive(Clone)]
 pub struct StandardError {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl StandardError {
+    /// Create with a lookback of `period` bars, clamped to at least 2.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(2),
-            values: Vec::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.teal],
+            values: IndicatorValues::new(),
+            colors: vec![palette::TEAL],
             visible: true,
         }
     }
@@ -55,6 +56,16 @@ impl Default for StandardError {
 }
 
 impl Indicator for StandardError {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StdErr"
     }
@@ -101,7 +112,7 @@ impl Indicator for StandardError {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

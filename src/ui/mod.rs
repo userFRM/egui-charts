@@ -1,12 +1,12 @@
-//! Chart-specific UI components.
+//! Chart toolbars, panels, dialogs and trading controls for host applications.
 //!
-//! Built on [`crate::ui_kit`] primitives, these modules provide the
-//! complete chart interface: drawing toolbar, top toolbar, timeframe
-//! bar, replay controls, dialogs, and widget panels.
+//! Place the components in your egui layout and apply their returned actions to
+//! the chart or host services. The components share [`crate::ui_kit`] controls and
+//! the active theme; market data, account connections and storage come from the host.
 
 // Application state trait for UI synchronization
 pub mod app_state;
-pub use app_state::ChartAppState;
+pub use app_state::{ChartAppState, Control};
 
 // Shared UI domain model
 pub mod model;
@@ -31,10 +31,19 @@ pub mod dialogs;
 pub mod icons;
 
 // Standalone components
+mod axis_context_menu;
 pub mod connection_status;
 pub mod context_menu;
 pub mod export;
 pub mod floating_replay_control;
 pub mod multi_chart;
 pub mod replay_status;
+pub mod strategy_report;
 pub mod symbol_header;
+mod tpo_context_menu;
+pub mod trading;
+
+mod trade_profile_menu;
+pub use trade_profile_menu::trade_profile_menu;
+#[cfg(test)]
+mod accessibility_tests;

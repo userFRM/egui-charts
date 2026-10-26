@@ -9,7 +9,8 @@
 //!
 //! Use [`to_renko_bricks`] to transform OHLCV bars into Renko bricks.
 
-use crate::model::Bar;
+use super::PriceBasedSource;
+use crate::model::{Bar, PriceBuilder};
 use chrono::{DateTime, Utc};
 
 /// A single Renko brick representing a fixed-size price movement.
@@ -21,6 +22,10 @@ pub struct RenkoBrick {
     pub open: f64,
     /// Closing price (top of an Up brick, bottom of a Down brick).
     pub close: f64,
+    /// Highest source price of this brick, including an upper wick on a down brick.
+    pub high: f64,
+    /// Lowest source price of this brick, including a lower wick on an up brick.
+    pub low: f64,
     /// Direction of this brick.
     pub direction: RenkoDirection,
 }
@@ -40,10 +45,12 @@ impl RenkoBrick {
         Bar {
             time: self.ts,
             open: self.open,
-            high: self.open.max(self.close),
-            low: self.open.min(self.close),
+            high: self.high,
+            low: self.low,
             close: self.close,
             volume: 0.0, // Renko doesn't use volume
+            colors: None,
+            payload: None,
         }
     }
 }
@@ -56,25 +63,35 @@ impl RenkoBrick {
 pub struct RenkoConfig {
     /// Size of each brick in price units
     pub brick_size: f64,
+    /// Price input; high/low gives continuation priority when a bar crosses both thresholds.
+    pub source: PriceBasedSource,
 }
 
 impl Default for RenkoConfig {
     fn default() -> Self {
-        Self { brick_size: 1.0 }
+        Self {
+            brick_size: 1.0,
+            source: PriceBasedSource::Close,
+        }
     }
 }
 
 impl RenkoConfig {
     /// Create a Renko config with an explicit brick size in price units.
     pub fn new(brick_size: f64) -> Self {
-        Self { brick_size }
+        Self {
+            brick_size,
+            source: PriceBasedSource::Close,
+        }
     }
 
     /// Calculate brick size from ATR (Avg True Range)
     pub fn from_atr(bars: &[Bar], period: usize, multiplier: f64) -> Self {
-        let atr = calculate_atr(bars, period);
         Self {
-            brick_size: atr * multiplier,
+            brick_size: super::BoxSizeMethod::Atr { period, multiplier }
+                .resolve(0.0, bars)
+                .unwrap_or(f64::NAN),
+            source: PriceBasedSource::Close,
         }
     }
 }
@@ -87,43 +104,93 @@ impl RenkoConfig {
 /// brick's close, and reverses it when a close reaches one brick beyond the
 /// last brick's open, so a reversal needs a two-brick move.
 ///
+/// Returns no bricks when the brick size is not a positive finite number.
+///
 /// # Safety Limits
+/// - When the bars move by more than two million brick sizes, the bricks are built from the latest
+///   bar after which they move at most that much
 /// - At most the newest 10,000 bricks
-/// - Auto-adjusts brick size if too small relative to price range
 pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
-    if bars.is_empty() {
+    let brick_size = config.brick_size;
+    if bars.is_empty() || !(brick_size > 0.0 && brick_size.is_finite()) {
         return Vec::new();
     }
+    let mut builder = RenkoBuilder::new(brick_size, config.source);
+    for bar in &bars[work_start(bars, brick_size, config.source)..] {
+        builder.push(bar);
+    }
+    builder.elements()
+}
 
-    // Calculate price range to validate brick size
-    let (min_price, max_price) = bars.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
+pub(crate) const MAX_BRICKS: usize = 10_000;
 
-    // Auto-adjust brick size if it would create too many bricks
-    // Aim for roughly 50-200 bricks maximum for visible data
-    let min_brick_size = price_range / 200.0;
-    let brick_size = config.brick_size.max(min_brick_size).max(0.0001); // Prevent zero/negative
+/// Builds Renko bricks bar by bar; `size` must be a positive finite number.
+#[derive(Clone)]
+pub(crate) struct RenkoBuilder {
+    size: f64,
+    source: PriceBasedSource,
+    extremes: Option<(f64, f64)>,
+    /// Open and close of the last brick, or the start price before the first brick; `None`
+    /// until the first bar.
+    last: Option<(f64, f64)>,
+    bricks: Vec<RenkoBrick>,
+}
 
-    let mut bricks = Vec::new();
-    const MAX_BRICKS: usize = 10_000;
+impl RenkoBuilder {
+    pub(crate) fn new(size: f64, source: PriceBasedSource) -> Self {
+        Self {
+            size,
+            source,
+            extremes: None,
+            last: None,
+            bricks: Vec::new(),
+        }
+    }
+}
 
-    // Start with the first bar's close price, aligned to brick boundary
-    let start = (bars[0].close / brick_size).floor() * brick_size;
-    // Open and close of the last brick, or the start price before the first brick.
-    let mut last = (start, start);
+impl PriceBuilder for RenkoBuilder {
+    type Element = RenkoBrick;
 
-    for bar in bars.iter() {
-        let price = bar.close;
+    fn push(&mut self, bar: &Bar) {
+        let size = self.size;
+        let Some(mut last) = self.last else {
+            let start = (bar.close / size).floor() * size;
+            self.last = Some((start, start));
+            self.extremes = Some((bar.close, bar.close));
+            return;
+        };
+        let (low, high) = match self.source {
+            PriceBasedSource::Close => (bar.close, bar.close),
+            PriceBasedSource::HighLow => (bar.low, bar.high),
+        };
+        let (prior_low, prior_high) = self.extremes.unwrap_or((bar.close, bar.close));
+        let (mut wick_low, mut wick_high) = (prior_low.min(low), prior_high.max(high));
+        let (open, close) = last;
+        let price = match self.source {
+            PriceBasedSource::Close => bar.close,
+            PriceBasedSource::HighLow if close >= open => {
+                if high >= close + size {
+                    high
+                } else {
+                    low
+                }
+            }
+            PriceBasedSource::HighLow => {
+                if low <= close - size {
+                    low
+                } else {
+                    high
+                }
+            }
+        };
         loop {
             let (open, close) = last;
             let (low, high) = (open.min(close), open.max(close));
             // Before the first brick both ends are the start, so either direction needs one brick.
-            let (brick_open, brick_close) = if price >= high + brick_size {
-                (high, high + brick_size)
-            } else if price <= low - brick_size {
-                (low, low - brick_size)
+            let (brick_open, brick_close) = if price >= high + size {
+                (high, high + size)
+            } else if price <= low - size {
+                (low, low - size)
             } else {
                 break;
             };
@@ -133,10 +200,20 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
             }
             let up = brick_close > brick_open;
 
-            bricks.push(RenkoBrick {
+            self.bricks.push(RenkoBrick {
                 ts: bar.time,
                 open: brick_open,
                 close: brick_close,
+                high: if up {
+                    brick_close
+                } else {
+                    wick_high.max(brick_open)
+                },
+                low: if up {
+                    wick_low.min(brick_open)
+                } else {
+                    brick_close
+                },
                 direction: if up {
                     RenkoDirection::Up
                 } else {
@@ -144,80 +221,48 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
                 },
             });
             last = (brick_open, brick_close);
+            wick_low = brick_close;
+            wick_high = brick_close;
 
             // Bound memory by dropping the oldest bricks; `last` never reads them.
-            if bricks.len() == 2 * MAX_BRICKS {
-                bricks.drain(..MAX_BRICKS);
+            if self.bricks.len() == 2 * MAX_BRICKS {
+                self.bricks.drain(..MAX_BRICKS);
             }
         }
+        self.last = Some(last);
+        // Keep the unfinished move beyond the last brick for the next wick.
+        self.extremes = Some((wick_low.min(price), wick_high.max(price)));
     }
 
-    bricks.drain(..bricks.len().saturating_sub(MAX_BRICKS));
-    bricks
+    fn elements(&self) -> Vec<RenkoBrick> {
+        self.bricks[self.bricks.len().saturating_sub(MAX_BRICKS)..].to_vec()
+    }
 }
 
-/// Calculate Avg True Range for automatic brick sizing
-fn calculate_atr(bars: &[Bar], period: usize) -> f64 {
-    if bars.len() < period {
-        // Fallback to simple range
-        let sum: f64 = bars.iter().map(|b| b.high - b.low).sum();
-        return sum / bars.len() as f64;
+/// Index of the bar to build from so that the bricks move at most `MAX_WORK` brick sizes. Bar
+/// `i` costs its close-to-close move in sizes plus 2; the returned bar only seeds the state.
+pub(crate) fn work_start(bars: &[Bar], size: f64, source: PriceBasedSource) -> usize {
+    let mut total = 0.0;
+    for i in (1..bars.len()).rev() {
+        let movement = match source {
+            PriceBasedSource::Close => (bars[i].close - bars[i - 1].close).abs(),
+            PriceBasedSource::HighLow => {
+                bars[i].high.max(bars[i - 1].high) - bars[i].low.min(bars[i - 1].low)
+            }
+        };
+        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
+        total += (movement / size).max(0.0) + 2.0;
+        if total > super::MAX_WORK {
+            return i;
+        }
     }
-
-    let mut true_ranges = Vec::new();
-
-    for i in 1..bars.len() {
-        let high_low = bars[i].high - bars[i].low;
-        let high_close_prev = (bars[i].high - bars[i - 1].close).abs();
-        let low_close_prev = (bars[i].low - bars[i - 1].close).abs();
-
-        let true_range = high_low.max(high_close_prev).max(low_close_prev);
-        true_ranges.push(true_range);
-    }
-
-    // Simple moving avg of true ranges
-    let sum: f64 = true_ranges
-        .iter()
-        .skip(true_ranges.len().saturating_sub(period))
-        .sum();
-    sum / period.min(true_ranges.len()) as f64
+    0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 101.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(1),
-                open: 101.0,
-                high: 105.0,
-                low: 100.0,
-                close: 104.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: start + Duration::minutes(2),
-                open: 104.0,
-                high: 107.0,
-                low: 103.0,
-                close: 106.0,
-                volume: 1000.0,
-            },
-        ]
-    }
-
     #[test]
     fn bricks_reverse_only_after_a_two_box_move() {
         let cases = [
@@ -261,6 +306,8 @@ mod tests {
                     low: c,
                     close: c,
                     volume: 0.0,
+                    colors: None,
+                    payload: None,
                 })
                 .collect();
             let got: Vec<(f64, f64)> = to_renko_bricks(&bars, &RenkoConfig::new(1.0))
@@ -277,6 +324,8 @@ mod tests {
             ts: Utc::now(),
             open: 100.0,
             close: 102.0,
+            high: 102.0,
+            low: 99.5,
             direction: RenkoDirection::Up,
         };
 
@@ -284,13 +333,6 @@ mod tests {
         assert_eq!(bar.open, 100.0);
         assert_eq!(bar.close, 102.0);
         assert_eq!(bar.high, 102.0);
-        assert_eq!(bar.low, 100.0);
-    }
-
-    #[test]
-    fn test_atr_calculation() {
-        let bars = create_test_bars();
-        let atr = calculate_atr(&bars, 2);
-        assert!(atr > 0.0);
+        assert_eq!(bar.low, 99.5);
     }
 }

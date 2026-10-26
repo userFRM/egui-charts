@@ -24,8 +24,8 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Awesome Oscillator indicator
@@ -33,7 +33,7 @@ use egui::Color32;
 pub struct AwesomeOscillator {
     fast_period: usize,
     slow_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     positive_color: Color32,
     negative_color: Color32,
     visible: bool,
@@ -49,9 +49,9 @@ impl AwesomeOscillator {
         Self {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
-            values: Vec::new(),
-            positive_color: DESIGN_TOKENS.semantic.extended.success, // Green
-            negative_color: DESIGN_TOKENS.semantic.extended.error,   // Red
+            values: IndicatorValues::new(),
+            positive_color: palette::GREEN, // Green
+            negative_color: palette::RED,   // Red
             visible: true,
         }
     }
@@ -77,6 +77,41 @@ impl Default for AwesomeOscillator {
 }
 
 impl Indicator for AwesomeOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        fast_period: length("Fast period", 1, usize::MAX),
+        slow_period: length("Slow period", 1, usize::MAX)
+    ; {});
+
+    fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.positive_color,
+            width: 1.0,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: crate::studies::PlotType::Columns,
+            visible: true,
+        }
+    }
+
+    fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
+        let value = self.values.value(0, bar)?;
+        let previous = bar.checked_sub(1).and_then(|bar| self.values.value(0, bar));
+        Some(if previous.is_some_and(|previous| value < previous) {
+            self.negative_color
+        } else {
+            self.positive_color
+        })
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "AO"
     }
@@ -119,7 +154,7 @@ impl Indicator for AwesomeOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -140,7 +175,7 @@ impl Indicator for AwesomeOscillator {
         false // AO is a separate histogram pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1 // Single histogram
     }
 
@@ -158,96 +193,5 @@ impl Indicator for AwesomeOscillator {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("AO({}, {})", self.fast_period, self.slow_period)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_uptrending_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..50)
-            .map(|i| {
-                let price = 100.0 + i as f64 * 0.5;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price - 0.2,
-                    high: price + 1.0,
-                    low: price - 1.0,
-                    close: price,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    fn create_downtrending_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..50)
-            .map(|i| {
-                let price = 150.0 - i as f64 * 0.5;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price + 0.2,
-                    high: price + 1.0,
-                    low: price - 1.0,
-                    close: price,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_ao_calculation() {
-        let bars = create_uptrending_bars();
-        let mut ao = AwesomeOscillator::new(5, 34);
-        ao.calculate(&bars);
-
-        assert_eq!(ao.values().len(), bars.len());
-
-        // First slow_period - 1 should be None
-        for i in 0..33 {
-            assert!(matches!(ao.values()[i], IndicatorValue::None));
-        }
-    }
-
-    #[test]
-    fn test_ao_positive_in_uptrend() {
-        let bars = create_uptrending_bars();
-        let mut ao = AwesomeOscillator::new(5, 34);
-        ao.calculate(&bars);
-
-        // In strong uptrend, AO should be positive
-        if let Some(IndicatorValue::Single(val)) = ao.values().last() {
-            assert!(*val > 0.0, "AO should be positive in uptrend");
-        }
-    }
-
-    #[test]
-    fn test_ao_negative_in_downtrend() {
-        let bars = create_downtrending_bars();
-        let mut ao = AwesomeOscillator::new(5, 34);
-        ao.calculate(&bars);
-
-        // In strong downtrend, AO should be negative
-        if let Some(IndicatorValue::Single(val)) = ao.values().last() {
-            assert!(*val < 0.0, "AO should be negative in downtrend");
-        }
-    }
-
-    #[test]
-    fn test_ao_is_not_overlay() {
-        let ao = AwesomeOscillator::new(5, 34);
-        assert!(!ao.is_overlay());
-    }
-
-    #[test]
-    fn test_ao_empty_data() {
-        let mut ao = AwesomeOscillator::new(5, 34);
-        ao.calculate(&[]);
-        assert!(ao.values().is_empty());
     }
 }

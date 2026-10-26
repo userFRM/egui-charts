@@ -23,16 +23,17 @@
 //! adx.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Avg Directional Index indicator
 #[derive(Clone)]
 pub struct ADX {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     adx_color: Color32,
     plus_di_color: Color32,
     minus_di_color: Color32,
@@ -47,10 +48,10 @@ impl ADX {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            adx_color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber (ADX)
-            plus_di_color: DESIGN_TOKENS.semantic.extended.success,   // Green (+DI)
-            minus_di_color: DESIGN_TOKENS.semantic.extended.error,    // Red (-DI)
+            values: IndicatorValues::new(),
+            adx_color: palette::GOLD,      // Amber (ADX)
+            plus_di_color: palette::GREEN, // Green (+DI)
+            minus_di_color: palette::RED,  // Red (-DI)
             visible: true,
         }
     }
@@ -86,23 +87,15 @@ impl Default for ADX {
     }
 }
 
-impl Indicator for ADX {
-    fn name(&self) -> &str {
-        "ADX"
-    }
-
-    fn desc(&self) -> &str {
-        "Avg Directional Index - Trend strength indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ADX {
+    /// The values over `data`, every bar of which has finite inputs.
+    pub(super) fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_mul(2) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate +DM, -DM, and TR for each bar
@@ -194,18 +187,38 @@ impl Indicator for ADX {
         // Build output values
         for i in 0..data.len() {
             if i < self.period * 2 - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Multiple(vec![
-                    adx[i],
-                    plus_di[i],
-                    minus_di[i],
-                ]));
+                values.push_lines(&[adx[i], plus_di[i], minus_di[i]]);
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ADX {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "ADX"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Avg Directional Index - Trend strength indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -229,7 +242,7 @@ impl Indicator for ADX {
         false // ADX is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3 // ADX, +DI, -DI
     }
 

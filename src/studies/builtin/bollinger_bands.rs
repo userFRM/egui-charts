@@ -26,7 +26,8 @@
 //!
 //! # Default colours
 //!
-//! Upper/middle/lower sourced from `indicators.bb_upper`, `bb_middle`, `bb_lower`.
+//! Upper and lower bands use [`palette::ACCENT`](crate::studies::palette::ACCENT);
+//! the middle band uses [`palette::BB_MIDDLE`](crate::studies::palette::BB_MIDDLE).
 //!
 //! # Example
 //!
@@ -37,15 +38,16 @@
 //! let mut bb = BollingerBands::new(20, 2.0);
 //! bb.calculate(&bars);
 //!
-//! if let IndicatorValue::Multiple(vals) = &bb.values()[30] {
+//! if let IndicatorValue::Multiple(vals) = &bb.values().to_rows()[30] {
 //!     let (upper, middle, lower) = (vals[0], vals[1], vals[2]);
 //! }
 //! ```
 
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Bollinger Bands indicator.
@@ -56,7 +58,7 @@ use egui::Color32;
 pub struct BollingerBands {
     period: usize,
     std_dev: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -67,39 +69,22 @@ impl BollingerBands {
         Self {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.indicators.bb_upper,  // Upper
-                DESIGN_TOKENS.semantic.indicators.bb_middle, // Middle
-                DESIGN_TOKENS.semantic.indicators.bb_lower,  // Lower
+                palette::ACCENT,    // Upper
+                palette::BB_MIDDLE, // Middle
+                palette::ACCENT,    // Lower
             ],
             visible: true,
         }
     }
-}
 
-/// Construct with the conventional default parameters.
-impl Default for BollingerBands {
-    fn default() -> Self {
-        Self::new(20, 2.0)
-    }
-}
-
-impl Indicator for BollingerBands {
-    fn name(&self) -> &str {
-        "BB"
-    }
-
-    fn desc(&self) -> &str {
-        "Bollinger Bands - Volatility indicator with upper and lower bands"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+    /// The values over `data`.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let prices: Vec<f64> = data[i + 1 - self.period..=i]
                     .iter()
@@ -114,13 +99,71 @@ impl Indicator for BollingerBands {
                 let upper = sma + (std * self.std_dev);
                 let lower = sma - (std * self.std_dev);
 
-                self.values
-                    .push(IndicatorValue::Multiple(vec![upper, sma, lower]));
+                values.push_lines(&[upper, sma, lower]);
             }
         }
+        values
+    }
+}
+
+/// Construct with the conventional default parameters.
+impl Default for BollingerBands {
+    fn default() -> Self {
+        Self::new(20, 2.0)
+    }
+}
+
+impl Indicator for BollingerBands {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        std_dev: number("Std dev", 0.0, f64::MAX)
+    ; {});
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        let color = self.colors[0];
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(0),
+            second: crate::studies::FillBoundary::Plot(2),
+            color: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 51),
+            inverted_color: None,
+        }]
+    }
+
+    fn name(&self) -> &str {
+        "BB"
+    }
+
+    fn desc(&self) -> &str {
+        "Bollinger Bands - Volatility indicator with upper and lower bands"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(self.period - 1, |_| true),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -141,7 +184,7 @@ impl Indicator for BollingerBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

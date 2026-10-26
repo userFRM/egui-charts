@@ -1,18 +1,18 @@
 use super::clamp_param;
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Accumulation Swing Index (ASI)
 /// Developed by Welles Wilder
 /// Cumulative sum of swing index values
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct AccumulationSwingIndex {
     /// Limit move (typically high value for stocks, actual limit for futures)
     limit_move: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -23,12 +23,13 @@ impl AccumulationSwingIndex {
     pub fn new(limit_move: f64) -> Self {
         Self {
             limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            values: IndicatorValues::new(),
+            color: palette::UP, // Teal
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -65,8 +66,8 @@ impl AccumulationSwingIndex {
     }
 
     /// The values over `data`, every bar of which has a finite open, high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < 2 {
             for _ in 0..data.len() {
@@ -95,6 +96,10 @@ impl Default for AccumulationSwingIndex {
 }
 
 impl Indicator for AccumulationSwingIndex {
+    crate::studies::inputs::study_inputs!(self;
+        limit_move: number("Limit move", f64::EPSILON, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "ASI"
     }
@@ -113,7 +118,7 @@ impl Indicator for AccumulationSwingIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -161,6 +166,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -179,10 +186,11 @@ mod tests {
         assert_eq!(asi.values.len(), 3);
 
         // In uptrend, ASI should increase
-        if let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
-            (&asi.values[1], &asi.values[2])
-        {
-            assert!(v2 > v1, "ASI should increase in uptrend");
-        }
+        let (IndicatorValue::Single(v1), IndicatorValue::Single(v2)) =
+            (&asi.values.to_rows()[1], &asi.values.to_rows()[2])
+        else {
+            panic!("no values: {:?}", &asi.values.to_rows()[1..]);
+        };
+        assert!(v2 > v1, "ASI should increase in uptrend");
     }
 }

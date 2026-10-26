@@ -7,6 +7,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::{RichText, Ui};
 
 /// A loading spinner with optional message text.
@@ -17,6 +18,7 @@ pub struct LoadingIndicator<'a> {
 }
 
 impl<'a> LoadingIndicator<'a> {
+    /// Create a spinner without a message.
     pub fn new() -> Self {
         Self { message: None }
     }
@@ -33,7 +35,7 @@ impl<'a> LoadingIndicator<'a> {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(
-                RichText::new(self.message.unwrap_or("Loading..."))
+                RichText::new(l10n::text(ui.ctx(), self.message.unwrap_or("Loading...")))
                     .color(ui.visuals().weak_text_color()),
             );
         });

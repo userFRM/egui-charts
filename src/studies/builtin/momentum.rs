@@ -8,15 +8,15 @@
 //! MOM = Close - Close[n]
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Momentum indicator
 #[derive(Clone)]
 pub struct Momentum {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -29,8 +29,8 @@ impl Momentum {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info,
+            values: IndicatorValues::new(),
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -44,6 +44,20 @@ impl Default for Momentum {
 }
 
 impl Indicator for Momentum {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "Momentum"
     }
@@ -61,7 +75,7 @@ impl Indicator for Momentum {
             .collect();
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -115,6 +129,8 @@ mod tests {
                 low: c,
                 close: c,
                 volume: 1.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 
@@ -134,6 +150,7 @@ mod tests {
         ];
         let actual: Vec<Option<f64>> = momentum
             .values()
+            .to_rows()
             .iter()
             .map(|v| match v {
                 IndicatorValue::Single(x) => Some(*x),

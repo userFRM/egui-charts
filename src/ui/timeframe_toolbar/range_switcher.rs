@@ -1,7 +1,7 @@
 //! Range Switcher Widget
 //!
 //! Provides quick date range selection buttons: 1D, 5D, 1M, 6M, YTD, 1Y, 5Y, All
-use crate::styles::typography;
+use crate::localization as l10n;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
@@ -50,15 +50,15 @@ impl DateRange {
     /// Get tooltip desc for the range
     pub fn tooltip(&self) -> &'static str {
         match self {
-            DateRange::Day1 => "1 day in 1 minute intervals",
-            DateRange::Day5 => "5 days in 5 minutes intervals",
-            DateRange::Month1 => "1 month in 30 minutes intervals",
-            DateRange::Month3 => "3 months in 1 hour intervals",
-            DateRange::Month6 => "6 months in 2 hours intervals",
-            DateRange::YTD => "Year to day in 1 day intervals",
-            DateRange::Year1 => "1 year in 1 day intervals",
-            DateRange::Year5 => "5 years in 1 week intervals",
-            DateRange::All => "All data in 1 month intervals",
+            DateRange::Day1 => "1 day in 1-minute intervals",
+            DateRange::Day5 => "5 days in 5-minute intervals",
+            DateRange::Month1 => "1 month in 30-minute intervals",
+            DateRange::Month3 => "3 months in 1-hour intervals",
+            DateRange::Month6 => "6 months in 2-hour intervals",
+            DateRange::YTD => "Year to date in 1-day intervals",
+            DateRange::Year1 => "1 year in 1-day intervals",
+            DateRange::Year5 => "5 years in 1-week intervals",
+            DateRange::All => "All data in 1-month intervals",
         }
     }
 
@@ -175,15 +175,15 @@ impl RangeSwitcherConfig {
         Self {
             ranges: DateRange::default_presets(),
             btn_height: DESIGN_TOKENS.sizing.button_sm,
-            btn_min_width: DESIGN_TOKENS.sizing.button_md + DESIGN_TOKENS.spacing.sm, // ~32px
-            spacing: DESIGN_TOKENS.spacing.xs,
+            btn_min_width: DESIGN_TOKENS.sizing.button_md + theme.spacing.sm, // ~32px
+            spacing: theme.spacing.xs,
             background_color: Color32::TRANSPARENT, // Let parent show through
             active_color: ui.btn_bg_active,
             hover_color: ui.btn_bg_hover,
             text_color: ui.text_secondary,
             active_text_color: ui.text,
-            border_radius: DESIGN_TOKENS.rounding.md,
-            font_size: typography::SM,
+            border_radius: theme.radius.md,
+            font_size: theme.text.small,
             show_border: true,
             border_color: ui.border,
         }
@@ -368,6 +368,16 @@ impl RangeSwitcher {
 
         // Allocate space and get response
         let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+        let translated_label = l10n::text(ui.ctx(), label);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                response.enabled(),
+                is_sel,
+                &translated_label,
+            )
+        });
+        crate::styles::focus::draw_focus_ring(ui, &response, self.config.border_radius);
 
         // Determine colors based on state
         let (bg_color, text_color) = if is_sel {
@@ -396,7 +406,7 @@ impl RangeSwitcher {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            label,
+            l10n::text(ui.ctx(), label),
             font_id,
             text_color,
         );

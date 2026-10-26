@@ -1,11 +1,11 @@
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Ultimate Momentum Oscillator
 /// Custom composite momentum indicator
 /// Combines multiple timeframes for confirmation
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct UltimateMomentum {
     /// Short period (typically 5)
@@ -14,23 +14,25 @@ pub struct UltimateMomentum {
     medium_period: usize,
     /// Long period (typically 20)
     long_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl UltimateMomentum {
+    /// Create with `short`, `medium`, `long` in bars, each clamped to at least one.
     pub fn new(short: usize, medium: usize, long: usize) -> Self {
         Self {
             short_period: short.max(1),
             medium_period: medium.max(1),
             long_period: long.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            values: IndicatorValues::new(),
+            color: palette::PURPLE,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -52,6 +54,18 @@ impl Default for UltimateMomentum {
 }
 
 impl Indicator for UltimateMomentum {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        medium_period: length("Medium period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "UltMom"
     }
@@ -91,7 +105,7 @@ impl Indicator for UltimateMomentum {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -142,6 +156,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -156,8 +172,10 @@ mod tests {
         assert_eq!(um.values.len(), 30);
 
         // In uptrend, momentum should be positive
-        if let IndicatorValue::Single(v) = um.values.last().unwrap() {
-            assert!(*v > 0.0, "Momentum should be positive in uptrend");
-        }
+        let rows = um.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", um.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 0.0, "Momentum should be positive in uptrend");
     }
 }

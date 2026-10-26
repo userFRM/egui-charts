@@ -1,9 +1,10 @@
 //! Scales and lines tab - price scale and line visibility settings.
 
 use crate::chart::series::SeriesSettings;
-use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::scales::PriceScaleMode;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Scales and lines tab renderer
@@ -14,28 +15,31 @@ impl ScalesTab {
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
 
-        ui.label("Price scale");
+        ui.label(l10n::text(ui.ctx(), "Price scale"));
         ui.space_sm();
 
         FormGrid::new("scales_price_grid").show(ui, |ui| {
             // Scale mode
-            ui.label("Scale mode");
-            ui.combo_select(
-                "scale_mode",
-                &mut settings.price_scale_mode,
-                [
-                    PriceScaleMode::Normal,
-                    PriceScaleMode::Logarithmic,
-                    PriceScaleMode::Percentage,
-                    PriceScaleMode::IndexedTo100,
-                ],
-                |v| Self::scale_mode_label(*v).to_string(),
-            );
+            let label = ui.label(l10n::text(ui.ctx(), "Scale mode"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "scale_mode",
+                    &mut settings.price_scale_mode,
+                    [
+                        PriceScaleMode::Normal,
+                        PriceScaleMode::Logarithmic,
+                        PriceScaleMode::Percentage,
+                        PriceScaleMode::IndexedTo100,
+                    ],
+                    |v| Self::scale_mode_label(*v).to_string(),
+                );
+            });
             ui.end_row();
 
             // Invert scale
-            ui.label("Invert scale");
-            ui.checkbox(&mut settings.invert_scale, "");
+            let label = ui.label(l10n::text(ui.ctx(), "Invert scale"));
+            ui.checkbox(&mut settings.invert_scale, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
 
@@ -43,18 +47,20 @@ impl ScalesTab {
         ui.separator();
         ui.space_xl();
 
-        ui.label("Lines");
+        ui.label(l10n::text(ui.ctx(), "Lines"));
         ui.space_sm();
 
         FormGrid::new("scales_lines_grid").show(ui, |ui| {
             // Show price line
-            ui.label("Show last price line");
-            ui.checkbox(&mut settings.show_price_line, "");
+            let label = ui.label(l10n::text(ui.ctx(), "Show last price line"));
+            ui.checkbox(&mut settings.show_price_line, "")
+                .labelled_by(label.id);
             ui.end_row();
 
             // Show previous close line
-            ui.label("Show previous close line");
-            ui.checkbox(&mut settings.show_prev_close_line, "");
+            let label = ui.label(l10n::text(ui.ctx(), "Show previous close line"));
+            ui.checkbox(&mut settings.show_prev_close_line, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
     }

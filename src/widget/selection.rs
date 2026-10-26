@@ -28,7 +28,8 @@ impl Chart {
         self.selection.selected_id()
     }
 
-    /// Returns the bar index at which the current selection was made, if any.
+    /// Returns the index at which the current selection was made, if any.
+    /// On price-based types it counts elements, otherwise source bars.
     ///
     /// This is the data-space index of the segment that was clicked, useful for
     /// anchoring tooltips or context menus near the click.
@@ -53,8 +54,8 @@ impl Chart {
     /// consistent.
     ///
     /// Hosts that build their own context menus read this each frame and open
-    /// the appropriate menu at [`RightClickTarget`]`::pos`. The turnkey menu in
-    /// [`TradingChart`](crate::TradingChart) consumes it for you.
+    /// the appropriate menu at [`RightClickTarget`]`::pos`. With the `ui`
+    /// feature, `ui::context_menu::ChartMenus` consumes it for you.
     ///
     /// Carries no `ui`-feature types, so it is available without the `ui`
     /// feature.
@@ -80,19 +81,41 @@ impl Chart {
 
         match selected {
             ChartElementId::Indicator(id) => {
-                let Some((_, indicator)) = self.indicators().find(|(study, _)| *study == id) else {
+                let Some(indicator) = self
+                    .study_ids
+                    .iter()
+                    .position(|study| *study == id)
+                    .and_then(|at| self.rendered_studies().indicators().get(at))
+                    .map(|study| study.as_ref())
+                else {
                     return;
                 };
-                if !indicator.is_visible() || !indicator.is_overlay() {
+                if !indicator.is_visible()
+                    || !indicator.is_overlay()
+                    || (indicator.is_volume() && !self.shows_volume())
+                {
                     return;
                 }
+                let volume_coords = (indicator.is_volume()
+                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
+                .then(|| {
+                    super::volume::mapping(
+                        coords,
+                        super::volume::overlay_rect(coords.rect, &self.config),
+                        indicator,
+                        &visible_range,
+                        Some(&self.merge_groups),
+                    )
+                });
+                let study_coords = crate::chart::renderers::study_mapping(indicator, coords);
+                let coords = volume_coords.as_ref().unwrap_or(&study_coords);
                 let config = SelectionDotConfig {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
                     ..Default::default()
                 };
                 // Multi-line indicators highlight every line so the whole study
                 // reads as selected.
-                for line_idx in 0..indicator.line_cnt() {
+                for line_idx in 0..indicator.line_count() {
                     render_indicator_selection_dots(
                         painter,
                         indicator,
@@ -109,7 +132,16 @@ impl Chart {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
                     ..Default::default()
                 };
-                let closes: Vec<f64> = visible_data.iter().map(|b| b.close).collect();
+                let values: Vec<f64> = visible_data
+                    .iter()
+                    .map(|b| {
+                        if series_id == SeriesId::VOLUME {
+                            b.volume
+                        } else {
+                            b.close
+                        }
+                    })
+                    .collect();
                 match series_id {
                     SeriesId::VOLUME => {
                         // Volume handles sit on the volume rect; render on the
@@ -118,13 +150,15 @@ impl Chart {
                         let max_volume = visible_data
                             .iter()
                             .map(|b| b.volume)
-                            .fold(0.0_f64, f64::max)
-                            .max(1.0);
+                            .fold(0.0_f64, f64::max);
+                        if max_volume <= 0.0 {
+                            return;
+                        }
                         render_candle_selection_dots(
                             painter,
                             visible_range,
                             &volume_coords,
-                            &closes,
+                            &values,
                             |volume| {
                                 let norm = (volume / max_volume) as f32;
                                 volume_coords.rect.bottom() - norm * volume_coords.rect.height()
@@ -137,7 +171,7 @@ impl Chart {
                             painter,
                             visible_range,
                             coords,
-                            &closes,
+                            &values,
                             |price| coords.price_to_y(price),
                             &config,
                         );
@@ -151,61 +185,123 @@ impl Chart {
 /// Hit-test a click on the main chart area, applying selection priority.
 ///
 /// Overlay indicator lines take priority over the series beneath them, matching
-/// the visual stacking order. `study_ids` holds the id of each study in
-/// `studies`. Returns the hit element and the bar index where the hit occurred,
-/// or `None` when the click landed on empty chart area.
+/// the visual stacking order in `order`, from back to front. `study_ids` holds the id
+/// of each study in `studies`.
+/// Returns the hit element and the bar index where the hit occurred, or `None`
+/// when the click landed on empty chart area.
 pub(super) fn hit_test_main_chart(
     click_pos: Pos2,
     studies: &IndicatorRegistry,
     study_ids: &[SeriesId],
+    order: &[SeriesId],
     coords: &ChartMapping,
     volume_coords: Option<&ChartMapping>,
     bars: &[crate::model::Bar],
     max_volume: f64,
     visible_range: std::ops::Range<usize>,
+    hit_tolerance: f32,
+    groups: Option<&super::merge::Groups>,
 ) -> Option<(ChartElementId, usize)> {
     if bars.is_empty() {
         return None;
     }
 
-    // 1. Overlay indicators (drawn on top of the series).
-    for (idx, indicator) in studies.indicators().iter().enumerate() {
-        if let Some(hit) = hit_test_indicator(
-            click_pos,
-            indicator.as_ref(),
-            idx,
-            visible_range.clone(),
-            coords,
-            |price| coords.price_to_y(price),
-        ) {
-            return Some((
-                ChartElementId::Indicator(study_ids[hit.indicator_idx]),
-                hit.bar_idx,
-            ));
+    // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
+    let reach = hit_tolerance.max(crate::chart::hit_test::HIT_TOLERANCE) + coords.bar_spacing;
+    let near = visible_range
+        .start
+        .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1))
+        ..visible_range
+            .end
+            .min(coords.x_to_idx(click_pos.x + reach).saturating_add(2));
+
+    let main = order
+        .iter()
+        .position(|id| *id == SeriesId::MAIN)
+        .unwrap_or(0);
+    let overlay_hit = |under_series: bool| {
+        for (at, id) in order.iter().enumerate().rev() {
+            if (at < main) != under_series {
+                continue;
+            }
+            let Some(idx) = study_ids.iter().position(|study| study == id) else {
+                continue;
+            };
+            let indicator = &studies.indicators()[idx];
+            let volume_mapping = if indicator.is_volume()
+                && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
+            {
+                if !indicator.is_overlay() || !indicator.is_visible() {
+                    continue;
+                }
+                let Some(volume) = volume_coords else {
+                    continue;
+                };
+                Some(super::volume::mapping(
+                    coords,
+                    volume.rect,
+                    indicator.as_ref(),
+                    &visible_range,
+                    groups,
+                ))
+            } else {
+                None
+            };
+            let study_coords = crate::chart::renderers::study_mapping(indicator.as_ref(), coords);
+            let coords = volume_mapping.as_ref().unwrap_or(&study_coords);
+            if let Some(hit) = hit_test_indicator(
+                click_pos,
+                indicator.as_ref(),
+                idx,
+                visible_range.clone(),
+                coords,
+                |price| coords.price_to_y(price),
+            ) {
+                return Some((
+                    ChartElementId::Indicator(study_ids[hit.indicator_idx]),
+                    hit.bar_idx,
+                ));
+            }
         }
+        None
+    };
+
+    // 1. Overlay indicators drawn over the series.
+    if let Some(hit) = overlay_hit(false) {
+        return Some(hit);
     }
 
-    // 2. Main price series (candles/bars/line).
-    if let Some(hit) = hit_test_candles(
-        click_pos,
-        bars,
-        visible_range.clone(),
-        coords,
-        |price| coords.price_to_y(price),
-        &crate::chart::series::HitTestConfig::default(),
-    ) {
-        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
-    }
-
-    // 3. Volume series (only when a volume pane was rendered).
-    if let Some(volume_coords) = volume_coords
-        && let Some(hit) =
-            hit_test_volume(click_pos, bars, visible_range, volume_coords, max_volume)
+    // 2. Volume is painted over the price series.
+    if order.contains(&SeriesId::MAIN)
+        && !studies
+            .indicators()
+            .iter()
+            .any(|study| study.is_volume() && study.is_overlay())
+        && let Some(volume_coords) = volume_coords
+        && let Some(hit) = hit_test_volume(click_pos, bars, near.clone(), volume_coords, max_volume)
     {
         return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
     }
 
-    None
+    // 3. Main price series (candles/bars/line).
+    if order.contains(&SeriesId::MAIN)
+        && let Some(hit) = hit_test_candles(
+            click_pos,
+            bars,
+            near,
+            coords,
+            |price| coords.price_to_y(price),
+            &crate::chart::series::HitTestConfig {
+                line_tolerance: hit_tolerance,
+                ..Default::default()
+            },
+        )
+    {
+        return Some((ChartElementId::Series(hit.series_id), hit.bar_idx));
+    }
+
+    // 4. Overlay indicators drawn under the series.
+    overlay_hit(true)
 }
 
 #[cfg(test)]
@@ -270,37 +366,54 @@ mod selection_tests {
             pos,
             &IndicatorRegistry::new(),
             &[],
+            &[SeriesId::MAIN],
             &mapping,
             None,
             &bars,
             100.0,
             0..bars.len(),
+            crate::chart::hit_test::HIT_TOLERANCE,
+            None,
         );
         assert!(hit.is_none());
     }
 
     #[test]
-    fn click_on_candle_selects_main_series() {
+    fn click_on_candle_or_near_its_wick_selects_main_series() {
         let (mapping, bars) = fixture();
-        // Click the center of bar 2's body (close = 12.4, open = 11.6).
+        // The center of bar 2's body (close = 12.4, open = 11.6), and its upper wick at 12.45,
+        // 8 points from the bar's centre: outside the default 5 point tolerance, inside 10.
         let bar = &bars[2];
         let mid_price = (bar.open + bar.close) / 2.0;
-        let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(mid_price));
-        let hit = hit_test_main_chart(
-            pos,
-            &IndicatorRegistry::new(),
-            &[],
-            &mapping,
-            None,
-            &bars,
-            100.0,
-            0..bars.len(),
-        );
-        assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
+        for (dx, price, tolerance, selected) in [
+            (0.0, mid_price, crate::chart::hit_test::HIT_TOLERANCE, true),
+            (8.0, 12.45, crate::chart::hit_test::HIT_TOLERANCE, false),
+            (8.0, 12.45, 10.0, true),
+        ] {
+            let pos = Pos2::new(mapping.idx_to_x(2) + dx, mapping.price_to_y(price));
+            let hit = hit_test_main_chart(
+                pos,
+                &IndicatorRegistry::new(),
+                &[],
+                &[SeriesId::MAIN],
+                &mapping,
+                None,
+                &bars,
+                100.0,
+                0..bars.len(),
+                tolerance,
+                None,
+            );
+            assert_eq!(
+                hit,
+                selected.then_some((ChartElementId::Series(SeriesId::MAIN), 2)),
+                "{dx} {price} {tolerance}"
+            );
+        }
     }
 
     #[test]
-    fn overlay_indicator_wins_over_series_at_same_point() {
+    fn selection_follows_overlay_volume_and_price_paint_order() {
         let (mapping, bars) = fixture();
         // Place an indicator value at bar 2 and bar 3 exactly on the candle's
         // close price so its line passes through the body. A click there must
@@ -311,17 +424,53 @@ mod selection_tests {
         let registry = overlay_at(values);
 
         let pos = Pos2::new(mapping.idx_to_x(2), mapping.price_to_y(bars[2].close));
-        let hit = hit_test_main_chart(
-            pos,
-            &registry,
-            &[SeriesId(2)],
-            &mapping,
-            None,
-            &bars,
-            100.0,
-            0..bars.len(),
-        );
-        assert_eq!(hit, Some((ChartElementId::Indicator(SeriesId(2)), 2)));
+        let volume = mapping.with_rect(egui::Rect::from_min_max(
+            Pos2::new(mapping.rect.left(), pos.y - 10.0),
+            Pos2::new(mapping.rect.right(), pos.y + 10.0),
+        ));
+        let empty = IndicatorRegistry::new();
+        for (studies, order, volume, expected) in [
+            (
+                &registry,
+                &[SeriesId::MAIN, SeriesId(2)][..],
+                Some(&volume),
+                ChartElementId::Indicator(SeriesId(2)),
+            ),
+            (
+                &empty,
+                &[SeriesId::MAIN],
+                Some(&volume),
+                ChartElementId::Series(SeriesId::VOLUME),
+            ),
+            (
+                &empty,
+                &[SeriesId::MAIN][..],
+                None,
+                ChartElementId::Series(SeriesId::MAIN),
+            ),
+            // Sent behind the series, the overlay yields to it.
+            (
+                &registry,
+                &[SeriesId(2), SeriesId::MAIN],
+                None,
+                ChartElementId::Series(SeriesId::MAIN),
+            ),
+        ] {
+            let hit = hit_test_main_chart(
+                pos,
+                studies,
+                &[SeriesId(2)],
+                order,
+                &mapping,
+                volume,
+                &bars,
+                100.0,
+                0..bars.len(),
+                crate::chart::hit_test::HIT_TOLERANCE,
+                None,
+            );
+            assert_eq!(hit, Some((expected, 2)));
+        }
     }
 
     #[test]
@@ -345,11 +494,14 @@ mod selection_tests {
             pos,
             &registry,
             &[SeriesId(2)],
+            &[SeriesId::MAIN, SeriesId(2)],
             &mapping,
             None,
             &bars,
             100.0,
             0..bars.len(),
+            crate::chart::hit_test::HIT_TOLERANCE,
+            None,
         );
         // Falls through to the series, since the pane indicator is not an overlay.
         assert_eq!(hit, Some((ChartElementId::Series(SeriesId::MAIN), 2)));
@@ -363,11 +515,14 @@ mod selection_tests {
             pos,
             &IndicatorRegistry::new(),
             &[],
+            &[SeriesId::MAIN],
             &mapping,
             None,
             &[],
             100.0,
             0..0,
+            crate::chart::hit_test::HIT_TOLERANCE,
+            None,
         );
         assert!(hit.is_none());
     }

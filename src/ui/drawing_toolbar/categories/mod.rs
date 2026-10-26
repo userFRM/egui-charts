@@ -1,10 +1,8 @@
 //! Drawing tool categories for left toolbar.
 //!
-//! Each category has its own module with:
-//! - Tool definitions and data
-//! - SVG icon mappings
-//! - Submenu rendering logic
-//! - Keyboard shortcuts
+//! Each category has its own module with its name, tooltip and icons. The tools of the tool
+//! categories come from [`data::get_category_sections`], so
+//! the bar and the flyout read one table.
 
 pub mod annotation;
 pub mod cursors;
@@ -25,9 +23,9 @@ pub use trend_lines::TrendLinesCategory;
 
 use crate::drawings::DrawingToolType;
 use crate::icons::Icon;
-use egui::{Rect, Ui};
+use egui::Ui;
 
-use super::DrawingToolbarAction;
+use super::{DrawingToolbarAction, data};
 
 /// Trait for all tool categories
 pub trait ToolCategory {
@@ -44,24 +42,33 @@ pub trait ToolCategory {
     fn curr_tool_icon(&self, selected: Option<DrawingToolType>) -> &'static Icon;
 
     /// Get all tools in this category
-    fn all_tools(&self) -> Vec<DrawingToolType>;
+    fn all_tools(&self) -> Vec<DrawingToolType> {
+        self.sections()
+            .into_iter()
+            .flat_map(|(_, tools)| tools)
+            .collect()
+    }
 
     /// Get sections for the submenu (section_name, tools)
-    fn sections(&self) -> Vec<(&'static str, Vec<DrawingToolType>)>;
+    fn sections(&self) -> Vec<(&'static str, Vec<DrawingToolType>)> {
+        data::get_category_sections(self.name())
+    }
 
     /// Check if a tool belongs to this category
     fn contains(&self, tool: DrawingToolType) -> bool {
         self.all_tools().contains(&tool)
     }
 
-    /// Render the submenu for this category
+    /// Draw the submenu rows into `ui`, which the toolbar shows in its flyout. A click on a
+    /// star toggles that tool in `favorites`.
     fn render_submenu(
         &self,
         ui: &mut Ui,
-        anchor_rect: Rect,
         sel_tool: Option<DrawingToolType>,
-        favorites: &[DrawingToolType],
-    ) -> DrawingToolbarAction;
+        favorites: &mut Vec<DrawingToolType>,
+    ) -> DrawingToolbarAction {
+        trend_lines::render_tool_submenu(ui, self.sections(), sel_tool, favorites)
+    }
 }
 
 /// Get all tool categories in display order

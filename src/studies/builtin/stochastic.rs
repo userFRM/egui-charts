@@ -21,10 +21,12 @@
 //! stoch.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::stepper::{rolling_max, rolling_min};
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::stepper::{rolling_max, rolling_min, update_window, usable_behind};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Stochastic Oscillator indicator
@@ -33,7 +35,7 @@ pub struct Stochastic {
     k_period: usize,
     k_smooth: usize,
     d_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     k_color: Color32,
     d_color: Color32,
     visible: bool,
@@ -51,9 +53,9 @@ impl Stochastic {
             k_period: k_period.max(1),
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
-            values: Vec::new(),
-            k_color: DESIGN_TOKENS.semantic.extended.info, // Blue
-            d_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            values: IndicatorValues::new(),
+            k_color: palette::BLUE,   // Blue
+            d_color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -69,14 +71,6 @@ impl Stochastic {
         self.d_color = d_color;
         self
     }
-
-    /// Calculate SMA of a slice
-    fn sma(values: &[f64]) -> f64 {
-        if values.is_empty() {
-            return 0.0;
-        }
-        values.iter().sum::<f64>() / values.len() as f64
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -86,24 +80,16 @@ impl Default for Stochastic {
     }
 }
 
-impl Indicator for Stochastic {
-    fn name(&self) -> &str {
-        "Stochastic"
-    }
-
-    fn desc(&self) -> &str {
-        "Stochastic Oscillator - Momentum oscillator (0-100)"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl Stochastic {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self.k_period.saturating_add(self.k_smooth) - 1;
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate raw %K (Fast Stochastic)
@@ -126,65 +112,66 @@ impl Indicator for Stochastic {
             }
         }
 
-        // Calculate smoothed %K (Slow Stochastic %K)
-        let mut smooth_k = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i < self.k_period + self.k_smooth - 2 || raw_k[i].is_nan() {
-                smooth_k.push(f64::NAN);
-            } else {
-                let start = i + 1 - self.k_smooth;
-                let valid_values: Vec<f64> = raw_k[start..=i]
-                    .iter()
-                    .filter(|v| !v.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid_values.len() >= self.k_smooth {
-                    smooth_k.push(Self::sma(&valid_values));
-                } else {
-                    smooth_k.push(f64::NAN);
-                }
-            }
-        }
-
-        // Calculate %D (SMA of smoothed %K)
-        let mut d_values = Vec::with_capacity(data.len());
-        let warmup = self
-            .k_period
-            .saturating_add(self.k_smooth)
-            .saturating_add(self.d_period)
-            - 3;
-        for i in 0..data.len() {
-            if i < warmup || smooth_k[i].is_nan() {
-                d_values.push(f64::NAN);
-            } else {
-                let start = i + 1 - self.d_period;
-                let valid_values: Vec<f64> = smooth_k[start..=i]
-                    .iter()
-                    .filter(|v| !v.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid_values.len() >= self.d_period {
-                    d_values.push(Self::sma(&valid_values));
-                } else {
-                    d_values.push(f64::NAN);
-                }
-            }
-        }
+        let smooth_k = helpers::sma(&raw_k, self.k_smooth);
+        let d_values = helpers::sma(&smooth_k, self.d_period);
 
         // Build output values
         for i in 0..data.len() {
             if smooth_k[i].is_nan() || d_values[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![smooth_k[i], d_values[i]]));
+                values.push_lines(&[smooth_k[i], d_values[i]]);
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for Stochastic {
+    crate::studies::inputs::study_inputs!(self;
+        k_period: length("K period", 1, usize::MAX),
+        k_smooth: length("K smooth", 1, usize::MAX),
+        d_period: length("D period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Stochastic"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn precision(&self) -> Option<usize> {
+        Some(2)
+    }
+
+    fn desc(&self) -> &str {
+        "Stochastic Oscillator - Momentum oscillator (0-100)"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        let behind = (self.k_period - 1)
+            .saturating_add(self.k_smooth - 1)
+            .saturating_add(self.d_period - 1);
+        let usable = |b: &Bar| b.high.is_finite() && b.low.is_finite() && b.close.is_finite();
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(behind, usable),
+            |data| over_finite_bars(data, usable, |data| self.compute(data)),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -201,11 +188,23 @@ impl Indicator for Stochastic {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: None,
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (80.0, palette::DOWN, "Overbought"),
+                (20.0, palette::UP, "Oversold"),
+            ],
+            fill_between_levels: false,
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false // Stochastic is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // %K and %D
     }
 
@@ -226,60 +225,5 @@ impl Indicator for Stochastic {
             format!("%K({},{},{})", self.k_period, self.k_smooth, self.d_period),
             "%D".to_string(),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..50)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.2).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + (i as f64 * 0.1).sin(),
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_stochastic_range() {
-        let bars = create_test_bars();
-        let mut stoch = Stochastic::new(14, 3, 3);
-        stoch.calculate(&bars);
-
-        for value in stoch.values() {
-            if let IndicatorValue::Multiple(vals) = value {
-                for v in vals {
-                    assert!(*v >= 0.0 && *v <= 100.0, "Stochastic should be 0-100");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_stochastic_output_format() {
-        let bars = create_test_bars();
-        let mut stoch = Stochastic::new(14, 3, 3);
-        stoch.calculate(&bars);
-
-        for value in stoch.values() {
-            match value {
-                IndicatorValue::Multiple(vals) => {
-                    assert_eq!(vals.len(), 2, "Should have %K and %D");
-                }
-                IndicatorValue::None => {} // Expected for early bars
-                _ => panic!("Unexpected value type"),
-            }
-        }
     }
 }

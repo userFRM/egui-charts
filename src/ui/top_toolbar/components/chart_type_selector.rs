@@ -4,11 +4,18 @@
 //! Uses [`crate::model::ChartType`] for the data definition.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::model::ChartType;
-use crate::styles::typography;
+use crate::styles::icons as icon_sizes;
+use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use crate::ui::top_toolbar::components::timeframe_selector::{menu_list_height, menu_row_focus};
+use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
+use egui::{Color32, Rect, Role, Ui, WidgetInfo, pos2, vec2};
+
+/// Height of a chart type row.
+const ROW_H: f32 = 40.0;
 
 /// Extension trait for ChartType to provide UI-specific functionality
 pub trait ChartTypeUiExt {
@@ -29,6 +36,7 @@ impl ChartTypeUiExt for ChartType {
             ChartType::Area => &embedded_icons::CHART_AREA,
             ChartType::HlcArea => &embedded_icons::CHART_HLC_AREA,
             ChartType::Baseline => &embedded_icons::CHART_BASELINE,
+            ChartType::Columns => &embedded_icons::CHART_COLUMNS,
             ChartType::HighLow => &embedded_icons::CHART_HIGH_LOW,
             ChartType::TimePriceOpportunity => &embedded_icons::CHART_TPO,
             ChartType::LineBreak => &embedded_icons::CHART_LINE_BREAK,
@@ -46,12 +54,19 @@ impl ChartTypeUiExt for ChartType {
 pub struct ChartTypeSelectorConfig {
     /// Minimum width of the button; it is otherwise sized to its label.
     pub btn_width: f32,
+    /// Minimum width of the menu.
     pub dropdown_width: f32,
+    /// Not read: rows are laid out by the menu.
     pub item_height: f32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub bg_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub hover_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub sel_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub text_color: Color32,
+    /// Not read: the menu takes its colours from the applied theme.
     pub muted_color: Color32,
 }
 
@@ -61,7 +76,8 @@ impl Default for ChartTypeSelectorConfig {
         // ui.style().visuals at render time for proper theme support.
         Self {
             btn_width: 0.0,
-            dropdown_width: DESIGN_TOKENS.sizing.dialog.submenu_width + DESIGN_TOKENS.spacing.xxl,
+            dropdown_width: DESIGN_TOKENS.sizing.dialog.submenu_width
+                + crate::theme::Theme::default().spacing.xxl,
             item_height: DESIGN_TOKENS.sizing.button_lg,
             bg_color: Color32::TRANSPARENT,
             hover_color: Color32::TRANSPARENT,
@@ -74,8 +90,11 @@ impl Default for ChartTypeSelectorConfig {
 
 /// Action from chart type selector
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChartTypeAction {
+    /// No action requested.
     None,
+    /// Select the supplied value.
     Select(ChartType),
 }
 
@@ -96,6 +115,7 @@ impl Default for ChartTypeSelector {
 }
 
 impl ChartTypeSelector {
+    /// Create a selector with `initial` as its selected chart type.
     pub fn new(initial: ChartType) -> Self {
         Self {
             current: initial,
@@ -104,6 +124,7 @@ impl ChartTypeSelector {
         }
     }
 
+    /// Use the supplied display and layout options.
     pub fn with_config(mut self, config: ChartTypeSelectorConfig) -> Self {
         self.config = config;
         self
@@ -111,34 +132,21 @@ impl ChartTypeSelector {
 
     /// Show the chart type selector
     pub fn show(&mut self, ui: &mut Ui) -> ChartTypeAction {
-        let mut action = ChartTypeAction::None;
-
         // Main button
         let btn_res = self.trigger().show(ui, self.is_open);
-        if btn_res.clicked() {
-            self.is_open = !self.is_open;
-        }
 
-        // Dropdown
-        if self.is_open {
-            let btn_rect = btn_res.rect;
-            action = self.draw_dropdown(ui, btn_rect);
-
-            // Close on click outside
-            if ui.input(|i| i.pointer.any_click())
-                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
-            {
-                let dropdown_height = ChartType::all().len() as f32 * self.config.item_height + 8.0;
-                let dropdown_rect = Rect::from_min_size(
-                    Pos2::new(btn_rect.min.x, btn_rect.max.y + 2.0),
-                    Vec2::new(self.config.dropdown_width, dropdown_height.min(400.0)),
-                );
-                if !btn_rect.contains(pos) && !dropdown_rect.contains(pos) {
-                    self.is_open = false;
-                }
-            }
-        }
-
+        let theme = ui.active_theme();
+        let id = ui.make_persistent_id("chart_type_menu");
+        let max_height = menu_list_height(ui, btn_res.rect, ROW_H);
+        let action = egui::Popup::menu(&btn_res)
+            .id(id)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .align_alternatives(&[])
+            .frame(egui::Frame::popup(ui.style()).fill(theme.ui.panel_bg))
+            .gap(theme.spacing.xs)
+            .show(|ui| self.menu_ui(ui, &theme, max_height))
+            .map_or(ChartTypeAction::None, |menu| menu.inner);
+        self.is_open = egui::Popup::is_id_open(ui.ctx(), id);
         action
     }
 
@@ -147,201 +155,123 @@ impl ChartTypeSelector {
         let label = self.current.name();
         Trigger {
             icon: Some(self.current.icon()),
-            label: label.to_owned(),
-            name: format!("Chart type: {label}"),
-            min_width: self.config.btn_width,
+            label: String::new(),
+            name: label.to_owned(),
+            min_width: self.config.btn_width.max(40.0),
+            filled: false,
         }
     }
 
-    fn draw_dropdown(&mut self, ui: &mut Ui, btn_rect: Rect) -> ChartTypeAction {
+    fn menu_ui(&mut self, ui: &mut Ui, theme: &Theme, max_height: f32) -> ChartTypeAction {
         let mut action = ChartTypeAction::None;
-        let dropdown_pos = Pos2::new(btn_rect.min.x, btn_rect.max.y + DESIGN_TOKENS.spacing.xs);
-        let colors = ChartTypeDropdownColors::from_ui(ui);
-        let current = self.current;
-        let dropdown_width = self.config.dropdown_width;
+        // Rows sit edge to edge, and the scroll bar is visible whenever the list overflows.
+        let spacing = ui.spacing_mut();
+        spacing.item_spacing.y = 0.0;
+        spacing.scroll.floating = false;
+        spacing.scroll.bar_width = 3.0;
+        spacing.scroll.fade.strength = 0.0;
 
-        egui::Area::new(egui::Id::unique("chart_type_dropdown"))
-            .fixed_pos(dropdown_pos)
-            .order(egui::Order::Foreground)
-            .show(ui.ctx(), |ui| {
-                // Rows are sized to sit edge to edge.
-                ui.spacing_mut().item_spacing.y = 0.0;
-                Self::draw_dropdown_frame(ui, &colors, dropdown_width, |ui| {
-                    self.draw_chart_type_list(ui, &colors, current, dropdown_width, &mut action);
-                });
+        ui.set_width(256.0_f32.max(self.config.dropdown_width));
+        ui.visuals_mut().selection.bg_fill = theme.ui.text;
+        ui.visuals_mut().selection.stroke.color = theme.ui.panel_bg;
+        // A popup is first measured inside a 400 px high area; this lets the list use the room below.
+        ui.set_max_height(max_height);
+
+        let current = self.current;
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for chart_type in ChartType::all() {
+                    if matches!(
+                        chart_type,
+                        ChartType::Line
+                            | ChartType::Area
+                            | ChartType::Columns
+                            | ChartType::TimePriceOpportunity
+                            | ChartType::LineBreak
+                    ) {
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(12.0);
+                    }
+                    let content = ChartTypeRow {
+                        chart_type: *chart_type,
+                        theme,
+                    };
+                    let row = ListItem::new()
+                        .selected(current == *chart_type)
+                        .height(ROW_H)
+                        .show(ui, content);
+                    if row.clicked() {
+                        action = ChartTypeAction::Select(*chart_type);
+                    }
+                }
             });
 
+        if let ChartTypeAction::Select(chart_type) = action {
+            self.current = chart_type;
+            ui.close();
+        }
         action
     }
+}
 
-    fn draw_dropdown_frame(
-        ui: &mut Ui,
-        colors: &ChartTypeDropdownColors,
-        width: f32,
-        content: impl FnOnce(&mut Ui),
-    ) {
-        egui::Frame::new()
-            .fill(colors.bg)
-            .stroke(Stroke::new(DESIGN_TOKENS.stroke.hairline, colors.border))
-            .corner_radius(DESIGN_TOKENS.rounding.md)
-            .shadow(egui::Shadow {
-                spread: 2,
-                blur: 8,
-                offset: [2, 2],
-                color: Color32::from_black_alpha(40),
-            })
-            .inner_margin(egui::Margin::same(DESIGN_TOKENS.spacing.sm as i8))
-            .show(ui, |ui| {
-                ui.set_min_width(width);
-                egui::ScrollArea::vertical()
-                    .max_height(500.0)
-                    .show(ui, content);
-            });
-    }
+/// One chart type row: icon, name, and a check on the current type.
+struct ChartTypeRow<'a> {
+    chart_type: ChartType,
+    theme: &'a Theme,
+}
 
-    fn draw_chart_type_list(
-        &mut self,
-        ui: &mut Ui,
-        colors: &ChartTypeDropdownColors,
-        current: ChartType,
-        width: f32,
-        action: &mut ChartTypeAction,
-    ) {
-        let item_height = DESIGN_TOKENS.sizing.button_lg + DESIGN_TOKENS.spacing.xs;
-        for chart_type in ChartType::all() {
-            if self.draw_chart_type_item(
-                ui,
-                colors,
-                *chart_type,
-                current == *chart_type,
-                width,
-                item_height,
-            ) {
-                *action = ChartTypeAction::Select(*chart_type);
-            }
-        }
-    }
-
-    fn draw_chart_type_item(
-        &mut self,
-        ui: &mut Ui,
-        colors: &ChartTypeDropdownColors,
-        chart_type: ChartType,
-        is_current: bool,
-        width: f32,
-        height: f32,
-    ) -> bool {
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(width - DESIGN_TOKENS.spacing.lg, height),
-            Sense::click(),
-        );
-
-        // Background
-        if is_current {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.selected);
-        } else if response.hovered() {
-            ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.sm, colors.hover);
-        }
-
-        // Icon
-        let icon_size = DESIGN_TOKENS.sizing.icon_lg;
-        let icon_rect = Rect::from_min_size(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.spacing.md,
-                rect.center().y - icon_size / 2.0,
-            ),
-            Vec2::splat(icon_size),
-        );
-        let icon_color = if is_current {
-            colors.on_selected
-        } else if response.hovered() {
-            ui.visuals().widgets.hovered.fg_stroke.color
+impl ListItemContent for ChartTypeRow<'_> {
+    fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> egui::Response {
+        let theme = self.theme;
+        let rect = context.rect;
+        let color = if context.selected {
+            theme.ui.panel_bg
         } else {
-            ui.visuals().widgets.noninteractive.fg_stroke.color
+            theme.ui.text
         };
-        chart_type
+        let translated_label = l10n::text(ui.ctx(), self.chart_type.name());
+        context.response.widget_info(|| {
+            WidgetInfo::selected(
+                Role::MenuItemRadio,
+                context.response.enabled(),
+                context.selected,
+                &translated_label,
+            )
+        });
+
+        let icon_rect = Rect::from_min_size(
+            pos2(rect.min.x, rect.center().y - icon_sizes::MD / 2.0),
+            vec2(icon_sizes::MD, icon_sizes::MD),
+        );
+        self.chart_type
             .icon()
-            .as_image_tinted(Vec2::splat(icon_size), icon_color)
+            .as_image_tinted(icon_rect.size(), color)
             .paint_at(ui, icon_rect);
 
-        // Name
-        let name_color = if is_current {
-            colors.on_selected
-        } else {
-            colors.text
-        };
         ui.painter().text(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.sizing.toolbar.left_width,
-                rect.min.y + DESIGN_TOKENS.spacing.xl,
-            ),
+            pos2(icon_rect.max.x + theme.spacing.lg, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            chart_type.name(),
-            egui::FontId::proportional(typography::LG),
-            name_color,
+            l10n::text(ui.ctx(), self.chart_type.name()),
+            egui::FontId::proportional(14.0),
+            color,
         );
 
-        // Description
-        let desc_color = if is_current {
-            colors.on_selected
-        } else {
-            colors.muted
-        };
-        ui.painter().text(
-            Pos2::new(
-                rect.min.x + DESIGN_TOKENS.sizing.toolbar.left_width,
-                rect.min.y + 26.0,
-            ),
-            egui::Align2::LEFT_CENTER,
-            chart_type.desc(),
-            egui::FontId::proportional(typography::XS),
-            desc_color,
-        );
-
-        // Checkmark
-        if is_current {
-            ui.painter().text(
-                Pos2::new(rect.right() - DESIGN_TOKENS.spacing.xxl, rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                "v",
-                egui::FontId::proportional(typography::MD),
-                colors.on_selected,
+        if context.selected {
+            let check = Rect::from_min_size(
+                pos2(
+                    rect.max.x - icon_sizes::SM,
+                    rect.center().y - icon_sizes::SM / 2.0,
+                ),
+                vec2(icon_sizes::SM, icon_sizes::SM),
             );
+            embedded_icons::CHECK
+                .as_image_tinted(check.size(), color)
+                .paint_at(ui, check);
         }
-
-        if response.clicked() {
-            self.current = chart_type;
-            self.is_open = false;
-            return true;
-        }
-        false
-    }
-}
-
-/// Theme colors for chart type dropdown
-struct ChartTypeDropdownColors {
-    bg: Color32,
-    hover: Color32,
-    selected: Color32,
-    text: Color32,
-    muted: Color32,
-    border: Color32,
-    on_selected: Color32,
-}
-
-impl ChartTypeDropdownColors {
-    fn from_ui(ui: &Ui) -> Self {
-        let visuals = &ui.style().visuals;
-        Self {
-            bg: visuals.window_fill,
-            hover: visuals.widgets.hovered.bg_fill,
-            selected: visuals.selection.bg_fill,
-            text: visuals.text_color(),
-            muted: visuals.widgets.noninteractive.fg_stroke.color,
-            border: visuals.widgets.noninteractive.bg_stroke.color,
-            on_selected: visuals.selection.stroke.color,
-        }
+        menu_row_focus(ui, context.response);
+        context.response.clone()
     }
 }

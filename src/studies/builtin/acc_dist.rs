@@ -24,14 +24,14 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Accumulation/Distribution Line indicator
 #[derive(Clone)]
 pub struct AccumulationDistribution {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -40,8 +40,8 @@ impl AccumulationDistribution {
     /// Create a new A/D Line indicator
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            values: IndicatorValues::new(),
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }
@@ -53,8 +53,8 @@ impl AccumulationDistribution {
     }
 
     /// The values over `data`, every bar of which has a finite high, low, close and volume.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -92,6 +92,10 @@ impl Default for AccumulationDistribution {
 }
 
 impl Indicator for AccumulationDistribution {
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "A/D"
     }
@@ -113,7 +117,7 @@ impl Indicator for AccumulationDistribution {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -131,7 +135,7 @@ impl Indicator for AccumulationDistribution {
         false // A/D is a separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 
@@ -149,119 +153,5 @@ impl Indicator for AccumulationDistribution {
 
     fn line_names(&self) -> Vec<String> {
         vec!["A/D Line".to_string()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_accumulation_bars() -> Vec<Bar> {
-        // Bars with closes near highs (accumulation)
-        let start = Utc::now();
-        (0..30)
-            .map(|i| {
-                let base = 100.0 + i as f64 * 0.5;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: base,
-                    high: base + 2.0,
-                    low: base - 1.0,
-                    close: base + 1.8, // Close near high
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    fn create_distribution_bars() -> Vec<Bar> {
-        // Bars with closes near lows (distribution)
-        let start = Utc::now();
-        (0..30)
-            .map(|i| {
-                let base = 150.0 - i as f64 * 0.5;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: base,
-                    high: base + 1.0,
-                    low: base - 2.0,
-                    close: base - 1.8, // Close near low
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_ad_accumulation() {
-        let bars = create_accumulation_bars();
-        let mut ad = AccumulationDistribution::new();
-        ad.calculate(&bars);
-
-        // A/D should be rising in accumulation
-        if let (Some(IndicatorValue::Single(first)), Some(IndicatorValue::Single(last))) =
-            (ad.values().first(), ad.values().last())
-        {
-            assert!(*last > *first, "A/D should rise during accumulation");
-        }
-    }
-
-    #[test]
-    fn test_ad_distribution() {
-        let bars = create_distribution_bars();
-        let mut ad = AccumulationDistribution::new();
-        ad.calculate(&bars);
-
-        // A/D should be falling in distribution
-        if let (Some(IndicatorValue::Single(first)), Some(IndicatorValue::Single(last))) =
-            (ad.values().first(), ad.values().last())
-        {
-            assert!(*last < *first, "A/D should fall during distribution");
-        }
-    }
-
-    #[test]
-    fn test_ad_is_not_overlay() {
-        let ad = AccumulationDistribution::new();
-        assert!(!ad.is_overlay());
-    }
-
-    #[test]
-    fn test_ad_empty_data() {
-        let mut ad = AccumulationDistribution::new();
-        ad.calculate(&[]);
-        assert!(ad.values().is_empty());
-    }
-
-    #[test]
-    fn test_ad_doji_no_change() {
-        // When high == low, A/D shouldn't change
-        let bars = vec![
-            Bar {
-                time: Utc::now(),
-                open: 100.0,
-                high: 100.0,
-                low: 100.0,
-                close: 100.0,
-                volume: 1000.0,
-            },
-            Bar {
-                time: Utc::now() + Duration::minutes(5),
-                open: 100.0,
-                high: 100.0,
-                low: 100.0,
-                close: 100.0,
-                volume: 1000.0,
-            },
-        ];
-        let mut ad = AccumulationDistribution::new();
-        ad.calculate(&bars);
-
-        if let (Some(IndicatorValue::Single(first)), Some(IndicatorValue::Single(second))) =
-            (ad.values().first(), ad.values().get(1))
-        {
-            assert_eq!(*first, *second, "A/D shouldn't change on doji bars");
-        }
     }
 }

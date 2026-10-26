@@ -4,6 +4,7 @@
 //! - `PnlLabel`: a profit or loss coloured by its sign (green, red or neutral)
 //! - `SideLabel`: coloured buy and sell or long and short badges
 
+use crate::localization as l10n;
 use egui::{Color32, Response, RichText, Ui};
 
 use crate::scales::{CurrencyFormatter, PriceFormatter};
@@ -36,10 +37,10 @@ fn signed(value: f64, magnitude: String) -> (f64, String) {
 /// normal text colour.
 ///
 /// ```
-/// # use egui_charts::ui_kit::trading_labels::PnlLabel;
+/// # use egui_charts::{ui_kit::trading_labels::PnlLabel, scales::CurrencyFormatter};
 /// # egui::__run_test_ui(|ui| {
-/// PnlLabel::currency(1234.5).show(ui);       // "+$1,234.50" in green
-/// PnlLabel::currency(-50.0).show(ui);        // "-$50.00" in red
+/// PnlLabel::currency(1234.5, &CurrencyFormatter::usd()).show(ui);       // "+$1,234.50" in green
+/// PnlLabel::currency(-50.0, &CurrencyFormatter::usd()).show(ui);        // "-$50.00" in red
 /// PnlLabel::percent(5.34).show(ui);          // "+5.34%" in green
 /// PnlLabel::value(-10.0, "custom").show(ui); // "custom" in red
 /// # });
@@ -52,9 +53,9 @@ pub struct PnlLabel {
 }
 
 impl PnlLabel {
-    /// Display a currency P&L value (e.g., "+$1,234.56" or "-$98.10")
-    pub fn currency(value: f64) -> Self {
-        let (value, text) = signed(value, CurrencyFormatter::usd().format(value.abs()));
+    /// Display a P&L value using the instrument currency and precision supplied by the host.
+    pub fn currency(value: f64, formatter: &CurrencyFormatter) -> Self {
+        let (value, text) = signed(value, formatter.format(value.abs()));
         Self {
             value,
             text,
@@ -107,7 +108,7 @@ impl PnlLabel {
         } else {
             ui.visuals().text_color()
         };
-        let mut rt = RichText::new(&self.text).color(color);
+        let mut rt = RichText::new(l10n::text(ui.ctx(), &self.text)).color(color);
         if self.strong {
             rt = rt.strong();
         }
@@ -197,7 +198,7 @@ impl SideLabel {
     /// Show the label
     pub fn show(self, ui: &mut Ui) -> Response {
         let color = side_color(ui, self.is_buy);
-        let mut rt = RichText::new(&self.text).color(color);
+        let mut rt = RichText::new(l10n::text(ui.ctx(), &self.text)).color(color);
         if let Some(s) = self.size {
             rt = rt.size(s);
         }
@@ -207,17 +208,37 @@ impl SideLabel {
 
 #[cfg(test)]
 mod tests {
-    use super::PnlLabel;
+    use super::{CurrencyFormatter, PnlLabel};
 
     #[test]
     fn pnl_text_signs_before_the_symbol_and_groups_thousands() {
         let wrong: Vec<_> = [
-            (PnlLabel::currency(1234.56), "+$1,234.56"),
-            (PnlLabel::currency(-98.10), "-$98.10"),
-            (PnlLabel::currency(1_234_567.891), "+$1,234,567.89"),
-            (PnlLabel::currency(0.0), "$0.00"),
-            (PnlLabel::currency(-0.0), "$0.00"),
-            (PnlLabel::currency(-0.001), "$0.00"),
+            (
+                PnlLabel::currency(12.5, &CurrencyFormatter::eur()),
+                "+12.50 €",
+            ),
+            (
+                PnlLabel::currency(-12.0, &CurrencyFormatter::new("JPY", 0)),
+                "-JPY12",
+            ),
+            (
+                PnlLabel::currency(1234.56, &CurrencyFormatter::usd()),
+                "+$1,234.56",
+            ),
+            (
+                PnlLabel::currency(-98.10, &CurrencyFormatter::usd()),
+                "-$98.10",
+            ),
+            (
+                PnlLabel::currency(1_234_567.891, &CurrencyFormatter::usd()),
+                "+$1,234,567.89",
+            ),
+            (PnlLabel::currency(0.0, &CurrencyFormatter::usd()), "$0.00"),
+            (PnlLabel::currency(-0.0, &CurrencyFormatter::usd()), "$0.00"),
+            (
+                PnlLabel::currency(-0.001, &CurrencyFormatter::usd()),
+                "$0.00",
+            ),
             (PnlLabel::percent(5.34), "+5.34%"),
             (PnlLabel::percent(-1.28), "-1.28%"),
             (PnlLabel::percent(0.0), "0.00%"),
@@ -229,7 +250,10 @@ mod tests {
         .collect();
         assert!(wrong.is_empty(), "(got, expected): {wrong:?}");
         // Text that shows zero takes the zero colour, whatever the value was.
-        assert_eq!(PnlLabel::currency(-0.001).value, 0.0);
+        assert_eq!(
+            PnlLabel::currency(-0.001, &CurrencyFormatter::usd()).value,
+            0.0
+        );
         assert_eq!(PnlLabel::percent(0.004).value, 0.0);
     }
 }

@@ -1,30 +1,31 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Historical Volatility (HV)
 /// Measures the annualized standard deviation of log returns
 /// Used for options pricing and risk assessment
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct HistoricalVolatility {
     /// Lookback period (typically 20 or 30)
     period: usize,
     /// Trading days per year (252 for stocks, 365 for crypto)
     trading_days: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl HistoricalVolatility {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
             trading_days: 252.0, // Default for stocks
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Deep Orange
+            values: IndicatorValues::new(),
+            color: palette::ORANGE, // Deep Orange
             visible: true,
         }
     }
@@ -36,11 +37,13 @@ impl HistoricalVolatility {
         self
     }
 
+    /// Annualize over 365 bars instead of the default 252.
     pub fn for_crypto(mut self) -> Self {
         self.trading_days = 365.0;
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -54,23 +57,15 @@ impl Default for HistoricalVolatility {
     }
 }
 
-impl Indicator for HistoricalVolatility {
-    fn name(&self) -> &str {
-        "HV"
-    }
-
-    fn desc(&self) -> &str {
-        "Historical Volatility - Annualized standard deviation of returns"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl HistoricalVolatility {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate log returns
@@ -89,7 +84,7 @@ impl Indicator for HistoricalVolatility {
         // Calculate rolling standard deviation
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &log_returns[i + 1 - self.period..=i];
 
@@ -98,7 +93,7 @@ impl Indicator for HistoricalVolatility {
                     window.iter().filter(|&&x| !x.is_nan()).copied().collect();
 
                 if valid_returns.len() < 2 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                     continue;
                 }
 
@@ -118,12 +113,43 @@ impl Indicator for HistoricalVolatility {
                 // Annualize: multiply by sqrt(trading_days) and convert to percentage
                 let annualized_hv = std_dev * self.trading_days.sqrt() * 100.0;
 
-                self.values.push(IndicatorValue::Single(annualized_hv));
+                values.push(IndicatorValue::Single(annualized_hv));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for HistoricalVolatility {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        trading_days: number("Trading days", 0.0, f64::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
+    }
+
+    fn name(&self) -> &str {
+        "HV"
+    }
+
+    fn desc(&self) -> &str {
+        "Historical Volatility - Annualized standard deviation of returns"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -171,6 +197,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -195,13 +223,14 @@ mod tests {
 
         // First values should be None
         for i in 0..5 {
-            assert!(matches!(hv.values[i], IndicatorValue::None));
+            assert!(matches!(hv.values.to_rows()[i], IndicatorValue::None));
         }
 
         // Should have positive volatility
-        if let IndicatorValue::Single(v) = hv.values[6] {
-            assert!(v > 0.0, "HV should be positive");
-        }
+        let IndicatorValue::Single(v) = hv.values.to_rows()[6] else {
+            panic!("no value: {:?}", hv.values.to_rows()[6]);
+        };
+        assert!(v > 0.0, "HV should be positive");
     }
 
     #[test]
@@ -220,9 +249,11 @@ mod tests {
         hv.calculate(&data);
 
         // With constant prices, HV should be 0
-        if let IndicatorValue::Single(v) = hv.values.last().unwrap() {
-            assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
-        }
+        let rows = hv.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
+        };
+        assert!(v.abs() < 0.01, "HV should be ~0 for constant prices");
     }
 
     #[test]
@@ -241,8 +272,10 @@ mod tests {
         hv.calculate(&data);
 
         // High volatility should produce large HV values
-        if let IndicatorValue::Single(v) = hv.values.last().unwrap() {
-            assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
-        }
+        let rows = hv.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", hv.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 100.0, "HV should be high for volatile prices, got {v}");
     }
 }

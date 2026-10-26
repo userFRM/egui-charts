@@ -1,0 +1,19 @@
+:root {
+  --sl-color-accent-low: #17294f;
+  --sl-color-accent: #407be0;
+  --sl-color-accent-high: #bbd3ff;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e7efff;
+  --sl-color-accent: #285bbd;
+  --sl-color-accent-high: #173c80;
+}
+.card {
+  --sl-card-border: var(--sl-color-accent);
+  --sl-card-bg: var(--sl-color-accent-low);
+}
+.starlight-aside {
+  --sl-color-asides-text-accent: var(--sl-color-accent-high);
+  --sl-color-asides-border: var(--sl-color-accent);
+  background-color: var(--sl-color-accent-low);
+}

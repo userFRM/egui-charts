@@ -1,8 +1,9 @@
 //! Built-in technical indicators.
 //!
 //! This module contains the built-in technical indicators, grouped by
-//! category below. All indicators implement the
-//! [`Indicator`](super::Indicator) trait for a uniform API.
+//! category below. Bar-based indicators implement the
+//! [`Indicator`](super::Indicator) trait for a uniform API. Execution-based studies
+//! [`trade_delta`] and [`footprint_studies`] consume [`crate::data::Footprint`] explicitly.
 //!
 //! # Indicator categories
 //!
@@ -14,38 +15,82 @@
 //!
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
-//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`],
+//! [`CCI`], [`Momentum`], [`RateOfChange`], [`Aroon`], [`AwesomeOscillator`], [`RsiDivergence`],
 //! [`UltimateOscillator`], [`ConnorsRSI`], [`CoppockCurve`], [`TRIX`],
 //! [`ElderRay`], [`FisherTransform`], [`ForceIndex`], [`MassIndex`],
 //! [`DetrendedPriceOscillator`], [`KDJ`], [`PrettyGoodOscillator`],
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
-//! [`PercentageVolumeOscillator`]
+//! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
+//! [`BullBearPower`], [`AdvanceDeclineRatioBars`], [`PriceMomentumOscillator`], [`PringsSpecialK`],
+//! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
 //! [`ADX`], [`SuperTrend`], [`IchimokuCloud`], [`ParabolicSAR`],
-//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`]
+//! [`DirectionalMovement`], [`VortexIndicator`], [`SqueezeMomentum`],
+//! [`WilliamsAlligator`], [`ChopZone`], [`VolatilityStop`], [`ChandeKrollStop`]
 //!
 //! ## Volatility
 //! [`BollingerBands`], [`ATR`], [`KeltnerChannels`], [`DonchianChannels`],
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
-//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`]
+//! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
+//! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`],
+//! [`Median`]
+//!
+//! ## Price
+//! [`BollingerBars`]
 //!
 //! ## Volume
 //! [`OnBalanceVolume`], [`VolumeWeightedAvgPrice`], [`MoneyFlowIndex`],
 //! [`AccumulationDistribution`], [`ChaikinMoneyFlow`],
 //! [`VolumeRateOfChange`], [`KlingerOscillator`], [`CVD`],
-//! [`VolProfileVisible`], [`VolProfileFixed`]
+//! [`VolProfileVisible`], [`VolProfileFixed`], [`ChaikinOscillator`], [`TimeWeightedAvgPrice`],
+//! [`VwapAutoAnchored`], [`Volume24h`], [`RelativeVolumeAtTime`]
 //!
 //! ## Support / resistance
-//! [`PivotPoints`], [`ZigZag`], [`PriceChannel`]
+//! [`PivotPoints`], [`PivotPointsHighLow`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
+//!
+//! ## Patterns
+//! [`CandlestickPatterns`]
 //!
 //! ## Statistics
-//! [`CorrelationCoefficient`], [`LinearRegression`], [`StandardError`],
-//! [`RankCorrelationIndex`], [`MajorityRule`]
+//! [`LinearRegression`], [`StandardError`],
+//! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`]
+//!
+//! ## Time
+//! [`TradingSessions`]
 
 use crate::model::Bar;
-use crate::studies::IndicatorValue;
+mod footprint_studies;
+pub use footprint_studies::{FootprintStudy, FootprintStudyKind, footprint_studies};
+mod options_volume_profile;
+pub use options_volume_profile::OptionsVolumeProfile;
+mod trade_delta;
+pub use trade_delta::{TradeDeltaValue, trade_delta};
+
+mod candlestick_patterns;
+pub use candlestick_patterns::{CandlestickPatterns, PatternTrend, PatternType};
+
+mod higher_interval_candles;
+pub use higher_interval_candles::HigherIntervalCandles;
+
+// Price overlays and their pane companion
+mod bollinger_bars;
+mod chande_kroll_stop;
+mod chop_zone;
+mod median;
+mod volatility_stop;
+mod williams_alligator;
+pub use bollinger_bars::BollingerBars;
+pub use chande_kroll_stop::ChandeKrollStop;
+pub use chop_zone::ChopZone;
+pub use median::Median;
+pub use volatility_stop::VolatilityStop;
+pub use williams_alligator::WilliamsAlligator;
+
+mod time_price_opportunity;
+pub use time_price_opportunity::TimePriceOpportunity;
 
 mod bollinger_bands;
 mod ema;
@@ -80,10 +125,15 @@ mod williams_r;
 
 // Volume indicators
 mod acc_dist;
+mod anchor_period;
 mod cmf;
 mod mfi;
 mod obv;
+mod twap;
+mod volume;
+mod volume_profile;
 mod vwap;
+mod vwap_auto_anchored;
 
 // Trend indicators
 mod adx;
@@ -98,7 +148,14 @@ mod keltner;
 mod std_dev;
 
 // Support/Resistance indicators
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod auto_drawing;
+mod gaps;
 mod pivot_points;
+mod pivot_points_high_low;
+mod rsi_divergence;
+mod williams_fractals;
 mod zigzag;
 
 // Oscillator/Momentum indicators (additional)
@@ -140,8 +197,8 @@ mod squeeze_momentum;
 
 // Fourth batch - Statistics and Price variants
 mod accumulation_swing;
-mod correlation;
 mod linear_regression;
+mod linear_regression_channel;
 mod percent_b;
 mod price_channel;
 mod relative_vigor;
@@ -172,41 +229,66 @@ mod cvd;
 // Eighth batch - Volume indicators
 mod net_volume;
 mod price_volume_trend_study;
-mod vol_profile_fixed;
-mod vol_profile_visible;
 
 // Eighth batch - Volatility indicators
 mod close_to_close_vol;
 mod ohlc_volatility;
-mod volatility_index;
+mod parkinson_vol;
 mod zero_trend_vol;
 
 // Ninth batch - Moving average variants and cross indicators
 mod envelopes;
 mod guppy_ma;
 mod ma_channel;
+mod ma_combination;
 mod ma_cross;
 mod ma_ema_cross;
 mod ma_hamming;
 mod ma_multiple;
+mod ma_presets;
 mod smoothed_ma;
 
 // Tenth batch - Statistics indicators
-mod correlation_log;
 mod majority_rule;
 mod rank_correlation;
 mod standard_error;
 mod standard_error_bands;
 
-// Tenth batch - Breadth & Price indicators
-mod advance_decline;
+// Tenth batch - Market structure indicators
 mod anchored_vwap_study;
 mod week52_highlow;
 
 // Tenth batch - Other indicators
 mod bbw;
-mod ratio_study;
-mod spread_study;
+
+// Eleventh batch - Oscillators
+mod accelerator_oscillator;
+mod advance_decline_ratio_bars;
+mod aroon_oscillator;
+mod average_daily_range;
+mod bbtrend;
+mod bull_bear_power;
+mod chaikin_oscillator;
+mod ulcer_index;
+// Standard oscillators
+mod market_breadth;
+mod price_momentum_oscillator;
+mod rci_ribbon;
+mod relative_volatility_index;
+mod smi_ergodic;
+pub use market_breadth::{
+    AdvanceDeclineLine, AdvanceDeclineRatio, CumulativeVolumeIndex, MarketBreadth,
+};
+mod special_k;
+mod woodies_cci;
+// Time studies
+mod performance;
+mod relative_volume_at_time;
+mod seasonality;
+mod trading_sessions;
+mod up_down_volume;
+mod visible_average_price;
+mod volume_24h;
 
 // Re-exports - Original indicators
 pub use bollinger_bands::BollingerBands;
@@ -242,10 +324,18 @@ pub use williams_r::WilliamsR;
 
 // Re-exports - Volume indicators
 pub use acc_dist::AccumulationDistribution;
+pub use anchor_period::AnchorPeriod;
 pub use cmf::ChaikinMoneyFlow;
 pub use mfi::MoneyFlowIndex;
 pub use obv::OnBalanceVolume;
+pub use twap::TimeWeightedAvgPrice;
+pub use volume::{Volume, VolumeAverage, VolumeColorRule};
+pub use volume_profile::{
+    VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
+    VolProfileSession, VolProfileVisible,
+};
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
+pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
 
 // Re-exports - Trend indicators
 pub use adx::ADX;
@@ -260,8 +350,15 @@ pub use keltner::KeltnerChannels;
 pub use std_dev::StandardDeviation;
 
 // Re-exports - Support/Resistance indicators
-pub use pivot_points::{PivotMethod, PivotPoints};
-pub use zigzag::{ZigZag, ZigZagMode};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use gaps::Gaps;
+pub use pivot_points::{PivotMethod, PivotPoints, PivotTimeframe};
+pub use pivot_points_high_low::PivotPointsHighLow;
+pub use rsi_divergence::RsiDivergence;
+pub use williams_fractals::WilliamsFractals;
+pub use zigzag::{ZigZag, ZigZagMode, ZigZagPivot};
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;
@@ -302,8 +399,8 @@ pub use squeeze_momentum::SqueezeMomentum;
 
 // Re-exports - Fourth batch (Statistics and Price variants)
 pub use accumulation_swing::AccumulationSwingIndex;
-pub use correlation::CorrelationCoefficient;
 pub use linear_regression::{LinearRegression, LinearRegressionSlope};
+pub use linear_regression_channel::LinearRegressionChannel;
 pub use percent_b::PercentB;
 pub use price_channel::PriceChannel;
 pub use relative_vigor::RelativeVigorIndex;
@@ -334,300 +431,62 @@ pub use cvd::{CVD, CVDMode};
 // Re-exports - Eighth batch (Volume indicators)
 pub use net_volume::NetVolume;
 pub use price_volume_trend_study::PriceVolumeTrendStudy;
-pub use vol_profile_fixed::VolProfileFixed;
-pub use vol_profile_visible::VolProfileVisible;
 
 // Re-exports - Eighth batch (Volatility indicators)
 pub use close_to_close_vol::CloseToCloseVol;
 pub use ohlc_volatility::OhlcVolatility;
-pub use volatility_index::VolatilityIndex;
+pub use parkinson_vol::ParkinsonVol;
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
 pub use envelopes::Envelopes;
 pub use guppy_ma::GuppyMA;
 pub use ma_channel::MAChannel;
+pub use ma_combination::{AverageLine, AverageType, MACombination};
 pub use ma_cross::MACross;
 pub use ma_ema_cross::EMACross;
 pub use ma_hamming::HammingMA;
 pub use ma_multiple::MultipleMA;
+pub use ma_presets::{MARibbon, MixedMACross, TripleMA};
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)
-pub use correlation_log::CorrelationLogReturns;
 pub use majority_rule::MajorityRule;
 pub use rank_correlation::RankCorrelationIndex;
 pub use standard_error::StandardError;
 pub use standard_error_bands::StandardErrorBands;
 
-// Re-exports - Tenth batch (Breadth & Price)
-pub use advance_decline::AdvanceDeclineLine;
+// Re-exports - Tenth batch (Market structure)
 pub use anchored_vwap_study::AnchoredVWAP;
-pub use week52_highlow::Week52HighLow;
+pub use week52_highlow::{Week52HighLow, Week52HighLowLevels};
 
 // Re-exports - Tenth batch (Other)
 pub use bbw::BollingerBandsWidth;
-pub use ratio_study::RatioStudy;
-pub use spread_study::SpreadStudy;
 
-/// Return a list of `(short_name, description)` pairs for every built-in indicator.
-///
-/// This is useful for building indicator-picker UIs or auto-complete
-/// lists. To construct an indicator dynamically, look it up through
-/// [`IndicatorFactory`](super::IndicatorFactory), which keys every built-in by
-/// its [`Indicator::name`](super::Indicator::name).
-pub fn list_builtin_indicators() -> Vec<(&'static str, &'static str)> {
-    vec![
-        // Moving Avgs
-        ("SMA", "Simple Moving Avg"),
-        ("EMA", "Exponential Moving Avg"),
-        ("WMA", "Weighted Moving Avg"),
-        ("DEMA", "Double Exponential Moving Avg"),
-        ("TEMA", "Triple Exponential Moving Avg"),
-        ("HMA", "Hull Moving Avg"),
-        ("ALMA", "Arnaud Legoux Moving Avg"),
-        ("VWMA", "Volume Weighted Moving Avg"),
-        ("LSMA", "Least Squares Moving Avg"),
-        ("SWMA", "Symmetrically Weighted Moving Avg"),
-        ("KAMA", "Kaufman Adaptive Moving Avg"),
-        // Volatility
-        ("Bollinger Bands", "Bollinger Bands"),
-        ("ATR", "Avg True Range"),
-        ("Keltner", "Keltner Channels"),
-        ("Donchian", "Donchian Channels"),
-        ("StdDev", "Standard Deviation"),
-        // Momentum
-        ("RSI", "Relative Strength Index"),
-        ("MACD", "Moving Avg Convergence Divergence"),
-        ("VW-MACD", "Volume Weighted MACD"),
-        ("Stochastic", "Stochastic Oscillator"),
-        ("Stochastic RSI", "Stochastic RSI"),
-        ("Williams %R", "Williams Percent Range"),
-        ("CCI", "Commodity Channel Index"),
-        ("ROC", "Rate of Change"),
-        ("Momentum", "Momentum"),
-        ("Aroon", "Aroon Indicator"),
-        ("Awesome Oscillator", "Awesome Oscillator"),
-        ("Ultimate Oscillator", "Ultimate Oscillator"),
-        // Trend
-        ("ADX", "Avg Directional Index"),
-        ("SuperTrend", "SuperTrend"),
-        ("Ichimoku", "Ichimoku Cloud"),
-        ("Parabolic SAR", "Parabolic Stop and Reverse"),
-        // Volume
-        ("OBV", "On Balance Volume"),
-        ("VWAP", "Volume Weighted Avg Price"),
-        ("MFI", "Money Flow Index"),
-        ("A/D", "Accumulation/Distribution Line"),
-        ("CMF", "Chaikin Money Flow"),
-        // Support/Resistance
-        (
-            "Pivot Points",
-            "Pivot Points (Standard, Fibonacci, Woodie, Camarilla, DeMark)",
-        ),
-        ("ZigZag", "ZigZag - Identifies significant swings"),
-        // Additional Oscillators/Momentum
-        ("TRIX", "Triple Exponential Avg"),
-        ("Coppock", "Coppock Curve - Long-term momentum"),
-        ("Force Index", "Force Index - Price movement force"),
-        ("Elder Ray", "Elder Ray - Bull/Bear Power"),
-        (
-            "Fisher Transform",
-            "Fisher Transform - Gaussian distribution",
-        ),
-        ("Connors RSI", "Connors RSI - Composite momentum"),
-        ("DPO", "Detrended Price Oscillator"),
-        ("Mass Index", "Mass Index - Range expansion reversal"),
-        // Volume/Price Oscillators
-        ("VROC", "Volume Rate of Change"),
-        ("BoP", "Balance of Power - Buyer/seller strength"),
-        ("EoM", "Ease of Movement - Price/volume relationship"),
-        (
-            "Volume Oscillator",
-            "Volume Oscillator - Volume EMA difference",
-        ),
-        ("PPO", "Percentage Price Oscillator"),
-        ("PVO", "Percentage Volume Oscillator"),
-        // Trend/Volatility
-        ("Vortex", "Vortex Indicator - Trend direction"),
-        ("Klinger", "Klinger Volume Oscillator - Money flow trend"),
-        ("CHOP", "Choppiness Index - Market trendiness"),
-        ("HV", "Historical Volatility - Annualized volatility"),
-        ("STC", "Schaff Trend Cycle - Fast trend oscillator"),
-        // Advanced Indicators
-        ("KDJ", "KDJ - Enhanced Stochastic with K, D, J lines"),
-        ("MFI BW", "Market Facilitation Index (Bill Williams)"),
-        ("Squeeze", "Squeeze Momentum - Volatility breakout"),
-        (
-            "Ehlers Fisher",
-            "Ehlers Fisher Transform - Price distribution",
-        ),
-        ("COG", "Center of Gravity - Reversal detection"),
-        ("Chandelier", "Chandelier Exit - ATR-based trailing stop"),
-        ("KST", "Know Sure Thing - Multi-timeframe momentum"),
-        ("Rainbow", "Rainbow Oscillator - Multi-MA distance"),
-        ("DMI", "Directional Movement Index - +DI/-DI lines"),
-        ("PGO", "Pretty Good Oscillator - Price in ATR units"),
-        // Fourth batch - Statistics and Price variants
-        ("ASI", "Accumulation Swing Index - Cumulative swing"),
-        ("Correlation", "Correlation Coefficient - Price vs time"),
-        ("LinReg", "Linear Regression - Trend line projection"),
-        ("LinReg Slope", "Linear Regression Slope - Rate of change"),
-        ("%B", "Percent B - Pos within Bollinger Bands"),
-        ("Price Channel", "Price Channel - N-bar high/low bands"),
-        ("RVI", "Relative Vigor Index - Momentum oscillator"),
-        ("SMI", "Stochastic Momentum Index - Smoothed stochastic"),
-        ("TP", "Typical Price - (H+L+C)/3"),
-        ("WC", "Weighted Close - (H+L+2C)/4"),
-        ("MP", "Median Price - (H+L)/2"),
-        (
-            "Ultimate Momentum",
-            "Ultimate Momentum - Multi-period momentum",
-        ),
-        // Fifth batch - Additional momentum and volume
-        ("AccBands", "Acceleration Bands - Volatility-based envelope"),
-        ("CV", "Chaikin Volatility - Range rate of change"),
-        ("CMO", "Chande Momentum Oscillator - Up/down momentum"),
-        ("CSI", "Commodity Selection Index - Pos sizing"),
-        (
-            "TDI",
-            "Trend Detection Index - Positive when trending, negative when consolidating",
-        ),
-        ("DS", "Double Stochastic - Double-smoothed oscillator"),
-        ("Impulse", "Elder Impulse System - Trend with momentum"),
-        ("MD", "McGinley Dynamic - Self-adjusting MA"),
-        ("TII", "Trend Intensity Index - Trend strength"),
-        ("Qstick", "Qstick - Candlestick body avg"),
-        ("TSI", "True Strength Index - Double-smoothed momentum"),
-        ("VIDYA", "Variable Index Dynamic Avg - Volatility MA"),
-        ("ZLEMA", "Zero Lag EMA - Reduced lag moving avg"),
-        ("VPT", "Volume Price Trend - Price-weighted volume"),
-        ("NVI", "Negative Volume Index - Low volume days"),
-        ("PVI", "Positive Volume Index - High volume days"),
-        ("WAD", "Williams AD - Buying/selling pressure"),
-        // Sixth batch - Price calculations
-        ("OHLC4", "OHLC4 - (Open + High + Low + Close) / 4"),
-        ("HLC3", "HLC3 - (High + Low + Close) / 3"),
-        ("HL2", "HL2 - (High + Low) / 2 - Midpoint"),
-        ("TR", "True Range - Max price movement"),
-        // Seventh batch - order-flow estimates from bars
-        (
-            "CVD",
-            "Cumulative Volume Delta - Buy minus sell volume, estimated from bars",
-        ),
-        // Eighth batch - Volume indicators
-        (
-            "Net Volume",
-            "Net Volume - Positive on up bars, negative on down bars",
-        ),
-        (
-            "Vol Profile VR",
-            "Volume Profile Visible Range - Volume distribution across price levels",
-        ),
-        (
-            "Vol Profile FR",
-            "Volume Profile Fixed Range - Volume distribution with fixed boundaries",
-        ),
-        (
-            "PVT Enhanced",
-            "Price Volume Trend Enhanced - PVT with EMA signal line",
-        ),
-        // Eighth batch - Volatility indicators
-        (
-            "C2C Vol",
-            "Close-to-Close Volatility - Annualized std dev of log returns",
-        ),
-        (
-            "GK Vol",
-            "Garman-Klass OHLC Volatility - Efficient OHLC estimator",
-        ),
-        (
-            "Parkinson Vol",
-            "Zero-Trend Volatility (Parkinson) - High-low range estimator",
-        ),
-        (
-            "Vol Index",
-            "Volatility Index - ATR-based annualized volatility percentage",
-        ),
-        // Ninth batch - Moving average variants and cross indicators
-        (
-            "SMMA",
-            "Smoothed Moving Average - Wilder's smoothing method",
-        ),
-        (
-            "GMMA",
-            "Guppy Multiple Moving Average - 12 EMAs in short/long groups",
-        ),
-        (
-            "MA Cross",
-            "Moving Average Cross - Two SMA lines for crossover signals",
-        ),
-        (
-            "EMA Cross",
-            "EMA Cross - Two EMA lines for crossover signals",
-        ),
-        (
-            "MA Channel",
-            "Moving Average Channel - MA with upper/lower offset bands",
-        ),
-        (
-            "Multi MA",
-            "Multiple Moving Averages - SMA 20, 50, 100, 200",
-        ),
-        (
-            "Envelopes",
-            "Moving Average Envelopes - Percentage bands around MA",
-        ),
-        (
-            "Hamming MA",
-            "Hamming Weighted Moving Average - Hamming window weighting",
-        ),
-        // Tenth batch - Statistics
-        (
-            "CorrLogRet",
-            "Correlation Log Returns - Pearson correlation of log returns vs time",
-        ),
-        (
-            "MajRule",
-            "Majority Rule - Up/down close majority over period",
-        ),
-        (
-            "RankCorr",
-            "Rank Correlation Index (Spearman) - Price vs time rank correlation",
-        ),
-        (
-            "StdErr",
-            "Standard Error - Standard error of linear regression",
-        ),
-        (
-            "StdErrBands",
-            "Standard Error Bands - LinReg with standard error envelope",
-        ),
-        // Tenth batch - Breadth & Price
-        (
-            "A/D Line",
-            "Advance/Decline Line - Cumulative up/down close count",
-        ),
-        (
-            "52W HL%",
-            "52-Week High/Low Percentage - Position within period range",
-        ),
-        (
-            "AVWAP",
-            "Anchored VWAP - Volume weighted average price from anchor bar",
-        ),
-        // Tenth batch - Other
-        ("Spread", "Spread Study - High minus Low for each bar"),
-        (
-            "Ratio",
-            "Ratio Study - Close/Open percentage change per bar",
-        ),
-        (
-            "BBW",
-            "Bollinger Bands Width - Band width as percentage of middle band",
-        ),
-    ]
-}
+// Re-exports - Eleventh batch (Oscillators)
+pub use accelerator_oscillator::AcceleratorOscillator;
+pub use advance_decline_ratio_bars::AdvanceDeclineRatioBars;
+pub use aroon_oscillator::AroonOscillator;
+pub use average_daily_range::AverageDailyRange;
+pub use bbtrend::BBTrend;
+pub use bull_bear_power::BullBearPower;
+pub use chaikin_oscillator::ChaikinOscillator;
+pub use ulcer_index::UlcerIndex;
+// Re-exports - Standard oscillators
+pub use price_momentum_oscillator::PriceMomentumOscillator;
+pub use rci_ribbon::RciRibbon;
+pub use relative_volatility_index::RelativeVolatilityIndex;
+pub use smi_ergodic::{SMIErgodic, SMIErgodicIndicator, SMIErgodicOscillator};
+pub use special_k::PringsSpecialK;
+pub use woodies_cci::WoodiesCCI;
+// Re-exports - Time studies
+pub use performance::Performance;
+pub use relative_volume_at_time::{RelativeVolumeAnchor, RelativeVolumeAtTime, RelativeVolumeMode};
+pub use seasonality::Seasonality;
+pub use trading_sessions::TradingSessions;
+pub use up_down_volume::UpDownVolume;
+pub use visible_average_price::VisibleAveragePrice;
+pub use volume_24h::Volume24h;
 
 /// A float parameter clamped into `min..=max`, NaN to `min`, the way constructors
 /// raise a length of 0 to 1.
@@ -641,18 +500,27 @@ fn clamp_param(value: f64, min: f64, max: f64) -> f64 {
 fn over_finite_bars(
     data: &[Bar],
     finite: impl Fn(&Bar) -> bool,
-    compute: impl FnOnce(&[Bar]) -> Vec<IndicatorValue>,
-) -> Vec<IndicatorValue> {
+    compute: impl FnOnce(&[Bar]) -> crate::studies::IndicatorValues,
+) -> crate::studies::IndicatorValues {
     if data.iter().all(&finite) {
         return compute(data);
     }
     let kept: Vec<_> = data.iter().filter(|b| finite(b)).cloned().collect();
-    let mut values = compute(&kept).into_iter();
-    data.iter()
-        .map(|b| if finite(b) { values.next() } else { None })
-        .map(|v| v.unwrap_or(IndicatorValue::None))
-        .collect()
+    let computed = compute(&kept);
+    let mut values = crate::studies::IndicatorValues::missing(data.len());
+    for (line, column) in computed.columns().iter().enumerate() {
+        let mut source = column.iter();
+        for (bar, input) in data.iter().enumerate() {
+            if finite(input) {
+                values.set_value(line, bar, *source.next().expect("one value per finite bar"));
+            }
+        }
+    }
+    values
 }
 
-/// Most price rows a volume profile computes.
-const MAX_PROFILE_ROWS: usize = 10_000;
+mod trade_profile;
+pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};
+
+mod order_flow;
+pub use order_flow::OrderFlowStudy;

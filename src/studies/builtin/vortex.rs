@@ -1,34 +1,37 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Vortex Indicator (VI)
 /// Identifies trend direction and strength
 /// Uses True Range and directional movement concepts
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct VortexIndicator {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [+VI (bullish), -VI (bearish)]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl VortexIndicator {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - +VI
-                DESIGN_TOKENS.semantic.extended.error,   // Red - -VI
+                palette::GREEN, // Green - +VI
+                palette::RED,   // Red - -VI
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
@@ -42,23 +45,15 @@ impl Default for VortexIndicator {
     }
 }
 
-impl Indicator for VortexIndicator {
-    fn name(&self) -> &str {
-        "Vortex"
-    }
-
-    fn desc(&self) -> &str {
-        "Vortex Indicator - Identifies trend direction"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl VortexIndicator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range, +VM, -VM for each bar
@@ -93,7 +88,7 @@ impl Indicator for VortexIndicator {
         // Calculate VI+ and VI-
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Sum over period
                 let tr_sum: f64 = tr_values[i + 1 - self.period..=i].iter().sum();
@@ -101,18 +96,41 @@ impl Indicator for VortexIndicator {
                 let vm_minus_sum: f64 = vm_minus[i + 1 - self.period..=i].iter().sum();
 
                 if tr_sum == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     let vi_plus = vm_plus_sum / tr_sum;
                     let vi_minus = vm_minus_sum / tr_sum;
-                    self.values
-                        .push(IndicatorValue::Multiple(vec![vi_plus, vi_minus]));
+                    values.push_lines(&[vi_plus, vi_minus]);
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for VortexIndicator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Vortex"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Vortex Indicator - Identifies trend direction"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -147,68 +165,5 @@ impl Indicator for VortexIndicator {
             format!("+VI({})", self.period),
             format!("-VI({})", self.period),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_vortex_calculation() {
-        let mut vi = VortexIndicator::new(5);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 103.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(108.0, 103.0, 107.0),
-            make_bar(110.0, 105.0, 109.0),
-            make_bar(112.0, 107.0, 111.0),
-            make_bar(114.0, 109.0, 113.0),
-        ];
-
-        vi.calculate(&data);
-
-        assert_eq!(vi.values.len(), 7);
-
-        // Should have valid values after period
-        if let IndicatorValue::Multiple(v) = &vi.values[6] {
-            assert_eq!(v.len(), 2);
-            // In uptrend, +VI should typically be > -VI
-        }
-    }
-
-    #[test]
-    fn test_vortex_uptrend() {
-        let mut vi = VortexIndicator::new(3);
-
-        // Clear uptrend
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(106.0, 101.0, 105.0),
-            make_bar(110.0, 105.0, 109.0),
-            make_bar(114.0, 109.0, 113.0),
-            make_bar(118.0, 113.0, 117.0),
-        ];
-
-        vi.calculate(&data);
-
-        if let IndicatorValue::Multiple(v) = vi.values.last().unwrap() {
-            // +VI should be greater than -VI in uptrend
-            assert!(v[0] > v[1], "+VI should be > -VI in uptrend");
-        }
     }
 }

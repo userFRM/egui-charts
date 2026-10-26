@@ -1,42 +1,30 @@
-//! Unified chart coordinate system.
+//! Coordinate mapping between bar indices, prices and screen positions.
 //!
-//! This module provides the single source of truth for all coordinate
-//! conversions between bar indices, prices, and screen positions.
-//!
-//! # Key Types
-//!
-//! - [`ChartMapping`]: The unified coordinate mapper for idx ↔ x and price ↔ y
-//!
-//! # Coordinate Formula
-//!
-//! ```text
-//! delta_from_right = base_idx + right_offset - bar_idx
-//! x = rect.min.x + rect.width() - (delta_from_right + 0.5) * bar_spacing - 1.0
-//! ```
+//! Use [`ChartMapping`] to share the same mapping across rendering, hit testing
+//! and host overlays.
 
 use crate::scales::PriceMap;
 use egui::{Pos2, Rect};
 
 /// Unified coordinate mapping for charts and indicator panes.
 ///
-/// This is the single source of truth for converting between:
+/// Converts between:
 /// - Bar indices ↔ X screen coordinates
 /// - Prices ↔ Y screen coordinates
 ///
-/// All chart components (main chart, indicator panes, hit testing, drawings)
-/// should use this struct for coordinate conversions.
+/// Share the mapping with overlays and hit tests to keep them aligned with the pane.
 #[derive(Clone, Copy, Debug)]
 pub struct ChartMapping {
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Spacing between bars in pixels
+    /// Spacing between bars in egui logical points.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
-    /// Index of the last visible bar (anchor point for x conversion)
+    /// Index of the final bar in the series, used as the horizontal anchor.
     pub base_idx: usize,
     /// Right-side offset for chart scrolling (in bar units)
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Price-to-y mapping of the pane; it carries its own vertical extent,
     /// which need not match `rect`
     pub price: PriceMap,
@@ -49,7 +37,7 @@ impl ChartMapping {
         bar_spacing: f32,
         start_idx: usize,
         base_idx: usize,
-        right_offset: f32,
+        right_offset: impl Into<f64>,
         price: PriceMap,
     ) -> Self {
         Self {
@@ -57,7 +45,7 @@ impl ChartMapping {
             bar_spacing,
             start_idx,
             base_idx,
-            right_offset,
+            right_offset: right_offset.into(),
             price,
         }
     }
@@ -71,9 +59,10 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right = self.base_idx as f32 + self.right_offset - bar_idx as f32;
-        let relative_x = self.rect.width() - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        self.rect.min.x + relative_x
+        let delta_from_right = (self.base_idx as f64 - bar_idx as f64) + self.right_offset;
+        (f64::from(self.rect.min.x) + f64::from(self.rect.width())
+            - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
+            - 1.0) as f32
     }
 
     /// Convert X screen coordinate to bar index (inverse of idx_to_x).
@@ -85,10 +74,7 @@ impl ChartMapping {
         if self.bar_spacing.abs() < f32::EPSILON {
             return self.base_idx;
         }
-        let relative_x = x - self.rect.min.x;
-        let delta_from_right = (self.rect.width() - relative_x - 1.0) / self.bar_spacing - 0.5;
-        let bar_idx = self.base_idx as f32 + self.right_offset - delta_from_right;
-        bar_idx.round() as usize
+        self.x_to_idx_f64(x).round() as usize
     }
 
     /// Convert X screen coordinate to fractional bar index.
@@ -99,12 +85,20 @@ impl ChartMapping {
     /// anchor index is returned rather than producing an infinite/NaN index.
     #[inline]
     pub fn x_to_idx_f32(&self, x: f32) -> f32 {
+        self.x_to_idx_f64(x) as f32
+    }
+
+    /// Convert X to a fractional bar index, retaining sub-bar precision on large histories.
+    /// A degenerate spacing returns the anchor, as in [`Self::x_to_idx_f32`].
+    #[inline]
+    pub fn x_to_idx_f64(&self, x: f32) -> f64 {
         if self.bar_spacing.abs() < f32::EPSILON {
-            return self.base_idx as f32 + self.right_offset;
+            return self.base_idx as f64 + self.right_offset;
         }
-        let relative_x = x - self.rect.min.x;
-        let delta_from_right = (self.rect.width() - relative_x - 1.0) / self.bar_spacing - 0.5;
-        self.base_idx as f32 + self.right_offset - delta_from_right
+        let relative_x = f64::from(x) - f64::from(self.rect.min.x);
+        let delta_from_right =
+            (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
+        self.base_idx as f64 + (self.right_offset - delta_from_right)
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -119,7 +113,7 @@ impl ChartMapping {
     /// Returns `None` when there is no data, or when the cursor falls before the
     /// first bar or after the last bar (the right-side empty scroll margin), so
     /// callers never index past the slice or read a stale neighbour. Resolution
-    /// uses [`Self::x_to_idx_f32`], the exact inverse of [`Self::idx_to_x`], so
+    /// uses [`Self::x_to_idx_f64`], the exact inverse of [`Self::idx_to_x`], so
     /// the bar at its own centre x resolves to itself and the readout describes
     /// the same bar the crosshair snaps to.
     #[inline]
@@ -127,7 +121,7 @@ impl ChartMapping {
         if visible_len == 0 || self.bar_spacing.abs() < f32::EPSILON {
             return None;
         }
-        let global_idx = self.x_to_idx_f32(x).round() as isize;
+        let global_idx = self.x_to_idx_f64(x).round() as isize;
 
         let first = self.start_idx as isize;
         let last = (self.start_idx + visible_len - 1) as isize;
@@ -243,6 +237,17 @@ mod tests {
             let x = mapping.idx_to_x(idx);
             let recovered = mapping.x_to_idx(x);
             assert_eq!(recovered, idx, "idx {idx} -> x {x} -> idx {recovered}");
+        }
+        for (right_offset, index) in [(-0.005, 999_999), (-500_000.005, 499_999)] {
+            let large = ChartMapping {
+                base_idx: 999_999,
+                bar_spacing: 200.0,
+                right_offset,
+                ..mapping
+            };
+            assert_eq!(large.idx_to_x(index), 800.0);
+            assert_eq!(large.x_to_idx(800.0), index);
+            assert_eq!(large.x_to_idx(901.0), index + 1);
         }
     }
 

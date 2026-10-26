@@ -9,9 +9,12 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, LineStyle, PositionSize,
-    RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ArrowStyle, ChartPoint, DrawingToolType, FibonacciConfig, FontWeight, GannConfig,
+    PitchforkConfig, PositionSize, RegressionTrendConfig, TimeframeVisibility,
 };
+
+use crate::data::VolumeProfileConfig;
+use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 
 /// A drawing on the chart
@@ -39,6 +42,42 @@ pub struct Drawing {
     /// Unique identifier for this drawing
     #[serde(skip)]
     pub id: usize,
+    /// Id of the stored record this drawing was restored from; `None` for a drawing never
+    /// stored, which is saved under its `id`
+    #[serde(skip)]
+    pub stored_id: Option<String>,
+    /// Creation time, in Unix milliseconds, of the stored record this drawing was restored
+    /// from; `None` for a drawing never stored, which is saved with the time of the save
+    #[serde(skip)]
+    pub created_at: Option<i64>,
+    /// User notes, saved with the drawing and restored from its stored record
+    #[serde(skip)]
+    pub notes: Option<String>,
+    /// Optional object-tree name, saved with the drawing.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Owning study id, or `None` for the main price pane. Follows that study when panes move
+    /// or merge; hosts restoring studies must retain or remap their ids. Older files use main.
+    #[serde(default)]
+    pub pane: Option<usize>,
+    /// Whether pointer and programmatic selection can select this drawing.
+    #[serde(default = "enabled")]
+    pub selectable: bool,
+    /// Whether chart saves and persistence notifications include this drawing.
+    #[serde(default = "enabled")]
+    pub saveable: bool,
+    /// Whether host object lists should include this drawing. Rendering is independent.
+    #[serde(default = "enabled")]
+    pub listed: bool,
+    /// Host-defined group identity, retained through saving and undo.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Stable id of a host-registered tool; `None` uses the built-in renderer.
+    #[serde(default)]
+    pub custom_tool: Option<String>,
+    /// Host-defined settings passed to the registered renderer and saved without interpretation.
+    #[serde(default)]
+    pub custom_settings: serde_json::Value,
     /// Type of drawing tool
     pub tool_type: DrawingToolType,
     /// Screen coordinates (updated each frame from chart_points)
@@ -51,6 +90,10 @@ pub struct Drawing {
     /// (empty for other tools); rebuilt with `points` by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
+    /// Position as fractions of the pane width and height for anchored text and notes.
+    /// `None` adopts the first displayed position, including for older saved drawings.
+    #[serde(default)]
+    pub screen_anchor: Option<[f32; 2]>,
     /// Drawing color as RGBA
     pub color: [u8; 4],
     /// Stroke width in pixels
@@ -95,9 +138,23 @@ pub struct Drawing {
     /// Band width of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
 
+    /// Price and time divisions of Gann boxes and squares.
+    #[serde(default)]
+    pub gann: Option<GannConfig>,
+    /// Whether a parallel channel draws its dashed halfway line.
+    #[serde(default)]
+    pub channel_midline: bool,
+    /// Level lines and band fill of the pitchfork tools.
+    #[serde(default)]
+    pub pitchfork: Option<PitchforkConfig>,
+
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
     pub z_order: i32,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl Drawing {
@@ -105,33 +162,70 @@ impl Drawing {
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         Self {
             id,
+            stored_id: None,
+            created_at: None,
+            notes: None,
+            label: None,
+            selectable: true,
+            saveable: true,
+            listed: true,
+            group: None,
             tool_type,
+            custom_tool: None,
+            custom_settings: serde_json::Value::Null,
             points: Vec::new(),
             chart_points: Vec::new(),
             level_ys: Vec::new(),
+            screen_anchor: None,
+            pane: None,
             color: [242, 54, 69, 255], // Default red (#F23645)
             stroke_width: 2.0,
             completed: false,
-            text: None,
+            text: (tool_type == DrawingToolType::Sticker).then(|| "sticker:bull".into()),
             // Styling defaults
             line_style: LineStyle::Solid,
             fill_color: None,
             locked: false,
             visible: true,
-            font_size: 12.0,
+            font_size: if matches!(
+                tool_type,
+                DrawingToolType::FontIcon | DrawingToolType::Sticker
+            ) {
+                32.0
+            } else {
+                12.0
+            },
             font_weight: FontWeight::Normal,
             extend_left: false,
             extend_right: false,
             arrow_start_style: ArrowStyle::None,
-            arrow_end_style: ArrowStyle::Arrow,
+            arrow_end_style: if matches!(
+                tool_type,
+                DrawingToolType::Arrow | DrawingToolType::ArrowMarker | DrawingToolType::Path
+            ) {
+                ArrowStyle::Arrow
+            } else {
+                ArrowStyle::None
+            },
             timeframe_visibility: TimeframeVisibility::all(),
             position_size: None,
             fib_config: None,
             volume_profile: None,
             regression_trend: None,
+            pitchfork: None,
+            channel_midline: false,
+            gann: None,
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
+    }
+
+    /// Creates a host-defined drawing. The manager looks up `tool` in its registry; the
+    /// built-in polyline identity supplies anchor handles and multi-click input only.
+    pub fn custom(tool: impl Into<String>) -> Self {
+        let mut drawing = Self::new(0, DrawingToolType::Polyline);
+        drawing.custom_tool = Some(tool.into());
+        drawing
     }
 
     /// Create a new drawing with a specific color
@@ -170,8 +264,32 @@ impl Drawing {
             .unwrap_or_default();
     }
 
+    /// Rebuilds anchored text and note coordinates relative to the pane. Call after
+    /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
+    /// adopt their first displayed position. Resizing preserves the width and height fractions.
+    pub fn update_pane_coords(&mut self, pane: egui::Rect) {
+        if !matches!(
+            self.tool_type,
+            DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
+        ) || !pane.is_finite()
+            || pane.width() <= 0.0
+            || pane.height() <= 0.0
+        {
+            return;
+        }
+        if let Some(pos) = self.points.first_mut() {
+            let anchor = self.screen_anchor.get_or_insert_with(|| {
+                [
+                    (pos.x - pane.left()) / pane.width(),
+                    (pos.y - pane.top()) / pane.height(),
+                ]
+            });
+            *pos = pane.min + egui::vec2(anchor[0] * pane.width(), anchor[1] * pane.height());
+        }
+    }
+
     /// The Fibonacci config in use and the price of each of its visible levels, for a retracement
-    /// or an extension with both anchors placed.
+    /// or an extension projected from its third anchor (the first anchor for legacy two-point drawings).
     pub(crate) fn fib_levels(&self) -> Option<(FibonacciConfig, Vec<f64>)> {
         let extension = match self.tool_type {
             DrawingToolType::FibonacciRetracement => false,
@@ -188,8 +306,9 @@ impl Drawing {
                 FibonacciConfig::default()
             }
         });
+        let origin = self.chart_points.get(2).unwrap_or(start).price;
         let prices = config
-            .level_prices(start.price, end.price, extension)
+            .level_prices(start.price, end.price, extension, origin)
             .collect();
         Some((config, prices))
     }

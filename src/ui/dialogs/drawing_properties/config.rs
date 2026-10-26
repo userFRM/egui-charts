@@ -2,7 +2,7 @@
 
 use crate::tokens::DESIGN_TOKENS;
 
-/// Content height that fits the tallest tab (Coordinates) above the footer.
+/// Default content height; longer coordinate and level lists scroll above the footer.
 const HEIGHT: f32 = 346.0;
 
 /// Configuration for the drawing properties dialog
@@ -27,11 +27,11 @@ pub struct DrawingPropertiesConfig {
 impl Default for DrawingPropertiesConfig {
     fn default() -> Self {
         Self {
-            width: DESIGN_TOKENS.sizing.dialog.default_width,
+            width: 520.0,
             height: HEIGHT,
             tab_height: DESIGN_TOKENS.sizing.settings_dialog.tab_height,
-            content_padding: DESIGN_TOKENS.spacing.lg,
-            row_spacing: DESIGN_TOKENS.spacing.md,
+            content_padding: crate::theme::Theme::default().spacing.lg,
+            row_spacing: crate::theme::Theme::default().spacing.md,
             label_width: DESIGN_TOKENS.sizing.dialog.label_width,
             control_width: DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
         }

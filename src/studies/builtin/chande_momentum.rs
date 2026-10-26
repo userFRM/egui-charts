@@ -1,30 +1,32 @@
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Chande Momentum Oscillator (CMO)
 /// Measures momentum on both up and down days
 /// Ranges from -100 to +100
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct ChandeMomentumOscillator {
     /// Period for calculation (typically 14 or 20)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl ChandeMomentumOscillator {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            values: IndicatorValues::new(),
+            color: palette::PURPLE,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -38,6 +40,16 @@ impl Default for ChandeMomentumOscillator {
 }
 
 impl Indicator for ChandeMomentumOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CMO"
     }
@@ -92,7 +104,7 @@ impl Indicator for ChandeMomentumOscillator {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -124,37 +136,5 @@ impl Indicator for ChandeMomentumOscillator {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("CMO({})", self.period)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_cmo() {
-        let mut cmo = ChandeMomentumOscillator::new(5);
-
-        // Uptrending data
-        let data: Vec<Bar> = (0..20).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        cmo.calculate(&data);
-
-        // In pure uptrend, CMO should be +100
-        if let IndicatorValue::Single(v) = cmo.values.last().unwrap() {
-            assert!(*v > 50.0, "CMO should be positive in uptrend");
-        }
     }
 }

@@ -1,6 +1,6 @@
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Anchored VWAP - VWAP calculated from a specific anchor bar index forward.
@@ -9,17 +9,18 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct AnchoredVWAP {
     anchor_bar: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl AnchoredVWAP {
+    /// Create with a zero-based anchor bar index for volume-weighted averaging.
     pub fn new(anchor_bar: usize) -> Self {
         Self {
             anchor_bar,
-            values: Vec::new(),
-            colors: vec![DESIGN_TOKENS.semantic.indicators.vwap],
+            values: IndicatorValues::new(),
+            colors: vec![palette::YELLOW],
             visible: true,
         }
     }
@@ -37,6 +38,16 @@ impl Default for AnchoredVWAP {
 }
 
 impl Indicator for AnchoredVWAP {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        anchor_bar: length("Anchor bar", 0, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "AVWAP"
     }
@@ -80,7 +91,7 @@ impl Indicator for AnchoredVWAP {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

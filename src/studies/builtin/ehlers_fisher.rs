@@ -1,46 +1,48 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Ehlers Fisher Transform (John Ehlers version)
 /// Converts prices into a Gaussian normal distribution
 /// More responsive than standard Fisher Transform
 ///
 /// Related: [`FisherTransform`](super::FisherTransform) clamps the smoothed
 /// value instead of the normalized price.
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct EhlersFisher {
     /// Lookback period (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Fisher, Trigger]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl EhlersFisher {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Trigger
+                palette::BLUE,   // Blue - Fisher
+                palette::ORANGE, // Orange - Trigger
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -80,7 +82,12 @@ impl EhlersFisher {
             let new_value1 = 0.33 * normalized.clamp(-0.999, 0.999) + 0.67 * value1;
 
             // Fisher transform
-            let prev_fisher = fisher;
+            // The first value has no previous one to trigger on.
+            let prev_fisher = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                fisher
+            };
             fisher = 0.5 * ((1.0 + new_value1) / (1.0 - new_value1)).ln() + 0.5 * fisher;
 
             value1 = new_value1;
@@ -91,10 +98,8 @@ impl EhlersFisher {
         for (fisher, trigger) in fisher_values {
             if fisher.is_nan() {
                 values.push(IndicatorValue::None);
-            } else if trigger.is_nan() || trigger == 0.0 {
-                values.push(IndicatorValue::Single(fisher));
             } else {
-                values.push(IndicatorValue::Multiple(vec![fisher, trigger]));
+                values.push_lines(&[fisher, trigger]);
             }
         }
         values
@@ -108,6 +113,16 @@ impl Default for EhlersFisher {
 }
 
 impl Indicator for EhlersFisher {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HL2,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Ehlers Fisher"
     }
@@ -124,7 +139,7 @@ impl Indicator for EhlersFisher {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -172,6 +187,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -196,6 +213,7 @@ mod tests {
         // Should have Fisher values
         let valid_cnt = ef
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

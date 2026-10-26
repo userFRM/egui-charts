@@ -16,12 +16,14 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::text::LayoutJob;
 use egui::{Align, CollapsingResponse, Id, RichText, TextStyle, Ui, Vec2, WidgetText};
 
-use crate::icons::Icon;
+use crate::icons::{Icon, icons};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use egui::emath::GuiRounding;
 
 /// A collapsible section with header
 pub struct Section {
@@ -69,7 +71,7 @@ impl Section {
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> CollapsingResponse<R> {
         let theme = ui.active_theme();
-        let mut text = RichText::new(&self.title).size(theme.text.small);
+        let mut text = RichText::new(l10n::text(ui.ctx(), &self.title)).size(theme.text.small);
         if self.strong_header {
             text = text.strong();
         }
@@ -90,24 +92,33 @@ impl Section {
             text.into()
         };
 
-        let mut header = egui::CollapsingHeader::new(header_text)
+        let header = egui::CollapsingHeader::new(header_text)
             .id_salt(self.id)
             .default_open(self.default_open);
 
-        if let Some(icon) = self.icon {
-            header = header.icon(move |ui, openness, response| {
-                egui::collapsing_header::paint_default_icon(ui, openness, response);
-                // The header centres this rect in its indent and starts the title at the indent.
+        let header = header.icon(move |ui, openness, response| {
+            let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
+            let chevron = if openness > 0.5 {
+                &icons::CHEVRON_DOWN
+            } else {
+                &icons::CHEVRON_RIGHT
+            };
+            let rect = egui::Rect::from_center_size(response.rect.center(), Vec2::splat(icon_size))
+                .round_to_pixels(ui.pixels_per_point());
+            chevron
+                .as_image_tinted(rect.size(), tint)
+                .paint_at(ui, rect);
+            if let Some(icon) = self.icon {
+                // The title reserves this icon slot after the disclosure control.
                 let left = response.rect.center().x + ui.spacing().indent / 2.0;
-                let icon_rect = egui::Rect::from_min_size(
+                let rect = egui::Rect::from_min_size(
                     egui::pos2(left, response.rect.center().y - icon_size / 2.0),
                     Vec2::splat(icon_size),
-                );
-                let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
-                icon.as_image_tinted(Vec2::splat(icon_size), tint)
-                    .paint_at(ui, icon_rect);
-            });
-        }
+                )
+                .round_to_pixels(ui.pixels_per_point());
+                icon.as_image_tinted(rect.size(), tint).paint_at(ui, rect);
+            }
+        });
 
         header.show(ui, add_contents)
     }

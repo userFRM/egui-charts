@@ -1,0 +1,22 @@
+[package]
+name = "egui-charts-capture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone like `examples/demo`: built on its own, never by the library crate.
+[workspace]
+
+[[bin]]
+name = "capture"
+path = "main.rs"
+
+[dependencies]
+egui-charts = { path = "../..", features = ["ui"] }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "wgpu", "persistence"] }
+egui = "0.37.0"
+egui_extras = { version = "0.37.0", features = ["svg"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu", "eframe"] }
+chrono = "0.4.43"
+log = "0.4.29"
+image = { version = "0.25", default-features = false, features = ["png"] }

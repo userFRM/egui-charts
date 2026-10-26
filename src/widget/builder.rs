@@ -1,8 +1,8 @@
 //! Chart construction, configuration, and data management methods.
 //!
-//! This module contains the builder-pattern constructors and the mutable
-//! configuration API for [`Chart`]. Use these methods to create a chart,
-//! set its initial state, and update it across frames.
+//! This module contains [`ChartBuilder`], the builder-pattern constructors and
+//! the mutable configuration API for [`Chart`]. Use these methods to create a
+//! chart, set its initial state, and update it across frames.
 //!
 //! # Builder Pattern
 //!
@@ -34,19 +34,24 @@
 //! # }
 //! ```
 
+#[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
-use crate::config::{ChartConfig, ChartOptions};
-use crate::data::FeedState;
+use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
+use crate::data::{Datafeed, FeedState};
+#[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
-use crate::model::ChartType;
-use crate::model::{BarData, ChartState};
+use crate::model::{BarClock, BarData, Timeframe};
+use crate::model::{ChartType, ChartTypeParams};
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
+use crate::studies::ChartState;
 use crate::studies::IndicatorRegistry;
+use crate::theme::Theme;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 impl Chart {
     /// Creates a new chart with default configuration.
@@ -60,7 +65,7 @@ impl Chart {
     /// * `data` -- The OHLCV bar data to display
     pub fn new(data: BarData) -> Self {
         let chart_options = ChartOptions::default();
-        let (bars, rejected_bars) = super::series::clean(data.bars);
+        let (bars, rejected_bars) = super::series::clean(data.bars, &BarClock::exact());
         let mut state = ChartState::new(BarData::from_bars(bars));
 
         // Initialize TimeScale with defaults (apply all constraints)
@@ -79,9 +84,12 @@ impl Chart {
 
         Self {
             state,
+            replay: None,
             config: ChartConfig::default(),
+            applied_config_scale_mode: Default::default(),
             start_idx: 0,
             chart_options,
+            keyboard: super::keyboard::KeyboardState::default(),
             kinetic_scroll: KineticScrollState::new(),
             scroll_start_pos: None,
             scroll_start_offset: None,
@@ -91,9 +99,13 @@ impl Chart {
             apply_visible_bars_once: false,
             price_axis_drag: None,
             pending_start_idx: None,
+            pending_scroll_time: None,
+            scroll_animation: None,
+            time_axis_rect: egui::Rect::NOTHING,
             chart_type: ChartType::Candles,
-            renko_brick_size: 1.0,
-            kagi_reversal_amount: 1.0,
+            chart_type_params: ChartTypeParams::default(),
+            pending_box_sizes: [false; 4],
+            older_bars_drawn: true,
             tracking_mode_active: false,
             mouse_in_chart: false,
             feed: FeedState {
@@ -102,17 +114,90 @@ impl Chart {
             },
             from_ticks: BTreeSet::new(),
             studies: IndicatorRegistry::new(),
+            study_data: Default::default(),
+            element_studies: Default::default(),
+            #[cfg(feature = "studies")]
+            volume_setting: false,
+            #[cfg(feature = "studies")]
+            volume_study: None,
+            main_series_visible: true,
+            main_series_present: true,
+            main_series_scale: Default::default(),
+            price_series: Vec::new(),
+            heikin_ashi: Default::default(),
+            series_scales: Default::default(),
             study_ids: Vec::new(),
+            study_inputs: Vec::new(),
+            study_autoscale: Vec::new(),
             pending_from: Vec::new(),
+            next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
+            primitives: Vec::new(),
+            next_primitive: 0,
+            #[cfg(feature = "drawings")]
             drawings: DrawingManager::new(),
+            #[cfg(feature = "drawings")]
+            symbol_drawings: Default::default(),
+            #[cfg(not(feature = "drawings"))]
+            symbol_markers: Default::default(),
+            #[cfg(feature = "drawings")]
+            drawing_store: None,
+            #[cfg(feature = "drawings")]
+            restored_studies: Default::default(),
+            history: super::history::ChartHistory::default(),
+            pane_layout: super::pane_layout::PaneLayout::default(),
+            pane_options: Default::default(),
             box_zoom: BoxZoomState::new(),
             zoom_mode_active: false,
             zoom_just_applied: false,
             symbol: String::new(),
-            timeframe: String::new(),
+            legend_instrument: None,
+            currency_choices: Vec::new(),
+            currency_choice: None,
+            legend_badge: None,
+            watermark: None,
+            legend_statuses: Vec::new(),
+            quote: None,
+            quote_action: None,
+            server_time_offset: None,
+            bar_close_time: None,
+            indicator_settings_request: None,
+            session_quote: None,
+            session_provider: None,
+            horizontal_scale: None,
+            locale: None,
+            date_format: None,
+            time_formatter: None,
+            price_formatter: None,
+            percentage_formatter: None,
+            volume_formatter: None,
+            series_formatters: Default::default(),
+            extended_hours: false,
+            measured_axis_width: 0.0,
+            last_layout: None,
+            last_ratio_lock: false,
+            axis_hover: None,
+            scale_settings_requested: false,
+            theme_override: None,
+            inherited_theme: None,
+            host_events: Default::default(),
+            indicator_source_request: None,
+            events: Vec::new(),
+            time_scale_events: Vec::new(),
+            event_visibility: Default::default(),
+            mark_source: None,
+            signal_source: None,
+            targets: Default::default(),
+            show_price_targets: false,
+            hidden_signal_categories: Default::default(),
+            event_click: None,
+            timeframe: None,
+            feed_link: None,
+            #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
+            main_series_style: crate::model::SeriesStyle::default(),
+            last_price_pulse: std::cell::Cell::new(None),
             last_price_map: PriceMap::new(
                 PriceTransform::default(),
                 PriceRange::new(0.0, 100.0),
@@ -125,12 +210,31 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             synced_crosshair_bar_idx: None,
+            synced_crosshair_price: None,
+            last_crosshair: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Vec::new(),
+            marker_options: Default::default(),
+            change_marks: None,
+            price_lines: Vec::new(),
+            next_price_line: 0,
+            #[cfg(feature = "ui")]
+            trading_tags: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_outlined: Vec::new(),
+            #[cfg(feature = "ui")]
+            trading_bid_ask: false,
+            #[cfg(feature = "ui")]
+            order_quantity: None,
+            #[cfg(feature = "ui")]
+            quantity_clicked: None,
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,
+            menu_open: false,
+            size: None,
+            merge_groups: Default::default(),
         }
     }
 
@@ -145,7 +249,7 @@ impl Chart {
     /// * `config` -- Custom visual configuration (colors, padding, feature flags)
     pub fn with_config(data: BarData, config: ChartConfig) -> Self {
         let mut chart = Self::new(data);
-        chart.config = config;
+        chart.update_config(config);
         chart
     }
 
@@ -179,6 +283,7 @@ impl Chart {
         // Store the desired number so that we can compute the proper
         // bar spacing during `show_internal` when we know the widget width.
         self.desired_visible_bars = Some(count);
+        self.apply_visible_bars_once = true;
         // Default to showing the latest `count` bars unless caller overrides later
         self.start_idx = self.state.data().len().saturating_sub(count);
         self
@@ -186,14 +291,15 @@ impl Chart {
 
     /// Sets the starting bar index for the visible range (builder pattern).
     ///
-    /// Index `0` is the oldest bar in the data. Use this to start the chart
+    /// On price-based types indices count elements; index `0` is the oldest kept element.
+    /// Otherwise index `0` is the oldest bar in the data. Use this to start the chart
     /// at a specific point in history rather than at the latest data.
     pub fn start_idx(mut self, index: usize) -> Self {
         self.start_idx = index;
         self
     }
 
-    /// Returns the number of bars currently visible in the chart area.
+    /// Returns the number of visible slots, counting elements on price-based types.
     ///
     /// This value is computed from the bar spacing and widget width during
     /// rendering. Returns 100 as a fallback if the chart has not been rendered yet.
@@ -208,12 +314,25 @@ impl Chart {
         }
     }
 
-    /// Returns the current starting bar index of the visible range.
+    /// Returns the current starting index of the visible range, counting elements on price-based types.
     ///
     /// Useful for syncing chart position with external app state or persisting
     /// the user's scroll position across sessions.
     pub fn get_start_idx(&self) -> usize {
         self.start_idx
+    }
+
+    /// Applies a changed configuration mode without overriding direct scale controls.
+    pub(super) fn apply_config_scale_mode(&mut self) {
+        let mode = self.config.right_axis_scale_mode;
+        if self.applied_config_scale_mode != mode {
+            if self.state.price_scale().options().mode != mode {
+                self.state.price_scale_mut().reset();
+                self.state.clear_zoom_history();
+                self.state.price_scale_mut().options_mut().mode = mode;
+            }
+            self.applied_config_scale_mode = mode;
+        }
     }
 
     /// Replaces the visual configuration on a persistent chart instance.
@@ -222,6 +341,8 @@ impl Chart {
     /// changes settings). For initial construction prefer [`Chart::with_config`].
     pub fn update_config(&mut self, config: ChartConfig) {
         self.config = config;
+        self.applied_config_scale_mode = self.state.price_scale().options().mode;
+        self.apply_config_scale_mode();
     }
 
     /// Updates the desired number of visible bars on a persistent chart instance.
@@ -239,21 +360,43 @@ impl Chart {
     /// Updates the starting bar index on a persistent chart instance.
     ///
     /// Only triggers an update if `index` differs from the current value.
-    /// The viewport shift is applied on the next frame.
+    /// The viewport shift is applied on the next frame. On price-based types `index` counts
+    /// elements, with zero the oldest kept element.
     pub fn set_start_idx(&mut self, index: usize) {
         if index != self.start_idx {
             self.start_idx = index;
             self.pending_start_idx = Some(index);
+            self.pending_scroll_time = None;
         }
+    }
+
+    /// Scrolls the bar nearest `time` to the centre of the chart, keeping the zoom.
+    ///
+    /// Applied on the next frame. A time outside the data shows the nearest end; with a feed,
+    /// older history is requested until the time is reached or history ends. Panning, zooming,
+    /// [`Chart::set_start_idx`] or tracking cancel it.
+    pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.pending_scroll_time = Some(time);
+        self.pending_start_idx = None;
+        self.disable_tracking_mode();
+        self.kinetic_scroll = KineticScrollState::new();
     }
 
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
     ///
-    /// Takes effect on the next rendered frame. For Renko/Kagi charts, also
-    /// set the brick/reversal size with [`Chart::set_renko_brick_size`] or
-    /// [`Chart::set_kagi_reversal_amount`].
+    /// Takes effect on the next rendered frame. Price-based chart types take their
+    /// sizes from [`Chart::set_chart_type_params`]. A change clears the zoom history and the
+    /// series and drawing selection, keeping bar spacing and the time at the right edge.
+    /// A view near the live edge stays there. On Renko, Kagi, Line Break, Point and Figure and
+    /// range bar charts, indices count elements instead of bars.
     pub fn set_chart_type(&mut self, chart_type: ChartType) {
-        self.chart_type = chart_type;
+        if self.chart_type != chart_type {
+            self.state.clear_zoom_history();
+            self.selection.deselect();
+            #[cfg(feature = "drawings")]
+            self.drawings.deselect();
+            self.chart_type = chart_type;
+        }
     }
 
     /// Enables tracking mode, which automatically scrolls to keep the latest bar visible.
@@ -262,6 +405,7 @@ impl Chart {
     /// there as new data arrives. Disable with [`Chart::disable_tracking_mode`].
     pub fn enable_tracking_mode(&mut self) {
         self.tracking_mode_active = true;
+        self.pending_scroll_time = None;
         // Immediately scroll to latest when enabling
         self.state.time_scale_mut().scroll_to_realtime();
     }
@@ -290,30 +434,34 @@ impl Chart {
         self.chart_type
     }
 
-    /// Sets the Renko brick size in price units.
+    /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,
+    /// Line Break) and of the baseline.
     ///
-    /// Each Renko brick represents a fixed price movement of this size.
-    /// Only affects rendering when the chart type is [`ChartType::Renko`].
-    pub fn set_renko_brick_size(&mut self, brick_size: f64) {
-        self.renko_brick_size = brick_size;
+    /// Fixed sizes are in price units. ATR and percentage methods resolve from the loaded history
+    /// when this is called, or once enough bars arrive if history is not ready. They then stay
+    /// fixed through ticks, appends, corrections and prepends. Calling this again or replacing
+    /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
+    /// reported on the chart. On price-based types a change
+    /// clears the zoom history and selection and keeps the right-edge item by time and rank.
+    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+        if self.chart_type.is_time_independent() && self.chart_type_params != params {
+            self.state.clear_zoom_history();
+            self.selection.deselect();
+            #[cfg(feature = "drawings")]
+            self.drawings.deselect();
+        }
+        self.chart_type_params = params;
+        self.pending_box_sizes = self
+            .chart_type_params
+            .size_methods()
+            .map(|method| method != crate::model::BoxSizeMethod::Fixed);
+        self.chart_type_params
+            .resolve_sizes(&self.state.data().bars, &mut self.pending_box_sizes);
     }
 
-    /// Returns the current Renko brick size in price units.
-    pub fn renko_brick_size(&self) -> f64 {
-        self.renko_brick_size
-    }
-
-    /// Sets the Kagi reversal amount in price units.
-    ///
-    /// A new Kagi line segment is drawn when price reverses by at least this
-    /// amount. Only affects rendering when the chart type is [`ChartType::Kagi`].
-    pub fn set_kagi_reversal_amount(&mut self, reversal_amount: f64) {
-        self.kagi_reversal_amount = reversal_amount;
-    }
-
-    /// Returns the current Kagi reversal amount in price units.
-    pub fn kagi_reversal_amount(&self) -> f64 {
-        self.kagi_reversal_amount
+    /// Returns the parameters of the price-based chart types and of the baseline.
+    pub fn chart_type_params(&self) -> &ChartTypeParams {
+        &self.chart_type_params
     }
 
     /// Calculates how many bars fit in the given pixel width at the current bar spacing.
@@ -339,6 +487,24 @@ impl Chart {
         self.last_rendered_price_rect
     }
 
+    /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
+    /// hidden: the configured minimum width, or wider when the labels need more room.
+    pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
+        let (shown, minimum) = match side {
+            crate::scales::PriceScaleId::Right => {
+                (self.config.show_right_axis, self.config.right_axis_width)
+            }
+            crate::scales::PriceScaleId::Left => {
+                (self.config.show_left_axis, self.config.left_axis_width)
+            }
+        };
+        if shown {
+            minimum.max(self.measured_axis_width)
+        } else {
+            0.0
+        }
+    }
+
     /// Get the volume rect used for actual rendering
     ///
     /// This is the actual screen rect where volume bars are drawn, useful for
@@ -353,5 +519,580 @@ impl Chart {
     /// external code that needs to do hit testing on indicator lines.
     pub fn get_rendered_indicator_panes(&self) -> &[super::RenderedIndicatorPane] {
         &self.last_rendered_indicator_panes
+    }
+}
+
+/// Fluent builder for a [`Chart`].
+///
+/// Use one of the constructor methods ([`new`](Self::new),
+/// [`price_chart`](Self::price_chart), [`options_chart`](Self::options_chart)) and chain
+/// configuration calls before calling [`build`](Self::build) to produce the chart.
+///
+/// All setter methods return `Self` and are marked `#[must_use]` to prevent accidental
+/// drops of the builder mid-chain.
+///
+/// # Examples
+///
+/// ```rust
+/// use egui_charts::{ChartBuilder, ChartType};
+/// use egui_charts::model::Timeframe;
+/// use egui_charts::theme::Theme;
+///
+/// let chart = ChartBuilder::new()
+///     .with_symbol("ETHUSDT")
+///     .with_timeframe(Timeframe::Hour1)
+///     .with_theme(Theme::dark())
+///     .with_chart_type(ChartType::Candles)
+///     .with_visible_candles(120)
+///     .build();
+/// ```
+pub struct ChartBuilder {
+    feed: Option<Arc<dyn Datafeed>>,
+    symbol: Option<String>,
+    timeframe: Timeframe,
+    theme: Option<Theme>,
+    chart_type: ChartType,
+    config: ChartConfig,
+    chart_options: ChartOptions,
+    indicators: Option<IndicatorRegistry>,
+    #[cfg(feature = "drawings")]
+    drawing_registry: crate::drawings::DrawingToolRegistry,
+    visible_candles: usize,
+    /// Bars asked for in the first page of history.
+    initial_bars: usize,
+}
+
+impl ChartBuilder {
+    /// Create a new chart builder with sensible defaults
+    ///
+    /// With a feed and a symbol, the chart asks for the latest 1000 bars at its
+    /// first `show`, and again when the symbol or timeframe changes.
+    pub fn new() -> Self {
+        Self {
+            feed: None,
+            symbol: None,
+            timeframe: Timeframe::Min1,
+            theme: None,
+            chart_type: ChartType::Candles,
+            config: ChartConfig::default(),
+            chart_options: ChartOptions::default(),
+            indicators: None,
+            #[cfg(feature = "drawings")]
+            drawing_registry: Default::default(),
+            visible_candles: 100,
+            initial_bars: 1000,
+        }
+    }
+
+    /// Creates a line chart with the time axis labels and ticks hidden.
+    ///
+    /// The data is still a time series of bars, and pan and zoom work as on any
+    /// chart.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Line chart without time axis labels
+    /// let chart = ChartBuilder::options_chart()
+    ///     .with_symbol("SPY")
+    ///     .build();
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// For traditional OHLC price charts, use [`ChartBuilder::new()`] instead.
+    pub fn options_chart() -> Self {
+        let mut chart_options = ChartOptions::default();
+        // Disable time-based features
+        chart_options.time_scale.time_visible = false;
+        chart_options.time_scale.seconds_visible = false;
+        chart_options.time_scale.ticks_visible = false;
+
+        Self::new()
+            .with_config(ChartConfig {
+                show_time_labels: false,
+                ..Default::default()
+            })
+            .with_chart_options(chart_options)
+            .with_chart_type(ChartType::Line)
+    }
+
+    /// Creates a line chart without grid or crosshair, showing 50 bars.
+    ///
+    /// Drawing tools and studies are not added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Create minimal price ticker
+    /// let chart = ChartBuilder::price_chart()
+    ///     .with_symbol("BTCUSDT")
+    ///     .with_visible_candles(30)  // Even narrower view
+    ///     .build();
+    ///
+    /// // Clean chart with no grid, crosshair, or tools
+    /// ```
+    ///
+    /// ## Dashboard Example
+    ///
+    /// ```rust
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// // Multiple mini-charts for dashboard
+    /// let btc_chart = ChartBuilder::price_chart()
+    ///     .with_symbol("BTCUSDT")
+    ///     .build();
+    ///
+    /// let eth_chart = ChartBuilder::price_chart()
+    ///     .with_symbol("ETHUSDT")
+    ///     .build();
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// For drawing tools and studies, use [`ChartBuilder::new()`] instead.
+    pub fn price_chart() -> Self {
+        use crate::config::CrosshairOptions;
+
+        let config = ChartConfig {
+            show_horizontal_grid: false,
+            show_vertical_grid: false,
+            ..ChartConfig::default()
+        };
+
+        let chart_options = ChartOptions {
+            crosshair: CrosshairOptions {
+                vert_line_visible: false,
+                horz_line_visible: false,
+                label_visible: false,
+                ..CrosshairOptions::default()
+            },
+            ..ChartOptions::default()
+        };
+
+        Self::new()
+            .with_config(config)
+            .with_chart_options(chart_options)
+            .with_chart_type(ChartType::Line)
+            .with_visible_candles(50)
+    }
+
+    /// Source of instrument, history and live updates. Without one, feed the chart with
+    /// [`Chart::set_data`] and [`Chart::update`].
+    ///
+    /// [`build`](Self::build) calls no feed method: with a symbol, the chart's first
+    /// [`show`](Chart::show) asks the feed for the instrument and the latest page of history,
+    /// and subscribes once the instrument resolves.
+    #[must_use]
+    pub fn with_feed(mut self, feed: Arc<dyn Datafeed>) -> Self {
+        self.feed = Some(feed);
+        self
+    }
+
+    /// Set the trading symbol (e.g., `"BTCUSDT"`, `"AAPL"`).
+    ///
+    /// Without a symbol the chart shows none and requests nothing from the
+    /// feed.
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: impl Into<String>) -> Self {
+        self.symbol = Some(symbol.into());
+        self
+    }
+
+    /// Set the bar aggregation timeframe (default: `Timeframe::Min1`).
+    #[must_use]
+    pub fn with_timeframe(mut self, timeframe: Timeframe) -> Self {
+        self.timeframe = timeframe;
+        self
+    }
+
+    /// Set a per-chart theme. Without one the chart follows the active egui theme.
+    ///
+    /// Applies colours to the [`ChartConfig`] and retains a per-chart override for text sizes,
+    /// axes, legends and overlays. It leaves egui and sibling charts unchanged.
+    /// Use [`Chart::set_theme_override`] to replace or clear it on a persistent chart.
+    #[must_use]
+    pub fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = Some(theme);
+        self
+    }
+
+    /// Set the chart visualization type (default: `ChartType::Candles`).
+    ///
+    /// Common types: `Candles`, `Line`, `Area`, `Bar`, `Baseline`, `Histogram`.
+    #[must_use]
+    pub fn with_chart_type(mut self, chart_type: ChartType) -> Self {
+        self.chart_type = chart_type;
+        self
+    }
+
+    /// Override the entire [`ChartConfig`] (axis visibility, grid, realtime button, etc.).
+    #[must_use]
+    pub fn with_config(mut self, config: ChartConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Override the [`ChartOptions`] (crosshair, time scale, scroll/zoom behavior, etc.).
+    #[must_use]
+    pub fn with_chart_options(mut self, options: ChartOptions) -> Self {
+        self.chart_options = options;
+        self
+    }
+
+    /// Toggle session-break dividers (day/week/month boundaries) and shading.
+    #[must_use]
+    pub fn with_session_breaks(mut self, show: bool) -> Self {
+        self.config.show_session_breaks = show;
+        self
+    }
+
+    /// Add the studies of `registry` (SMA, RSI, MACD, etc.) to the chart, which computes,
+    /// updates and draws them.
+    #[must_use]
+    pub fn with_indicators(mut self, registry: IndicatorRegistry) -> Self {
+        self.indicators = Some(registry);
+        self
+    }
+
+    /// Set host drawing tools and built-in availability before the chart is built.
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    #[must_use]
+    pub fn with_drawing_registry(mut self, registry: crate::drawings::DrawingToolRegistry) -> Self {
+        self.drawing_registry = registry;
+        self
+    }
+
+    /// Set the number of bars visible in the initial viewport (default: 100).
+    ///
+    /// This controls the initial bar spacing so that approximately `count` bars
+    /// fit within the chart width. Use zero to keep the configured bar spacing.
+    #[must_use]
+    pub fn with_visible_candles(mut self, count: usize) -> Self {
+        self.visible_candles = count;
+        self
+    }
+
+    /// Bars asked for in the first page of history (default 1,000); scroll-back pages ask for
+    /// at least 600.
+    ///
+    /// # Examples
+    /// ```
+    /// use egui_charts::ChartBuilder;
+    ///
+    /// let chart = ChartBuilder::new().with_initial_bars(500).build();
+    /// ```
+    #[must_use]
+    pub fn with_initial_bars(mut self, bars: usize) -> Self {
+        self.initial_bars = bars;
+        self
+    }
+
+    /// Configure the right price scale
+    ///
+    /// The right price scale is the primary scale, shown by default. The chart
+    /// starts with this visibility and scale mode.
+    ///
+    /// # Examples
+    /// ```
+    /// use egui_charts::ChartBuilder;
+    /// use egui_charts::scales::PriceScaleMode;
+    ///
+    /// let chart = ChartBuilder::new()
+    ///     .with_right_price_scale(true, PriceScaleMode::Logarithmic)
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn with_right_price_scale(
+        mut self,
+        visible: bool,
+        mode: crate::scales::PriceScaleMode,
+    ) -> Self {
+        self.config.show_right_axis = visible;
+        self.config.right_axis_scale_mode = mode;
+        self
+    }
+
+    /// Enable or disable the scroll-to-latest button.
+    ///
+    /// Default: true (visible)
+    #[must_use]
+    pub fn with_realtime_btn(mut self, visible: bool) -> Self {
+        self.config.show_realtime_btn = visible;
+        self
+    }
+
+    /// Set the position of the scroll-to-latest button.
+    ///
+    /// Default: BottomRight
+    #[must_use]
+    pub fn with_realtime_button_pos(mut self, position: RealtimeButtonPos) -> Self {
+        self.config.realtime_button_pos = position;
+        self
+    }
+
+    /// Set custom text for the scroll-to-latest button. Set its size to fit the text.
+    ///
+    /// Default: a double right chevron
+    #[must_use]
+    pub fn with_realtime_button_text(mut self, text: impl Into<String>) -> Self {
+        self.config.realtime_button_text = Some(text.into());
+        self
+    }
+
+    /// Set the size of the scroll-to-latest button (width, height) in points.
+    ///
+    /// Default: (28.0, 28.0)
+    #[must_use]
+    pub fn with_realtime_button_size(mut self, width: f32, height: f32) -> Self {
+        self.config.realtime_button_size = (width, height);
+        self
+    }
+
+    /// Consume the builder and produce the chart.
+    ///
+    /// This applies the theme to the config and sets up the chart. It never
+    /// blocks and calls no feed method: with a feed and a symbol, the chart's
+    /// first [`show`](Chart::show) asks the feed for the instrument and history.
+    pub fn build(mut self) -> Chart {
+        if let Some(theme) = &self.theme {
+            self.config = self.config.with_theme(theme);
+        }
+
+        let mut chart =
+            Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
+
+        chart.theme_override = self.theme;
+        chart.set_chart_type(self.chart_type);
+        chart.set_visible_bars(self.visible_candles);
+        chart.set_symbol(self.symbol.unwrap_or_default());
+        chart.set_timeframe(self.timeframe);
+        #[cfg(feature = "drawings")]
+        {
+            chart.drawings.registry = self.drawing_registry;
+        }
+        if let Some(feed) = self.feed {
+            chart.attach_feed(feed, self.initial_bars);
+        }
+
+        let mut studies = self.indicators.unwrap_or_default();
+        while let Some(study) = studies.remove_indicator(0) {
+            chart.add_indicator(study);
+        }
+        chart
+    }
+}
+
+impl Default for ChartBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Bar;
+    use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn drawings_keep_times_through_replacement_streaming_and_symbol_switches() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::SeriesId;
+        let bars = |times: &[i64]| {
+            times
+                .iter()
+                .map(|&t| Bar::new(Utc.timestamp_opt(t, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect()
+        };
+        let mut chart = Chart::new(BarData::from_bars(bars(&[60, 120, 180])));
+        chart.set_symbol("A");
+        chart.user_action(|chart| {
+            let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+            drawing.chart_points = [-0.5, 0.5, 3.5].map(|i| ChartPoint::new(i, 10.0)).to_vec();
+            chart.drawings_mut().drawings.push(drawing);
+            chart
+                .drawings_mut()
+                .edit_drawing(7, |d| d.color = [1, 2, 3, 255]);
+        });
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![crate::model::Marker::new(Utc.timestamp_opt(90, 0).unwrap())],
+        );
+        // Anchors are at 30, 90, 270 seconds. New bars include an interior gap and
+        // a new cadence: their projected indices follow piecewise linear interpolation.
+        for (times, expected) in [
+            (vec![0, 60, 120, 180], [0.5, 1.5, 4.5]),
+            (vec![0, 120, 240, 360], [0.25, 0.75, 2.25]),
+            (vec![], [0.25, 0.75, 2.25]),
+            (vec![0, 60, 180, 300], [0.5, 1.25, 2.75]),
+        ] {
+            chart.set_data(SeriesId::MAIN, bars(&times));
+            for (point, want) in chart.drawings().drawings[0]
+                .chart_points
+                .iter()
+                .zip(expected)
+            {
+                assert_eq!(point.bar_idx, want, "times {times:?}");
+            }
+        }
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.25);
+        assert!(chart.redo());
+        chart.update(SeriesId::MAIN, bars(&[120]).pop().unwrap());
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 1.5);
+        // An index edited by the host gets a new time before the next mutation.
+        chart.drawings_mut().drawings[0].chart_points[1].bar_idx = 2.5;
+        chart.drawings_mut().stay_in_drawing_mode = true;
+        chart.drawings_mut().eraser_mode = true;
+        chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
+        chart.drawings_mut().registry.set_availability(
+            DrawingToolType::TrendLine,
+            crate::drawings::ToolAvailability {
+                visible: false,
+                enabled: false,
+            },
+        );
+        chart.set_symbol("B");
+        assert!(
+            !chart
+                .drawings()
+                .registry
+                .availability(DrawingToolType::TrendLine)
+                .enabled
+        );
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(chart.marks.is_empty());
+        assert!(chart.drawings().stay_in_drawing_mode);
+        assert!(chart.drawings().eraser_mode);
+        chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
+        chart.set_symbol("A");
+        assert!(chart.drawings().dragging_handle.is_none());
+        chart.set_data(SeriesId::MAIN, bars(&[0, 60, 120, 180, 240, 300]));
+        assert_eq!(chart.drawings().drawings[0].chart_points[1].bar_idx, 2.5);
+        assert_eq!(chart.marks.len(), 1);
+    }
+
+    #[test]
+    fn configured_price_mode_reaches_constructors_and_mutations() {
+        use crate::scales::PriceScaleMode;
+        for entry in 0..4 {
+            let config = ChartConfig {
+                right_axis_scale_mode: PriceScaleMode::Logarithmic,
+                ..Default::default()
+            };
+            let mut chart = match entry {
+                0 => Chart::with_config(BarData::new(), config.clone()),
+                1 => ChartBuilder::new().with_config(config.clone()).build(),
+                _ => Chart::new(BarData::new()),
+            };
+            if entry == 2 {
+                chart.update_config(config);
+            } else if entry == 3 {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            }
+            let ctx = egui::Context::default();
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Logarithmic,
+                "entry {entry}"
+            );
+            chart.state.price_scale_mut().set_range(1.0, 2.0);
+            chart.update_config(chart.config().clone());
+            assert!(chart.state.price_scale().is_manual());
+            chart.config_mut().right_axis_scale_mode = PriceScaleMode::Normal;
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.state.price_scale().options().mode,
+                PriceScaleMode::Normal
+            );
+            assert!(!chart.state.price_scale().is_manual());
+            chart.state.price_scale_mut().set_range(10.0, 20.0);
+            let range = chart.state.price_scale().range();
+            chart.user_action(|chart| {
+                chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+            });
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(chart.undo());
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            assert!(
+                chart.state.price_scale().is_manual(),
+                "undo restores the range"
+            );
+            assert_eq!(chart.state.price_scale().range(), range);
+        }
+    }
+
+    /// Both entry points fit 50 slots once and leave the same view at the latest bar.
+    #[test]
+    fn visible_bars_matches_the_setter_on_initial_frames() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let data = BarData::from_bars(
+            (0..600)
+                .map(|i| Bar::new(start + Duration::days(i), 100.0, 200.0, 100.0, 200.0, 1.0))
+                .collect(),
+        );
+        for width in [600.0, 900.0, 1440.0] {
+            let mut built = Chart::new(data.clone()).visible_bars(50);
+            let mut set = Chart::new(data.clone());
+            set.set_visible_bars(50);
+            let contexts = [egui::Context::default(), egui::Context::default()];
+            built.set_timeframe(Timeframe::Day1);
+            set.set_timeframe(Timeframe::Day1);
+            for frame in 0..3 {
+                for (chart, ctx) in [(&mut built, &contexts[0]), (&mut set, &contexts[1])] {
+                    let input = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 500.0),
+                        )),
+                        time: Some(frame as f64 * 0.1),
+                        ..Default::default()
+                    };
+                    ctx.run_ui(input, |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    built.state.time_scale().bar_spacing(),
+                    set.state.time_scale().bar_spacing(),
+                    "width {width}, frame {frame}"
+                );
+                assert_eq!(
+                    built.state.time_scale().bar_spacing(),
+                    built.get_rendered_price_rect().width() / 50.0
+                );
+                assert_eq!(built.get_visible_bars(), set.get_visible_bars());
+                assert_eq!(built.get_visible_bars(), 49);
+                assert_eq!(built.get_start_idx(), set.get_start_idx());
+                assert!(built.get_start_idx() >= 548);
+            }
+            // A later zoom survives subsequent frames: the builder's count is applied once.
+            built.state.time_scale_mut().set_bar_spacing(20.0);
+            built.apply_timescale_config(width - 166.0);
+            assert_eq!(built.state.time_scale().bar_spacing(), 20.0);
+        }
     }
 }

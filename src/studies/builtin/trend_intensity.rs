@@ -1,6 +1,7 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Trend Intensity Index (TII), after M. H. Pee (Technical Analysis of Stocks & Commodities, June 2002).
@@ -12,21 +13,23 @@ use egui::Color32;
 pub struct TrendIntensityIndex {
     /// Number of deviations summed; the moving average spans twice as many bars.
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl TrendIntensityIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Indigo/Blue
+            values: IndicatorValues::new(),
+            color: palette::BLUE, // Indigo/Blue
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -39,16 +42,10 @@ impl Default for TrendIntensityIndex {
     }
 }
 
-impl Indicator for TrendIntensityIndex {
-    fn name(&self) -> &str {
-        "TII"
-    }
-
-    fn desc(&self) -> &str {
-        "Trend Intensity Index - Measures trend strength"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
+impl TrendIntensityIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let n = self.period;
         let ma_len = n.saturating_mul(2);
         let first = ma_len.saturating_add(n) - 2;
@@ -65,11 +62,9 @@ impl Indicator for TrendIntensityIndex {
                 window.iter().map(|b| bar.close - b.close).sum::<f64>() / ma_len as f64
             })
             .collect();
-
-        self.values.clear();
         for i in 0..data.len() {
             if i < first {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
             let (mut up, mut down) = (0.0, 0.0);
@@ -86,11 +81,37 @@ impl Indicator for TrendIntensityIndex {
             } else {
                 50.0
             };
-            self.values.push(IndicatorValue::Single(tii));
+            values.push(IndicatorValue::Single(tii));
         }
+
+        values
+    }
+}
+
+impl Indicator for TrendIntensityIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "TII"
+    }
+
+    fn desc(&self) -> &str {
+        "Trend Intensity Index - Measures trend strength"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -131,21 +152,23 @@ impl Indicator for TrendIntensityIndex {
 #[derive(Clone)]
 pub struct Qstick {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl Qstick {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            values: IndicatorValues::new(),
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -159,6 +182,14 @@ impl Default for Qstick {
 }
 
 impl Indicator for Qstick {
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Qstick"
     }
@@ -192,7 +223,7 @@ impl Indicator for Qstick {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -242,6 +273,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -271,6 +304,7 @@ mod tests {
             tii.calculate(&data);
             let got: Vec<Option<f64>> = tii
                 .values()
+                .to_rows()
                 .iter()
                 .map(|v| match v {
                     IndicatorValue::Single(x) => Some(*x),
@@ -300,8 +334,10 @@ mod tests {
         assert_eq!(qs.values.len(), 10);
 
         // Should be positive for bullish candles
-        if let IndicatorValue::Single(v) = qs.values.last().unwrap() {
-            assert!(*v > 0.0);
-        }
+        let rows = qs.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", qs.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 0.0);
     }
 }

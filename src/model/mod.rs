@@ -1,21 +1,29 @@
-//! Core data models for financial charting
+//! Data types for bars, instruments, chart styles, trading and host analytics.
 //!
-//! Provides fundamental data structures for bars, candles, markers,
-//! symbols, timeframes, and chart state management.
-//!
-//! # Module Organization
-//!
-//! - [`bar`] - Core OHLCV data structures
-//! - `chart_type` - Chart visualization type definitions
-//! - `renko`, `kagi`, `line_break`, etc. - Data transformations
-//! - `markers`, `annotations` - Chart overlays
-//! - `strategy` - A strategy run's trades and equity, and its performance metrics
+//! Start with [`Bar`] and [`BarData`] for price history, [`Instrument`] for symbol
+//! metadata and [`Timeframe`] for bar intervals. The transformation modules build
+//! price-based charts and TPO profiles without rendering; strategy records describe
+//! host-computed runs and provide performance calculations.
+
+/// The most price movement, in sizes, that a Renko or range bar build walks over. A smaller size
+/// on a longer history is built from a later bar; see `renko::work_start`.
+pub(crate) const MAX_WORK: f64 = 2_000_000.0;
+
+/// A price-based chart built one bar at a time, so a cached build can be extended by the newest
+/// bar instead of rebuilt. The first `push` seeds the state. `elements` returns the newest
+/// elements up to the type's limit, including the one still forming.
+pub(crate) trait PriceBuilder {
+    type Element: Clone;
+    fn push(&mut self, bar: &Bar);
+    fn elements(&self) -> Vec<Self::Element>;
+}
 
 mod alert;
 mod annotations;
 pub mod bar;
+mod box_size;
+mod chart_style;
 mod chart_type;
-mod chartstate;
 mod clock;
 mod color;
 mod date_range;
@@ -23,69 +31,88 @@ mod instrument;
 pub mod kagi;
 pub mod line_break;
 mod markers;
+#[cfg(any(feature = "studies", feature = "drawings"))]
+pub(crate) mod math;
 pub mod point_figure;
 mod price_source;
 pub mod quote;
 pub mod range_bar;
 pub mod renko;
+mod revision;
+mod series_scale;
+mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
-mod symbol;
-pub mod symbol_info;
+mod time_scale_event;
 mod timeframe;
 mod timescale;
+mod timezone;
 pub mod tpo;
 mod trading;
 
-pub use alert::{Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus};
+pub use alert::{
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
+    AlertStatus,
+};
 pub use annotations::{Annotation, MarkerType};
 #[cfg(feature = "widget")]
 pub(crate) use bar::SpanCache;
-pub(crate) use bar::percent_change;
-pub use bar::{Bar, BarData};
-pub use chart_type::{ChartType, ChartTypeCategory, ChartTypeParams};
-pub use chartstate::{ChartState, ZoomState};
+pub use bar::{Bar, BarColors, BarData};
+#[cfg(feature = "widget")]
+pub(crate) use bar::{index_at, time_at};
+pub(crate) use bar::{last_with_value, percent_change};
+pub use box_size::{BoxSizeMethod, PriceBasedSource};
+pub use chart_style::{
+    AreaStyle, BarsStyle, BaselineStyle, ChartTypeStyles, LastPriceAnimation, LinePlotStyle,
+    LineType,
+};
+pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
-pub use instrument::{Instrument, Session, SessionWindow, TimezoneId};
+pub use instrument::{DataStatus, Instrument, Session, SessionWindow, SymbolType};
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{
     LineBreakConfig, LineBreakLine, LineBreakSignal, LineDirection,
     detect_signal as detect_line_break_signal, to_line_break_lines,
 };
-pub use markers::{Marker, MarkerPos, MarkerShape};
+pub use markers::{
+    ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
+    PriceLine,
+};
 pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
 pub use price_source::PriceSource;
 pub use quote::{
-    Level1Quote, OrderBook, OrderBookLevel, OrderBookSource, QuoteSource, QuoteSourceError, Tick,
-    TickSource, TradeSide,
+    ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
+    TradeConditions,
 };
-pub use range_bar::{
-    RangeBar, RangeBarConfig, TickData as RangeTickData, to_range_bars_from_ohlc,
-    to_range_bars_from_ticks,
-};
+pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
+pub(crate) use revision::next_revision;
+pub use series_scale::SeriesScale;
+pub use series_style::{AutoscaleProvider, PriceLineSource, SeriesStyle};
 pub use session::{
-    CompositeSessionProvider, DailySessionProvider, MonthlySessionProvider, SessionBreak,
-    SessionBreakType, SessionProvider, WeeklySessionProvider, find_session_breaks,
+    CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
+    MonthlySessionProvider, SessionBreak, SessionBreakType, SessionProvider, WeeklySessionProvider,
+    find_session_breaks,
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyExit, StrategyPerformance, StrategyReport, StrategySide, StrategyTrade,
+    StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
+    StrategyTrade,
 };
-pub use symbol::Symbol;
-pub use symbol_info::{DataStatus, LibrarySymbolInfo, SubsessionInfo, SymbolFormat, SymbolType};
+pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::Timeframe;
 pub use timescale::{LogicalRange, TimeScale};
+pub use timezone::{TimezoneId, TimezoneOffset};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
     derive_tick_size, to_tpo_profiles,
 };
 pub use trading::{
-    Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-    OrderType, Position,
+    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
+    OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
 
 #[cfg(test)]
@@ -105,6 +132,8 @@ mod tests {
                 low: p,
                 close: p,
                 volume: 0.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }
@@ -148,6 +177,109 @@ mod tests {
                 })
             })
             .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn price_based_charts_use_the_configured_size() {
+        // Prices and sizes are binary fractions, so scaling by 2^-20 is exact.
+        let u = 1.0 / 256.0;
+        let z = [
+            100.0,
+            110.0,
+            110.0 - 5.0 * u,
+            110.0,
+            110.0 - 13.0 * u,
+            110.0,
+            100.0,
+        ];
+        type Run = dyn Fn(&[Bar], f64) -> Vec<(f64, f64)>;
+        type Pair = (f64, f64);
+        // (name, size, build as (open, close) pairs, expected count, first, last)
+        let cases: [(&str, f64, &Run, usize, Pair, Pair); 4] = [
+            (
+                "renko",
+                1.0 / 32.0,
+                &|b, s| {
+                    to_renko_bricks(b, &RenkoConfig::new(s))
+                        .iter()
+                        .map(|e| (e.open, e.close))
+                        .collect()
+                },
+                639,
+                (100.0, 100.03125),
+                (100.03125, 100.0),
+            ),
+            (
+                "kagi",
+                1.0 / 64.0,
+                &|b, s| {
+                    to_kagi_lines(b, &KagiConfig::new(s))
+                        .iter()
+                        .map(|e| (e.start_price, e.end_price))
+                        .collect()
+                },
+                6,
+                (100.0, 110.0),
+                (110.0, 100.0),
+            ),
+            (
+                "point and figure",
+                1.0 / 64.0,
+                &|b, s| {
+                    to_pnf_columns(b, &PointFigureConfig::new(s, 3))
+                        .iter()
+                        .map(|e| (e.start_price, e.end_price))
+                        .collect()
+                },
+                4,
+                (100.0, 110.0),
+                (109.984375, 100.0),
+            ),
+            (
+                "range bars",
+                1.0 / 32.0,
+                &|b, s| {
+                    to_range_bars_from_ohlc(b, &RangeBarConfig::new(s))
+                        .iter()
+                        .map(|e| (e.open, e.close))
+                        .collect()
+                },
+                643,
+                (100.0, 100.03125),
+                (100.0, 100.0),
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, size, run, count, first, last) in cases {
+            for scale in [1.0, 2f64.powi(-20)] {
+                let got = run(&flat_bars(z.iter().map(|p| p * scale)), size * scale);
+                let want = (
+                    count,
+                    (first.0 * scale, first.1 * scale),
+                    (last.0 * scale, last.1 * scale),
+                );
+                if (got.len(), got[0], got[got.len() - 1]) != want {
+                    failures.push(format!(
+                        "{name} at scale {scale}: {} elements, want {want:?}",
+                        got.len()
+                    ));
+                }
+            }
+            let none = run(&flat_bars(z.iter().copied()), 0.0);
+            if !none.is_empty() {
+                failures.push(format!("{name}: {} elements for size 0", none.len()));
+            }
+        }
+        // A step of 1.1e13 sizes is not built: the build starts at the bar after it.
+        let u40 = 2f64.powi(-40);
+        let bars = flat_bars([100.0, 110.0, 110.0 + 4.0 * u40].into_iter());
+        let v = to_renko_bricks(&bars, &RenkoConfig::new(u40));
+        if v.len() != 4
+            || v.last().map(|e| (e.open, e.close)) != Some((110.0 + 3.0 * u40, 110.0 + 4.0 * u40))
+        {
+            failures.push(format!("renko work bound: {} bricks", v.len()));
+        }
         assert!(failures.is_empty(), "{failures:#?}");
     }
 }

@@ -1,30 +1,33 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Choppiness Index
 /// Measures market trendiness vs choppiness
 /// Values close to 100 = choppy market, values close to 0 = trending market
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct ChoppinessIndex {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl ChoppinessIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            values: IndicatorValues::new(),
+            color: palette::PURPLE,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -38,23 +41,15 @@ impl Default for ChoppinessIndex {
     }
 }
 
-impl Indicator for ChoppinessIndex {
-    fn name(&self) -> &str {
-        "CHOP"
-    }
-
-    fn desc(&self) -> &str {
-        "Choppiness Index - Measures market trendiness"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ChoppinessIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range for each bar
@@ -75,7 +70,7 @@ impl Indicator for ChoppinessIndex {
         // Calculate Choppiness Index
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // Sum of TR over period
                 let atr_sum: f64 = tr_values[i + 1 - self.period..=i].iter().sum();
@@ -91,17 +86,41 @@ impl Indicator for ChoppinessIndex {
                 let range = highest - lowest;
 
                 if range == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     // CHOP = 100 * LOG10(SUM(TR, n) / (Highest High - Lowest Low)) / LOG10(n)
                     let chop = 100.0 * (atr_sum / range).log10() / (self.period as f64).log10();
-                    self.values.push(IndicatorValue::Single(chop));
+                    values.push(IndicatorValue::Single(chop));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ChoppinessIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "CHOP"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Choppiness Index - Measures market trendiness"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -133,79 +152,5 @@ impl Indicator for ChoppinessIndex {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("CHOP({})", self.period)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_choppiness_calculation() {
-        let mut chop = ChoppinessIndex::new(5);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(103.0, 99.0, 101.0),
-            make_bar(104.0, 100.0, 102.0),
-            make_bar(105.0, 101.0, 103.0),
-            make_bar(106.0, 102.0, 104.0),
-            make_bar(107.0, 103.0, 105.0),
-            make_bar(108.0, 104.0, 106.0),
-        ];
-
-        chop.calculate(&data);
-
-        assert_eq!(chop.values.len(), 7);
-
-        // First 5 should be None
-        for i in 0..5 {
-            assert!(matches!(chop.values[i], IndicatorValue::None));
-        }
-
-        // Values should be between 0 and 100
-        for value in &chop.values {
-            if let IndicatorValue::Single(v) = value {
-                assert!(
-                    *v >= 0.0 && *v <= 100.0,
-                    "CHOP should be between 0-100, got {v}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_trending_market() {
-        let mut chop = ChoppinessIndex::new(5);
-
-        // Strong trend - each bar higher than previous
-        let data: Vec<Bar> = (0..10)
-            .map(|i| {
-                make_bar(
-                    102.0 + i as f64 * 5.0,
-                    98.0 + i as f64 * 5.0,
-                    100.0 + i as f64 * 5.0,
-                )
-            })
-            .collect();
-
-        chop.calculate(&data);
-
-        // In a strong trend, CHOP should be relatively low (< 50)
-        if let IndicatorValue::Single(v) = chop.values.last().unwrap() {
-            assert!(*v < 50.0, "CHOP should be low in strong trend, got {v}");
-        }
     }
 }

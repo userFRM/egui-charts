@@ -1,16 +1,16 @@
 use super::clamp_param;
 use crate::model::Bar;
-/// Moving Average Envelopes
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
+/// Moving Average Envelopes
 #[derive(Clone)]
 pub struct Envelopes {
     period: usize,
     percent: f64,
     ma_type: String,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -22,11 +22,11 @@ impl Envelopes {
             period: period.max(1),
             percent: clamp_param(percent, 0.0, f64::MAX),
             ma_type: ma_type.to_string(),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::BLUE,  // Blue - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }
@@ -39,37 +39,19 @@ impl Default for Envelopes {
     }
 }
 
-impl Envelopes {
-    fn calc_sma(data: &[Bar], period: usize) -> Vec<Option<f64>> {
-        let mut result = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i + 1 < period {
-                result.push(None);
-            } else {
-                let start = i + 1 - period;
-                let sma: f64 = data[start..=i].iter().map(|b| b.close).sum::<f64>() / period as f64;
-                result.push(Some(sma));
-            }
-        }
-        result
-    }
-
-    fn calc_ema(data: &[Bar], period: usize) -> Vec<Option<f64>> {
-        let mut result = Vec::with_capacity(data.len());
-        if data.is_empty() {
-            return result;
-        }
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = data[0].close;
-        for bar in data {
-            ema = (bar.close - ema) * multiplier + ema;
-            result.push(Some(ema));
-        }
-        result
-    }
-}
-
 impl Indicator for Envelopes {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        percent: number("Percent", 0.0, f64::MAX),
+        ma_type: choice("Average", ["SMA".to_owned(), "EMA".to_owned()])
+    ; {});
+
     fn name(&self) -> &str {
         "Envelopes"
     }
@@ -85,29 +67,21 @@ impl Indicator for Envelopes {
             return;
         }
 
+        let closes: Vec<_> = data.iter().map(|bar| bar.close).collect();
         let ma_values = match self.ma_type.as_str() {
-            "EMA" => Self::calc_ema(data, self.period),
-            _ => Self::calc_sma(data, self.period),
+            "EMA" => crate::studies::helpers::ema(&closes, self.period),
+            _ => crate::studies::helpers::sma(&closes, self.period),
         };
 
         let multiplier = self.percent / 100.0;
 
-        for ma_opt in &ma_values {
-            match ma_opt {
-                Some(ma) => {
-                    let upper = ma * (1.0 + multiplier);
-                    let lower = ma * (1.0 - multiplier);
-                    self.values
-                        .push(IndicatorValue::Multiple(vec![upper, *ma, lower]));
-                }
-                None => {
-                    self.values.push(IndicatorValue::None);
-                }
-            }
+        for ma in ma_values {
+            self.values
+                .push_lines(&[ma * (1.0 + multiplier), ma, ma * (1.0 - multiplier)]);
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -125,7 +99,7 @@ impl Indicator for Envelopes {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

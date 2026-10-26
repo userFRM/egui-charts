@@ -1,30 +1,32 @@
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Volume Rate of Change (VROC)
 /// Measures the rate of change in volume over a specified period
 /// Helps identify volume trends and divergences
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct VolumeRateOfChange {
     /// Lookback period
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl VolumeRateOfChange {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple, // Purple
+            values: IndicatorValues::new(),
+            color: palette::DEEP_PURPLE, // Purple
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -39,6 +41,14 @@ impl Default for VolumeRateOfChange {
 }
 
 impl Indicator for VolumeRateOfChange {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "VROC"
     }
@@ -74,7 +84,7 @@ impl Indicator for VolumeRateOfChange {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -122,6 +132,8 @@ mod tests {
             low: 100.0,
             close: 100.0,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -145,12 +157,13 @@ mod tests {
 
         // First 5 should be None
         for i in 0..5 {
-            assert!(matches!(vroc.values[i], IndicatorValue::None));
+            assert!(matches!(vroc.values.to_rows()[i], IndicatorValue::None));
         }
 
         // Check calculation at index 5: (1500 - 1000) / 1000 * 100 = 50%
-        if let IndicatorValue::Single(v) = vroc.values[5] {
-            assert!((v - 50.0).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = vroc.values.to_rows()[5] else {
+            panic!("no value: {:?}", vroc.values.to_rows()[5]);
+        };
+        assert!((v - 50.0).abs() < 0.01);
     }
 }

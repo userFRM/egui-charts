@@ -1,6 +1,6 @@
-//! Upper toolbar components
+//! Symbol search, interval and chart type pickers, study selection and layout controls.
 //!
-//! Individual components for the upper toolbar.
+//! Use these components individually when composing a custom top toolbar.
 
 pub mod chart_grid_selector;
 pub mod chart_type_selector;
@@ -21,8 +21,8 @@ pub use chart_type_selector::{
 
 // From indicator_dialog
 pub use indicator_dialog::{
-    ConfiguredIndicator, IndicatorCategory, IndicatorDialog, IndicatorDialogAction,
-    IndicatorDialogConfig, IndicatorInfo, IndicatorParams, IndicatorTab, IndicatorType,
+    IndicatorCategory, IndicatorDialog, IndicatorDialogAction, IndicatorDialogConfig,
+    IndicatorInfo, IndicatorParams, IndicatorTab,
 };
 
 // From chart_grid_selector
@@ -32,12 +32,11 @@ pub use chart_grid_selector::ChartGridSelector;
 pub use sync_button::SyncButton;
 
 // From layout_menu
-pub use layout_menu::{LayoutAction, LayoutInfo, LayoutMenu, LayoutMenuConfig};
+pub use layout_menu::{LayoutAction, LayoutMenu, LayoutMenuConfig};
 
 // From settings_menu (ChartType comes from chart_type_selector - single source of truth)
 pub use settings_menu::{
-    CandleColorConfig, ChartSettings, ChartSettingsState, PrecisionMode, ScaleMode, SettingsAction,
-    SettingsDialog, SettingsDialogConfig, SettingsMenu, SettingsTab, StatusLineOptions,
+    ChartSettings, SettingsAction, SettingsDialog, SettingsDialogConfig, SettingsMenu, SettingsTab,
 };
 
 // From symbol_search
@@ -48,5 +47,6 @@ pub use symbol_search::{
 
 // From timeframe_selector
 pub use timeframe_selector::{
-    Timeframe, TimeframeAction, TimeframeSelector, TimeframeSelectorConfig, TimeframeUnit,
+    TimeframeAction, TimeframePreferences, TimeframeSelector, TimeframeSelectorConfig,
+    TimeframeUnit,
 };

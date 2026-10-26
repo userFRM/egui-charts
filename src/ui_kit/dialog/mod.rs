@@ -7,54 +7,21 @@
 //! The kit `Modal`, `ConfirmDialog` and `PromptDialog` use the same frame, header and footer
 //! over a scrim.
 
-use egui::emath::GuiRounding as _;
-use egui::{
-    Align, Align2, Context, Frame, Layout, RichText, Style, Ui, UiBuilder, UiStackInfo, Vec2,
-};
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
+use egui::{Align, Align2, Context, Frame, Layout, RichText, Ui, UiBuilder, UiStackInfo, Vec2};
 
 use crate::icons::icons;
-use crate::styles::typography;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
 
-/// The dialog surface: the theme's window fill, border, radius and shadow, padded 16 px.
-pub(crate) fn dialog_frame(style: &Style) -> Frame {
-    Frame::window(style).inner_margin(DESIGN_TOKENS.spacing.xxl)
-}
-
-/// The height of the heading row, which egui gives a window's title and its buttons.
-fn heading_row_height(ctx: &Context) -> f32 {
-    // Resolve the font first: `fonts_mut` holds the context's lock, which `global_style` takes too.
-    let font = egui::TextStyle::Heading.resolve(&ctx.global_style());
-    ctx.fonts_mut(|f| f.row_height(&font))
-}
-
-/// The size to give an `egui::Window` that has a title bar and `frame` so that its content gets
-/// `content`.
-///
-/// egui sizes a window from outside, frame and title bar included. The title bar is a heading row
-/// inside the frame's inner margin, above a line as wide as the frame's stroke; the title text's
-/// row is rounded to whole pixels and the buttons beside it are not.
-pub(crate) fn titled_window_size(ctx: &Context, frame: &Frame, content: Vec2) -> Vec2 {
-    let row = heading_row_height(ctx);
-    let row = row.max(row.round_to_pixels(ctx.pixels_per_point()));
-    let title_bar = row + frame.inner_margin.sum().y + frame.stroke.width;
-    content + frame.total_margin().sum() + Vec2::new(0.0, title_bar)
-}
-
-/// The title of an `egui::Window` with a close button, centred over the whole title bar.
-///
-/// egui centres a title in the space left of the close button, which it sizes to the heading
-/// row height; a blank atom of that size on the left balances it.
-pub(crate) fn centred_title<'a>(ctx: &Context, title: &'a str) -> egui::Atoms<'a> {
-    let blank = egui::Atom {
-        size: Some(Vec2::splat(heading_row_height(ctx))),
-        ..Default::default()
-    };
-    egui::Atoms::new((blank, title))
+/// The dialog surface: the theme's panel fill, window border, radius and shadow, padded 16 px.
+pub(crate) fn dialog_frame(ctx: &Context) -> Frame {
+    Frame::window(&ctx.global_style())
+        .fill(ctx.global_style().visuals.panel_fill)
+        .inner_margin(ctx.active_theme().spacing.xxl)
 }
 
 /// A centered dialog window with standard styling.
@@ -115,11 +82,14 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
-        let mut frame = dialog_frame(&ctx.global_style());
+        let mut frame = dialog_frame(ctx);
         if let Some(r) = self.rounding {
             frame = frame.corner_radius(r);
         }
-        let max = ctx.content_rect().shrink(DESIGN_TOKENS.spacing.xxxl).size()
+        let max = ctx
+            .content_rect()
+            .shrink(ctx.active_theme().spacing.xxxl)
+            .size()
             - frame.total_margin().sum();
         let inner = self.size.min(max).max(Vec2::ZERO);
 
@@ -128,33 +98,75 @@ impl DialogFrame {
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
+            .max_width((max.x + frame.total_margin().sum().x).max(0.0))
             .frame(frame);
         let window = if self.auto_height {
-            window.default_width(inner.x)
+            window
+                .default_width(inner.x)
+                .default_height((max.y + frame.total_margin().sum().y).max(0.0))
+                .max_height((max.y + frame.total_margin().sum().y).max(0.0))
         } else {
             window.fixed_size(inner)
         };
 
+        let input_blocked = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let auto_height = self.auto_height;
         window.show(ctx, |ui| {
+            let translated_label = l10n::text(ui.ctx(), &self.id);
+            ui.response().widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Dialog, ui.is_enabled(), &translated_label)
+            });
+            ui.data_mut(|d| {
+                d.insert_temp(ui.layer_id().id.with("dialog_input_blocked"), input_blocked)
+            });
             // A non-resizable window shrinks to its content, so hold the preferred size here.
             ui.set_min_size(inner);
+            ui.set_max_width(inner.x);
             if auto_height {
+                ui.set_max_height(max.y.max(0.0));
                 add_contents(ui);
             } else {
                 // The tag lets a `DialogFooter` drawn directly in this Ui sit at the bottom.
                 let info = UiStackInfo::default().with_tag(FIXED_HEIGHT_TAG);
                 ui.scope_builder(UiBuilder::new().ui_stack_info(info), add_contents);
             }
+            let focused = ui.ctx().memory(|m| m.focused()).is_some();
+            ui.data_mut(|d| d.insert_temp(ui.layer_id().id.with("dialog_had_focus"), focused));
         });
     }
 }
 
 /// Standard dialog title row: left-aligned title and a close button centred on it.
 ///
-/// Returns `true` if the close button was clicked.
+/// Returns `true` on a close click or an unhandled Escape key.
 pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
-    title_row(ui, title, true)
+    let close = title_row(ui, title, true);
+    let had_focus = ui
+        .data(|d| d.get_temp::<bool>(ui.layer_id().id.with("dialog_had_focus")))
+        .unwrap_or(false);
+    close || (!had_focus && dialog_key(ui, egui::Key::Escape))
+}
+
+fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
+    if ui
+        .data(|d| d.get_temp::<bool>(ui.layer_id().id.with("dialog_input_blocked")))
+        .unwrap_or(false)
+        || egui::Popup::is_any_open(ui.ctx())
+        || ui.ctx().any_popup_open()
+        || ui.ctx().top_layer_id() != Some(ui.layer_id())
+        || ui.ctx().memory(|m| m.focused()).is_some()
+    {
+        return false;
+    }
+    ui.input_mut(|input| {
+        let fresh = input.events.iter().any(|event| {
+            matches!(event,
+                egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. }
+                if *pressed == key && modifiers.is_none()
+            )
+        });
+        fresh && input.consume_key(egui::Modifiers::NONE, key)
+    })
 }
 
 /// Title row shared with the modal dialogs, which hide the close button when not closable.
@@ -163,7 +175,11 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
     let close = ui
         .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(title).strong().size(typography::LG));
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), title))
+                    .strong()
+                    .size(ui.active_theme().text.title),
+            );
             closable
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -175,7 +191,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
                     .inner
         })
         .inner;
-    ui.add_space(DESIGN_TOKENS.spacing.sm);
+    ui.add_space(ui.active_theme().spacing.sm);
     close
 }
 
@@ -204,6 +220,7 @@ pub struct DialogFooter {
 }
 
 impl DialogFooter {
+    /// Create a footer with a primary action label.
     pub fn new(primary_label: impl Into<String>) -> Self {
         Self {
             primary_label: primary_label.into(),
@@ -253,30 +270,57 @@ impl DialogFooter {
         }
         let top = ui.cursor().top();
 
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
         ui.separator();
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
 
         let row = ui.horizontal(|ui| {
             left_content(ui);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
+                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let width = std::iter::once(&self.primary_label)
+                    .chain(self.secondary_label.iter())
+                    .map(|label| {
+                        (ui.painter()
+                            .layout_no_wrap(
+                                l10n::text(ui.ctx(), label.clone()),
+                                font.clone(),
+                                egui::Color32::PLACEHOLDER,
+                            )
+                            .size()
+                            .x
+                            + 2.0 * ui.active_theme().spacing.xl)
+                            .max(ButtonSize::MD.pixels())
+                    })
+                    .sum::<f32>()
+                    + if self.secondary_label.is_some() {
+                        ui.active_theme().spacing.lg
+                    } else {
+                        0.0
+                    };
+                ui.allocate_ui_with_layout(
+                    Vec2::new(width, ButtonSize::MD.pixels()),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        let secondary_clicked = self
+                            .secondary_label
+                            .as_ref()
+                            .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
+                        let primary =
+                            Button::new(&self.primary_label).enabled(self.primary_enabled);
+                        let primary = if self.danger {
+                            primary.danger()
+                        } else {
+                            primary.primary()
+                        };
+                        let primary_clicked = primary.show(ui).clicked();
 
-                let primary = Button::new(&self.primary_label).enabled(self.primary_enabled);
-                let primary = if self.danger {
-                    primary.danger()
-                } else {
-                    primary.primary()
-                };
-                let primary_clicked = primary.show(ui).clicked();
-
-                let secondary_clicked = self
-                    .secondary_label
-                    .as_ref()
-                    .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
-
-                (primary_clicked, secondary_clicked)
+                        (primary_clicked, secondary_clicked)
+                    },
+                )
+                .inner
             })
             .inner
         });
@@ -285,13 +329,91 @@ impl DialogFooter {
             let height = row.response.rect.bottom() - top;
             ui.data_mut(|d| d.insert_temp(height_id, height));
         }
-        row.inner
+        let (primary, secondary) = row.inner;
+        (
+            primary || (self.primary_enabled && dialog_key(ui, egui::Key::Enter)),
+            secondary,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_keyboard_dismisses_and_activates_only_an_enabled_primary() {
+        for (key, enabled, expected) in [
+            (egui::Key::Escape, true, (true, false)),
+            (egui::Key::Enter, true, (false, true)),
+            (egui::Key::Enter, false, (false, false)),
+        ] {
+            let ctx = Context::default();
+            let frame = |events| {
+                let mut result = (false, false);
+                ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        DialogFrame::new("keys", Vec2::new(420.0, 240.0)).show(ui.ctx(), |ui| {
+                            result.0 = dialog_header(ui, "Keys");
+                            result.1 = DialogFooter::new("Apply")
+                                .primary_enabled(enabled)
+                                .show(ui)
+                                .0;
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+                result
+            };
+            frame(vec![]);
+            frame(vec![]);
+            assert_eq!(
+                frame(vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn footer_tab_order_follows_the_buttons_from_left_to_right() {
+        let ctx = Context::default();
+        let frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    DialogFooter::new("Apply").secondary("Cancel").show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            ctx.memory(|m| m.focused())
+                .and_then(|id| ctx.read_response(id))
+                .map(|r| r.rect)
+        };
+        frame(vec![]);
+        let tab = || egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let first = frame(vec![tab()]).unwrap();
+        let second = frame(vec![tab()]).unwrap();
+        assert!(first.right() < second.left(), "{first:?}, {second:?}");
+    }
 
     #[test]
     fn footer_sits_at_the_bottom_of_a_fixed_frame_from_the_first_visible_frame() {
@@ -323,37 +445,47 @@ mod tests {
             first.0, second.0,
             "the window moved after its first visible frame"
         );
-        let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
+        let inner_bottom = second.0.bottom() - ctx.active_theme().spacing.xxl;
         assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
     }
 
     #[test]
-    fn a_titled_window_gives_its_content_the_requested_size() {
+    fn auto_height_scroll_body_reaches_the_screen_cap() {
         let ctx = Context::default();
-        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::default());
-        let content = Vec2::new(300.0, 200.0);
-        let mut available = Vec2::ZERO;
-        for _ in 0..2 {
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    Vec2::new(1000.0, 800.0),
-                )),
-                ..Default::default()
-            };
-            ctx.run_ui(input, |ui| {
-                let ctx = ui.ctx();
-                let frame = Frame::window(&ctx.global_style());
-                egui::Window::new(centred_title(ctx, "Titled"))
-                    .open(&mut true)
-                    .collapsible(false)
-                    .resizable(false)
-                    .fixed_size(titled_window_size(ctx, &frame, content))
-                    .frame(frame)
-                    .show(ctx, |ui| available = ui.available_size());
-            })
-            .drop_without_applying_deltas();
+        for (width, height) in [(1440.0, 900.0), (320.0, 450.0), (1440.0, 900.0)] {
+            let mut window = egui::Id::NULL;
+            for _ in 0..3 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        DialogFrame::with_width("scroll", 500.0).show(ui.ctx(), |ui| {
+                            window = ui.layer_id().id;
+                            dialog_header(ui, "Scrolling body");
+                            egui::ScrollArea::vertical()
+                                .max_height(ui.available_height())
+                                .show(ui, |ui| {
+                                    for i in 0..100 {
+                                        ui.label(format!("Row {i}"));
+                                    }
+                                });
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let rect = ctx.memory(|m| m.area_rect(window)).unwrap();
+            assert!((rect.height() - (height - 48.0)).abs() <= 2.0, "{rect:?}");
+            assert!(rect.top() >= 23.0 && rect.bottom() <= height - 23.0);
+            assert!(
+                rect.left() >= 23.0 && rect.right() <= width - 23.0,
+                "{rect:?}"
+            );
         }
-        assert_eq!(available, content);
     }
 }

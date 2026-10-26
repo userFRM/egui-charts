@@ -3,12 +3,13 @@
 //! Playback controls for historical data replay.
 
 use super::{ReplayAction, ReplayColors, ReplayConfig, ReplaySpeed, ReplayState};
-use crate::ext::UiExt;
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{RichText, Ui, Vec2};
 
 /// The configured colours, or the active theme's while they are the defaults.
@@ -71,7 +72,7 @@ impl<'a> ReplayControls<'a> {
         // Update playback timing
         let _bars_advanced = state.update();
 
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let mut result_action = ReplayAction::None;
 
         ui.horizontal(|ui| {
@@ -124,7 +125,7 @@ impl<'a> ReplayControls<'a> {
             } else {
                 // Show hint when not in replay mode
                 ui.label(
-                    RichText::new("Click Replay to enter replay mode")
+                    RichText::new(l10n::text(ui.ctx(), "Click Replay to enter replay mode"))
                         .color(colors(self.config, ui).disabled_color),
                 );
             }
@@ -155,7 +156,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render playback control btns
     fn render_playback_controls(&self, ui: &mut Ui, state: &ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
 
@@ -213,7 +214,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render the progress bar
     fn render_progress_bar(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let colors = colors(self.config, ui);
         let mut action = ReplayAction::None;
 
@@ -226,18 +227,29 @@ impl<'a> ReplayControls<'a> {
             Vec2::new(width, layout.progress_bar_height),
             egui::Sense::click_and_drag(),
         );
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.xs);
+        response.widget_info(|| {
+            egui::WidgetInfo::slider(
+                response.enabled(),
+                f64::from(progress) * 100.0,
+                "Replay position",
+            )
+        });
 
         if ui.is_rect_visible(rect) {
             // Background
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.xs, colors.progress_bg);
+                .rect_filled(rect, ui.active_theme().radius.xs, colors.progress_bg);
 
             // Filled portion
             let filled_width = rect.width() * progress;
             let filled_rect =
                 egui::Rect::from_min_size(rect.min, Vec2::new(filled_width, rect.height()));
-            ui.painter()
-                .rect_filled(filled_rect, DESIGN_TOKENS.rounding.xs, colors.progress_fill);
+            ui.painter().rect_filled(
+                filled_rect,
+                ui.active_theme().radius.xs,
+                colors.progress_fill,
+            );
 
             // Cursor/handle
             let cursor_x = rect.min.x + filled_width;
@@ -280,11 +292,14 @@ impl<'a> ReplayControls<'a> {
         }
 
         // Show tooltip with position info
-        response.on_hover_text(format!(
-            "Bar {} / {} ({:.1}%)",
-            state.curr_bar + 1,
-            state.total_bars,
-            progress * 100.0
+        response.on_hover_text(l10n::format_text(
+            ui.ctx(),
+            "Bar {0} / {1} ({2}%)",
+            &[
+                ("0", format!("{}", state.curr_bar + 1)),
+                ("1", format!("{}", state.total_bars)),
+                ("2", format!("{:.1}", progress * 100.0)),
+            ],
         ));
 
         action
@@ -292,7 +307,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render speed control
     fn render_speed_control(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let colors = colors(self.config, ui);
         let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
@@ -311,13 +326,15 @@ impl<'a> ReplayControls<'a> {
         let combo_id = ui.scope_id().with("speed_combo");
 
         egui::ComboBox::from_id_salt(combo_id)
-            .selected_text(RichText::new(&speed_label).color(colors.speed_color))
+            .selected_text(
+                RichText::new(l10n::text(ui.ctx(), &speed_label)).color(colors.speed_color),
+            )
             .width(layout.speed_dropdown_width)
             .show_ui(ui, |ui| {
                 for preset in ReplaySpeed::presets() {
                     let label = preset.label();
                     if ui
-                        .selectable_label(*preset == state.speed, &label)
+                        .selectable_label(*preset == state.speed, l10n::text(ui.ctx(), &label))
                         .clicked()
                     {
                         action = ReplayAction::SetSpeed(preset.multiplier());
@@ -340,7 +357,7 @@ impl<'a> ReplayControls<'a> {
     /// Render info display (bar counter, time, etc.)
     fn render_info_display(&self, ui: &mut Ui, state: &ReplayState) {
         let behavior = &self.config.behavior;
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
 
         ui.right_aligned(|ui| {
             // Bar counter
@@ -353,7 +370,13 @@ impl<'a> ReplayControls<'a> {
             // Current date/time
             if let Some(date) = state.curr_date {
                 ui.add_space(layout.btn_spacing);
-                ui.label(RichText::new(date.format("%Y-%m-%d %H:%M").to_string()).small());
+                ui.label(
+                    RichText::new(l10n::text(
+                        ui.ctx(),
+                        date.format("%Y-%m-%d %H:%M").to_string(),
+                    ))
+                    .small(),
+                );
             }
 
             // Symbol
@@ -417,7 +440,7 @@ impl<'a> CompactReplayControls<'a> {
 
             // Speed label
             ui.label(
-                RichText::new(state.speed.label())
+                RichText::new(l10n::text(ui.ctx(), state.speed.label()))
                     .small()
                     .color(colors.speed_color),
             );

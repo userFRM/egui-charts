@@ -16,15 +16,16 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Hull Moving Avg indicator
 #[derive(Clone)]
 pub struct HMA {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -37,8 +38,8 @@ impl HMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(2),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
+            values: IndicatorValues::new(),
+            color: palette::DEEP_PURPLE, // Deep Purple
             visible: true,
         }
     }
@@ -47,27 +48,6 @@ impl HMA {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// Calculate WMA for a slice of values
-    fn calculate_wma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut wma = vec![f64::NAN; data.len()];
-        if data.is_empty() || period == 0 {
-            return wma;
-        }
-
-        let weight_sum = period as f64 * (period as f64 + 1.0) / 2.0;
-
-        for i in (period - 1)..data.len() {
-            let mut weighted_sum = 0.0;
-            for j in 0..period {
-                let weight = (period - j) as f64;
-                weighted_sum += data[i - j] * weight;
-            }
-            wma[i] = weighted_sum / weight_sum;
-        }
-
-        wma
     }
 }
 
@@ -79,6 +59,16 @@ impl Default for HMA {
 }
 
 impl Indicator for HMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "HMA"
     }
@@ -102,10 +92,10 @@ impl Indicator for HMA {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Step 1: Calculate WMA(close, period/2)
-        let wma_half = Self::calculate_wma(&closes, half_period);
+        let wma_half = helpers::wma(&closes, half_period);
 
         // Step 2: Calculate WMA(close, period)
-        let wma_full = Self::calculate_wma(&closes, self.period);
+        let wma_full = helpers::wma(&closes, self.period);
 
         // Step 3: Calculate 2 * WMA(half) - WMA(full)
         let mut raw_hma = vec![f64::NAN; data.len()];
@@ -116,7 +106,7 @@ impl Indicator for HMA {
         }
 
         // Step 4: Calculate WMA(raw_hma, sqrt(period))
-        let hma = Self::calculate_wma(&raw_hma, sqrt_period);
+        let hma = helpers::wma(&raw_hma, sqrt_period);
 
         // Build output
         let min_period = self.period.saturating_add(sqrt_period) - 1;
@@ -129,7 +119,7 @@ impl Indicator for HMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -147,7 +137,7 @@ impl Indicator for HMA {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

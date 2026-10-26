@@ -83,16 +83,41 @@ pub struct ReplayLayout {
     pub date_display_width: f32,
 }
 
+impl ReplayLayout {
+    pub(super) fn resolved(&self, theme: &Theme) -> Self {
+        let defaults = Self::default();
+        let mut layout = self.clone();
+        for (value, default, themed) in [
+            (
+                &mut layout.btn_spacing,
+                defaults.btn_spacing,
+                theme.spacing.sm,
+            ),
+            (
+                &mut layout.progress_bar_height,
+                defaults.progress_bar_height,
+                theme.spacing.lg,
+            ),
+            (&mut layout.padding, defaults.padding, theme.spacing.lg),
+        ] {
+            if *value == default {
+                *value = themed;
+            }
+        }
+        layout
+    }
+}
+
 impl Default for ReplayLayout {
     fn default() -> Self {
         Self {
             control_bar_height: DESIGN_TOKENS.sizing.replay.control_bar_height,
             btn_size: DESIGN_TOKENS.sizing.replay.button_size,
             small_button_size: DESIGN_TOKENS.sizing.button_sm,
-            btn_spacing: DESIGN_TOKENS.spacing.sm,
-            progress_bar_height: DESIGN_TOKENS.spacing.lg,
+            btn_spacing: crate::theme::Theme::default().spacing.sm,
+            progress_bar_height: crate::theme::Theme::default().spacing.lg,
             progress_bar_width: None,
-            padding: DESIGN_TOKENS.spacing.lg,
+            padding: crate::theme::Theme::default().spacing.lg,
             speed_dropdown_width: DESIGN_TOKENS.sizing.replay.speed_dropdown_width,
             date_display_width: DESIGN_TOKENS.sizing.replay.date_display_width,
         }
@@ -106,10 +131,6 @@ pub struct ReplayBehavior {
     pub default_speed: ReplaySpeed,
     /// Whether to loop when reaching end
     pub loop_playback: bool,
-    /// Whether to show trading simulation panel by default
-    pub show_trading_panel: bool,
-    /// Initial capital for trading simulation
-    pub initial_capital: f64,
     /// Whether to auto-scroll chart during playback
     pub auto_scroll: bool,
     /// Number of bars to keep visible ahead of current position
@@ -133,8 +154,6 @@ impl Default for ReplayBehavior {
         Self {
             default_speed: ReplaySpeed::Normal,
             loop_playback: false,
-            show_trading_panel: false,
-            initial_capital: 10000.0,
             auto_scroll: true,
             lookahead_bars: 10,
             pause_on_interaction: false,
@@ -189,13 +208,14 @@ impl ReplayConfig {
                 control_bar_height: DESIGN_TOKENS.sizing.icon_xxl,
                 btn_size: DESIGN_TOKENS.sizing.icon_lg,
                 small_button_size: DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
-                btn_spacing: DESIGN_TOKENS.spacing.xs,
-                progress_bar_height: DESIGN_TOKENS.spacing.md,
-                padding: DESIGN_TOKENS.spacing.sm,
+                btn_spacing: crate::theme::Theme::default().spacing.xs,
+                progress_bar_height: crate::theme::Theme::default().spacing.md,
+                padding: crate::theme::Theme::default().spacing.sm,
                 speed_dropdown_width: DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
-                    - DESIGN_TOKENS.spacing.xxxl,
+                    - crate::theme::Theme::default().spacing.xxxl,
                 date_display_width: DESIGN_TOKENS.sizing.replay.date_display_width
-                    - DESIGN_TOKENS.spacing.section_lg,
+                    - (crate::theme::Theme::default().spacing.xxxl
+                        + crate::theme::Theme::default().spacing.xxl),
                 ..Default::default()
             },
             ..Default::default()
@@ -209,13 +229,14 @@ impl ReplayConfig {
                 control_bar_height: DESIGN_TOKENS.sizing.replay.button_size,
                 btn_size: DESIGN_TOKENS.sizing.button_sm,
                 small_button_size: DESIGN_TOKENS.sizing.icon_md,
-                btn_spacing: DESIGN_TOKENS.spacing.xs,
-                progress_bar_height: DESIGN_TOKENS.spacing.sm,
-                padding: DESIGN_TOKENS.spacing.sm,
+                btn_spacing: crate::theme::Theme::default().spacing.xs,
+                progress_bar_height: crate::theme::Theme::default().spacing.sm,
+                padding: crate::theme::Theme::default().spacing.sm,
                 speed_dropdown_width: DESIGN_TOKENS.sizing.technical_labels.line_label_width,
                 date_display_width: DESIGN_TOKENS.sizing.replay.date_display_width
                     - DESIGN_TOKENS.sizing.technical_labels.pattern_label_width
-                    + DESIGN_TOKENS.spacing.section_lg,
+                    + crate::theme::Theme::default().spacing.xxxl
+                    + crate::theme::Theme::default().spacing.xxl,
                 ..Default::default()
             },
             behavior: ReplayBehavior {

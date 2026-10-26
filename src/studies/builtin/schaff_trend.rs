@@ -1,12 +1,14 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Schaff Trend Cycle (STC)
 /// Combines MACD with stochastic to create a faster, more accurate oscillator
 /// Oscillates between 0 and 100
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct SchaffTrendCycle {
     /// MACD short period (typically 23)
@@ -15,23 +17,25 @@ pub struct SchaffTrendCycle {
     macd_long: usize,
     /// Stochastic cycle period (typically 10)
     cycle: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl SchaffTrendCycle {
+    /// Create with MACD periods 23 and 50 and cycle length 10.
     pub fn new() -> Self {
         Self {
             macd_short: 23,
             macd_long: 50,
             cycle: 10,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan,
+            values: IndicatorValues::new(),
+            color: palette::CYAN,
             visible: true,
         }
     }
 
+    /// Set the short and long MACD periods and cycle length in bars, each at least one.
     pub fn with_periods(mut self, short: usize, long: usize, cycle: usize) -> Self {
         self.macd_short = short.max(1);
         self.macd_long = long.max(1);
@@ -39,59 +43,22 @@ impl SchaffTrendCycle {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
     }
 
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // First value is SMA
-        let first_sma: f64 = data.iter().take(period).sum::<f64>() / period as f64;
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                ema.push(f64::NAN);
-            } else if i == period - 1 {
-                ema.push(first_sma);
-            } else {
-                let prev = ema[i - 1];
-                if prev.is_nan() || data[i].is_nan() {
-                    ema.push(f64::NAN);
-                } else {
-                    ema.push((data[i] - prev) * multiplier + prev);
-                }
-            }
-        }
-
-        ema
-    }
-
     fn stochastic(values: &[f64], period: usize) -> Vec<f64> {
         let mut result = Vec::with_capacity(values.len());
-
+        let highest = rolling_max(values.iter().copied(), period);
+        let lowest = rolling_min(values.iter().copied(), period);
         for i in 0..values.len() {
             if i < period - 1 || values[i].is_nan() {
                 result.push(f64::NAN);
                 continue;
             }
-
-            let window = &values[i + 1 - period..=i];
-            let valid: Vec<f64> = window.iter().filter(|&&x| !x.is_nan()).copied().collect();
-
-            if valid.is_empty() {
-                result.push(f64::NAN);
-                continue;
-            }
-
-            let high = valid.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let low = valid.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            let (high, low) = (highest[i], lowest[i]);
             let range = high - low;
 
             if range == 0.0 {
@@ -123,8 +90,8 @@ impl SchaffTrendCycle {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.macd_long.saturating_add(self.cycle) {
             for _ in 0..data.len() {
@@ -137,8 +104,8 @@ impl SchaffTrendCycle {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate MACD line (short EMA - long EMA)
-        let short_ema = Self::calculate_ema(&closes, self.macd_short);
-        let long_ema = Self::calculate_ema(&closes, self.macd_long);
+        let short_ema = helpers::ema_sma(&closes, self.macd_short);
+        let long_ema = helpers::ema_sma(&closes, self.macd_long);
 
         let mut macd = Vec::with_capacity(data.len());
         for i in 0..data.len() {
@@ -179,6 +146,18 @@ impl Default for SchaffTrendCycle {
 }
 
 impl Indicator for SchaffTrendCycle {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        macd_short: length("MACD short", 1, usize::MAX),
+        macd_long: length("MACD long", 1, usize::MAX),
+        cycle: length("Cycle", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "STC"
     }
@@ -191,7 +170,7 @@ impl Indicator for SchaffTrendCycle {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -242,6 +221,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -256,11 +237,14 @@ mod tests {
         assert_eq!(stc.values.len(), 50);
 
         // Check that valid values are between 0 and 100
-        for value in &stc.values {
+        let mut checked = 0;
+        for value in &stc.values.to_rows() {
             if let IndicatorValue::Single(v) = value {
                 assert!(*v >= 0.0 && *v <= 100.0, "STC should be 0-100, got {v}");
+                checked += 1;
             }
         }
+        assert!(checked > 0, "no value to check");
     }
 
     #[test]
@@ -273,8 +257,10 @@ mod tests {
         stc.calculate(&data);
 
         // In uptrend, STC should be high (close to 100)
-        if let IndicatorValue::Single(v) = stc.values.last().unwrap() {
-            assert!(*v > 50.0, "STC should be high in uptrend, got {v}");
-        }
+        let rows = stc.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", stc.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 50.0, "STC should be high in uptrend, got {v}");
     }
 }

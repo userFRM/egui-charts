@@ -1,27 +1,28 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Market Facilitation Index (MFI / BW MFI)
 /// Developed by Bill Williams
 /// Measures price movement per unit of volume
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct MarketFacilitationIndex {
     /// Divisor for volume (typically 1 for crypto, 1000000 for stocks)
     divisor: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl MarketFacilitationIndex {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
             divisor: 1.0,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            values: IndicatorValues::new(),
+            color: palette::UP, // Teal
             visible: true,
         }
     }
@@ -32,6 +33,7 @@ impl MarketFacilitationIndex {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -45,6 +47,10 @@ impl Default for MarketFacilitationIndex {
 }
 
 impl Indicator for MarketFacilitationIndex {
+    crate::studies::inputs::study_inputs!(self;
+        divisor: number("Divisor", f64::EPSILON, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MFI BW"
     }
@@ -69,7 +75,7 @@ impl Indicator for MarketFacilitationIndex {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -117,6 +123,8 @@ mod tests {
             low,
             close: (high + low) / 2.0,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -133,9 +141,10 @@ mod tests {
 
         assert_eq!(mfi.values.len(), 2);
 
-        if let IndicatorValue::Single(v) = mfi.values[0] {
-            assert!((v - 0.004).abs() < 0.0001);
-        }
+        let IndicatorValue::Single(v) = mfi.values.to_rows()[0] else {
+            panic!("no value: {:?}", mfi.values.to_rows()[0]);
+        };
+        assert!((v - 0.004).abs() < 0.0001);
     }
 
     #[test]
@@ -146,6 +155,6 @@ mod tests {
 
         mfi.calculate(&data);
 
-        assert!(matches!(mfi.values[0], IndicatorValue::None));
+        assert!(matches!(mfi.values.to_rows()[0], IndicatorValue::None));
     }
 }

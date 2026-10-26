@@ -1,6 +1,6 @@
 //! Timeframe (bar aggregation interval) for financial charts.
 //!
-//! A [`Timeframe`] specifies how long each bar/candle represents.  The library
+//! A [`Timeframe`] specifies the time window or execution-based threshold represented by a bar.  The library
 //! ships with standard presets from 100 ms up to 1 month, and a [`Custom`](Timeframe::Custom)
 //! variant for arbitrary intervals.
 //!
@@ -27,13 +27,17 @@ use std::str::FromStr;
 
 /// Timeframe for bar aggregation.
 ///
-/// Each variant represents a fixed time interval over which OHLCV data is aggregated
+/// Time variants represent a fixed interval over which OHLCV data is aggregated
 /// into a single [`Bar`](super::Bar). The default timeframe is [`Min1`](Timeframe::Min1).
 ///
 /// Timeframes are divided into tiers:
 ///
 /// | Tier         | Variants                                               |
 /// |-------------|-------------------------------------------------------|
+/// | Tick count  | `Ticks(count)` -- a nonzero number of executions         |
+/// | Volume      | `Volume(units)` -- exact traded volume                   |
+/// | Range       | `Range(ticks)` -- price range in instrument ticks        |
+/// | Delta       | `Delta(units)` -- absolute buy minus sell volume         |
 /// | Millisecond | `Ms100`, `Ms250`, `Ms500`                              |
 /// | Second      | `Sec1` .. `Sec30`                                      |
 /// | Minute      | `Min1`, `Min5`, `Min15`, `Min30`                       |
@@ -51,6 +55,7 @@ use std::str::FromStr;
 /// assert_eq!(tf.to_string(), "4h");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Timeframe {
     // Millisecond timeframes (for high-frequency trading)
     /// 100-millisecond bars (HFT).
@@ -99,12 +104,27 @@ pub enum Timeframe {
     /// Custom timeframe defined in seconds.
     /// Allows user-defined intervals (e.g., 45s, 3min, 2h). The interval is never zero.
     Custom(NonZeroU64),
+
+    /// One bar per nonzero number of accepted trades, starting at subscription or replay start.
+    Ticks(NonZeroU64),
+    /// Exact traded volume per bar, in whole units. A fill spanning bars is split by size.
+    Volume(NonZeroU64),
+    /// Price range in instrument ticks. Closes on the first real fill reaching the range;
+    /// skipped prices can overshoot it. No synthetic executions are inserted.
+    Range(NonZeroU64),
+    /// Absolute buy minus sell volume per bar, in whole units. Fills split at the threshold;
+    /// unknown sides contribute volume but no delta.
+    Delta(NonZeroU64),
 }
 
 impl Timeframe {
     /// Returns the canonical string label for this timeframe (e.g. `"1min"`, `"4h"`, `"1D"`).
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
+            Timeframe::Ticks(count) => Cow::Owned(format!("{count}t")),
+            Timeframe::Volume(size) => Cow::Owned(format!("{size}v")),
+            Timeframe::Range(ticks) => Cow::Owned(format!("{ticks}r")),
+            Timeframe::Delta(size) => Cow::Owned(format!("{size}delta")),
             Timeframe::Ms100 => Cow::Borrowed("100ms"),
             Timeframe::Ms250 => Cow::Borrowed("250ms"),
             Timeframe::Ms500 => Cow::Borrowed("500ms"),
@@ -126,7 +146,15 @@ impl Timeframe {
         }
     }
 
-    /// Returns all preset (non-custom) timeframes in ascending order.
+    /// Whether bars close on executions rather than a time boundary.
+    pub fn is_trade_based(self) -> bool {
+        matches!(
+            self,
+            Self::Ticks(_) | Self::Volume(_) | Self::Range(_) | Self::Delta(_)
+        )
+    }
+
+    /// Returns the preset time intervals in ascending duration order. Trade-based intervals are excluded.
     pub fn all() -> Vec<Timeframe> {
         vec![
             Timeframe::Ms100,
@@ -149,9 +177,14 @@ impl Timeframe {
         ]
     }
 
-    /// Get duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes
+    /// Duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes.
+    /// Trade-based intervals have no time duration and return zero; do not use them to step time.
     pub fn duration_ms(&self) -> i64 {
         match self {
+            Timeframe::Ticks(_)
+            | Timeframe::Volume(_)
+            | Timeframe::Range(_)
+            | Timeframe::Delta(_) => 0,
             Timeframe::Ms100 => 100,
             Timeframe::Ms250 => 250,
             Timeframe::Ms500 => 500,
@@ -175,7 +208,7 @@ impl Timeframe {
         }
     }
 
-    /// Get chrono Duration
+    /// Duration as a chrono value; zero for trade-based intervals.
     pub fn duration(&self) -> Duration {
         Duration::milliseconds(self.duration_ms())
     }
@@ -187,6 +220,11 @@ impl Timeframe {
 
     /// Convert a resolution string to Timeframe
     pub fn from_resolution(resolution: &str) -> Option<Self> {
+        if let Ok(timeframe) = resolution.parse::<Self>()
+            && timeframe.is_trade_based()
+        {
+            return Some(timeframe);
+        }
         match resolution {
             "1" => Some(Timeframe::Min1),
             "5" => Some(Timeframe::Min5),
@@ -233,6 +271,26 @@ impl FromStr for Timeframe {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        for (suffix, make) in [
+            ("delta", Timeframe::Delta as fn(NonZeroU64) -> Timeframe),
+            ("v", Timeframe::Volume),
+            ("r", Timeframe::Range),
+        ] {
+            if let Some(value) = s.to_lowercase().strip_suffix(suffix)
+                && value.chars().all(|c| c.is_ascii_digit())
+            {
+                return value
+                    .parse::<NonZeroU64>()
+                    .map(make)
+                    .map_err(|_| "Trade interval must be a positive integer".into());
+            }
+        }
+        if let Some(count) = s.to_lowercase().strip_suffix('t') {
+            return count
+                .parse::<NonZeroU64>()
+                .map(Timeframe::Ticks)
+                .map_err(|_| "Tick count must be a positive integer".into());
+        }
         // Try known preset names first
         match s.to_lowercase().as_str() {
             "100ms" => return Ok(Timeframe::Ms100),
@@ -347,6 +405,20 @@ mod tests {
     #[test]
     fn test_from_str_presets() {
         assert_eq!("1min".parse::<Timeframe>(), Ok(Timeframe::Min1));
+        let ticks = Timeframe::Ticks(NonZeroU64::new(10).unwrap());
+        assert_eq!("10t".parse::<Timeframe>(), Ok(ticks));
+        assert_eq!(ticks.to_string(), "10t");
+        assert_eq!(Timeframe::from_resolution("10T"), Some(ticks));
+        for text in ["100v", "10r", "100delta"] {
+            let timeframe: Timeframe = text.parse().unwrap();
+            assert_eq!(timeframe.to_string(), text);
+            assert_eq!(
+                Timeframe::from_resolution(&text.to_uppercase()),
+                Some(timeframe)
+            );
+        }
+        assert!("0t".parse::<Timeframe>().is_err());
+        assert!(serde_json::from_str::<Timeframe>(r#"{"Ticks":0}"#).is_err());
         assert_eq!("1h".parse::<Timeframe>(), Ok(Timeframe::Hour1));
         assert_eq!("1d".parse::<Timeframe>(), Ok(Timeframe::Day1));
         assert_eq!("1w".parse::<Timeframe>(), Ok(Timeframe::Week1));

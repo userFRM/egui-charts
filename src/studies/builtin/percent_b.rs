@@ -1,19 +1,19 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Percent B (%B)
 /// Shows where price is relative to Bollinger Bands
 /// 0 = at lower band, 1 = at upper band
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct PercentB {
     /// Period for Bollinger Bands (typically 20)
     period: usize,
     /// Standard deviation multiplier (typically 2.0)
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -24,12 +24,13 @@ impl PercentB {
         Self {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
+            values: IndicatorValues::new(),
+            color: palette::CYAN, // Cyan
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -43,6 +44,17 @@ impl Default for PercentB {
 }
 
 impl Indicator for PercentB {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "%B"
     }
@@ -91,7 +103,7 @@ impl Indicator for PercentB {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -139,6 +151,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -151,10 +165,11 @@ mod tests {
 
         pb.calculate(&data);
 
-        if let IndicatorValue::Single(v) = pb.values.last().unwrap() {
-            // With constant prices, %B should be 0.5 (middle of bands)
-            // But with zero std dev, bands collapse
-            assert!(v.is_finite());
-        }
+        let rows = pb.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", pb.values.to_rows().last().unwrap());
+        };
+        // Constant prices collapse the bands to a point: %B is the middle of the band
+        assert_eq!(*v, 0.5);
     }
 }

@@ -8,7 +8,22 @@
 //!
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
-use crate::model::percent_change;
+use crate::model::{Instrument, percent_change};
+use std::sync::Arc;
+
+/// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
+/// Invalid tick sizes are ignored; explicit decimals take precedence.
+pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
+    instrument.price_decimals.or_else(|| {
+        let tick = instrument
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)?;
+        let text = tick.to_string();
+        Some(text.split_once('.').map_or(0, |(_, decimals)| {
+            decimals.len().min(usize::from(u8::MAX)) as u8
+        }))
+    })
+}
 
 /// Trait for custom price formatting on the Y axis.
 ///
@@ -24,6 +39,12 @@ pub trait PriceFormatter: Send + Sync {
     /// # Returns
     /// Formatted string to display on the price axis
     fn format(&self, price: f64) -> String;
+
+    /// Format a price axis tick. Defaults to [`format`](Self::format); override it
+    /// to write ticks differently from crosshair and price tag labels.
+    fn format_tick(&self, price: f64) -> String {
+        self.format(price)
+    }
 
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
@@ -74,6 +95,9 @@ impl PriceFormatter for DefaultPriceFormatter {
         } else {
             // Auto precision - remove trailing zeros
             let formatted = format!("{:.prec$}", price, prec = self.precision);
+            if self.precision == 0 {
+                return formatted;
+            }
             formatted
                 .trim_end_matches('0')
                 .trim_end_matches('.')
@@ -306,7 +330,7 @@ impl PriceFormatter for ScientificFormatter {
 
 /// Custom price formatter using a closure
 pub struct CustomPriceFormatter {
-    formatter: Box<dyn Fn(f64) -> String + Send + Sync>,
+    formatter: Arc<dyn Fn(f64) -> String + Send + Sync>,
 }
 
 impl CustomPriceFormatter {
@@ -316,7 +340,7 @@ impl CustomPriceFormatter {
         F: Fn(f64) -> String + Send + Sync + 'static,
     {
         Self {
-            formatter: Box::new(formatter),
+            formatter: Arc::new(formatter),
         }
     }
 }
@@ -327,8 +351,9 @@ impl PriceFormatter for CustomPriceFormatter {
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
-        // Cannot clone closures, return default
-        Box::new(DefaultPriceFormatter::default())
+        Box::new(Self {
+            formatter: Arc::clone(&self.formatter),
+        })
     }
 }
 
@@ -400,6 +425,18 @@ impl Default for PriceFormatterBuilder {
     }
 }
 
+/// Decimals for a price by its magnitude: 2 from 100 up, 4 from 1 up, 6 below 1.
+#[cfg(feature = "widget")]
+pub(crate) fn price_decimals(price: f64) -> usize {
+    if price.abs() >= 100.0 {
+        2
+    } else if price.abs() >= 1.0 {
+        4
+    } else {
+        6
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,6 +452,12 @@ mod tests {
     fn test_fixed_precision() {
         let formatter = DefaultPriceFormatter::with_precision(4);
         assert_eq!(formatter.format(123.456), "123.4560");
+        for value in [0.0, 10.0, 100.0, -100.0] {
+            assert_eq!(
+                DefaultPriceFormatter::with_precision(0).format(value),
+                format!("{value:.0}")
+            );
+        }
     }
 
     #[test]
@@ -496,6 +539,7 @@ mod tests {
     fn test_custom_formatter() {
         let formatter = CustomPriceFormatter::new(|price| format!("Price: {price:.2}"));
         assert_eq!(formatter.format(123.456), "Price: 123.46");
+        assert_eq!(formatter.clone_box().format(123.456), "Price: 123.46");
     }
 
     #[test]

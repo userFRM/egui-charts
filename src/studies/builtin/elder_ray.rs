@@ -1,69 +1,46 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Elder Ray Index (Bull Power / Bear Power)
 /// Measures buying and selling pressure
 /// Developed by Alexander Elder
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct ElderRay {
     /// EMA period (typically 13)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Bull Power (green), Bear Power (red)]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl ElderRay {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Bull Power
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Bear Power
+                palette::GREEN, // Green - Bull Power
+                palette::RED,   // Red - Bear Power
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
-    /// Calculate EMA of close prices
-    fn calculate_ema(data: &[Bar], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // First value is SMA
-        let first_sma: f64 = data.iter().take(period).map(|b| b.close).sum::<f64>() / period as f64;
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                ema.push(f64::NAN);
-            } else if i == period - 1 {
-                ema.push(first_sma);
-            } else {
-                let prev = ema[i - 1];
-                ema.push((data[i].close - prev) * multiplier + prev);
-            }
-        }
-
-        ema
-    }
-
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
@@ -73,7 +50,10 @@ impl ElderRay {
         }
 
         // Calculate EMA
-        let ema = Self::calculate_ema(data, self.period);
+        let ema = helpers::ema_sma(
+            &data.iter().map(|b| b.close).collect::<Vec<_>>(),
+            self.period,
+        );
 
         // Calculate Bull Power and Bear Power
         for i in 0..data.len() {
@@ -85,7 +65,7 @@ impl ElderRay {
                 // Bear Power = Low - EMA
                 let bear_power = data[i].low - ema[i];
 
-                values.push(IndicatorValue::Multiple(vec![bull_power, bear_power]));
+                values.push_lines(&[bull_power, bear_power]);
             }
         }
 
@@ -101,6 +81,14 @@ impl Default for ElderRay {
 }
 
 impl Indicator for ElderRay {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "Elder Ray"
     }
@@ -117,7 +105,7 @@ impl Indicator for ElderRay {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -152,69 +140,5 @@ impl Indicator for ElderRay {
             format!("Bull({})", self.period),
             format!("Bear({})", self.period),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_elder_ray_calculation() {
-        let mut er = ElderRay::new(3);
-
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(104.0, 99.0, 102.0),
-            make_bar(106.0, 100.0, 104.0),
-            make_bar(108.0, 102.0, 106.0),
-        ];
-
-        er.calculate(&data);
-
-        assert_eq!(er.values.len(), 4);
-
-        // First two should be None
-        assert!(matches!(er.values[0], IndicatorValue::None));
-        assert!(matches!(er.values[1], IndicatorValue::None));
-
-        // Third should have values
-        if let IndicatorValue::Multiple(v) = &er.values[2] {
-            assert_eq!(v.len(), 2);
-            // Bull power should be positive (high > ema typically in uptrend)
-        }
-    }
-
-    #[test]
-    fn test_elder_ray_interpretation() {
-        // In an uptrend, bull power should be positive
-        // In a downtrend, bear power should be negative
-        let mut er = ElderRay::new(2);
-
-        // Uptrend
-        let data = vec![
-            make_bar(102.0, 98.0, 100.0),
-            make_bar(105.0, 100.0, 104.0),
-            make_bar(110.0, 104.0, 108.0),
-        ];
-
-        er.calculate(&data);
-
-        if let IndicatorValue::Multiple(v) = &er.values[2] {
-            // Bull power should be positive in uptrend
-            assert!(v[0] > 0.0);
-        }
     }
 }

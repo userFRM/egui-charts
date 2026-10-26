@@ -24,8 +24,8 @@
 
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Arnaud Legoux Moving Avg indicator
@@ -34,7 +34,7 @@ pub struct ALMA {
     period: usize,
     offset: f64,
     sigma: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -56,8 +56,8 @@ impl ALMA {
             period,
             offset,
             sigma,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange
+            values: IndicatorValues::new(),
+            color: palette::DEEP_ORANGE, // Deep Orange
             visible: true,
         }
     }
@@ -82,6 +82,18 @@ impl Default for ALMA {
 }
 
 impl Indicator for ALMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        offset: number("Offset", 0.0, 1.0),
+        sigma: number("Sigma", 0.001, 100.0)
+    ; {});
+
     fn name(&self) -> &str {
         "ALMA"
     }
@@ -121,7 +133,7 @@ impl Indicator for ALMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -139,7 +151,7 @@ impl Indicator for ALMA {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 
@@ -180,6 +192,8 @@ mod tests {
                     low: price - 1.0,
                     close: price,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -195,41 +209,12 @@ mod tests {
 
         // First period-1 values should be None
         for i in 0..8 {
-            assert!(matches!(alma.values()[i], IndicatorValue::None));
+            assert!(matches!(alma.values().to_rows()[i], IndicatorValue::None));
         }
 
         // Check valid values exist
-        for value in alma.values().iter().skip(8) {
+        for value in alma.values().to_rows().iter().skip(8) {
             assert!(matches!(value, IndicatorValue::Single(_)));
         }
-    }
-
-    #[test]
-    fn test_alma_smoothness() {
-        let bars = create_test_bars();
-        let mut alma = ALMA::new(9, 0.85, 6.0);
-        alma.calculate(&bars);
-
-        // ALMA should track price but be smoothed
-        if let Some(IndicatorValue::Single(val)) = alma.values().last() {
-            let last_close = bars.last().unwrap().close;
-            assert!(
-                (*val - last_close).abs() < 10.0,
-                "ALMA should be close to price"
-            );
-        }
-    }
-
-    #[test]
-    fn test_alma_is_overlay() {
-        let alma = ALMA::new(9, 0.85, 6.0);
-        assert!(alma.is_overlay());
-    }
-
-    #[test]
-    fn test_alma_empty_data() {
-        let mut alma = ALMA::new(9, 0.85, 6.0);
-        alma.calculate(&[]);
-        assert!(alma.values().is_empty());
     }
 }

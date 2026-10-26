@@ -21,25 +21,18 @@ use crate::drawings::DrawingToolType;
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DrawingToolbarAction {
     /// No action taken
     None,
     /// A drawing tool was selected
     SelectTool(DrawingToolType),
-    /// Selection cleared (cursor mode)
-    ClearSelection,
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
     /// Magnet mode toggled
     ToggleMagnet,
     /// Stay-in-drawing mode toggled
     ToggleStayInDrawingMode,
-    /// Tool added to favorites
-    AddFavorite(DrawingToolType),
-    /// Tool removed from favorites
-    RemoveFavorite(DrawingToolType),
-    /// Settings requested
-    OpenSettings,
     /// Clear all drawings requested
     ClearAllDrawings,
     /// Drawing color changed (RGBA)
@@ -68,8 +61,6 @@ pub enum DrawingToolbarAction {
     ZoomOut,
     /// Toggle values tooltip on long press
     ToggleValuesTooltip,
-    /// Toggle favorites toolbar visibility
-    ToggleFavoritesToolbar,
     /// Lock all drawings
     LockAllDrawings,
     /// Save current drawing properties as a template
@@ -82,16 +73,20 @@ pub enum DrawingToolbarAction {
         /// Template ID to load
         template_id: String,
     },
-    /// Delete a saved drawing template
-    DeleteTemplate {
-        /// Template ID to delete
-        template_id: String,
-    },
-    /// Open the template management menu
+    /// Open the template name input.
     OpenTemplateMenu,
-    /// Insert an emoji/icon as a text annotation
+    /// Open the host's drawing template catalog for loading and deletion.
+    ManageTemplates,
+    /// Place a bundled icon, emoji or sticker at its independent pixel size.
+    InsertGlyph {
+        /// Bundled glyph id or Unicode emoji.
+        icon_name: &'static str,
+        /// Size in logical pixels, saved as `Drawing::font_size`.
+        size: f32,
+    },
+    /// Legacy host intent for an emoji at the configured default size.
     InsertEmoji {
-        /// Icon reference to insert
+        /// The icon or emoji to place
         icon_name: &'static str,
     },
 }

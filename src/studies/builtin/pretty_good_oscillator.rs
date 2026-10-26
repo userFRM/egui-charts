@@ -1,30 +1,33 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Pretty Good Oscillator (PGO)
 /// Measures price distance from moving avg in ATR units
 /// Values > 3 or < -3 indicate potential reversal
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct PrettyGoodOscillator {
     /// Period for calculations (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl PrettyGoodOscillator {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan,
+            values: IndicatorValues::new(),
+            color: palette::CYAN,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -37,23 +40,15 @@ impl Default for PrettyGoodOscillator {
     }
 }
 
-impl Indicator for PrettyGoodOscillator {
-    fn name(&self) -> &str {
-        "PGO"
-    }
-
-    fn desc(&self) -> &str {
-        "Pretty Good Oscillator - Price distance in ATR units"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl PrettyGoodOscillator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate True Range
@@ -70,7 +65,7 @@ impl Indicator for PrettyGoodOscillator {
         // Calculate SMA of closes and EMA of TR (ATR)
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 // SMA of closes
                 let sma: f64 = data[i + 1 - self.period..=i]
@@ -83,17 +78,41 @@ impl Indicator for PrettyGoodOscillator {
                 let atr: f64 = tr[i + 1 - self.period..=i].iter().sum::<f64>() / self.period as f64;
 
                 if atr == 0.0 {
-                    self.values.push(IndicatorValue::None);
+                    values.push(IndicatorValue::None);
                 } else {
                     // PGO = (Close - SMA) / ATR
                     let pgo = (data[i].close - sma) / atr;
-                    self.values.push(IndicatorValue::Single(pgo));
+                    values.push(IndicatorValue::Single(pgo));
                 }
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for PrettyGoodOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "PGO"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Pretty Good Oscillator - Price distance in ATR units"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -141,6 +160,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -162,8 +183,10 @@ mod tests {
         assert_eq!(pgo.values.len(), 6);
 
         // Last value should be positive (price above avg)
-        if let IndicatorValue::Single(v) = pgo.values.last().unwrap() {
-            assert!(*v > 0.0, "PGO should be positive after upward move");
-        }
+        let rows = pgo.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", pgo.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 0.0, "PGO should be positive after upward move");
     }
 }

@@ -1,10 +1,10 @@
 [package]
 name = "egui-charts"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-description = "Financial charting engine for egui: candlesticks and other chart types, drawing tools, technical indicators and a design-token theme system"
+description = "Interactive financial charts for egui with historical and streaming data, studies, drawing tools and order flow"
 repository = "https://github.com/userFRM/egui-charts"
 homepage = "https://github.com/userFRM/egui-charts"
 documentation = "https://docs.rs/egui-charts"
@@ -12,7 +12,7 @@ authors = ["userFRM"]
 keywords = ["trading", "charts", "finance", "egui", "candlestick"]
 categories = ["visualization", "gui", "graphics", "rendering::engine"]
 readme = "README.md"
-# `examples/demo` is a self-contained `eframe`+`wgpu`/Trunk workspace built only
+# `examples/demo` is a self-contained `eframe`+`glow`/Trunk workspace built only
 # by Trunk, never by the host crate.  Auto-discovery would otherwise pick up
 # `examples/demo/main.rs` as a `demo` example and try to build it here, so the
 # example set is declared explicitly instead.
@@ -22,10 +22,20 @@ exclude = [
     ".github/",
     "tests/",
     "benches/",
+    "docs/*",
+    "!docs/builder-guide.md",
+    "!docs/site/src/content/docs/*.mdx",
+    "!docs/study-data.md",
+    "!docs/strategy-report.md",
+    "fuzz/",
     "*.png",
     "*.gif",
     "*.mp4",
 ]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 path = "src/lib.rs"
@@ -43,16 +53,55 @@ required-features = ["widget", "studies"]
 [[example]]
 name = "drawing_tools"
 path = "examples/drawing_tools.rs"
-required-features = ["widget"]
+required-features = ["widget", "drawings"]
 
 [[example]]
-name = "data_source"
-path = "examples/data_source.rs"
+name = "live_feed"
+path = "examples/live_feed.rs"
 required-features = ["widget"]
 
 [[example]]
 name = "bare_chart"
 path = "examples/bare_chart.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "volatility_smile"
+path = "examples/volatility_smile.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "yield_curve"
+path = "examples/yield_curve.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "primitives"
+path = "examples/primitives.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "custom_indicator"
+path = "examples/custom_indicator.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "drawing_persistence"
+path = "examples/drawing_persistence.rs"
+required-features = ["drawings"]
+
+[[example]]
+name = "backtesting"
+path = "examples/backtesting.rs"
+
+[[example]]
+name = "scripting"
+path = "examples/scripting.rs"
+required-features = ["widget"]
+
+[[example]]
+name = "synchronized_charts"
+path = "examples/synchronized_charts.rs"
 required-features = ["widget"]
 
 [[bench]]
@@ -61,25 +110,63 @@ path = "benches/bare_chart.rs"
 harness = false
 required-features = ["widget"]
 
+[[bench]]
+name = "frame_time"
+path = "benches/frame_time.rs"
+harness = false
+required-features = ["widget", "studies", "drawings"]
+
+[[bench]]
+name = "stream"
+path = "benches/stream.rs"
+harness = false
+required-features = ["widget", "studies"]
+
+[[bench]]
+name = "order_flow"
+path = "benches/order_flow.rs"
+harness = false
+required-features = ["widget"]
+
 [features]
-default = ["ui"]
-## The egui chart widget: `Chart`, `ChartBuilder`, drawings, configuration,
+default = ["ui", "locales", "timezones"]
+## The egui chart widget: `Chart`, `ChartBuilder`, configuration,
 ## theme and the `Indicator` extension point.  Without it the crate is the
 ## headless engine (`model`, `scales`, `data`, `services`, `tokens` and the
 ## `Indicator` trait layer of `studies`) and does not depend on egui.
-widget = ["dep:egui", "dep:web-time"]
+widget = ["dep:egui", "dep:web-time", "dep:png"]
+## Drawing tools, annotation storage and interaction. Enabled by `ui`.
+drawings = ["widget"]
 ## The built-in studies and `IndicatorFactory`.  Needs no egui, so a headless
 ## build can compute the same studies.
 studies = []
 ## Compile-time embedded SVG icons (`icons::Icon`).  Required by `ui`.
-## The chart installs egui_extras' SVG image loader so the icons render.
-icons = ["widget", "dep:egui_extras", "egui_extras/svg"]
+## The chart installs egui_extras' SVG image loader and a pixel-aligned icon loader so the icons render.
+icons = ["widget", "dep:egui_extras", "egui_extras/svg", "dep:resvg"]
 ## Application-level UI components: toolbars, panels, sidebars, dialogs, the
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
-ui = ["icons", "studies", "dep:thiserror"]
+ui = ["icons", "studies", "drawings", "dep:thiserror", "eframe/accesskit"]
+## Month and weekday names and the AM/PM marker in the language of a locale, for
+## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
+## Without it those labels stay in English.
+locales = ["chrono/unstable-locales"]
+## IANA time zones and daylight-saving rules from chrono-tz, enabled by default.
+## Without it, UTC, system local time and explicit fixed offsets remain available.
+timezones = ["dep:chrono-tz"]
 ## `Serialize` and `Deserialize` for `theme::Theme`, so an application can load a theme from a file.
 serde = []
+
+# The web builds: `trunk build --release` of `examples/demo`, whose own profile matches this one,
+# and of the bare chart in `scripts/web-size.sh`. Whole-program optimisation for size: at `s` the
+# frame of `benches/bare_chart.rs` costs 30% more instructions than at `release`, at `z` 60% more
+# for a download only 1.5% smaller. `panic` and `strip` stay as they are: wasm32-unknown-unknown
+# aborts on panic anyway, and the web build keeps no symbols.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
 
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
@@ -87,22 +174,40 @@ serde = []
 # CI without a Vulkan/Metal toolchain, and the `x11`/`wayland` platform features
 # are required because `default-features = false` otherwise leaves `winit`
 # without a Linux backend.  `clipboard` gives text fields copy and paste.
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "x11", "wayland"] }
+# `ui` enables the native screen-reader bridge; widget-only examples opt in with `eframe/accesskit`.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "glow", "x11", "wayland"] }
 egui = "0.37.0"
+egui_kittest = { version = "0.37.0", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The tests measure text in egui's fonts, and the examples fall back to them for
+# the characters Roboto lacks.  The web build of the bare chart carries only the
+# Roboto that `theme::apply_to_egui` installs.
+egui = { version = "0.37.0", features = ["default_fonts"] }
+# The examples that draw random sample data run natively only.
 rand = "0.10.0"
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# `examples/bare_chart.rs` starts its web runner from the page.
+wasm-bindgen-futures = "0.4.79"
+wasm-bindgen-test = "0.3.79"
+
 [dependencies]
-# Fonts are the application's choice: eframe enables egui's `default_fonts`.
+# theme::apply_to_egui installs the bundled Roboto face.
 egui = { version = "0.37.0", default-features = false, features = ["serde"], optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path
 # resolves to this crate, which egui re-exports.
 ecolor = { version = "0.37.0", features = ["serde"] }
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
-serde = { version = "1.0.228", features = ["derive"] }
+# The icon loader rasterises with the same resvg that egui_extras' SVG loader uses.
+resvg = { version = "0.45.1", default-features = false, optional = true }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 chrono = { version = "0.4.43", features = ["serde"] }
-chrono-tz = "0.10.4"
+chrono-tz = { version = "0.10.4", optional = true }
 web-time = { version = "1.1.0", optional = true }
 csv = "1.4.0"
+# Encodes chart images rasterised by `Chart::export_png`.
+png = { version = "0.17.16", optional = true }
 thiserror = { version = "2.0.18", optional = true }
 log = "0.4.29"

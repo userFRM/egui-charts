@@ -1,20 +1,22 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-/// Net Volume
-/// Shows volume as positive when close > open, negative when close < open
-use crate::studies::{Indicator, IndicatorValue};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Volume signed by the close against the previous close: positive, negative or zero.
+/// The first bar has no value.
 #[derive(Clone)]
 pub struct NetVolume {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl NetVolume {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![Color32::from_rgb(38, 166, 154)], // Teal
             visible: true,
         }
@@ -28,30 +30,51 @@ impl Default for NetVolume {
 }
 
 impl Indicator for NetVolume {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
+    }
+
     fn name(&self) -> &str {
         "Net Volume"
     }
 
     fn desc(&self) -> &str {
-        "Net Volume - Positive on up bars, negative on down bars"
+        "Net Volume - Volume signed by the change from the previous close"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        for bar in data {
-            let net = if bar.close > bar.open {
-                bar.volume
-            } else if bar.close < bar.open {
-                -bar.volume
-            } else {
-                0.0
-            };
-            self.values.push(IndicatorValue::Single(net));
-        }
+        self.values = over_finite_bars(
+            data,
+            |b| b.close.is_finite() && b.volume.is_finite(),
+            |data| {
+                let mut previous = None;
+                data.iter()
+                    .map(|bar| {
+                        let value = match previous {
+                            None => IndicatorValue::None,
+                            Some(close) => IndicatorValue::Single(if bar.close > close {
+                                bar.volume
+                            } else if bar.close < close {
+                                -bar.volume
+                            } else {
+                                0.0
+                            }),
+                        };
+                        previous = Some(bar.close);
+                        value
+                    })
+                    .collect()
+            },
+        );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

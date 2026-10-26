@@ -1,44 +1,127 @@
+//! Detrended Price Oscillator (DPO)
+//!
+//! The DPO removes the trend from the close by comparing it with a moving average shifted by
+//! half its length plus one bar, so that cycles shorter than the length stand out.
+//!
+//! # Formula
+//! ```text
+//! shift = length / 2 + 1   (integer division)
+//! non-centred: DPO = close - SMA(close, length)[shift]
+//! centred:     DPO = close[shift] - SMA(close, length), drawn `shift` bars back
+//! ```
+//! with conventional length 21, non-centred. The non-centred form is aligned with the current
+//! bar. The centred form compares each close with the average centred on it; its value is
+//! stored at the bar that completes the average and [`plot_offset`](Indicator::plot_offset)
+//! draws it `shift` bars back, so its last `shift` bars are blank. A value that would be drawn
+//! back over a bar skipped for a non-finite close is left out, as it would not lie under the close
+//! it uses.
+//!
+//! # Example
+//! ```
+//! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
+//! use egui_charts::studies::{DetrendedPriceOscillator, Indicator};
+//!
+//! let mut dpo = DetrendedPriceOscillator::new(21);
+//! dpo.calculate(&bars);
+//! assert!(dpo.values().value(0, 31).is_some());
+//!
+//! let mut centred = DetrendedPriceOscillator::new(21).with_centered(true);
+//! centred.calculate(&bars);
+//! assert_eq!(centred.plot_offset(0), -11);
+//! ```
+
+use super::over_finite_bars;
 use crate::model::Bar;
-/// Detrended Price Oscillator (DPO)
-/// Removes trend from price to identify cycles
-/// Compares price to a displaced moving avg
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::stepper::rolling_mean;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Detrended Price Oscillator, aligned with the current bar or centred on the average.
 #[derive(Clone)]
 pub struct DetrendedPriceOscillator {
-    /// Period for SMA calculation
     period: usize,
-    values: Vec<IndicatorValue>,
+    centered: bool,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl DetrendedPriceOscillator {
+    /// Create a non-centred DPO over `period` bars (conventionally 21).
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple,
+            centered: false,
+            values: IndicatorValues::new(),
+            color: palette::DEEP_PURPLE,
             visible: true,
         }
     }
 
+    /// Compare each close with the average centred on it, drawn back by the shift.
+    pub fn with_centered(mut self, centered: bool) -> Self {
+        self.centered = centered;
+        self
+    }
+
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
+    }
+
+    fn shift(&self) -> usize {
+        self.period / 2 + 1
+    }
+
+    /// The values over `data`, every bar of which has a finite close.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
+        let average = rolling_mean(&closes, self.period);
+        (0..data.len())
+            .map(|i| {
+                IndicatorValue::Single(match i.checked_sub(self.shift()) {
+                    Some(back) if self.centered => closes[back] - average[i],
+                    Some(back) => closes[i] - average[back],
+                    None => f64::NAN,
+                })
+            })
+            .collect()
     }
 }
 
 /// Construct with the conventional default parameters.
 impl Default for DetrendedPriceOscillator {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(21)
     }
 }
 
 impl Indicator for DetrendedPriceOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Length", 1, usize::MAX),
+        centered: toggle("Centered")
+    ; {});
+
+    fn plot_offset(&self, _line: usize) -> isize {
+        if self.centered {
+            -(self.shift().min(isize::MAX as usize) as isize)
+        } else {
+            0
+        }
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "DPO"
     }
@@ -48,71 +131,27 @@ impl Indicator for DetrendedPriceOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        // DPO requires period + displacement
-        // Displacement = period / 2 + 1
-        let displacement = self.period / 2 + 1;
-        let required = self.period.saturating_add(displacement);
-
-        if data.len() < required {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
-        // Calculate SMA values
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        for i in 0..data.len() {
-            // Need enough data for both the SMA and the historical close
-            let sma_idx = i + displacement;
-
-            if i < self.period - 1 || sma_idx >= data.len() {
-                self.values.push(IndicatorValue::None);
-            } else {
-                // Calculate SMA at the shifted position
-                let sma: f64 = closes[sma_idx - self.period + 1..=sma_idx]
-                    .iter()
-                    .sum::<f64>()
-                    / self.period as f64;
-
-                // DPO = Close - SMA(period/2 + 1 bars ago)
-                let dpo = closes[i] - sma;
-                self.values.push(IndicatorValue::Single(dpo));
-            }
-        }
-
-        // Pad the end with None values since we're using forward-looking SMA
-        let valid_cnt = self
-            .values
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        if valid_cnt == 0 {
-            // Alternative calculation: look backward instead of forward
-            self.values.clear();
-
-            for i in 0..data.len() {
-                if i < self.period + displacement - 1 {
-                    self.values.push(IndicatorValue::None);
-                } else {
-                    let sma_start = i - displacement - self.period + 1;
-                    let sma_end = i - displacement;
-
-                    let sma: f64 =
-                        closes[sma_start..=sma_end].iter().sum::<f64>() / self.period as f64;
-
-                    let dpo = closes[i] - sma;
-                    self.values.push(IndicatorValue::Single(dpo));
-                }
-            }
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        if self.centered {
+            // Drawn back over a skipped bar, a value would sit beside the close it uses.
+            let mut skipped = None;
+            self.values = (0..data.len())
+                .map(|i| {
+                    if !data[i].close.is_finite() {
+                        skipped = Some(i);
+                    }
+                    let near = skipped.is_some_and(|s| i - s <= self.shift());
+                    IndicatorValue::Single(if near {
+                        f64::NAN
+                    } else {
+                        self.values.value(0, i).unwrap_or(f64::NAN)
+                    })
+                })
+                .collect();
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -123,6 +162,13 @@ impl Indicator for DetrendedPriceOscillator {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, Color32::from_gray(128), "Zero")],
+            ..Default::default()
         }
     }
 
@@ -150,66 +196,30 @@ impl Indicator for DetrendedPriceOscillator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
 
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-        }
-    }
-
+    /// With length 1 the shift is 1 and the average is the close, so a centred value is drawn
+    /// under the close one bar before the one completing it. Nothing is drawn under a skipped bar,
+    /// nor under the bar before it, whose value the skipped bar would complete.
     #[test]
-    fn test_dpo_calculation() {
-        let mut dpo = DetrendedPriceOscillator::new(10);
-
-        // Create data with a trend
-        let data: Vec<Bar> = (0..50).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        dpo.calculate(&data);
-
-        assert_eq!(dpo.values.len(), 50);
-
-        // Count valid values
-        let valid_cnt = dpo
-            .values
+    fn centred_values_stay_under_their_close_past_a_skipped_bar() {
+        let bars: Vec<Bar> = [0.0, 1.0, 4.0, f64::NAN, 9.0, 16.0]
             .iter()
-            .filter(|v| matches!(v, IndicatorValue::Single(_)))
-            .count();
-
-        assert!(valid_cnt > 0, "Should have some valid DPO values");
-    }
-
-    #[test]
-    fn test_dpo_removes_trend() {
-        let mut dpo = DetrendedPriceOscillator::new(5);
-
-        // Perfect linear trend: DPO should be relatively flat
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64 * 2.0)).collect();
-
-        dpo.calculate(&data);
-
-        // DPO values should oscillate around 0 for a linear trend
-        let valid_values: Vec<f64> = dpo
-            .values
-            .iter()
-            .filter_map(|v| {
-                if let IndicatorValue::Single(x) = v {
-                    Some(*x)
-                } else {
-                    None
-                }
+            .enumerate()
+            .map(|(i, &c)| {
+                Bar::new(
+                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                    c,
+                    c,
+                    c,
+                    c,
+                    1.0,
+                )
             })
             .collect();
-
-        if !valid_values.is_empty() {
-            let mean: f64 = valid_values.iter().sum::<f64>() / valid_values.len() as f64;
-            // Mean should be close to 0 after detrending
-            assert!(mean.abs() < 10.0, "DPO mean {mean} should be close to 0");
-        }
+        let mut dpo = DetrendedPriceOscillator::new(1).with_centered(true);
+        dpo.calculate(&bars);
+        let drawn: Vec<_> = (0..5).map(|bar| dpo.plot_value(0, bar)).collect();
+        assert_eq!(drawn, [Some(-1.0), Some(-3.0), None, None, Some(-7.0)]);
     }
 }

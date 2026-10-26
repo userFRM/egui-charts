@@ -26,11 +26,12 @@
 //! kama.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Kaufman Adaptive Moving Average indicator.
 ///
@@ -44,9 +45,18 @@ pub struct KAMA {
     fast_period: usize,
     /// Slowest EMA period (typically 30).
     slow_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    closes: VecDeque<f64>,
+    seed_sum: f64,
+    volatility: f64,
+    kama: Option<f64>,
 }
 
 impl KAMA {
@@ -62,8 +72,9 @@ impl KAMA {
             period: period.max(1),
             fast_period: 2,
             slow_period: 30,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
+            values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            color: palette::CYAN, // Cyan
             visible: true,
         }
     }
@@ -80,78 +91,6 @@ impl KAMA {
         self.color = color;
         self
     }
-
-    /// Calculate the Efficiency Ratio (ER) for a price window.
-    ///
-    /// ER = |net change| / sum of |bar-to-bar changes|.
-    /// Returns a value between 0.0 (no net progress) and 1.0 (perfectly trending).
-    fn efficiency_ratio(prices: &[f64]) -> f64 {
-        if prices.len() < 2 {
-            return 0.0;
-        }
-
-        let change = (prices[prices.len() - 1] - prices[0]).abs();
-
-        let mut volatility = 0.0;
-        for i in 1..prices.len() {
-            volatility += (prices[i] - prices[i - 1]).abs();
-        }
-
-        if volatility > 0.0 {
-            change / volatility
-        } else {
-            0.0
-        }
-    }
-
-    /// Calculate smoothing constant from ER
-    fn smoothing_constant(&self, er: f64) -> f64 {
-        let fast_sc = 2.0 / (self.fast_period as f64 + 1.0);
-        let slow_sc = 2.0 / (self.slow_period as f64 + 1.0);
-
-        // SC = [ER * (FastSC - SlowSC) + SlowSC]^2
-        let sc = er * (fast_sc - slow_sc) + slow_sc;
-        sc * sc
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // First values are None
-        for _ in 0..self.period - 1 {
-            values.push(IndicatorValue::None);
-        }
-
-        // Initialize KAMA with first valid SMA
-        let first_prices: Vec<f64> = data[0..self.period].iter().map(|bar| bar.close).collect();
-        let mut kama = first_prices.iter().sum::<f64>() / self.period as f64;
-        values.push(IndicatorValue::Single(kama));
-
-        // N + 1 closes give the N price changes the efficiency ratio sums.
-        for i in self.period..data.len() {
-            let prices: Vec<f64> = data[i - self.period..=i]
-                .iter()
-                .map(|bar| bar.close)
-                .collect();
-
-            let er = Self::efficiency_ratio(&prices);
-            let sc = self.smoothing_constant(er);
-
-            let close = data[i].close;
-            kama = kama + sc * (close - kama);
-
-            values.push(IndicatorValue::Single(kama));
-        }
-        values
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -162,6 +101,18 @@ impl Default for KAMA {
 }
 
 impl Indicator for KAMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        fast_period: length("Fast period", 1, usize::MAX),
+        slow_period: length("Slow period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "KAMA"
     }
@@ -171,10 +122,51 @@ impl Indicator for KAMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let fast = 2.0 / (self.fast_period as f64 + 1.0);
+        let slow = 2.0 / (self.slow_period as f64 + 1.0);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let close = bar.close;
+                if !close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if let Some(previous) = state.closes.back() {
+                    state.volatility += (close - previous).abs();
+                }
+                state.closes.push_back(close);
+                let next = if let Some(previous) = state.kama {
+                    // N + 1 closes supply exactly N price changes.
+                    let first = state.closes.pop_front().unwrap();
+                    let er = if state.volatility > 0.0 {
+                        (close - first).abs() / state.volatility
+                    } else {
+                        0.0
+                    };
+                    let sc = (er * (fast - slow) + slow).powi(2);
+                    state.volatility =
+                        (state.volatility - (state.closes.front().unwrap() - first).abs()).max(0.0);
+                    previous + sc * (close - previous)
+                } else {
+                    state.seed_sum += close;
+                    if state.closes.len() < self.period {
+                        return IndicatorValue::None;
+                    }
+                    state.seed_sum / self.period as f64
+                };
+                state.kama = Some(next);
+                IndicatorValue::Single(next)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -225,6 +217,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -293,9 +287,18 @@ mod tests {
         for (name, period, closes, expected) in cases {
             let data: Vec<Bar> = closes.iter().map(|&c| make_bar(c)).collect();
             let mut kama = KAMA::new(*period);
-            kama.calculate(&data);
+            assert!(kama.is_incremental(), "KAMA must resume streaming updates");
+            for len in 0..=data.len() {
+                kama.update(&data[..len], len.saturating_sub(1));
+            }
             assert_eq!(kama.values.len(), expected.len(), "{name}");
-            for (i, (got, want)) in kama.values.iter().zip(expected.iter()).enumerate() {
+            for (i, (got, want)) in kama
+                .values
+                .to_rows()
+                .iter()
+                .zip(expected.iter())
+                .enumerate()
+            {
                 match (got, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Single(g), Some(w)) => {

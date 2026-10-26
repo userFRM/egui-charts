@@ -1,17 +1,19 @@
 //! Market quotes and order-book data structures.
 //!
-//! This module provides a pluggable system for consuming real-time market
-//! microstructure data at three granularity levels:
+//! Market microstructure data at three granularity levels:
 //!
-//! | Level | Trait | Data |
-//! |-------|-------|------|
-//! | Tick | [`TickSource`] | Individual trades (time & sales) |
-//! | L1 | [`QuoteSource`] | Best bid/ask (top-of-book) |
-//! | L2 | [`OrderBookSource`] | Full depth-of-market order book |
+//! | Level | Type | Data |
+//! |-------|------|------|
+//! | Tick | [`Tick`] | Individual trades (time & sales) |
+//! | L1 | [`Level1Quote`] | Best bid/ask (top-of-book) |
+//! | L2 | [`OrderBook`] | Full depth-of-market order book |
 //!
-//! Implement the appropriate trait to feed live data into the chart widget.
-//! All traits require `Send + Sync` so sources can be polled from any thread.
+//! A feed pushes trades, the order book and Level 1 quotes into the chart through
+//! [`Sink`](crate::data::Sink). A [`Quote`] summarises a symbol for watchlists, the
+//! symbol's panels and the order ticket; the host streams it through the
+//! [`Quotes`](crate::services::Quotes) service.
 
+use crate::model::OrderSide;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +22,9 @@ use serde::{Deserialize, Serialize};
 /// Each tick represents one matched trade on the exchange, recording the
 /// price, size, and aggressor side. Ticks are the finest-grained market
 /// data and can be aggregated into bars, footprint charts, or volume
-/// profiles. Build it with [`Tick::new`].
+/// profiles. Build it with [`Tick::new`]. A trade names no symbol: the
+/// [`Sink`](crate::data::Sink) it is pushed into stands for one instrument, so a
+/// trade holds no heap data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Tick {
@@ -30,25 +34,38 @@ pub struct Tick {
     pub price: f64,
     /// Trade size/volume
     pub size: f64,
-    /// Side of the trade (if available)
-    pub side: Option<TradeSide>,
+    /// Aggressor side, `None` when the feed does not classify the trade.
+    pub side: Option<OrderSide>,
     /// Exchange trade id or sequence number, unique per symbol and never reused: a number that
     /// restarts each session, such as a daily sequence number, is not an id unless combined with
     /// the session date. With it, history and live trades join without losing or repeating a
     /// trade, and a live trade whose id was already taken is dropped.
     #[serde(default)]
     pub id: Option<u64>,
+    /// Sale conditions the exchange reported, so studies and overlays can leave out prints such
+    /// as off-exchange or auction trades.
+    #[serde(default)]
+    pub conditions: TradeConditions,
+    /// Exchange aggressor order id, unique per symbol. Only explicit matching ids combine fills.
+    #[serde(default)]
+    pub aggressor_order_id: Option<u64>,
+    /// Resting order filled by this execution, when supplied by an order-level feed.
+    #[serde(default)]
+    pub resting_order_id: Option<u64>,
 }
 
 impl Tick {
     /// A trade without an id.
-    pub fn new(ts: DateTime<Utc>, price: f64, size: f64, side: Option<TradeSide>) -> Self {
+    pub fn new(ts: DateTime<Utc>, price: f64, size: f64, side: Option<OrderSide>) -> Self {
         Self {
             ts,
             price,
             size,
             side,
             id: None,
+            conditions: TradeConditions::NONE,
+            aggressor_order_id: None,
+            resting_order_id: None,
         }
     }
 
@@ -57,21 +74,195 @@ impl Tick {
         self.id = Some(id);
         self
     }
+
+    /// Sets [`resting_order_id`](Self::resting_order_id).
+    pub fn with_resting_order_id(mut self, id: u64) -> Self {
+        self.resting_order_id = Some(id);
+        self
+    }
+
+    /// Sets [`aggressor_order_id`](Self::aggressor_order_id).
+    pub fn with_aggressor_order_id(mut self, id: u64) -> Self {
+        self.aggressor_order_id = Some(id);
+        self
+    }
+
+    /// Sets [`conditions`](Self::conditions).
+    pub fn with_conditions(mut self, conditions: TradeConditions) -> Self {
+        self.conditions = conditions;
+        self
+    }
 }
 
-/// Aggressor side of a trade.
+/// Sale conditions of a trade, as a set of flags. Combine them with `|` and test them with
+/// [`intersects`](Self::intersects):
 ///
-/// Indicates whether the trade was initiated by a buyer lifting the ask
-/// or a seller hitting the bid. This is essential for computing delta
-/// (buy volume minus sell volume) in footprint and order-flow analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TradeSide {
-    /// Buy side (aggressor was buyer)
-    Buy,
-    /// Sell side (aggressor was seller)
-    Sell,
-    /// Unknown/unclassified
-    Unknown,
+/// ```
+/// use egui_charts::model::{Tick, TradeConditions};
+///
+/// let trade = Tick::new(chrono::Utc::now(), 100.0, 5.0, None)
+///     .with_conditions(TradeConditions::AUCTION);
+/// let leave_out = TradeConditions::OFF_EXCHANGE | TradeConditions::AUCTION;
+/// assert!(trade.conditions.intersects(leave_out));
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TradeConditions(u16);
+
+impl TradeConditions {
+    /// A regular trade of continuous trading on the exchange.
+    pub const NONE: Self = Self(0);
+    /// Reported away from the exchange's book, such as by a dark pool or an over-the-counter
+    /// dealer.
+    pub const OFF_EXCHANGE: Self = Self(1);
+    /// Printed by an opening, closing or reopening auction rather than by continuous trading.
+    pub const AUCTION: Self = Self(1 << 1);
+    /// Smaller than the instrument's round lot.
+    pub const ODD_LOT: Self = Self(1 << 2);
+    /// Reported late or out of sequence, after trades executed later than it.
+    pub const OUT_OF_SEQUENCE: Self = Self(1 << 3);
+    /// Executed outside the regular trading session.
+    pub const EXTENDED_HOURS: Self = Self(1 << 4);
+
+    /// Raw condition bits, including flags a newer feed may define.
+    pub(crate) fn bits(self) -> u16 {
+        self.0
+    }
+
+    /// Restores condition bits without discarding unknown flags in a recording.
+    pub(crate) fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
+    /// Whether any condition of `other` is set.
+    pub fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
+impl std::ops::BitOr for TradeConditions {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+/// A host-supplied session price, independent of the regular close and hovered history.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct SessionQuote {
+    /// Session price. Renderers ignore non-finite values.
+    pub price: f64,
+    /// Short host-supplied qualifier shown beside the price.
+    pub qualifier: String,
+}
+
+impl SessionQuote {
+    /// Creates a session quote without deriving it from historical bars.
+    pub fn new(price: f64, qualifier: impl Into<String>) -> Self {
+        Self {
+            price,
+            qualifier: qualifier.into(),
+        }
+    }
+}
+
+/// The quote of one symbol: its last price and change from the previous close, the session's
+/// volume, the best bid and ask, and the latest extended-hours trade. Fields the host does not
+/// know stay `None`.
+///
+/// ```
+/// use egui_charts::model::Quote;
+///
+/// let quote = Quote::new(105.0, 100.0, chrono::Utc::now()).with_bid_ask(104.99, 105.01);
+/// assert_eq!((quote.change(), quote.change_percent()), (5.0, 5.0));
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Quote {
+    /// Last traded price of the regular session.
+    pub last: f64,
+    /// Close of the previous regular session.
+    pub prev_close: f64,
+    /// When the quote last changed.
+    pub time: DateTime<Utc>,
+    /// Volume traded in the current session.
+    pub volume: Option<f64>,
+    /// Best bid.
+    pub bid: Option<f64>,
+    /// Best ask.
+    pub ask: Option<f64>,
+    /// The latest trade before or after the regular session.
+    pub extended: Option<ExtendedHoursQuote>,
+}
+
+impl Quote {
+    /// A quote of `last`, changed from `prev_close`, at `time`.
+    pub fn new(last: f64, prev_close: f64, time: DateTime<Utc>) -> Self {
+        Self {
+            last,
+            prev_close,
+            time,
+            volume: None,
+            bid: None,
+            ask: None,
+            extended: None,
+        }
+    }
+
+    /// Sets [`volume`](Self::volume).
+    pub fn with_volume(mut self, volume: f64) -> Self {
+        self.volume = Some(volume);
+        self
+    }
+
+    /// Sets [`bid`](Self::bid) and [`ask`](Self::ask).
+    pub fn with_bid_ask(mut self, bid: f64, ask: f64) -> Self {
+        (self.bid, self.ask) = (Some(bid), Some(ask));
+        self
+    }
+
+    /// Sets [`extended`](Self::extended).
+    pub fn with_extended(mut self, extended: ExtendedHoursQuote) -> Self {
+        self.extended = Some(extended);
+        self
+    }
+
+    /// `last` minus `prev_close`.
+    pub fn change(&self) -> f64 {
+        self.last - self.prev_close
+    }
+
+    /// The change divided by the absolute previous close, times 100; NaN when the previous close
+    /// is 0.
+    pub fn change_percent(&self) -> f64 {
+        if self.prev_close == 0.0 {
+            f64::NAN
+        } else {
+            self.change() / self.prev_close.abs() * 100.0
+        }
+    }
+}
+
+/// The session of an extended-hours trade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtendedSession {
+    /// Before the regular session opens.
+    PreMarket,
+    /// After the regular session closes.
+    PostMarket,
+}
+
+/// The latest trade of a symbol outside its regular session.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExtendedHoursQuote {
+    /// Whether the trade was before or after the regular session.
+    pub session: ExtendedSession,
+    /// Last traded price. Its change is measured from the regular session's last price,
+    /// [`Quote::last`].
+    pub last: f64,
+    /// When `last` traded.
+    pub time: DateTime<Utc>,
 }
 
 /// Level 1 quote -- best bid and ask (top-of-book).
@@ -93,7 +284,7 @@ pub enum TradeSide {
 /// };
 /// assert_eq!(quote.spread(), 10.0);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Level1Quote {
     /// Ts of the quote
     pub ts: DateTime<Utc>,
@@ -138,7 +329,7 @@ impl Level1Quote {
 ///
 /// Represents the aggregate size (and optionally order count) resting
 /// at one price level on either the bid or ask side.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBookLevel {
     /// Price level
     pub price: f64,
@@ -154,7 +345,7 @@ pub struct OrderBookLevel {
 /// time. Bids are sorted descending (best bid first), asks ascending
 /// (best ask first). Use [`imbalance_ratio`](Self::imbalance_ratio) to
 /// gauge buying vs. selling pressure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderBook {
     /// Ts of the snapshot
     pub ts: DateTime<Utc>,
@@ -219,6 +410,16 @@ impl OrderBook {
         bid_vol / total
     }
 
+    /// Whether the best bid is above the best ask. Bids and asks overlap during pre-open and
+    /// auction phases, while a venue publishes an indicative opening price, and in books
+    /// consolidated from several venues, so a crossed book is valid data: the chart keeps it as
+    /// the feed sends it. A best bid equal to the best ask is locked, not crossed.
+    pub fn is_crossed(&self) -> bool {
+        self.best_bid()
+            .zip(self.best_ask())
+            .is_some_and(|(bid, ask)| bid.price > ask.price)
+    }
+
     /// Get mid price from best bid/ask
     pub fn mid_price(&self) -> Option<f64> {
         let bid = self.best_bid()?.price;
@@ -226,95 +427,6 @@ impl OrderBook {
         Some((bid + ask) / 2.0)
     }
 }
-
-/// Provider of real-time Level 1 (best bid/ask) quotes.
-///
-/// Implement this trait to supply top-of-book quotes. The chart does not
-/// consume quote sources yet: the host application calls
-/// [`poll_quotes`](Self::poll_quotes) to drain newly arrived quotes and
-/// displays them itself.
-pub trait QuoteSource: Send + Sync {
-    /// Subscribe to Level 1 quotes for a symbol
-    fn subscribe_quotes(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Unsubscribe from Level 1 quotes
-    fn unsubscribe_quotes(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Poll for latest quotes
-    fn poll_quotes(&mut self) -> Vec<Level1Quote>;
-
-    /// Get latest quote for a symbol
-    fn latest_quote(&self, symbol: &str) -> Option<&Level1Quote>;
-}
-
-/// Provider of Level 2 depth-of-market order book snapshots.
-///
-/// Implement this trait to supply full order-book data; the chart does not
-/// consume order-book sources yet. Each snapshot contains all visible bid
-/// and ask levels up to the requested `depth`.
-pub trait OrderBookSource: Send + Sync {
-    /// Subscribe to order book for a symbol
-    fn subscribe_order_book(
-        &mut self,
-        symbol: String,
-        depth: usize,
-    ) -> Result<(), QuoteSourceError>;
-
-    /// Unsubscribe from order book
-    fn unsubscribe_order_book(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Poll for latest order book snapshots
-    fn poll_order_books(&mut self) -> Vec<OrderBook>;
-
-    /// Get latest order book for a symbol
-    fn latest_order_book(&self, symbol: &str) -> Option<&OrderBook>;
-}
-
-/// Provider of tick-by-tick trade data (time & sales).
-///
-/// Implement this trait to stream individual trade executions into the
-/// chart. Tick data enables volume-at-price analysis and cumulative delta
-/// overlays.
-pub trait TickSource: Send + Sync {
-    /// Subscribe to tick data for a symbol
-    fn subscribe_ticks(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Unsubscribe from tick data
-    fn unsubscribe_ticks(&mut self, symbol: String) -> Result<(), QuoteSourceError>;
-
-    /// Poll for latest ticks
-    fn poll_ticks(&mut self) -> Vec<Tick>;
-
-    /// Get accumulated ticks for a symbol
-    fn get_ticks(&self, symbol: &str, limit: usize) -> Vec<Tick>;
-}
-
-/// Error returned by [`QuoteSource`], [`OrderBookSource`], and [`TickSource`]
-/// operations.
-#[derive(Debug, Clone)]
-pub enum QuoteSourceError {
-    /// Symbol not found or invalid
-    InvalidSymbol(String),
-    /// Conn error
-    ConnError(String),
-    /// Subscription limit reached
-    SubscriptionLimitReached,
-    /// General error
-    Other(String),
-}
-
-impl std::fmt::Display for QuoteSourceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidSymbol(s) => write!(f, "Invalid symbol: {s}"),
-            Self::ConnError(e) => write!(f, "Conn error: {e}"),
-            Self::SubscriptionLimitReached => write!(f, "Subscription limit reached"),
-            Self::Other(e) => write!(f, "Error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for QuoteSourceError {}
 
 #[cfg(test)]
 mod tests {

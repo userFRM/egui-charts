@@ -1,6 +1,8 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Klinger Volume Oscillator, as defined by Stephen J. Klinger in "Identifying Trends With Volume Analysis", Technical Analysis of Stocks & Commodities, V.15:12 (December 1997).
@@ -18,27 +20,29 @@ pub struct KlingerOscillator {
     long_period: usize,
     /// Signal line period (typically 13)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Klinger, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl KlingerOscillator {
+    /// Create with short EMA 34, long EMA 55 and signal EMA 13.
     pub fn new() -> Self {
         Self {
             short_period: 34,
             long_period: 55,
             signal_period: 13,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Klinger
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - Klinger
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set the short, long and signal EMA periods in bars, each at least one.
     pub fn with_periods(mut self, short: usize, long: usize, signal: usize) -> Self {
         self.short_period = short.max(1);
         self.long_period = long.max(1);
@@ -46,81 +50,20 @@ impl KlingerOscillator {
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
-    fn calculate_ema(data: &[f64], period: usize) -> Vec<f64> {
-        if data.is_empty() || period == 0 {
-            return Vec::new();
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        let mut ema = Vec::with_capacity(data.len());
-
-        // Find first valid value
-        let mut first_sum = 0.0;
-        let mut count = 0;
-        let mut first_valid_idx = 0;
-
-        for (i, &value) in data.iter().enumerate() {
-            if !value.is_nan() {
-                first_sum += value;
-                count += 1;
-                if count == period {
-                    first_valid_idx = i;
-                    break;
-                }
-            }
-        }
-        if count < period {
-            return vec![f64::NAN; data.len()];
-        }
-
-        // A NaN input has no value but does not end the average.
-        let mut prev = first_sum / period as f64;
-        for i in 0..data.len() {
-            if i < first_valid_idx || data[i].is_nan() {
-                ema.push(f64::NAN);
-            } else {
-                if i > first_valid_idx {
-                    prev += (data[i] - prev) * multiplier;
-                }
-                ema.push(prev);
-            }
-        }
-
-        ema
-    }
-}
-
-impl Default for KlingerOscillator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Indicator for KlingerOscillator {
-    fn name(&self) -> &str {
-        "Klinger"
-    }
-
-    fn desc(&self) -> &str {
-        "Klinger Volume Oscillator - Long-term money flow trend"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut volume_force = vec![f64::NAN; data.len()];
         // 0.0 until a bar's sum first differs from the bar before.
         let mut trend = 0.0;
         let mut cm = 0.0;
-        // A bar with a non-finite price has no force and is skipped, not compared against.
         let mut prev: Option<&Bar> = None;
         for (i, bar) in data.iter().enumerate() {
-            if !(bar.high + bar.low + bar.close).is_finite() {
-                continue;
-            }
             let Some(prev) = prev.replace(bar) else {
                 continue;
             };
@@ -152,16 +95,16 @@ impl Indicator for KlingerOscillator {
             };
         }
 
-        let short_ema = Self::calculate_ema(&volume_force, self.short_period);
-        let long_ema = Self::calculate_ema(&volume_force, self.long_period);
+        let short_ema = helpers::ema_sma(&volume_force, self.short_period);
+        let long_ema = helpers::ema_sma(&volume_force, self.long_period);
         let klinger: Vec<f64> = short_ema
             .iter()
             .zip(&long_ema)
             .map(|(s, l)| s - l)
             .collect();
-        let signal = Self::calculate_ema(&klinger, self.signal_period);
+        let signal = helpers::ema_sma(&klinger, self.signal_period);
 
-        self.values = klinger
+        klinger
             .iter()
             .zip(&signal)
             .map(|(&kvo, &signal)| {
@@ -171,10 +114,49 @@ impl Indicator for KlingerOscillator {
                     IndicatorValue::Multiple(vec![kvo, signal])
                 }
             })
-            .collect();
+            .collect()
+    }
+}
+
+impl Default for KlingerOscillator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indicator for KlingerOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        short_period: length("Short period", 1, usize::MAX),
+        long_period: length("Long period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn name(&self) -> &str {
+        "Klinger"
+    }
+
+    fn desc(&self) -> &str {
+        "Klinger Volume Oscillator - Long-term money flow trend"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.high.is_finite()
+                    && b.low.is_finite()
+                    && b.close.is_finite()
+                    && b.volume.is_finite()
+            },
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -204,7 +186,7 @@ impl Indicator for KlingerOscillator {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -229,6 +211,8 @@ mod tests {
             low,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -256,7 +240,7 @@ mod tests {
         }
         data[40] = Bar {
             volume: data[40].volume,
-            ..data[39]
+            ..data[39].clone()
         };
 
         // (KVO, signal) for bars 55 to 79; the trend flips many times along the series.
@@ -291,7 +275,7 @@ mod tests {
         let mut klinger = KlingerOscillator::new();
         klinger.calculate(&data);
 
-        let values = klinger.values();
+        let values = klinger.values().to_rows();
         assert_eq!(values.len(), 80);
         assert!(
             values[..55]
@@ -314,13 +298,16 @@ mod tests {
                 other => panic!("bar {bar}: expected two lines, got {other:?}"),
             }
         }
-        assert_eq!(klinger.line_cnt(), 2);
+        assert_eq!(klinger.line_count(), 2);
 
         // A bar with a non-finite price has no value; the study carries on after it.
         data[60].high = f64::NAN;
         klinger.calculate(&data);
-        assert!(matches!(klinger.values()[60], IndicatorValue::None));
-        assert!(klinger.values()[61..].iter().all(|v| matches!(
+        assert!(matches!(
+            klinger.values().to_rows()[60],
+            IndicatorValue::None
+        ));
+        assert!(klinger.values().to_rows()[61..].iter().all(|v| matches!(
             v,
             IndicatorValue::Multiple(l) if l[0].is_finite()
         )));
@@ -330,6 +317,7 @@ mod tests {
         assert!(
             klinger
                 .values()
+                .to_rows()
                 .iter()
                 .all(|v| matches!(v, IndicatorValue::None))
         );

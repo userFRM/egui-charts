@@ -4,6 +4,7 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::math::{LinearFit, Moments};
 use crate::model::{Bar, SpanCache};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
@@ -17,54 +18,87 @@ thread_local! {
 }
 
 impl Drawing {
-    pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter) {
-        if self.points.len() < 3 {
+    pub(crate) fn render_parallel_channel(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(outline) = self.parallel_channel_outline(rect) else {
             return;
+        };
+        if let Some(fill) = self.fill_color {
+            for area in outline.areas {
+                painter.add(egui::Shape::convex_polygon(
+                    area,
+                    Color32::from_rgba_unmultiplied(fill[0], fill[1], fill[2], fill[3]),
+                    Stroke::NONE,
+                ));
+            }
         }
-
-        let p1 = self.points[0];
-        let p2 = self.points[1];
-        let p3 = self.points[2];
-
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-        let stroke = Stroke::new(self.stroke_width, color);
-
-        // Draw first trendline
-        painter.line_segment([p1, p2], stroke);
-
-        // Calculate parallel offset vector
-        let dx = p2.x - p1.x;
-        let dy = p2.y - p1.y;
-
-        // Calculate perpendicular distance from p3 to line p1-p2
-        let line_len_sq = dx * dx + dy * dy;
-        if line_len_sq < 1e-6 {
-            return; // Degenerate line
+        for (i, [a, b]) in outline.lines.into_iter().enumerate() {
+            if i == 2 && self.channel_midline {
+                super::utils::draw_dashed_line(
+                    painter,
+                    a,
+                    b,
+                    Stroke::new(self.stroke_width, self.color32()),
+                    8.0,
+                    4.0,
+                );
+            } else {
+                self.styled_segment(
+                    painter,
+                    a,
+                    b,
+                    Stroke::new(self.stroke_width, self.color32()),
+                );
+            }
         }
+    }
 
-        // Project p3 onto line p1-p2
-        let t = ((p3.x - p1.x) * dx + (p3.y - p1.y) * dy) / line_len_sq;
-        let proj_x = p1.x + t * dx;
-        let proj_y = p1.y + t * dy;
+    pub(super) fn parallel_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
+        let [c, d] = self.parallel_channel_second_line()?;
+        let [a, b] = [self.points[0], self.points[1]];
+        let extend = |a: Pos2, b: Pos2| {
+            let [left, right] = super::lines::extended_line(a, b, rect);
+            let forward = if (b.x - a.x).abs() < 1e-6 {
+                b.y >= a.y
+            } else {
+                b.x >= a.x
+            };
+            let (a, b) = if forward { (a, b) } else { (b, a) };
+            [
+                if self.extend_left { left } else { a },
+                if self.extend_right { right } else { b },
+            ]
+        };
+        let (base, other) = (extend(a, b), extend(c, d));
+        let mut outline = super::Outline {
+            lines: vec![base, other],
+            ..Default::default()
+        };
+        if self.channel_midline {
+            outline
+                .lines
+                .push([base[0].lerp(other[0], 0.5), base[1].lerp(other[1], 0.5)]);
+        }
+        if self.fill_color.is_some() {
+            outline
+                .areas
+                .push(vec![base[0], base[1], other[1], other[0]]);
+        }
+        Some(outline)
+    }
 
-        // Calculate offset
-        let offset_x = p3.x - proj_x;
-        let offset_y = p3.y - proj_y;
-
-        // Draw parallel line
-        let p4 = Pos2::new(p1.x + offset_x, p1.y + offset_y);
-        let p5 = Pos2::new(p2.x + offset_x, p2.y + offset_y);
-        painter.line_segment([p4, p5], stroke);
-
-        // Draw conn lines (dashed)
-        let dashed_stroke = Stroke::new(stroke::HAIRLINE, Color32::from_white_alpha(128));
-        painter.line_segment([p1, p4], dashed_stroke);
-        painter.line_segment([p2, p5], dashed_stroke);
+    /// The channel's second line: the base line from the first to the second
+    /// anchor, moved straight up or down in price through the third anchor, so
+    /// the channel is as wide in price at every bar. A vertical base moves
+    /// sideways instead. `None` below three anchors or when the first two coincide.
+    pub(crate) fn parallel_channel_second_line(&self) -> Option<[Pos2; 2]> {
+        let &[p1, p2, p3, ..] = self.points.as_slice() else {
+            return None;
+        };
+        if (p2 - p1).length_sq() < 1e-6 {
+            return None;
+        }
+        let offset = offset_onto(p1, p2, p3);
+        Some([p1 + offset, p2 + offset])
     }
 
     /// Render Regression Trend - least-squares line through the closes of the
@@ -180,7 +214,7 @@ impl Drawing {
     }
 
     /// Render Flat Top/Bottom - Trend line with horizontal support/resistance
-    pub(crate) fn render_flat_top_bottom(&self, painter: &egui::Painter) {
+    pub(crate) fn render_flat_top_bottom(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 3 {
             let color = Color32::from_rgba_unmultiplied(
                 self.color[0],
@@ -215,9 +249,7 @@ impl Drawing {
         let is_flat_top = p3.y < (p1.y + p2.y) / 2.0;
 
         // Draw flat horizontal line at p3's y level
-        let extend_amount = typography::XXL + typography::LG; // Extend beyond the trend line
-        let flat_start = Pos2::new(p1.x.min(p2.x) - extend_amount, p3.y);
-        let flat_end = Pos2::new(p1.x.max(p2.x) + extend_amount, p3.y);
+        let [flat_start, flat_end] = flat_line(p1, p2, p3);
         painter.line_segment(
             [flat_start, flat_end],
             Stroke::new(self.stroke_width, color),
@@ -230,24 +262,8 @@ impl Drawing {
         let fill_color =
             Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 35);
 
-        // Fill polygon between trend line and flat line
-        let fill_points = if is_flat_top {
-            vec![
-                Pos2::new(p1.x, p1.y),
-                Pos2::new(p2.x, p2.y),
-                Pos2::new(p2.x, p3.y),
-                Pos2::new(p1.x, p3.y),
-            ]
-        } else {
-            vec![
-                Pos2::new(p1.x, p3.y),
-                Pos2::new(p2.x, p3.y),
-                Pos2::new(p2.x, p2.y),
-                Pos2::new(p1.x, p1.y),
-            ]
-        };
         painter.add(egui::epaint::PathShape::convex_polygon(
-            fill_points,
+            flat_top_bottom_fill(p1, p2, p3),
             fill_color,
             Stroke::NONE,
         ));
@@ -304,7 +320,6 @@ impl Drawing {
         );
 
         // Height measurement between lines
-        let height_diff = (p3.y - (p1.y + p2.y) / 2.0).abs();
         let mid_x = (p1.x + p2.x) / 2.0;
         let mid_trend_y = (p1.y + p2.y) / 2.0;
 
@@ -332,7 +347,7 @@ impl Drawing {
         painter.text(
             height_label_pos,
             egui::Align2::LEFT_CENTER,
-            format!("{height_diff:.0}px"),
+            self.size_labels(view.price_to_y).concat(),
             egui::FontId::proportional(typography::XS),
             measure_color,
         );
@@ -359,7 +374,7 @@ impl Drawing {
     }
 
     /// Render Disjoint Channel - Two parallel channel segments with connector
-    pub(crate) fn render_disjoint_channel(&self, painter: &egui::Painter) {
+    pub(crate) fn render_disjoint_channel(&self, painter: &egui::Painter, view: &ChartView) {
         if self.points.len() < 3 {
             let color = Color32::from_rgba_unmultiplied(
                 self.color[0],
@@ -396,7 +411,7 @@ impl Drawing {
         let line_length = (dx * dx + dy * dy).sqrt();
 
         // Second segment endpoint (parallel to first)
-        let p4 = Pos2::new(p3.x + dx, p3.y + dy);
+        let [_, p4] = disjoint_second_line(p1, p2, p3);
 
         // Calculate midpoints for the connector
         let mid1 = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
@@ -451,7 +466,6 @@ impl Drawing {
 
         // Draw width measurement
         if line_length > 20.0 {
-            let channel_width = ((p3.x - p1.x).powi(2) + (p3.y - p1.y).powi(2)).sqrt();
             let mid_connector = Pos2::new((mid1.x + mid2.x) / 2.0, (mid1.y + mid2.y) / 2.0);
 
             // Label background
@@ -460,22 +474,13 @@ impl Drawing {
                 .extended
                 .chart_axis_bg
                 .gamma_multiply(0.8);
-            let label_rect = Rect::from_center_size(
-                mid_connector,
-                egui::Vec2::new(
-                    DESIGN_TOKENS.sizing.technical_labels.line_label_width
-                        + DESIGN_TOKENS.spacing.lg,
-                    typography::XXL,
-                ),
-            );
-            painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
-
-            painter.text(
-                mid_connector,
+            super::measurements::boxed_label(
+                painter,
                 egui::Align2::CENTER_CENTER,
-                format!("{channel_width:.0}px"),
-                egui::FontId::proportional(typography::XS),
+                mid_connector,
+                self.size_labels(view.price_to_y).concat(),
                 connector_color,
+                label_bg,
             );
         }
 
@@ -511,35 +516,6 @@ impl Drawing {
     }
 }
 
-/// Least-squares line through the closes of a span of bars, against their
-/// position in the span.
-#[derive(Clone, Copy)]
-struct LinearFit {
-    /// Price change per bar.
-    slope: f64,
-    /// Fitted price at the first bar.
-    intercept: f64,
-    /// Standard deviation of the closes around the line (n - 1 denominator).
-    sigma: f64,
-    /// Share of the closes' variance the line explains.
-    r_squared: f64,
-    /// Pearson correlation of the closes with their position; `None` when
-    /// the closes are flat.
-    correlation: Option<f64>,
-}
-
-/// Means of the closes of a span of bars and of their positions in it, and
-/// the sums of the products of their deviations from those means.
-#[derive(Clone, Copy, Default)]
-struct Moments {
-    n: f64,
-    mean_x: f64,
-    mean_y: f64,
-    sxx: f64,
-    sxy: f64,
-    syy: f64,
-}
-
 /// Moments of `bars`, the span that starts at bar `first`. A tick on the
 /// forming bar, or a new bar, adds one bar to the moments of the bars before
 /// it instead of refitting the span.
@@ -551,73 +527,133 @@ fn span_moments(view: &ChartView, first: usize, bars: &[Bar]) -> Rc<Moments> {
     })
 }
 
-impl Moments {
-    /// Moments of the closes of `bars`: the mean, corrected for rounding, then the centred sums.
-    fn of(bars: &[Bar]) -> Self {
-        let n = bars.len() as f64;
-        if bars.is_empty() {
-            return Self::default();
-        }
-        let mean_x = (n - 1.0) / 2.0;
-        let mean_y = bars.iter().map(|bar| bar.close).sum::<f64>() / n;
-        // Correct the rounding of the sum, so equal closes give their close as the mean.
-        let mean_y = mean_y + bars.iter().map(|bar| bar.close - mean_y).sum::<f64>() / n;
-        let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
-        for (i, bar) in bars.iter().enumerate() {
-            let (dx, dy) = (i as f64 - mean_x, bar.close - mean_y);
-            sxx += dx * dx;
-            sxy += dx * dy;
-            syy += dy * dy;
-        }
-        Self {
-            n,
-            mean_x,
-            mean_y,
-            sxx,
-            sxy,
-            syy,
-        }
-    }
+/// The flat top/bottom's horizontal line at `p3`, run past both ends of the
+/// trend line from `p1` to `p2`.
+pub(super) fn flat_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    let extend = typography::XXL + typography::LG;
+    [p1.x.min(p2.x) - extend, p1.x.max(p2.x) + extend].map(|x| Pos2::new(x, p3.y))
+}
 
-    /// These moments with the close `y` of the next bar added (Welford's update).
-    fn with(&self, y: f64) -> Self {
-        let n = self.n + 1.0;
-        let (dx, dy) = (self.n - self.mean_x, y - self.mean_y);
-        let (mean_x, mean_y) = (self.mean_x + dx / n, self.mean_y + dy / n);
-        Self {
-            n,
-            mean_x,
-            mean_y,
-            sxx: self.sxx + dx * (self.n - mean_x),
-            sxy: self.sxy + dx * (y - mean_y),
-            syy: self.syy + dy * (y - mean_y),
-        }
+/// The area between the flat top/bottom's trend line from `p1` to `p2` and
+/// its flat line at `p3`, over the trend line's bars, wound clockwise.
+pub(super) fn flat_top_bottom_fill(p1: Pos2, p2: Pos2, p3: Pos2) -> Vec<Pos2> {
+    let (f1, f2) = (Pos2::new(p1.x, p3.y), Pos2::new(p2.x, p3.y));
+    if p3.y < (p1.y + p2.y) / 2.0 {
+        vec![p1, p2, f2, f1]
+    } else {
+        vec![f1, f2, p2, p1]
     }
+}
 
-    /// The least-squares line; `None` for fewer than two bars.
-    fn fit(&self) -> Option<LinearFit> {
-        if self.n < 2.0 {
-            return None;
-        }
-        let slope = self.sxy / self.sxx;
-        let residual = (self.syy - slope * self.sxy).max(0.0);
-        // Closes are flat when they vary by no more than the rounding of their mean.
-        let flat = self.syy <= 16.0 * self.n * (self.mean_y * f64::EPSILON).powi(2);
-        Some(LinearFit {
-            slope,
-            intercept: self.mean_y - slope * self.mean_x,
-            sigma: (residual / (self.n - 1.0)).sqrt(),
-            // Flat closes are fitted exactly.
-            r_squared: if flat { 1.0 } else { 1.0 - residual / self.syy },
-            correlation: (!flat).then(|| self.sxy / (self.sxx * self.syy).sqrt()),
-        })
+/// The disjoint channel's second line: from `p3`, parallel to and as long as
+/// the line from `p1` to `p2`.
+pub(super) fn disjoint_second_line(p1: Pos2, p2: Pos2, p3: Pos2) -> [Pos2; 2] {
+    [p3, p3 + (p2 - p1)]
+}
+
+/// The move that carries the line through `p1` and `p2` onto `p3`: straight up
+/// or down, so the moved line is as far in price at every bar, or sideways for
+/// a vertical line.
+pub(super) fn offset_onto(p1: Pos2, p2: Pos2, p3: Pos2) -> egui::Vec2 {
+    let d = p2 - p1;
+    if d.x.abs() < 1e-3 {
+        egui::vec2(p3.x - p1.x, 0.0)
+    } else {
+        egui::vec2(0.0, p3.y - (p1.y + (p3.x - p1.x) * d.y / d.x))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawings::DrawingToolType;
     use crate::drawings::rendering::sample_bars;
+
+    /// The second line keeps the base line's slope and passes through the third
+    /// anchor straight above or below it, so the channel's price width is the
+    /// same at every bar. A vertical base moves sideways onto the third anchor.
+    #[test]
+    fn parallel_channel_second_line_passes_through_the_third_anchor_vertically() {
+        let cases = [
+            // Base y = 100 - x; at x = 0 the third anchor is 50 px below it.
+            (
+                [(0.0, 100.0), (100.0, 0.0), (0.0, 150.0)],
+                [(0.0, 150.0), (100.0, 50.0)],
+            ),
+            // Base y = 100 - x; at x = 50 the base is at 50, the third anchor 30 px above.
+            (
+                [(0.0, 100.0), (100.0, 0.0), (50.0, 20.0)],
+                [(0.0, 70.0), (100.0, -30.0)],
+            ),
+            (
+                [(50.0, 0.0), (50.0, 100.0), (80.0, 30.0)],
+                [(80.0, 0.0), (80.0, 100.0)],
+            ),
+        ];
+        for (anchors, want) in cases {
+            let mut drawing = Drawing::new(1, DrawingToolType::ParallelChannel);
+            drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
+            let got = drawing.parallel_channel_second_line().unwrap();
+            let want = want.map(|(x, y)| Pos2::new(x, y));
+            assert!(
+                got.iter().zip(want).all(|(g, w)| g.distance(w) < 1e-3),
+                "anchors {anchors:?}: got {got:?}, want {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_channel_options_share_rendered_and_selected_geometry() {
+        let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::ParallelChannel);
+        drawing.points = vec![
+            Pos2::new(10.0, 100.0),
+            Pos2::new(30.0, 80.0),
+            Pos2::new(20.0, 120.0),
+        ];
+        drawing.extend_left = true;
+        drawing.extend_right = true;
+        drawing.fill_color = Some([33, 150, 243, 30]);
+        let mut saved = serde_json::to_value(&drawing).unwrap();
+        saved["channel_midline"] = true.into();
+        let mut restored: Drawing = serde_json::from_value(saved).unwrap();
+        restored.points = drawing.points;
+        restored.id = 1;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(100.0, 200.0));
+        let outline = restored.outline(rect).unwrap();
+        assert_eq!(
+            outline.lines,
+            vec![
+                [Pos2::new(0.0, 110.0), Pos2::new(100.0, 10.0)],
+                [Pos2::new(0.0, 140.0), Pos2::new(100.0, 40.0)],
+                [Pos2::new(0.0, 125.0), Pos2::new(100.0, 25.0)],
+            ]
+        );
+        assert_eq!(outline.areas.len(), 1);
+        let hit = crate::drawings::services::DrawingInteraction::new();
+        assert_eq!(
+            hit.hit_test(Pos2::new(80.0, 45.0), &[restored.clone()], "1m"),
+            Some(1)
+        );
+        // Left and right are chart directions, independent of anchor order.
+        for reverse in [false, true] {
+            if reverse {
+                restored.points.swap(0, 1);
+            }
+            for (left, right, xs) in [
+                (true, false, [0.0, 30.0]),
+                (false, true, [10.0, 100.0]),
+                (false, false, [10.0, 30.0]),
+            ] {
+                restored.extend_left = left;
+                restored.extend_right = right;
+                for [a, b] in restored.outline(rect).unwrap().lines {
+                    assert_eq!([a.x, b.x], xs);
+                }
+            }
+        }
+        restored.fill_color = None;
+        assert!(restored.outline(rect).unwrap().areas.is_empty());
+    }
 
     /// Reference: ordinary least squares of the closes of bars 0..=5 against
     /// 0..=5, residual standard deviation over n - 1, R² = 1 - SSres / SStot,
@@ -646,7 +682,7 @@ mod tests {
         let flat = Moments::of(&vec![
             Bar {
                 close: 0.1,
-                ..bars[0]
+                ..bars[0].clone()
             };
             100
         ])

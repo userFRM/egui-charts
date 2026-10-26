@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Bollinger Bands Width - measures how wide the Bollinger Bands are.
@@ -12,7 +12,7 @@ use egui::Color32;
 pub struct BollingerBandsWidth {
     period: usize,
     std_dev: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -23,8 +23,8 @@ impl BollingerBandsWidth {
         Self {
             period: period.max(1),
             std_dev: clamp_param(std_dev, 0.0, f64::MAX),
-            values: Vec::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.purple],
+            values: IndicatorValues::new(),
+            colors: vec![palette::PURPLE],
             visible: true,
         }
     }
@@ -37,6 +37,21 @@ impl Default for BollingerBandsWidth {
 }
 
 impl Indicator for BollingerBandsWidth {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        std_dev: number("Std dev", 0.0, f64::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
+    }
+
     fn name(&self) -> &str {
         "BBW"
     }
@@ -78,7 +93,7 @@ impl Indicator for BollingerBandsWidth {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

@@ -1,9 +1,8 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-/// Elder Impulse System
-/// Combines EMA slope and MACD histogram for trend signals
-/// Green = bullish, Red = bearish, Blue = neutral
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Signal state for Elder Impulse
@@ -17,6 +16,9 @@ pub enum ImpulseSignal {
     Neutral,
 }
 
+/// Elder Impulse System
+/// Combines EMA slope and MACD histogram for trend signals
+/// Green = bullish, Red = bearish, Blue = neutral
 #[derive(Clone)]
 pub struct ElderImpulseSystem {
     /// EMA period (typically 13)
@@ -27,49 +29,35 @@ pub struct ElderImpulseSystem {
     macd_slow: usize,
     /// MACD signal period
     macd_signal: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Bullish, Bearish, Neutral]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl ElderImpulseSystem {
+    /// Create with `ema_period`, `macd_fast`, `macd_slow`, `macd_signal` in bars, each clamped
+    /// to at least one.
     pub fn new(ema_period: usize, macd_fast: usize, macd_slow: usize, macd_signal: usize) -> Self {
         Self {
             ema_period: ema_period.max(1),
             macd_fast: macd_fast.max(1),
             macd_slow: macd_slow.max(1),
             macd_signal: macd_signal.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Bullish
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Bearish
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Neutral
+                palette::GREEN, // Green - Bullish
+                palette::RED,   // Red - Bearish
+                palette::BLUE,  // Blue - Neutral
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    fn ema(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-        if data.is_empty() || period == 0 {
-            return result;
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        result.push(data[0]);
-
-        for i in 1..data.len() {
-            let ema = (data[i] - result[i - 1]) * multiplier + result[i - 1];
-            result.push(ema);
-        }
-
-        result
     }
 }
 
@@ -79,44 +67,36 @@ impl Default for ElderImpulseSystem {
     }
 }
 
-impl Indicator for ElderImpulseSystem {
-    fn name(&self) -> &str {
-        "Impulse"
-    }
-
-    fn desc(&self) -> &str {
-        "Elder Impulse System - Trend direction with momentum"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ElderImpulseSystem {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self
             .macd_slow
             .max(self.ema_period)
             .saturating_add(self.macd_signal);
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate EMA for slope
-        let ema = Self::ema(&closes, self.ema_period);
+        let ema = helpers::ema(&closes, self.ema_period);
 
         // Calculate MACD
-        let ema_fast = Self::ema(&closes, self.macd_fast);
-        let ema_slow = Self::ema(&closes, self.macd_slow);
+        let ema_fast = helpers::ema(&closes, self.macd_fast);
+        let ema_slow = helpers::ema(&closes, self.macd_slow);
 
         let mut macd: Vec<f64> = Vec::with_capacity(data.len());
         for i in 0..data.len() {
             macd.push(ema_fast[i] - ema_slow[i]);
         }
 
-        let signal = Self::ema(&macd, self.macd_signal);
+        let signal = helpers::ema(&macd, self.macd_signal);
 
         let mut histogram: Vec<f64> = Vec::with_capacity(data.len());
         for i in 0..data.len() {
@@ -125,7 +105,7 @@ impl Indicator for ElderImpulseSystem {
 
         for i in 0..data.len() {
             if i < min_period - 1 || i == 0 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let ema_rising = ema[i] > ema[i - 1];
                 let hist_rising = histogram[i] > histogram[i - 1];
@@ -139,12 +119,41 @@ impl Indicator for ElderImpulseSystem {
                     0.0 // Neutral
                 };
 
-                self.values.push(IndicatorValue::Single(signal_val));
+                values.push(IndicatorValue::Single(signal_val));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ElderImpulseSystem {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        ema_period: length("EMA period", 1, usize::MAX),
+        macd_fast: length("MACD fast", 1, usize::MAX),
+        macd_slow: length("MACD slow", 1, usize::MAX),
+        macd_signal: length("MACD signal", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Impulse"
+    }
+
+    fn desc(&self) -> &str {
+        "Elder Impulse System - Trend direction with momentum"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -192,6 +201,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

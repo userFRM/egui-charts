@@ -22,8 +22,8 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Symmetrically Weighted Moving Average indicator.
@@ -32,7 +32,7 @@ use egui::Color32;
 /// Overlay indicator.
 #[derive(Clone)]
 pub struct SWMA {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -47,8 +47,8 @@ impl SWMA {
     /// Create a new SWMA indicator (fixed 4-bar window, no parameters).
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            values: IndicatorValues::new(),
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }
@@ -68,6 +68,12 @@ impl SWMA {
 }
 
 impl Indicator for SWMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     fn name(&self) -> &str {
         "SWMA"
     }
@@ -104,7 +110,7 @@ impl Indicator for SWMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -152,6 +158,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -185,13 +193,14 @@ mod tests {
         swma.calculate(&data);
 
         assert_eq!(swma.values.len(), 5);
-        assert!(matches!(swma.values[0], IndicatorValue::None));
-        assert!(matches!(swma.values[1], IndicatorValue::None));
-        assert!(matches!(swma.values[2], IndicatorValue::None));
+        assert!(matches!(swma.values.to_rows()[0], IndicatorValue::None));
+        assert!(matches!(swma.values.to_rows()[1], IndicatorValue::None));
+        assert!(matches!(swma.values.to_rows()[2], IndicatorValue::None));
 
         // Fourth bar: (100 + 2*102 + 2*101 + 103) / 6 = 609 / 6 = 101.5
-        if let IndicatorValue::Single(v) = swma.values[3] {
-            assert!((v - 101.5).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = swma.values.to_rows()[3] else {
+            panic!("no value: {:?}", swma.values.to_rows()[3]);
+        };
+        assert!((v - 101.5).abs() < 0.01);
     }
 }

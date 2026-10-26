@@ -3,6 +3,8 @@
 //! Used for: cursors, tool categories, magnet, hide, remove btns.
 
 use crate::icons::Icon;
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use super::svg_helpers::render_svg_at_rect_themed;
@@ -28,9 +30,13 @@ pub struct PairButtonResponse {
 /// Direction for arrow indicators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrowDirection {
+    /// An upward direction.
     Up,
+    /// A downward direction.
     Down,
+    /// A leftward direction.
     Left,
+    /// A rightward arrow.
     Right,
 }
 
@@ -99,7 +105,16 @@ impl<'a> PairButton<'a> {
         // Icon button (centered in full width for visual balance)
         let icon_rect = Rect::from_center_size(pair_rect.center(), Vec2::splat(icon_size));
         let icon_res = ui.allocate_rect(icon_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &icon_res);
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
+        icon_res.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                icon_res.enabled(),
+                self.is_icon_active,
+                &translated_label,
+            )
+        });
+        crate::styles::focus::draw_focus_ring(ui, &icon_res, ui.active_theme().radius.sm);
 
         // Arrow button (right edge)
         let arrow_rect = Rect::from_min_size(
@@ -107,7 +122,13 @@ impl<'a> PairButton<'a> {
             Vec2::new(arrow_width, height),
         );
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &arrow_res);
+        let translated_label = l10n::text(ui.ctx(), self.arrow_tooltip);
+        arrow_res.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), &translated_label)
+        });
+        ui.ctx()
+            .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
+        crate::styles::focus::draw_focus_ring(ui, &arrow_res, ui.active_theme().radius.sm);
 
         // Draw icon button background (with visibility check)
         if ui.is_rect_visible(icon_rect) {
@@ -121,7 +142,7 @@ impl<'a> PairButton<'a> {
                 Color32::TRANSPARENT // Let parent Frame's background show through
             };
             ui.painter()
-                .rect_filled(icon_rect, DESIGN_TOKENS.rounding.button, icon_bg);
+                .rect_filled(icon_rect, ui.active_theme().radius.sm, icon_bg);
         }
 
         // Draw icon centered in interactive area (excluding left padding and arrow section)
@@ -172,8 +193,8 @@ impl<'a> PairButton<'a> {
         let arrow_hovered = arrow_res.hovered();
 
         // Tooltips (consumes the responses)
-        icon_res.on_hover_text(self.tooltip);
-        arrow_res.on_hover_text(self.arrow_tooltip);
+        icon_res.on_hover_text(l10n::text(ui.ctx(), self.tooltip));
+        arrow_res.on_hover_text(l10n::text(ui.ctx(), self.arrow_tooltip));
 
         PairButtonResponse {
             icon_clicked,
@@ -190,7 +211,7 @@ impl<'a> PairButton<'a> {
     /// Uses exact dimensions:
     /// - Outer rect: 52×38px
     /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
-    /// - Inner rounding: 6px
+    /// - Inner rounding: the theme's medium radius
     /// - Icon: 24×24 centered
     pub fn show_styled(&self, ui: &mut Ui) -> PairButtonResponse {
         let tokens = &DESIGN_TOKENS.sizing.toolbar;
@@ -198,7 +219,7 @@ impl<'a> PairButton<'a> {
         let btn_height = tokens.button_height;
         let margin_h = tokens.hover_margin_h;
         let margin_v = tokens.hover_margin_v;
-        let inner_rounding = tokens.inner_rounding;
+        let inner_rounding = ui.active_theme().radius.md;
         let icon_size = tokens.icon_size;
 
         let cursor_pos = ui.cursor().min;
@@ -227,9 +248,24 @@ impl<'a> PairButton<'a> {
 
         // Use Response-based interactions instead of manual pointer polling
         let icon_res = ui.allocate_rect(icon_zone_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &icon_res);
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
+        icon_res.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                icon_res.enabled(),
+                self.is_icon_active,
+                &translated_label,
+            )
+        });
+        crate::styles::focus::draw_focus_ring(ui, &icon_res, inner_rounding);
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &arrow_res);
+        let translated_label = l10n::text(ui.ctx(), self.arrow_tooltip);
+        arrow_res.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), &translated_label)
+        });
+        ui.ctx()
+            .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
+        crate::styles::focus::draw_focus_ring(ui, &arrow_res, inner_rounding);
 
         let icon_hovered = icon_res.hovered();
         let arrow_hovered = arrow_res.hovered();
@@ -285,8 +321,8 @@ impl<'a> PairButton<'a> {
         }
 
         // Tooltips using Response-based interactions
-        icon_res.on_hover_text(self.tooltip);
-        arrow_res.on_hover_text(self.arrow_tooltip);
+        icon_res.on_hover_text(l10n::text(ui.ctx(), self.tooltip));
+        arrow_res.on_hover_text(l10n::text(ui.ctx(), self.arrow_tooltip));
 
         PairButtonResponse {
             icon_clicked,

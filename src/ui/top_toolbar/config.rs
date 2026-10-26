@@ -1,48 +1,52 @@
-//! Configuration for top toolbar layout.
+//! Top toolbar dimensions and spacing.
 //!
-//! Colors are not stored here: widgets read them from `ui.visuals()` and the active theme.
-//! Fixed desktop dimensions - no responsive behavior.
+//! Use [`TopToolbarConfig`] to size controls; colors come from egui visuals and
+//! the active theme.
 
 // =============================================================================
 // Fixed Desktop Constants (exact dimensions)
 // =============================================================================
 
-/// Top toolbar height: 32px
-pub const TOOLBAR_HEIGHT: f32 = 32.0;
+/// Default top toolbar height in egui logical points.
+pub const TOOLBAR_HEIGHT: f32 = 38.0;
 
-/// Button size: 28px
-pub const BUTTON_SIZE: f32 = 28.0;
+/// Default button side length in egui logical points.
+pub const BUTTON_SIZE: f32 = 32.0;
 
-/// Icon size: 20px
-pub const ICON_SIZE: f32 = 20.0;
+/// Default icon side length in egui logical points.
+pub const ICON_SIZE: f32 = 24.0;
 
-/// Padding: 4px
+/// Default padding in egui logical points.
 pub const PADDING: f32 = 4.0;
 
-/// Corner rounding: 4px
+/// Default corner radius in egui logical points.
 pub const ROUNDING: f32 = 4.0;
 
 // =============================================================================
 // Config Struct
 // =============================================================================
 
-/// Configuration for the top toolbar - fixed desktop dimensions
+/// Dimensions for the top toolbar in egui logical points.
 #[derive(Clone, Debug)]
 pub struct TopToolbarConfig {
-    /// Toolbar height: 32px
+    /// Toolbar height.
     pub height: f32,
-    /// Icon size: 20px
+    /// Icon side length.
     pub small_icon_size: f32,
-    /// Button size: 28px
+    /// Button side length.
     pub btn_size: f32,
-    /// Padding: 4px
+    /// Padding between button content.
     pub padding: f32,
-    /// Border radius: 4px
+    /// Button corner radius.
     pub rounding: f32,
     // Legacy fields kept for compatibility
+    /// Retained for source compatibility; rendering uses `height`.
     pub base_height: f32,
+    /// Retained for source compatibility; rendering uses `small_icon_size`.
     pub base_icon_size: f32,
+    /// Retained for source compatibility; rendering uses `btn_size`.
     pub base_btn_size: f32,
+    /// Retained for source compatibility; rendering uses `padding`.
     pub base_padding: f32,
 }
 

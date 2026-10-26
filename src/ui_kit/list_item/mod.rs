@@ -1,4 +1,4 @@
-//! List Item Module - Composable list items following rerun patterns
+//! List Item Module - Composable list items
 //!
 //! This module provides a flexible list item system with composable content:
 //!
@@ -41,6 +41,7 @@
 //! # });
 //! ```
 
+use crate::theme::ThemeExt;
 mod button_content;
 mod content;
 mod label_content;
@@ -84,7 +85,6 @@ impl ListItem {
         if ui.is_rect_visible(rect) {
             let egui_visuals = ui.style().visuals.clone();
 
-            // Build ListVisuals (rerun-inspired pattern)
             let list_visuals = ListVisuals::new()
                 .with_hovered(response.hovered())
                 .with_active(interactive && response.is_pointer_button_down_on())
@@ -99,12 +99,12 @@ impl ListItem {
             // Draw background
             if bg_color != Color32::TRANSPARENT {
                 ui.painter()
-                    .rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg_color);
+                    .rect_filled(rect, ui.active_theme().radius.sm, bg_color);
             }
 
             // Create content context
             let content_context = ContentContext {
-                rect: rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.lg, 0.0)),
+                rect: rect.shrink2(Vec2::new(ui.active_theme().spacing.lg, 0.0)),
                 bg_color,
                 selected: self.selected,
                 hovered: response.hovered(),
@@ -126,6 +126,15 @@ impl ListItem {
                 );
             }
         }
+
+        // Rows touch, so keep the ring inside the row instead of under its neighbour's fill.
+        crate::styles::focus::draw_focus_ring(
+            ui,
+            &response
+                .clone()
+                .with_new_rect(rect.shrink(ui.active_theme().spacing.xs)),
+            ui.active_theme().radius.sm - ui.active_theme().spacing.xs,
+        );
 
         // Handle selection on click
         if response.clicked() && interactive {
@@ -206,5 +215,88 @@ mod tests {
             });
         })
         .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn subdued_and_property_labels_keep_their_weak_text_colour() {
+        for (name, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                ListItem::new().show_text(ui, "Plain");
+                ListItem::new().show(ui, LabelContent::new("Subdued").subdued(true));
+                ListItem::new().show_property(ui, "Open", "19,126.06");
+            });
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        Some((
+                            t.galley.job.text.clone(),
+                            t.override_text_color
+                                .unwrap_or(t.galley.job.sections[0].format.color),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            for (label, expected) in [
+                ("Plain", theme.ui.text),
+                ("Subdued", theme.ui.text_muted),
+                ("Open", theme.ui.text_muted),
+                ("19,126.06", theme.ui.text),
+            ] {
+                assert_eq!(
+                    text.iter().find(|(s, _)| s == label).unwrap().1,
+                    expected,
+                    "{name}: {label}"
+                );
+            }
+            assert_ne!(theme.ui.text_muted, theme.ui.text);
+        }
+    }
+
+    #[test]
+    fn tab_reaches_list_rows_in_visual_order_and_draws_their_ring() {
+        let ctx = egui::Context::default();
+        let frame = |events| {
+            let mut rows = Vec::new();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    for label in ["First", "Second", "Third"] {
+                        rows.push(ListItem::new().show_text(ui, label));
+                    }
+                },
+            );
+            let rings: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.stroke.width == 2.0 => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            (rows, rings)
+        };
+        frame(vec![]);
+        for index in 0..3 {
+            let (rows, rings) = frame(vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert!(rows[index].has_focus(), "row {index}");
+            assert_eq!(rings, vec![rows[index].rect]);
+        }
     }
 }

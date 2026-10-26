@@ -30,9 +30,9 @@ impl SessionType {
     /// Get tooltip desc
     pub fn tooltip(&self) -> &'static str {
         match self {
-            SessionType::RTH => "Regular trading hours",
-            SessionType::ETH => "Extended trading hours",
-            SessionType::Full24x7 => "24/7 trading",
+            SessionType::RTH => "Regular trading hours: on",
+            SessionType::ETH => "Regular trading hours: off (extended hours)",
+            SessionType::Full24x7 => "Regular trading hours: off (24/7 trading)",
         }
     }
 }
@@ -60,8 +60,6 @@ pub struct TimeframeToolbarState {
     pub adjust_for_dividends: bool,
     /// Current display time (for timezone display)
     pub curr_time: Option<chrono::DateTime<chrono::Utc>>,
-    /// Whether the trading panel row is expanded
-    pub trading_panel_expanded: bool,
 }
 
 impl Default for TimeframeToolbarState {
@@ -77,20 +75,7 @@ impl Default for TimeframeToolbarState {
             session_menu_open: false,
             adjust_for_dividends: false,
             curr_time: None,
-            trading_panel_expanded: false,
         }
-    }
-}
-
-impl TimeframeToolbarState {
-    /// Toggle trading panel expanded state
-    pub fn toggle_trading_panel(&mut self) {
-        self.trading_panel_expanded = !self.trading_panel_expanded;
-    }
-
-    /// Set trading panel expanded state
-    pub fn set_trading_panel_expanded(&mut self, expanded: bool) {
-        self.trading_panel_expanded = expanded;
     }
 }
 
@@ -152,17 +137,56 @@ impl TimeframeToolbarState {
 
     /// Get formatted time string for display
     pub fn formatted_time(&self) -> String {
+        let zone = self
+            .timezone
+            .parse::<crate::model::TimezoneId>()
+            .unwrap_or(crate::model::TimezoneId::utc());
         match &self.curr_time {
-            Some(time) => {
-                let formatted = time.format("%H:%M:%S").to_string();
-                format!("{} {}", formatted, self.timezone)
-            }
-            None => format!("--:--:-- {}", self.timezone),
+            Some(time) => format!("{} {zone}", time.with_timezone(&zone).format("%H:%M:%S")),
+            None => format!("--:--:-- {zone}"),
         }
     }
 
     /// Sync from application state.
     pub fn sync_from_app_state(&mut self, app_state: &dyn crate::ui::app_state::ChartAppState) {
         self.timeframe = *app_state.active_timeframe();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_converts_the_named_zone_and_falls_back_to_utc() {
+        for (instant, zone, expected) in [
+            ("2026-01-15T13:00:00Z", "UTC", "13:00:00 UTC"),
+            ("2026-01-15T13:00:00Z", "+05:45", "18:45:00 +05:45"),
+            #[cfg(feature = "timezones")]
+            (
+                "2026-01-15T13:00:00Z",
+                "America/New_York",
+                "08:00:00 America/New_York",
+            ),
+            #[cfg(feature = "timezones")]
+            (
+                "2026-07-15T13:00:00Z",
+                "America/New_York",
+                "09:00:00 America/New_York",
+            ),
+            ("2026-01-15T13:00:00Z", "unknown", "13:00:00 UTC"),
+        ] {
+            let state = TimeframeToolbarState {
+                curr_time: Some(instant.parse().unwrap()),
+                timezone: zone.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(state.formatted_time(), expected);
+        }
+        let state = TimeframeToolbarState {
+            timezone: "unknown".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(state.formatted_time(), "--:--:-- UTC");
     }
 }

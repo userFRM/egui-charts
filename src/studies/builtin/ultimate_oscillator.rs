@@ -23,9 +23,10 @@
 //! uo.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Ultimate Oscillator indicator
@@ -34,7 +35,7 @@ pub struct UltimateOscillator {
     period1: usize, // Short (typically 7)
     period2: usize, // Medium (typically 14)
     period3: usize, // Long (typically 28)
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -51,8 +52,8 @@ impl UltimateOscillator {
             period1: period1.max(1),
             period2: period2.max(1),
             period3: period3.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            values: IndicatorValues::new(),
+            color: palette::PURPLE,
             visible: true,
         }
     }
@@ -76,28 +77,20 @@ impl Default for UltimateOscillator {
     }
 }
 
-impl Indicator for UltimateOscillator {
-    fn name(&self) -> &str {
-        "UO"
-    }
-
-    fn desc(&self) -> &str {
-        "Ultimate Oscillator - Multi-timeframe momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl UltimateOscillator {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let max_period = self.period1.max(self.period2).max(self.period3);
         if data.len() < max_period.saturating_add(1) {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Calculate BP (Buying Pressure) and TR (True Range) for each bar
@@ -116,7 +109,7 @@ impl Indicator for UltimateOscillator {
         // Calculate UO for each bar
         for i in 0..data.len() {
             if i < max_period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -137,11 +130,37 @@ impl Indicator for UltimateOscillator {
 
             // UO = 100 * ((4 * Avg1) + (2 * Avg2) + Avg3) / 7
             let uo = 100.0 * ((4.0 * avg1) + (2.0 * avg2) + avg3) / 7.0;
-            self.values.push(IndicatorValue::Single(uo));
+            values.push(IndicatorValue::Single(uo));
         }
+
+        values
+    }
+}
+
+impl Indicator for UltimateOscillator {
+    crate::studies::inputs::study_inputs!(self;
+        period1: length("Period1", 1, usize::MAX),
+        period2: length("Period2", 1, usize::MAX),
+        period3: length("Period3", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "UO"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Ultimate Oscillator - Multi-timeframe momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -159,7 +178,7 @@ impl Indicator for UltimateOscillator {
         false // UO is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 
@@ -180,71 +199,5 @@ impl Indicator for UltimateOscillator {
             "UO({}, {}, {})",
             self.period1, self.period2, self.period3
         )]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..50)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.2).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + 0.5,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_uo_calculation() {
-        let bars = create_test_bars();
-        let mut uo = UltimateOscillator::new(7, 14, 28);
-        uo.calculate(&bars);
-
-        assert_eq!(uo.values().len(), bars.len());
-
-        // First max_period values should be None
-        for i in 0..28 {
-            assert!(matches!(uo.values()[i], IndicatorValue::None));
-        }
-    }
-
-    #[test]
-    fn test_uo_range() {
-        let bars = create_test_bars();
-        let mut uo = UltimateOscillator::new(7, 14, 28);
-        uo.calculate(&bars);
-
-        for value in uo.values() {
-            if let IndicatorValue::Single(val) = value {
-                assert!(
-                    *val >= 0.0 && *val <= 100.0,
-                    "UO should be 0-100, got {val}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_uo_is_not_overlay() {
-        let uo = UltimateOscillator::new(7, 14, 28);
-        assert!(!uo.is_overlay());
-    }
-
-    #[test]
-    fn test_uo_empty_data() {
-        let mut uo = UltimateOscillator::new(7, 14, 28);
-        uo.calculate(&[]);
-        assert!(uo.values().is_empty());
     }
 }

@@ -1,13 +1,12 @@
 //! Range-bar chart transformation.
 //!
-//! Range bars have a fixed price range (high minus low) and variable time
-//! duration. A new bar starts only once the previous bar's range is filled.
-//! This normalises volatility, giving each bar equal "importance" in price
-//! terms.
-//!
-//! - [`to_range_bars_from_ticks`] -- build from tick data (exact).
-//! - [`to_range_bars_from_ohlc`] -- approximate from OHLCV bars.
+//! Build bars with a configured price range rather than a fixed time interval.
+//! Use [`to_range_bars_from_ticks`] with executions, or
+//! [`to_range_bars_from_ohlc`] for an approximation from existing bars. The newest
+//! output bar can be incomplete.
 
+use super::PriceBuilder;
+use super::Tick;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
@@ -109,27 +108,18 @@ impl RangeBar {
             low: self.low,
             close: self.close,
             volume: self.volume,
+            colors: None,
+            payload: None,
         }
     }
 }
 
-/// Minimal tick record for building range bars from raw trade data.
-#[derive(Debug, Clone)]
-pub struct TickData {
-    /// Trade price.
-    pub price: f64,
-    /// Trade size/volume.
-    pub volume: f64,
-    /// Trade timestamp.
-    pub ts: DateTime<Utc>,
-}
-
-/// Build range bars from raw tick data (exact construction). A tick's volume that would make its
-/// bar's volume overflow is left out.
+/// Build range bars from trades (exact construction). A trade's size that would make its bar's
+/// volume overflow is left out.
 ///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
-pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> Vec<RangeBar> {
+pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<RangeBar> {
     if ticks.is_empty() {
         return Vec::new();
     }
@@ -144,7 +134,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         high: first_tick.price,
         low: first_tick.price,
         close: first_tick.price,
-        volume: add_volume(0.0, first_tick.volume),
+        volume: add_volume(0.0, first_tick.size),
         start_time: first_tick.ts,
         end_time: first_tick.ts,
         range_size,
@@ -156,7 +146,7 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
         curr_bar.high = curr_bar.high.max(tick.price);
         curr_bar.low = curr_bar.low.min(tick.price);
         curr_bar.close = tick.price;
-        curr_bar.volume = add_volume(curr_bar.volume, tick.volume);
+        curr_bar.volume = add_volume(curr_bar.volume, tick.size);
         curr_bar.end_time = tick.ts;
         curr_bar.tick_cnt += 1;
 
@@ -209,48 +199,71 @@ pub fn to_range_bars_from_ticks(ticks: &[TickData], config: &RangeBarConfig) -> 
 /// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
 /// volume overflow is left out.
 ///
+/// Returns no bars when the range size is not a positive finite number.
+///
 /// # Safety Limits
+/// - When the bars move by more than two million range sizes, the range bars are built from the
+///   latest bar after which they move at most that much
 /// - At most the newest 5,000 range bars
-/// - Auto-adjusts range size if too small relative to price range
 pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<RangeBar> {
-    if data.is_empty() {
-        return Vec::new();
-    }
-
-    // Calculate price range to validate range size
-    let (min_price, max_price) = data.iter().fold((f64::MAX, f64::MIN), |(min, max), bar| {
-        (min.min(bar.low), max.max(bar.high))
-    });
-    let price_range = max_price - min_price;
-
-    // Calculate range size (potentially using ATR)
-    let base_range_size = if config.use_atr && data.len() >= config.atr_period {
+    // The range size, from ATR when the config asks for it
+    let range_size = if config.use_atr && data.len() >= config.atr_period {
         calculate_atr(data, config.atr_period) * config.atr_multiplier
     } else {
         config.range_size
     };
+    if data.is_empty() || !(range_size > 0.0 && range_size.is_finite()) {
+        return Vec::new();
+    }
+    let mut builder = RangeBarBuilder::new(range_size);
+    for bar in &data[work_start(data, range_size)..] {
+        builder.push(bar);
+    }
+    builder.elements()
+}
 
-    // Auto-adjust range size if it would create too many bars
-    let min_range_size = price_range / 200.0;
-    let range_size = base_range_size.max(min_range_size).max(0.0001);
+pub(crate) const MAX_BARS: usize = 5_000;
 
-    let mut bars: Vec<RangeBar> = Vec::new();
-    const MAX_BARS: usize = 5_000;
+/// Builds range bars from OHLC bars one at a time; `range_size` must be a positive finite
+/// number. The range bar in progress is kept apart from the closed bars and added by `elements`.
+#[derive(Clone)]
+pub(crate) struct RangeBarBuilder {
+    range_size: f64,
+    /// The range bar in progress; `None` until the first bar.
+    curr_bar: Option<RangeBar>,
+    bars: Vec<RangeBar>,
+}
 
-    let first = &data[0];
-    let mut curr_bar = RangeBar {
-        open: first.open,
-        high: first.high,
-        low: first.low,
-        close: first.close,
-        volume: add_volume(0.0, first.volume),
-        start_time: first.time,
-        end_time: first.time,
-        range_size,
-        tick_cnt: 1,
-    };
+impl RangeBarBuilder {
+    pub(crate) fn new(range_size: f64) -> Self {
+        Self {
+            range_size,
+            curr_bar: None,
+            bars: Vec::new(),
+        }
+    }
+}
 
-    for bar in data.iter().skip(1) {
+impl PriceBuilder for RangeBarBuilder {
+    type Element = RangeBar;
+
+    fn push(&mut self, bar: &Bar) {
+        let range_size = self.range_size;
+        let Some(mut curr_bar) = self.curr_bar.take() else {
+            self.curr_bar = Some(RangeBar {
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: add_volume(0.0, bar.volume),
+                start_time: bar.time,
+                end_time: bar.time,
+                range_size,
+                tick_cnt: 1,
+            });
+            return;
+        };
+
         // Simulate processing this bar's range
         let prices = [bar.open, bar.high, bar.low, bar.close];
 
@@ -258,30 +271,31 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
             curr_bar.high = curr_bar.high.max(price);
             curr_bar.low = curr_bar.low.min(price);
 
-            // Check if range is exceeded (with iteration limit)
-            let mut iterations = 0;
-            const MAX_ITERATIONS: usize = 100;
-
-            while curr_bar.range() >= range_size && iterations < MAX_ITERATIONS {
-                iterations += 1;
-
+            while curr_bar.range() >= range_size {
                 // Complete the bar
                 if curr_bar.high - curr_bar.open >= range_size {
+                    // A size below the precision of the price moves nothing
+                    if curr_bar.low + range_size == curr_bar.low {
+                        break;
+                    }
                     // Closed up
                     curr_bar.close = curr_bar.low + range_size;
                     curr_bar.high = curr_bar.close;
                 } else {
+                    if curr_bar.high - range_size == curr_bar.high {
+                        break;
+                    }
                     // Closed down
                     curr_bar.close = curr_bar.high - range_size;
                     curr_bar.low = curr_bar.close;
                 }
 
                 curr_bar.end_time = bar.time;
-                bars.push(curr_bar.clone());
+                self.bars.push(curr_bar.clone());
 
                 // Bound memory by dropping the oldest bars; `curr_bar` never reads them.
-                if bars.len() == 2 * MAX_BARS {
-                    bars.drain(..MAX_BARS);
+                if self.bars.len() == 2 * MAX_BARS {
+                    self.bars.drain(..MAX_BARS);
                 }
 
                 // Start new bar
@@ -303,15 +317,16 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
         curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
         curr_bar.end_time = bar.time;
         curr_bar.tick_cnt += 1;
+        self.curr_bar = Some(curr_bar);
     }
 
-    // Add incomplete bar
-    if curr_bar.tick_cnt > 0 {
-        bars.push(curr_bar);
+    fn elements(&self) -> Vec<RangeBar> {
+        let mut bars = self.bars.clone();
+        // The incomplete bar, if it has any ticks
+        bars.extend(self.curr_bar.clone().filter(|b| b.tick_cnt > 0));
+        bars.drain(..bars.len().saturating_sub(MAX_BARS));
+        bars
     }
-
-    bars.drain(..bars.len().saturating_sub(MAX_BARS));
-    bars
 }
 
 /// `volume` plus `added`, or `volume` alone when the sum is not finite: two valid volumes can add
@@ -319,6 +334,28 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
 fn add_volume(volume: f64, added: f64) -> f64 {
     let sum = volume + added;
     if sum.is_finite() { sum } else { volume }
+}
+
+/// Index of the bar to build from so that the range bars move at most `MAX_WORK` range sizes.
+/// Bar `i` costs its path through open, high, low and close in sizes plus 4; the returned bar
+/// only seeds the state, and its own range is split at the next bar's first price.
+pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
+    let mut total = 0.0;
+    for i in (1..bars.len()).rev() {
+        let (b, prev) = (&bars[i], &bars[i - 1]);
+        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
+        total += (((b.open - prev.close).abs()
+            + (b.high - b.open).abs()
+            + (b.high - b.low)
+            + (b.close - b.low).abs())
+            / size)
+            .max(0.0)
+            + 4.0;
+        if total + (prev.high - prev.low) / size > super::MAX_WORK {
+            return i;
+        }
+    }
+    0
 }
 
 /// Calculate ATR for range size
@@ -364,6 +401,8 @@ mod tests {
                     low: base - 2.0,
                     close: base + 1.0,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -402,13 +441,16 @@ mod tests {
             (0.0, &[100.0, 0.0], &[(100.0, 100.0, 0.0, 0.0)]),
         ];
         for (range, prices, expected) in cases {
-            let ticks: Vec<TickData> = prices
+            let ticks: Vec<Tick> = prices
                 .iter()
                 .enumerate()
-                .map(|(i, &price)| TickData {
-                    price,
-                    volume: 1.0,
-                    ts: DateTime::from_timestamp(i as i64, 0).unwrap(),
+                .map(|(i, &price)| {
+                    Tick::new(
+                        DateTime::from_timestamp(i as i64, 0).unwrap(),
+                        price,
+                        1.0,
+                        None,
+                    )
                 })
                 .collect();
             let bars: Vec<_> = to_range_bars_from_ticks(&ticks, &RangeBarConfig::new(range))
@@ -433,11 +475,7 @@ mod tests {
     #[test]
     fn a_volume_that_would_overflow_is_left_out() {
         let ts = Utc::now();
-        let tick = |volume| TickData {
-            price: 100.0,
-            volume,
-            ts,
-        };
+        let tick = |volume| Tick::new(ts, 100.0, volume, None);
         let bar = |volume| Bar::new(ts, 100.0, 100.0, 100.0, 100.0, volume);
         let volumes = [f64::INFINITY, f64::MAX, f64::MAX];
         let config = RangeBarConfig::new(5.0);

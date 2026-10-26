@@ -1,8 +1,9 @@
 //! Canvas tab - background and grid settings.
 
 use crate::chart::series::SeriesSettings;
-use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 use egui::Ui;
 
 /// Canvas tab renderer
@@ -13,13 +14,15 @@ impl CanvasTab {
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
 
-        ui.label("Background");
+        ui.label(l10n::text(ui.ctx(), "Background"));
         ui.space_sm();
 
         FormGrid::new("canvas_bg_grid").show(ui, |ui| {
-            ui.label("Type");
-            ui.combo_select("bg_type", &mut settings.background_type, [0u8, 1], |v| {
-                Self::background_type_label(*v).to_string()
+            let label = ui.label(l10n::text(ui.ctx(), "Type"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select("bg_type", &mut settings.background_type, [0u8, 1], |v| {
+                    Self::background_type_label(*v).to_string()
+                });
             });
             ui.end_row();
         });
@@ -28,16 +31,18 @@ impl CanvasTab {
         ui.separator();
         ui.space_xl();
 
-        ui.label("Grid lines");
+        ui.label(l10n::text(ui.ctx(), "Grid lines"));
         ui.space_sm();
 
         FormGrid::new("canvas_grid_grid").show(ui, |ui| {
-            ui.label("Vertical grid lines");
-            ui.checkbox(&mut settings.show_vertical_grid, "");
+            let label = ui.label(l10n::text(ui.ctx(), "Vertical grid lines"));
+            ui.checkbox(&mut settings.show_vertical_grid, "")
+                .labelled_by(label.id);
             ui.end_row();
 
-            ui.label("Horizontal grid lines");
-            ui.checkbox(&mut settings.show_horizontal_grid, "");
+            let label = ui.label(l10n::text(ui.ctx(), "Horizontal grid lines"));
+            ui.checkbox(&mut settings.show_horizontal_grid, "")
+                .labelled_by(label.id);
             ui.end_row();
         });
 
@@ -45,17 +50,19 @@ impl CanvasTab {
         ui.separator();
         ui.space_xl();
 
-        ui.label("Crosshair");
+        ui.label(l10n::text(ui.ctx(), "Crosshair"));
         ui.space_sm();
 
         FormGrid::new("canvas_crosshair_grid").show(ui, |ui| {
-            ui.label("Mode");
-            ui.combo_select(
-                "crosshair_mode",
-                &mut settings.crosshair_mode,
-                [0u8, 1, 2],
-                |v| Self::crosshair_mode_label(*v).to_string(),
-            );
+            let label = ui.label(l10n::text(ui.ctx(), "Mode"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "crosshair_mode",
+                    &mut settings.crosshair_mode,
+                    [0u8, 1, 2],
+                    |v| Self::crosshair_mode_label(*v).to_string(),
+                );
+            });
             ui.end_row();
         });
     }

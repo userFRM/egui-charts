@@ -1,10 +1,12 @@
 //! ButtonContent - Clickable button content for list items
 
+use crate::localization as l10n;
 use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::ButtonVariant;
 
 use super::content::{ContentContext, ListItemContent};
 
@@ -119,22 +121,9 @@ impl<'a> ButtonContent<'a> {
     fn get_colors(&self, ui: &Ui, hovered: bool, active: bool) -> (Color32, Color32, Color32) {
         let visuals = &ui.style().visuals;
 
-        if self.disabled {
-            return (
-                visuals.widgets.noninteractive.bg_fill,
-                visuals
-                    .widgets
-                    .noninteractive
-                    .fg_stroke
-                    .color
-                    .gamma_multiply(0.5),
-                visuals
-                    .widgets
-                    .noninteractive
-                    .fg_stroke
-                    .color
-                    .gamma_multiply(0.5),
-            );
+        if self.disabled || !ui.is_enabled() {
+            let text = ui.active_theme().ui.text_disabled;
+            return (Color32::TRANSPARENT, text, text);
         }
 
         match self.style {
@@ -159,26 +148,22 @@ impl<'a> ButtonContent<'a> {
                     )
                 }
             }
-            ButtonStyle::Primary => {
-                let colors = ui.active_theme().ui;
-                let (accent, text) = (colors.accent, colors.accent_text);
-                if active {
-                    (accent.gamma_multiply(0.8), text, text)
-                } else if hovered {
-                    (accent.gamma_multiply(0.9), text, text)
+            ButtonStyle::Primary | ButtonStyle::Danger => {
+                let variant = if self.style == ButtonStyle::Primary {
+                    ButtonVariant::Primary
                 } else {
-                    (accent, text, text)
-                }
-            }
-            ButtonStyle::Danger => {
-                let colors = ui.active_theme().ui;
-                let (danger, text) = (colors.danger_bg, colors.danger_text);
-                if active {
-                    (danger.gamma_multiply(0.8), text, text)
-                } else if hovered {
-                    (danger.gamma_multiply(0.9), text, text)
+                    ButtonVariant::Danger
+                };
+                if active || hovered {
+                    let text = variant.fg_color(ui);
+                    (variant.bg_color(ui, hovered, active), text, text)
                 } else {
-                    (danger, text, text)
+                    let text = if self.style == ButtonStyle::Danger {
+                        ui.active_theme().ui.error
+                    } else {
+                        visuals.text_color()
+                    };
+                    (Color32::TRANSPARENT, text, text)
                 }
             }
             ButtonStyle::Subtle => {
@@ -209,11 +194,12 @@ impl<'a> ButtonContent<'a> {
 impl<'a> ListItemContent for ButtonContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let response = context.response;
+        let translated_label = l10n::text(ui.ctx(), self.label.as_deref().unwrap_or_default());
         response.widget_info(|| {
             WidgetInfo::labeled(
                 Role::Button,
                 !self.disabled && ui.is_enabled(),
-                self.label.as_deref().unwrap_or_default(),
+                &translated_label,
             )
         });
 
@@ -224,7 +210,7 @@ impl<'a> ListItemContent for ButtonContent<'a> {
             // The fill covers the whole row, like the list item's own hover fill.
             if bg_color != Color32::TRANSPARENT {
                 ui.painter()
-                    .rect_filled(response.rect, DESIGN_TOKENS.rounding.sm, bg_color);
+                    .rect_filled(response.rect, ui.active_theme().radius.sm, bg_color);
             }
 
             let content_rect = context.rect;
@@ -241,14 +227,14 @@ impl<'a> ListItemContent for ButtonContent<'a> {
             // Draw label if present
             if let Some(label) = &self.label {
                 let text_pos = egui::pos2(
-                    content_rect.min.x + self.icon_size + DESIGN_TOKENS.spacing.sm,
+                    content_rect.min.x + self.icon_size + ui.active_theme().spacing.sm,
                     content_rect.center().y,
                 );
 
                 ui.painter().text(
                     text_pos,
                     egui::Align2::LEFT_CENTER,
-                    label,
+                    l10n::text(ui.ctx(), label),
                     egui::TextStyle::Body.resolve(ui.style()),
                     text_color,
                 );
@@ -260,5 +246,64 @@ impl<'a> ListItemContent for ButtonContent<'a> {
 
     fn interactive(&self) -> bool {
         !self.disabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::icons;
+    use crate::theme::{apply_to_egui, contrast, presets};
+
+    #[test]
+    fn action_rows_are_transparent_at_rest_and_use_readable_state_colours() {
+        for (name, theme) in presets() {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            ctx.run_ui(Default::default(), |ui| {
+                for style in [
+                    ButtonStyle::Default,
+                    ButtonStyle::Primary,
+                    ButtonStyle::Danger,
+                    ButtonStyle::Subtle,
+                ] {
+                    let row = ButtonContent::new(&icons::PLUS, "Action").style(style);
+                    let (fill, icon, text) = row.get_colors(ui, false, false);
+                    assert_eq!(fill, Color32::TRANSPARENT, "{name}: {style:?}");
+                    assert_eq!(icon, text);
+                    assert!(
+                        contrast(text, theme.ui.panel_bg) >= 4.5,
+                        "{name}: {style:?}"
+                    );
+                    let disabled = row.disabled(true).get_colors(ui, true, true);
+                    assert_eq!(
+                        disabled,
+                        (
+                            Color32::TRANSPARENT,
+                            theme.ui.text_disabled,
+                            theme.ui.text_disabled
+                        )
+                    );
+                }
+                for (row, hover, active, text) in [
+                    (
+                        ButtonContent::new(&icons::PLUS, "Add").primary(),
+                        theme.ui.accent_hover,
+                        theme.ui.accent_active,
+                        theme.ui.accent_text,
+                    ),
+                    (
+                        ButtonContent::new(&icons::CLOSE, "Delete").danger(),
+                        theme.ui.danger_bg_hover,
+                        theme.ui.danger_bg_active,
+                        theme.ui.danger_text,
+                    ),
+                ] {
+                    assert_eq!(row.get_colors(ui, true, false), (hover, text, text));
+                    assert_eq!(row.get_colors(ui, true, true), (active, text, text));
+                }
+            })
+            .drop_without_applying_deltas();
+        }
     }
 }

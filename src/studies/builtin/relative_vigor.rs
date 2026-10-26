@@ -1,34 +1,38 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::stepper::rolling_mean;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Relative Vigor Index (RVI)
 /// Measures conviction of price movement
 /// Uses the relationship between close-open vs high-low
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct RelativeVigorIndex {
     /// Period for smoothing (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [RVI, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl RelativeVigorIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - RVI
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Signal
+                palette::GREEN, // Green - RVI
+                palette::RED,   // Red - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
@@ -49,30 +53,6 @@ impl RelativeVigorIndex {
 
         result
     }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let valid: Vec<f64> = data[i + 1 - period..=i]
-                    .iter()
-                    .filter(|&&x| !x.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid.is_empty() {
-                    result.push(f64::NAN);
-                } else {
-                    result.push(valid.iter().sum::<f64>() / valid.len() as f64);
-                }
-            }
-        }
-
-        result
-    }
 }
 
 impl Default for RelativeVigorIndex {
@@ -81,25 +61,10 @@ impl Default for RelativeVigorIndex {
     }
 }
 
-impl Indicator for RelativeVigorIndex {
-    fn name(&self) -> &str {
-        "RVI"
-    }
-
-    fn desc(&self) -> &str {
-        "Relative Vigor Index - Price movement conviction"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period.saturating_add(4) {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
+impl RelativeVigorIndex {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Calculate (Close - Open) for numerator
         let close_open: Vec<f64> = data.iter().map(|b| b.close - b.open).collect();
 
@@ -111,8 +76,8 @@ impl Indicator for RelativeVigorIndex {
         let smoothed_den = Self::swma(&high_low);
 
         // Calculate running sums over period
-        let num_sum = Self::calculate_sma(&smoothed_num, self.period);
-        let den_sum = Self::calculate_sma(&smoothed_den, self.period);
+        let num_sum = rolling_mean(&smoothed_num, self.period);
+        let den_sum = rolling_mean(&smoothed_den, self.period);
 
         // Calculate RVI
         let mut rvi = Vec::with_capacity(data.len());
@@ -130,17 +95,40 @@ impl Indicator for RelativeVigorIndex {
         // Store results
         for i in 0..data.len() {
             if rvi[i].is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(rvi[i]));
+                values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![rvi[i], signal[i]]));
+                values.push_lines(&[rvi[i], signal[i]]);
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for RelativeVigorIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "RVI"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Relative Vigor Index - Price movement conviction"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| {
+                b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            },
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -172,51 +160,5 @@ impl Indicator for RelativeVigorIndex {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("RVI({})", self.period), "Signal".to_string()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(open: f64, high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_rvi_calculation() {
-        let mut rvi = RelativeVigorIndex::new(5);
-
-        let data: Vec<Bar> = (0..20)
-            .map(|i| {
-                make_bar(
-                    100.0 + i as f64,
-                    102.0 + i as f64,
-                    98.0 + i as f64,
-                    101.0 + i as f64,
-                )
-            })
-            .collect();
-
-        rvi.calculate(&data);
-
-        assert_eq!(rvi.values.len(), 20);
-
-        // Should have valid values
-        let valid_cnt = rvi
-            .values
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
     }
 }

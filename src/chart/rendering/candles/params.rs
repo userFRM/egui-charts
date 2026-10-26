@@ -23,10 +23,16 @@ pub struct CandleDataContext<'a> {
     /// Heikin-Ashi, a cumulative recurrence) compute over `full_data` and slice
     /// the window out, so their output is invariant under panning and zooming.
     pub full_data: &'a [Bar],
-    /// [`ChartState::revision`](crate::model::ChartState::revision) of `full_data`.
+    /// [`ChartState::revision`](crate::studies::ChartState::revision) of `full_data`.
     pub revision: u64,
+    /// Transform retained by the owner of this series, shared by its price fit and rendering.
+    pub heikin_ashi: &'a super::HeikinAshiCache,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
+    /// Interval and calendar of the bars, whose sessions the TPO profiles follow.
+    pub clock: &'a crate::model::BarClock,
+    /// The instrument's minimum price increment, if known.
+    pub tick_size: Option<f64>,
 }
 
 /// Bar/candle rendering dimensions
@@ -61,22 +67,6 @@ impl VolumeSettings {
     }
 }
 
-/// Japanese chart type settings (Renko, Kagi, etc.)
-#[derive(Clone, Copy)]
-pub struct JapaneseChartSettings {
-    pub renko_brick_size: f64,
-    pub kagi_reversal_amount: f64,
-}
-
-impl JapaneseChartSettings {
-    pub fn new(renko_brick_size: f64, kagi_reversal_amount: f64) -> Self {
-        Self {
-            renko_brick_size,
-            kagi_reversal_amount,
-        }
-    }
-}
-
 /// Bullish/bearish color pair
 #[derive(Clone, Copy)]
 pub struct TradingColors {
@@ -102,21 +92,22 @@ impl CoordMapping {
 }
 
 /// Combined parameters for chart type rendering
-pub struct ChartTypeParams {
+pub struct ChartTypeParams<'a> {
     pub dimensions: BarDimensions,
     pub volume: VolumeSettings,
-    pub japanese: JapaneseChartSettings,
+    /// The parameters of the price-based chart types
+    pub type_params: &'a crate::model::ChartTypeParams,
     pub colors: TradingColors,
     pub coords: CoordMapping,
     pub price_source: PriceSource,
 }
 
-impl ChartTypeParams {
+impl<'a> ChartTypeParams<'a> {
     /// Create chart type params from pre-composed structs
     pub fn new(
         dimensions: BarDimensions,
         volume: VolumeSettings,
-        japanese: JapaneseChartSettings,
+        type_params: &'a crate::model::ChartTypeParams,
         colors: TradingColors,
         coords: CoordMapping,
         price_source: PriceSource,
@@ -124,7 +115,7 @@ impl ChartTypeParams {
         Self {
             dimensions,
             volume,
-            japanese,
+            type_params,
             colors,
             coords,
             price_source,
@@ -143,12 +134,6 @@ impl ChartTypeParams {
     }
     pub fn max_volume(&self) -> f64 {
         self.volume.max_volume
-    }
-    pub fn renko_brick_size(&self) -> f64 {
-        self.japanese.renko_brick_size
-    }
-    pub fn kagi_reversal_amount(&self) -> f64 {
-        self.japanese.kagi_reversal_amount
     }
     pub fn bullish_color(&self) -> Color32 {
         self.colors.bullish

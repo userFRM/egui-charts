@@ -7,6 +7,7 @@ pub mod actions;
 pub mod buttons;
 pub mod components;
 pub mod config;
+mod host;
 pub mod state;
 mod toolbar;
 
@@ -14,8 +15,6 @@ mod toolbar;
 pub use actions::TopToolbarAction;
 pub use buttons::{IconTextButton, TextButton, ToolbarIconButton, separator};
 pub use components::{
-    CandleColorConfig,
-    ChartSettingsState,
     // Upper toolbar components (ChartType re-exported from crate::model)
     ChartTypeAction,
     ChartTypeSelector,
@@ -25,7 +24,6 @@ pub use components::{
     CompareSymbol,
     CompareSymbolsConfig,
     CompareSymbolsDialog,
-    ConfiguredIndicator,
     IndicatorCategory,
     IndicatorDialog,
     IndicatorDialogAction,
@@ -33,27 +31,23 @@ pub use components::{
     IndicatorInfo,
     IndicatorParams,
     IndicatorTab,
-    IndicatorType,
     LayoutAction,
-    LayoutInfo,
     LayoutMenu,
     LayoutMenuConfig,
-    PrecisionMode,
-    ScaleMode,
     SettingsAction,
     SettingsDialog,
     SettingsDialogConfig,
     SettingsMenu,
     SettingsTab,
-    StatusLineOptions,
     SymbolSearchConfig,
     SymbolSearchDialog,
-    Timeframe,
     TimeframeAction,
+    TimeframePreferences,
     TimeframeSelector,
     TimeframeSelectorConfig,
     TimeframeUnit,
 };
 pub use config::TopToolbarConfig;
+pub use host::ToolbarEntry;
 pub use state::TopToolbarState;
 pub use toolbar::TopToolbar;

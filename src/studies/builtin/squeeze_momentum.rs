@@ -1,12 +1,13 @@
-use super::clamp_param;
+use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Squeeze Momentum Indicator
 /// Combines Bollinger Bands and Keltner Channels to identify periods of low volatility
 /// When BB is inside KC = "squeeze" (low volatility period)
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct SqueezeMomentum {
     /// Bollinger Bands period (typically 20)
@@ -19,13 +20,14 @@ pub struct SqueezeMomentum {
     kc_mult: f64,
     /// Momentum period (typically 12)
     momentum_period: usize,
-    values: Vec<IndicatorValue>,
-    /// Colors: [Momentum positive, Momentum negative, Squeeze on, Squeeze off]
+    values: IndicatorValues,
+    /// Colors: [Momentum positive, Squeeze on (the squeeze line), Momentum negative, Squeeze off]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl SqueezeMomentum {
+    /// Create with the default Bollinger and Keltner channel settings.
     pub fn new() -> Self {
         Self {
             bb_period: 20,
@@ -33,12 +35,12 @@ impl SqueezeMomentum {
             kc_period: 20,
             kc_mult: 1.5,
             momentum_period: 12,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Momentum positive
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Momentum negative
-                DESIGN_TOKENS.semantic.extended.disabled, // Gray - Squeeze on
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Squeeze off
+                palette::GREEN,    // Green - Momentum positive
+                palette::DISABLED, // Gray - Squeeze on
+                palette::RED,      // Red - Momentum negative
+                palette::BLUE,     // Blue - Squeeze off
             ],
             visible: true,
         }
@@ -60,44 +62,10 @@ impl SqueezeMomentum {
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
-    }
-
-    fn calculate_std_dev(data: &[f64], sma: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 || sma[i].is_nan() {
-                result.push(f64::NAN);
-            } else {
-                let mean = sma[i];
-                let variance: f64 = data[i + 1 - period..=i]
-                    .iter()
-                    .map(|&x| (x - mean).powi(2))
-                    .sum::<f64>()
-                    / period as f64;
-                result.push(variance.sqrt());
-            }
-        }
-
-        result
     }
 
     fn calculate_atr(data: &[Bar], period: usize) -> Vec<f64> {
@@ -111,7 +79,7 @@ impl SqueezeMomentum {
             tr.push(high_low.max(high_close).max(low_close));
         }
 
-        Self::calculate_sma(&tr, period)
+        helpers::sma(&tr, period)
     }
 
     fn linear_regression(data: &[f64], period: usize) -> Vec<f64> {
@@ -148,40 +116,32 @@ impl Default for SqueezeMomentum {
     }
 }
 
-impl Indicator for SqueezeMomentum {
-    fn name(&self) -> &str {
-        "Squeeze"
-    }
-
-    fn desc(&self) -> &str {
-        "Squeeze Momentum - Identifies volatility breakouts"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl SqueezeMomentum {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let required = self.bb_period.max(self.kc_period).max(self.momentum_period);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get closes
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
         // Calculate Bollinger Bands
-        let bb_sma = Self::calculate_sma(&closes, self.bb_period);
-        let bb_std = Self::calculate_std_dev(&closes, &bb_sma, self.bb_period);
+        let bb_sma = helpers::sma(&closes, self.bb_period);
+        let bb_std = helpers::stdev(&closes, self.bb_period);
 
         // Calculate Keltner Channels
-        let kc_sma = Self::calculate_sma(&closes, self.kc_period);
+        let kc_sma = helpers::sma(&closes, self.kc_period);
         let atr = Self::calculate_atr(data, self.kc_period);
 
         // Calculate midline and deviations for squeeze calculation
         let hl2: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
-        let hl2_sma = Self::calculate_sma(&hl2, self.momentum_period);
+        let hl2_sma = helpers::sma(&hl2, self.momentum_period);
 
         // Calculate momentum using linear regression
         let mut deviation = Vec::with_capacity(data.len());
@@ -202,7 +162,7 @@ impl Indicator for SqueezeMomentum {
                 || atr[i].is_nan()
                 || momentum[i].is_nan()
             {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let bb_upper = bb_sma[i] + self.bb_mult * bb_std[i];
                 let bb_lower = bb_sma[i] - self.bb_mult * bb_std[i];
@@ -212,15 +172,44 @@ impl Indicator for SqueezeMomentum {
                 // Squeeze is ON when BB is inside KC
                 let squeeze_on = bb_lower > kc_lower && bb_upper < kc_upper;
 
-                self.values.push(IndicatorValue::Multiple(vec![
-                    momentum[i],
-                    if squeeze_on { 1.0 } else { 0.0 },
-                ]));
+                values.push_lines(&[momentum[i], if squeeze_on { 1.0 } else { 0.0 }]);
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for SqueezeMomentum {
+    crate::studies::inputs::study_inputs!(self;
+        bb_period: length("Bb period", 1, usize::MAX),
+        bb_mult: number("Bb mult", 0.0, f64::MAX),
+        kc_period: length("Kc period", 1, usize::MAX),
+        kc_mult: number("Kc mult", 0.0, f64::MAX),
+        momentum_period: length("Momentum period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn name(&self) -> &str {
+        "Squeeze"
+    }
+
+    fn desc(&self) -> &str {
+        "Squeeze Momentum - Identifies volatility breakouts"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -268,6 +257,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -284,8 +275,10 @@ mod tests {
         assert_eq!(squeeze.values.len(), 50);
 
         // Should have momentum and squeeze state
-        if let IndicatorValue::Multiple(v) = squeeze.values.last().unwrap() {
-            assert_eq!(v.len(), 2);
-        }
+        let rows = squeeze.values.to_rows();
+        let IndicatorValue::Multiple(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", squeeze.values.to_rows().last().unwrap());
+        };
+        assert_eq!(v.len(), 2);
     }
 }

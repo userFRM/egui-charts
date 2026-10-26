@@ -25,15 +25,15 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Commodity Channel Index indicator
 #[derive(Clone)]
 pub struct CCI {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -46,8 +46,8 @@ impl CCI {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan, // Cyan
+            values: IndicatorValues::new(),
+            color: palette::CYAN, // Cyan
             visible: true,
         }
     }
@@ -73,6 +73,16 @@ impl Default for CCI {
 }
 
 impl Indicator for CCI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::HLC3,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CCI"
     }
@@ -118,7 +128,7 @@ impl Indicator for CCI {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -170,13 +180,15 @@ mod tests {
                 low: 100.0,
                 close: 100.0,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 
         let mut cci = CCI::new(20);
         cci.calculate(&bars);
 
-        for value in cci.values().iter().skip(19) {
+        for value in cci.values().to_rows().iter().skip(19) {
             assert!(
                 matches!(value, IndicatorValue::Single(v) if *v == 0.0),
                 "a window without deviation reads 0, got {value:?}"

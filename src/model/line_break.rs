@@ -1,54 +1,66 @@
-//! Three-Line Break chart transformation.
+//! Line Break chart transformation.
 //!
-//! A Line Break chart (also called "N-Line Break") draws a new line only
-//! when the closing price exceeds the high or low of the previous *N*
-//! lines. This filters out minor noise while preserving significant
-//! reversals.
+//! A Line Break chart extends the current direction when the selected price
+//! passes the last line's extreme. A reversal requires a break past the opposite
+//! extreme of the configured number of preceding lines. Use
+//! [`to_line_break_lines`] to transform OHLCV bars without rendering.
 //!
 //! - [`to_line_break_lines`] converts OHLCV bars into line-break lines.
 //! - [`detect_signal`] classifies the relationship between the last two
 //!   lines as a continuation or reversal.
 
+use super::PriceBasedSource;
+use super::PriceBuilder;
 use super::bar::Bar;
 use chrono::{DateTime, Utc};
 
 /// Configuration for the Line Break chart transformation.
 ///
-/// The `line_cnt` parameter (typically 3) controls how many prior lines
+/// The `line_count` parameter (typically 3) controls how many prior lines
 /// must be exceeded for a reversal to register.
 #[derive(Debug, Clone)]
 pub struct LineBreakConfig {
     /// Number of lines to look back for reversal
-    pub line_cnt: usize,
+    pub line_count: usize,
+    /// Price input; high/low gives continuation priority when a bar crosses both thresholds.
+    pub source: PriceBasedSource,
 }
 
 impl Default for LineBreakConfig {
     fn default() -> Self {
-        Self { line_cnt: 3 }
+        Self {
+            line_count: 3,
+            source: PriceBasedSource::Close,
+        }
     }
 }
 
 impl LineBreakConfig {
     /// Create a Line Break config with the given look-back count.
-    pub fn new(line_cnt: usize) -> Self {
-        Self { line_cnt }
+    pub fn new(line_count: usize) -> Self {
+        Self {
+            line_count,
+            source: PriceBasedSource::Close,
+        }
     }
 }
 
 /// Direction of a single line in a Line Break chart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineDirection {
+    /// An upward direction.
     Up,
+    /// A downward direction.
     Down,
 }
 
 /// A single line (block) in a Line Break chart.
 ///
-/// Each line spans from its open price (the previous line's close) to
-/// its close price, colored by direction.
+/// A continuation line opens at the previous line's close, a reversal line
+/// at the previous line's open; it closes at the bar's close.
 #[derive(Debug, Clone)]
 pub struct LineBreakLine {
-    /// Open price (previous line's close)
+    /// Open price: the previous line's close for a continuation, its open for a reversal
     pub open: f64,
     /// Close price
     pub close: f64,
@@ -85,94 +97,137 @@ impl LineBreakLine {
 /// # Safety Limits
 /// - At most the newest 10,000 lines
 pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBreakLine> {
-    if data.is_empty() {
-        return Vec::new();
+    let mut builder = LineBreakBuilder::new(config);
+    for bar in data {
+        builder.push(bar);
     }
+    builder.elements()
+}
 
-    const MAX_LINES: usize = 10_000;
-    let mut lines: Vec<LineBreakLine> = Vec::new();
+pub(crate) const MAX_LINES: usize = 10_000;
 
-    // Initialize with first bar
-    let first = &data[0];
-    let initial_direction = if first.close >= first.open {
-        LineDirection::Up
-    } else {
-        LineDirection::Down
-    };
+/// Builds Line Break lines bar by bar.
+#[derive(Clone)]
+pub(crate) struct LineBreakBuilder {
+    line_count: usize,
+    source: PriceBasedSource,
+    lines: Vec<LineBreakLine>,
+}
 
-    lines.push(LineBreakLine {
-        open: first.open,
-        close: first.close,
-        direction: initial_direction,
-        ts: first.time,
-    });
+impl LineBreakBuilder {
+    pub(crate) fn new(config: &LineBreakConfig) -> Self {
+        Self {
+            line_count: config.line_count,
+            source: config.source,
+            lines: Vec::new(),
+        }
+    }
+}
 
-    for bar in data.iter().skip(1) {
-        let last_line = lines.last().unwrap();
+impl PriceBuilder for LineBreakBuilder {
+    type Element = LineBreakLine;
+
+    fn push(&mut self, bar: &Bar) {
+        let Some(last_line) = self.lines.last() else {
+            // The first bar is the first line
+            self.lines.push(LineBreakLine {
+                open: bar.open,
+                close: bar.close,
+                direction: if bar.close >= bar.open {
+                    LineDirection::Up
+                } else {
+                    LineDirection::Down
+                },
+                ts: bar.time,
+            });
+            return;
+        };
+        let lines = &self.lines;
         let curr_direction = last_line.direction;
 
-        match curr_direction {
+        let price = match self.source {
+            PriceBasedSource::Close => bar.close,
+            PriceBasedSource::HighLow if curr_direction == LineDirection::Up => {
+                if bar.high > last_line.high() {
+                    bar.high
+                } else {
+                    bar.low
+                }
+            }
+            PriceBasedSource::HighLow => {
+                if bar.low < last_line.low() {
+                    bar.low
+                } else {
+                    bar.high
+                }
+            }
+        };
+        let new_line = match curr_direction {
             LineDirection::Up => {
                 // For a continuation, close must exceed the last line's high
-                if bar.close > last_line.high() {
-                    lines.push(LineBreakLine {
+                if price > last_line.high() {
+                    Some(LineBreakLine {
                         open: last_line.close,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Up,
                         ts: bar.time,
-                    });
+                    })
                 }
                 // For a reversal, close must break below the low of the last N lines
                 else {
-                    let lookback = config.line_cnt.min(lines.len());
+                    let lookback = self.line_count.min(lines.len());
                     let reversal_low = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.low())
                         .fold(f64::INFINITY, f64::min);
 
-                    if bar.close < reversal_low {
-                        lines.push(LineBreakLine {
-                            open: last_line.close,
-                            close: bar.close,
-                            direction: LineDirection::Down,
-                            ts: bar.time,
-                        });
-                    }
+                    (price < reversal_low).then_some(LineBreakLine {
+                        open: last_line.open,
+                        close: price,
+                        direction: LineDirection::Down,
+                        ts: bar.time,
+                    })
                 }
             }
             LineDirection::Down => {
                 // For a continuation, close must break below the last line's low
-                if bar.close < last_line.low() {
-                    lines.push(LineBreakLine {
+                if price < last_line.low() {
+                    Some(LineBreakLine {
                         open: last_line.close,
-                        close: bar.close,
+                        close: price,
                         direction: LineDirection::Down,
                         ts: bar.time,
-                    });
+                    })
                 }
                 // For a reversal, close must exceed the high of the last N lines
                 else {
-                    let lookback = config.line_cnt.min(lines.len());
+                    let lookback = self.line_count.min(lines.len());
                     let reversal_high = lines[lines.len() - lookback..]
                         .iter()
                         .map(|l| l.high())
                         .fold(f64::NEG_INFINITY, f64::max);
 
-                    if bar.close > reversal_high {
-                        lines.push(LineBreakLine {
-                            open: last_line.close,
-                            close: bar.close,
-                            direction: LineDirection::Up,
-                            ts: bar.time,
-                        });
-                    }
+                    (price > reversal_high).then_some(LineBreakLine {
+                        open: last_line.open,
+                        close: price,
+                        direction: LineDirection::Up,
+                        ts: bar.time,
+                    })
                 }
             }
+        };
+        self.lines.extend(new_line);
+
+        // Bound memory by dropping the oldest lines; only the last `line_count` are read.
+        let keep = MAX_LINES.max(self.line_count);
+        if self.lines.len() >= keep.saturating_mul(2) {
+            self.lines.drain(..self.lines.len() - keep);
         }
     }
 
-    lines.drain(..lines.len().saturating_sub(MAX_LINES));
-    lines
+    fn elements(&self) -> Vec<LineBreakLine> {
+        self.lines[self.lines.len().saturating_sub(MAX_LINES)..].to_vec()
+    }
 }
 
 /// Signal generated from the last two lines of a Line Break chart.
@@ -225,6 +280,8 @@ mod tests {
                     low: base - 1.0,
                     close: base + 2.0,
                     volume: 1000.0,
+                    colors: None,
+                    payload: None,
                 }
             })
             .collect()
@@ -251,6 +308,8 @@ mod tests {
                 low: open.min(close) - 1.0,
                 close,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect()
     }
@@ -258,7 +317,7 @@ mod tests {
     #[test]
     fn test_config_creation() {
         let config = LineBreakConfig::new(3);
-        assert_eq!(config.line_cnt, 3);
+        assert_eq!(config.line_count, 3);
     }
 
     #[test]
@@ -311,5 +370,45 @@ mod tests {
 
         let signal = detect_signal(&lines);
         assert_eq!(signal, LineBreakSignal::BearishReversal);
+    }
+
+    #[test]
+    fn reversal_lines_open_at_the_last_line_open() {
+        // (first open, closes after the first bar, expected (open, close) of every line)
+        let rows = [
+            (
+                10.0,
+                [11.0, 12.0, 13.0, 9.0],
+                [(10.0, 11.0), (11.0, 12.0), (12.0, 13.0), (12.0, 9.0)],
+            ),
+            (
+                13.0,
+                [12.0, 11.0, 10.0, 14.0],
+                [(13.0, 12.0), (12.0, 11.0), (11.0, 10.0), (11.0, 14.0)],
+            ),
+        ];
+        for (open, closes, expected) in rows {
+            let t0 = Utc::now();
+            let bars: Vec<Bar> = closes
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    let o = if i == 0 { open } else { c };
+                    Bar {
+                        time: t0,
+                        open: o,
+                        high: o.max(c),
+                        low: o.min(c),
+                        close: c,
+                        volume: 0.0,
+                        colors: None,
+                        payload: None,
+                    }
+                })
+                .collect();
+            let lines = to_line_break_lines(&bars, &LineBreakConfig::default());
+            let got: Vec<(f64, f64)> = lines.iter().map(|l| (l.open, l.close)).collect();
+            assert_eq!(got, expected);
+        }
     }
 }

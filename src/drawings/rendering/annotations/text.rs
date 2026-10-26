@@ -1,7 +1,7 @@
 //! Text label and anchored text rendering
 
 use crate::drawings::domain::Drawing;
-use crate::styles::{stroke, typography};
+use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke, epaint::StrokeKind};
 
@@ -23,7 +23,7 @@ impl Drawing {
         );
 
         // Draw background box
-        let font = egui::FontId::proportional(typography::LG);
+        let font = self.annotation_font();
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
         let text_size = galley.size();
 
@@ -66,7 +66,7 @@ impl Drawing {
         );
     }
 
-    /// Renders anchored text that stays fixed to chart coordinates.
+    /// Renders anchored text at its pane-relative screen position.
     pub(crate) fn render_anchored_text(&self, painter: &egui::Painter) {
         if self.points.is_empty() {
             return;
@@ -82,7 +82,7 @@ impl Drawing {
         );
 
         // Font and sizing
-        let font = egui::FontId::proportional(typography::LG);
+        let font = self.annotation_font();
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), color);
         let text_size = galley.size();
 
@@ -90,7 +90,15 @@ impl Drawing {
             DESIGN_TOKENS.sizing.annotation.signpost_padding_x,
             DESIGN_TOKENS.sizing.annotation.label_padding_y,
         );
-        let box_rect = egui::Rect::from_min_size(pos, text_size + padding * 2.0);
+        let prefix_width = painter
+            .layout_no_wrap("#".into(), font.clone(), color)
+            .size()
+            .x;
+        let text_offset = prefix_width + DESIGN_TOKENS.spacing.sm;
+        let box_rect = egui::Rect::from_min_size(
+            pos,
+            text_size + padding * 2.0 + egui::vec2(text_offset, 0.0),
+        );
 
         // Background with anchor icon
         painter.rect_filled(
@@ -111,19 +119,16 @@ impl Drawing {
 
         // Anchor icon before text
         painter.text(
-            Pos2::new(pos.x + DESIGN_TOKENS.spacing.md, pos.y + padding.y),
+            pos + padding,
             egui::Align2::LEFT_TOP,
             "#",
-            egui::FontId::proportional(typography::SM),
+            self.annotation_font(),
             color,
         );
 
         // Main text
         painter.text(
-            Pos2::new(
-                pos.x + DESIGN_TOKENS.sizing.technical_labels.elliott_label_size,
-                pos.y + padding.y,
-            ),
+            Pos2::new(pos.x + padding.x + text_offset, pos.y + padding.y),
             egui::Align2::LEFT_TOP,
             text,
             font,

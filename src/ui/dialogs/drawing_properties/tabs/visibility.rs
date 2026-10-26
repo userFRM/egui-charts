@@ -1,14 +1,17 @@
 //! Visibility tab - timeframe visibility settings.
 
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::Ui;
 
-use crate::ext::UiExt;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 
-/// Available timeframes
-const TIMEFRAMES: &[&str] = &["1m", "5m", "15m", "30m", "1h", "4h", "1D", "1W", "1M"];
+/// Available timeframes, named as `Timeframe::as_str` names them for the chart's interval label
+const TIMEFRAMES: &[&str] = &[
+    "1min", "5min", "15min", "30min", "1h", "4h", "1D", "1W", "1M",
+];
 
 /// Visibility tab renderer
 pub struct VisibilityTab;
@@ -17,20 +20,26 @@ impl VisibilityTab {
     pub fn show(ui: &mut Ui, props: &mut DrawingProps) {
         ui.space_md();
 
-        ui.checkbox(&mut props.visible_all_timeframes, "Show on all timeframes");
+        ui.checkbox(
+            &mut props.visible_all_timeframes,
+            l10n::text(ui.ctx(), "Show on all timeframes"),
+        );
 
         if !props.visible_all_timeframes {
             ui.space_lg();
-            ui.label("Timeframes");
+            ui.label(l10n::text(ui.ctx(), "Timeframes"));
             ui.space_sm();
 
             FormGrid::new("timeframes_grid")
                 .columns(3)
-                .spacing(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm)
+                .spacing(ui.active_theme().spacing.lg, ui.active_theme().spacing.sm)
                 .show(ui, |ui| {
                     for (i, tf) in TIMEFRAMES.iter().enumerate() {
                         let mut is_visible = props.visible_timeframes.contains(&tf.to_string());
-                        if ui.checkbox(&mut is_visible, *tf).changed() {
+                        if ui
+                            .checkbox(&mut is_visible, l10n::text(ui.ctx(), *tf))
+                            .changed()
+                        {
                             if is_visible {
                                 if !props.visible_timeframes.contains(&tf.to_string()) {
                                     props.visible_timeframes.push(tf.to_string());

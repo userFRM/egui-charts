@@ -21,6 +21,15 @@
 //! Screen points are not stored: [`Drawing::update_screen_coords`] rebuilds
 //! them from the anchors on the next frame.
 //!
+//! A restored drawing keeps the id, creation time and notes of its record in
+//! `Drawing::stored_id`, `created_at` and `notes`, and is saved back under
+//! them. Restore drawings through
+//! [`DrawingManager::add_synced_drawing`](crate::drawings::DrawingManager::add_synced_drawing)
+//! or by pushing them onto `DrawingManager::drawings`: either way the manager
+//! gives a new drawing an id that no restored drawing uses. Two managers
+//! restoring the same storage can still hand out the same id: one storage per
+//! manager is the supported use.
+//!
 //! # Storage format
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
@@ -44,6 +53,9 @@ use std::fmt;
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
     pub ts_ms: i64,
+    /// Nanoseconds after `ts_ms`, less than 1,000,000. Older documents default to zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subms_ns: u32,
     /// Price level at this coordinate.
     pub price: f64,
 }
@@ -51,8 +63,32 @@ pub struct StoredCoord {
 impl StoredCoord {
     /// Creates a new stored coordinate from a timestamp and price.
     pub fn new(ts_ms: i64, price: f64) -> Self {
-        Self { ts_ms, price }
+        Self {
+            ts_ms,
+            subms_ns: 0,
+            price,
+        }
     }
+
+    pub(crate) fn from_time(time: chrono::DateTime<chrono::Utc>, price: f64) -> Self {
+        Self {
+            ts_ms: time.timestamp_millis(),
+            subms_ns: time.timestamp_subsec_nanos() % 1_000_000,
+            price,
+        }
+    }
+
+    pub(crate) fn time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        if self.subms_ns >= 1_000_000 {
+            return None;
+        }
+        chrono::DateTime::from_timestamp_millis(self.ts_ms)?
+            .checked_add_signed(chrono::Duration::nanoseconds(i64::from(self.subms_ns)))
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// A fully serializable representation of a drawing with all its properties.
@@ -104,11 +140,16 @@ impl StoredDrawing {
     }
 
     /// The first field holding NaN or an infinity, which JSON cannot store.
-    fn non_finite_field(&self) -> Option<String> {
+    pub(super) fn non_finite_field(&self) -> Option<String> {
         let d = &self.drawing;
         let bad = |value: f64| !value.is_finite();
         if bad(d.stroke_width.into()) {
             return Some("stroke_width".into());
+        }
+        if d.screen_anchor
+            .is_some_and(|anchor| anchor.into_iter().any(|value| !value.is_finite()))
+        {
+            return Some("screen_anchor".into());
         }
         if bad(d.font_size.into()) {
             return Some("font_size".into());
@@ -127,10 +168,46 @@ impl StoredDrawing {
         if size.into_iter().any(bad) {
             return Some("position_size".into());
         }
-        let mut levels = d.fib_config.iter().flat_map(|config| &config.levels);
-        levels
-            .position(|level| bad(level.value.into()))
-            .map(|i| format!("fib_config.levels[{i}].value"))
+        for (name, values) in [
+            (
+                "fib_config.levels",
+                d.fib_config
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "pitchfork.levels",
+                d.pitchfork
+                    .iter()
+                    .flat_map(|c| c.levels.iter().map(|l| l.value))
+                    .collect(),
+            ),
+            (
+                "gann.price_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.price_levels.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.time_levels",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.time_levels.iter().copied())
+                    .collect(),
+            ),
+        ] {
+            if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+                let suffix = if name.ends_with(".levels") {
+                    ".value"
+                } else {
+                    ""
+                };
+                return Some(format!("{name}[{i}]{suffix}"));
+            }
+        }
+        None
     }
 }
 
@@ -242,11 +319,17 @@ impl DrawingStorage {
 
     /// Serialize to JSON, refusing what would lose a drawing on the next load:
     /// a non-finite number, which JSON cannot store and which would otherwise be
-    /// written as `null`, an id an earlier drawing already has and fewer anchors
-    /// than the tool draws with, which [`Self::from_json`] skips.
+    /// written as `null`, an id an earlier drawing already has, a cursor tool
+    /// such as the eraser, an unsupported timestamp and fewer anchors than the tool draws with.
+    /// [`Self::from_json`] skips these records.
     pub fn to_json(&self) -> Result<String, SaveError> {
         let mut ids = HashSet::new();
         for stored in &self.drawings {
+            if stored.drawing.tool_type.is_cursor() {
+                return Err(SaveError::Cursor {
+                    id: stored.id.clone(),
+                });
+            }
             if !ids.insert(stored.id.as_str()) {
                 return Err(SaveError::DuplicateId {
                     id: stored.id.clone(),
@@ -256,6 +339,16 @@ impl DrawingStorage {
                 return Err(SaveError::NonFinite {
                     id: stored.id.clone(),
                     field,
+                });
+            }
+            if let Some(point) = stored
+                .points
+                .iter()
+                .position(|point| point.time().is_none())
+            {
+                return Err(SaveError::UnmappedAnchor {
+                    id: stored.id.clone(),
+                    point,
                 });
             }
             if let Some((needed, anchors)) = stored.missing_anchors() {
@@ -338,8 +431,41 @@ impl DrawingStorage {
                                 "{tool} is a cursor, not a drawing"
                             )));
                         }
+                        if drawing.points.iter().any(|point| point.time().is_none()) {
+                            return Err(serde::de::Error::custom(
+                                "anchor timestamp is outside the supported range",
+                            ));
+                        }
                         if let Some(field) = drawing.non_finite_field() {
                             return Err(serde::de::Error::custom(format!("non-finite {field}")));
+                        }
+                        // Earlier placements stored fewer anchors. Keep their endpoints and
+                        // supply editable controls before checking the current construction.
+                        use DrawingToolType as T;
+                        match (tool, drawing.points.as_slice()) {
+                            (T::PriceNote | T::ArrowMarker, [a]) => {
+                                drawing.points.push(a.clone());
+                            }
+                            (T::RotatedRect, [a, b]) => {
+                                drawing.points = vec![
+                                    a.clone(),
+                                    StoredCoord {
+                                        price: a.price,
+                                        ..b.clone()
+                                    },
+                                    b.clone(),
+                                ];
+                            }
+                            (T::DoubleCurve, [a, b]) => {
+                                drawing.points = vec![a.clone(), a.clone(), b.clone(), b.clone()];
+                            }
+                            (T::FibonacciWedge | T::Pitchfan, [a, b]) => {
+                                drawing.points.push(StoredCoord {
+                                    price: a.price,
+                                    ..b.clone()
+                                });
+                            }
+                            _ => {}
                         }
                         if let Some((needed, anchors)) = drawing.missing_anchors() {
                             return Err(serde::de::Error::custom(format!(
@@ -394,6 +520,11 @@ pub enum SaveError {
         /// The id of the drawing.
         id: String,
     },
+    /// A drawing's tool is a cursor, such as the eraser, and loading skips it.
+    Cursor {
+        /// The id of the drawing.
+        id: String,
+    },
     /// A drawing has fewer anchors than its tool draws with, and loading skips it.
     MissingAnchors {
         /// The id of the drawing.
@@ -404,6 +535,13 @@ pub enum SaveError {
         anchors: usize,
         /// The anchors the tool needs.
         needed: usize,
+    },
+    /// An anchor has no time mapping or its timestamp is outside the supported range.
+    UnmappedAnchor {
+        /// Drawing id.
+        id: String,
+        /// Anchor index within the drawing.
+        point: usize,
     },
     /// Serialization failed.
     Json(serde_json::Error),
@@ -416,6 +554,7 @@ impl fmt::Display for SaveError {
                 write!(f, "drawing {id:?} has a non-finite {field}")
             }
             Self::DuplicateId { id } => write!(f, "duplicate drawing id {id:?}"),
+            Self::Cursor { id } => write!(f, "drawing {id:?} is a cursor, not a drawing"),
             Self::MissingAnchors {
                 id,
                 tool,
@@ -425,6 +564,9 @@ impl fmt::Display for SaveError {
                 f,
                 "drawing {id:?} has {anchors} anchors, {tool} needs {needed}"
             ),
+            Self::UnmappedAnchor { id, point } => {
+                write!(f, "drawing {id:?} anchor {point} has no time mapping")
+            }
             Self::Json(error) => error.fmt(f),
         }
     }
@@ -433,7 +575,11 @@ impl fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NonFinite { .. } | Self::DuplicateId { .. } | Self::MissingAnchors { .. } => None,
+            Self::NonFinite { .. }
+            | Self::DuplicateId { .. }
+            | Self::Cursor { .. }
+            | Self::MissingAnchors { .. }
+            | Self::UnmappedAnchor { .. } => None,
             Self::Json(error) => Some(error),
         }
     }
@@ -516,29 +662,51 @@ mod v1 {
     }
 }
 
-/// Convert a Drawing to StoredDrawing, its anchors mapped from bar index to timestamp.
+/// Convert a Drawing to StoredDrawing, its anchors mapped from bar index to timestamp, under
+/// the drawing's stored id and creation time when it was restored from storage, and under its
+/// id and the current time otherwise.
 ///
+/// Retained timestamps are used for unchanged projected indices. For new or edited indices,
 /// `bar_to_time` must accept fractional bar indices and extrapolate by the bar
 /// interval before index 0 and after the last bar instead of clamping: anchors
 /// can sit between bars, in the history not yet loaded or in the future area,
 /// and a clamping mapping would move them onto the first or last bar. It must
 /// be the inverse of the `time_to_bar` passed to [`stored_to_drawing`].
 pub fn drawing_to_stored(drawing: &Drawing, bar_to_time: impl Fn(f32) -> i64) -> StoredDrawing {
+    drawing_to_stored_with(drawing, |index, price| {
+        StoredCoord::new(bar_to_time(index), price)
+    })
+}
+
+pub(crate) fn drawing_to_stored_with(
+    drawing: &Drawing,
+    bar_to_coord: impl Fn(f32, f64) -> StoredCoord,
+) -> StoredDrawing {
     let mut settings = drawing.clone();
     settings.points.clear();
     settings.chart_points.clear();
-    let mut stored = StoredDrawing::new(drawing.id.to_string(), settings);
+    let id = drawing.stored_id.clone();
+    let mut stored = StoredDrawing::new(id.unwrap_or_else(|| drawing.id.to_string()), settings);
+    stored.created_at = drawing.created_at.unwrap_or(stored.created_at);
+    stored.notes.clone_from(&drawing.notes);
     stored.points = drawing
         .chart_points
         .iter()
-        .map(|p| StoredCoord::new(bar_to_time(p.bar_idx), p.price))
+        .map(|p| {
+            p.time_anchor
+                .filter(|(_, index)| *index == p.bar_idx)
+                .map_or_else(
+                    || bar_to_coord(p.bar_idx, p.price),
+                    |(time, _)| StoredCoord::from_time(time, p.price),
+                )
+        })
         .collect();
     stored
 }
 
-/// Convert StoredDrawing back to a completed Drawing, its anchors mapped from
-/// timestamp to bar index; the screen points follow on the next
-/// [`Drawing::update_screen_coords`].
+/// Convert StoredDrawing back to a completed Drawing with id `next_id`, its anchors mapped from
+/// timestamp to bar index and the record's id, creation time and notes kept; the screen points
+/// follow on the next [`Drawing::update_screen_coords`].
 ///
 /// `time_to_bar` must be the inverse of the `bar_to_time` passed to
 /// [`drawing_to_stored`]: it returns fractional bar indices and extrapolates
@@ -549,12 +717,27 @@ pub fn stored_to_drawing(
     time_to_bar: impl Fn(i64) -> f32,
     next_id: usize,
 ) -> Drawing {
+    stored_to_drawing_with(stored, |point| time_to_bar(point.ts_ms), next_id)
+}
+
+pub(crate) fn stored_to_drawing_with(
+    stored: &StoredDrawing,
+    time_to_bar: impl Fn(&StoredCoord) -> f32,
+    next_id: usize,
+) -> Drawing {
     let mut drawing = stored.drawing.clone();
     drawing.id = next_id;
+    drawing.stored_id = Some(stored.id.clone());
+    drawing.created_at = Some(stored.created_at);
+    drawing.notes.clone_from(&stored.notes);
     drawing.chart_points = stored
         .points
         .iter()
-        .map(|p| ChartPoint::new(time_to_bar(p.ts_ms), p.price))
+        .map(|p| {
+            let mut point = ChartPoint::new(time_to_bar(p), p.price);
+            point.time_anchor = p.time().map(|time| (time, point.bar_idx));
+            point
+        })
         .collect();
     drawing.completed = true;
     drawing
@@ -563,7 +746,9 @@ pub fn stored_to_drawing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::VolumeProfileConfig;
     use crate::drawings::*;
+    use crate::model::LineStyle;
 
     const T0: i64 = 1_704_067_200_000;
 
@@ -583,9 +768,12 @@ mod tests {
         (500.0 - price * 2.0) as f32
     }
 
+    /// The drawing `stored` restores to, without the record's identity, which
+    /// `a_later_session_keeps_the_stored_drawings_and_their_ids` checks.
     fn restore(stored: &StoredDrawing, id: usize) -> Drawing {
         let mut drawing = stored_to_drawing(stored, time_to_bar, id);
         drawing.update_screen_coords(bar_to_x, price_to_y);
+        (drawing.stored_id, drawing.created_at, drawing.notes) = (None, None, None);
         drawing
     }
 
@@ -602,6 +790,7 @@ mod tests {
         d.stroke_width = 3.5;
         d.completed = true;
         d.text = Some("note".into());
+        d.label = Some("Support".into());
         d.line_style = LineStyle::Dotted;
         d.fill_color = Some([5, 6, 7, 8]);
         d.locked = true;
@@ -630,9 +819,13 @@ mod tests {
             extend_left: true,
             extend_right: true,
             reverse: true,
+            logarithmic: true,
         });
         d.volume_profile = VolumeProfileConfig::new(50, 0.68);
         d.regression_trend = RegressionTrendConfig::new(1.5);
+        if tool == DrawingToolType::DoubleCurve {
+            d.chart_points.push(ChartPoint::new(12.0, 115.0));
+        }
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -640,14 +833,126 @@ mod tests {
 
     #[test]
     fn every_tool_round_trips_with_all_settings() {
-        for &tool in DrawingToolType::all().iter().filter(|t| !t.is_cursor()) {
-            let drawing = non_default_drawing(tool);
-            let mut storage = DrawingStorage::new("AAPL");
-            storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
-            let (loaded, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
-            let back = restore(&loaded.drawings()[0], drawing.id);
-            assert_eq!(format!("{back:?}"), format!("{drawing:?}"), "{tool:?}");
+        use crate::data::ProfileDisplay::{Delta, Total, UpDown};
+        for (tool, custom_anchors) in DrawingToolType::all()
+            .iter()
+            .copied()
+            .filter(|t| !t.is_cursor())
+            .map(|tool| (tool, None))
+            .chain((1..=3).map(|anchors| (DrawingToolType::Polyline, Some(anchors))))
+        {
+            let mut drawing = non_default_drawing(tool);
+            if let Some(anchors) = custom_anchors {
+                drawing.custom_tool = Some("host-shape".into());
+                drawing.custom_settings = serde_json::json!({"radius": 10});
+                drawing.chart_points.truncate(anchors);
+                drawing.update_screen_coords(bar_to_x, price_to_y);
+            }
+            drawing.gann = Some(crate::drawings::GannConfig {
+                price_levels: vec![0.25, 0.75],
+                time_levels: vec![0.5],
+            });
+            let mut fork = crate::drawings::PitchforkConfig::default();
+            fork.levels[0].line_style = LineStyle::Dotted;
+            fork.levels[1].visible = false;
+            fork.show_background = false;
+            drawing.pitchfork = Some(fork);
+            drawing.channel_midline = true;
+            drawing.selectable = false;
+            drawing.listed = false;
+            drawing.group = Some("levels".into());
+            if matches!(
+                tool,
+                DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
+            ) {
+                drawing.screen_anchor = Some([0.25, 0.75]);
+            }
+
+            let modes = if matches!(
+                tool,
+                DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
+            ) {
+                &[Total, UpDown, Delta][..]
+            } else {
+                &[Total][..]
+            };
+            for &display in modes {
+                let config = drawing.volume_profile.as_mut().unwrap();
+                *config = config.with_row_size(Some(0.25)).unwrap();
+                config.display = display;
+                config.up_color = [1, 2, 3, 240];
+                config.down_color = [4, 5, 6, 200];
+                let mut storage = DrawingStorage::new("AAPL");
+                storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
+                let (loaded, skipped) =
+                    DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+                assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+                let back = restore(&loaded.drawings()[0], drawing.id);
+                assert_eq!(
+                    format!("{back:?}"),
+                    format!("{drawing:?}"),
+                    "{tool:?} {display:?}"
+                );
+            }
         }
+    }
+
+    /// A later session that loads the storage, restores its drawings, copies one, adds one and
+    /// saves them all keeps every stored record as it was, with its layer, and stores the copy
+    /// and the new drawing under ids of their own, even where a stored id is a number the new
+    /// session could hand out.
+    #[test]
+    fn a_later_session_keeps_the_stored_drawings_and_their_ids() {
+        let mut storage = DrawingStorage::new("AAPL");
+        for (id, notes, z_order) in [("a1b2", Some("breakout level"), 1), ("2", None, 0)] {
+            let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
+            drawing.z_order = z_order;
+            let mut stored = StoredDrawing::new(id, drawing);
+            stored.points = vec![StoredCoord::new(T0, 100.0)];
+            stored.created_at = 1_700_000_000_000;
+            stored.notes = notes.map(String::from);
+            storage.add_drawing(stored);
+        }
+        let (mut storage, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+
+        let mut manager = DrawingManager::new();
+        for stored in storage.drawings() {
+            manager.add_synced_drawing(stored_to_drawing(stored, time_to_bar, 0));
+        }
+        manager.add_synced_drawing(manager.drawings[0].clone());
+        let (x_to_bar, y_to_price) = (|x: f32| x, |y: f32| f64::from(y));
+        let at = egui::Pos2::new(5.0, 90.0);
+        manager.start_drawing_with_coords(
+            DrawingToolType::HorizontalLine,
+            at,
+            x_to_bar,
+            y_to_price,
+        );
+        for drawing in &manager.drawings {
+            storage.add_drawing(drawing_to_stored(drawing, bar_to_time));
+        }
+        let (saved, _) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+
+        let records: Vec<_> = saved
+            .drawings()
+            .iter()
+            .map(|d| {
+                (
+                    d.id.as_str(),
+                    d.created_at,
+                    d.notes.as_deref(),
+                    d.drawing.z_order,
+                )
+            })
+            .collect();
+        assert_eq!(records.len(), 4, "{records:?}");
+        assert_eq!(
+            records[0],
+            ("a1b2", 1_700_000_000_000, Some("breakout level"), 1)
+        );
+        assert_eq!(records[1], ("2", 1_700_000_000_000, None, 0));
+        let ids: HashSet<_> = records.iter().map(|r| r.0).collect();
+        assert_eq!(ids.len(), 4, "{records:?}");
     }
 
     /// The version 1 fixture was written by the previous release and stands
@@ -691,11 +996,63 @@ mod tests {
         ];
         assert_eq!(v2.drawings().len(), tools.len());
         for (stored, tool) in v2.drawings().iter().zip(tools) {
-            let want = non_default_drawing(tool);
+            let mut want = non_default_drawing(tool);
+            want.label = None; // Earlier files have no object name.
+            want.fib_config.as_mut().unwrap().logarithmic = false;
             assert_eq!(
                 format!("{:?}", restore(stored, want.id)),
                 format!("{want:?}")
             );
+        }
+
+        // Settings from a file saved before the new fields and placement counts.
+        for (tool, count, origins) in [
+            (DrawingToolType::PriceNote, 1, &[0, 0][..]),
+            (DrawingToolType::ArrowMarker, 1, &[0, 0][..]),
+            (DrawingToolType::RotatedRect, 2, &[0, 1, 1][..]),
+            (DrawingToolType::DoubleCurve, 2, &[0, 0, 1, 1][..]),
+            (DrawingToolType::FibonacciWedge, 2, &[0, 1, 1][..]),
+            (DrawingToolType::Pitchfan, 2, &[0, 1, 1][..]),
+            (DrawingToolType::BarsPattern, 2, &[0, 1][..]),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            records[0]["points"].as_array_mut().unwrap().truncate(count);
+            for (at, point) in records[0]["points"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                point["subms_ns"] = (at + 1).into();
+            }
+            let original = records[0]["points"].as_array().unwrap().clone();
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let points = &loaded.drawings[0].points;
+            assert_eq!(points.len(), origins.len(), "{tool:?}");
+            for (point, &origin) in points.iter().zip(origins) {
+                assert_eq!(
+                    point.ts_ms,
+                    original[origin]["ts_ms"].as_i64().unwrap(),
+                    "{tool:?}"
+                );
+                assert_eq!(
+                    u64::from(point.subms_ns),
+                    original[origin]["subms_ns"].as_u64().unwrap(),
+                    "{tool:?}"
+                );
+            }
+            let points = serde_json::to_value(points).unwrap();
+            for anchor in original {
+                assert!(points.as_array().unwrap().contains(&anchor), "{tool:?}");
+            }
+            let (again, skipped) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(again.drawings[0].points.len(), origins.len());
         }
 
         let mut first = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
@@ -716,6 +1073,12 @@ mod tests {
             serde_json::to_string_pretty(&storage).unwrap()
         };
         let unreadable = [
+            (
+                current.replacen("\"ts_ms\":", "\"subms_ns\": 1000000, \"ts_ms\":", 1),
+                "anchor timestamp is outside the supported range",
+                &["2"][..],
+                0,
+            ),
             (
                 current.replacen("\"stroke_width\": 2.0", "\"stroke_width\": null", 1),
                 "invalid type: null",
@@ -793,6 +1156,15 @@ mod tests {
         assert!(skipped.is_empty(), "{skipped:?}");
         assert_eq!(storage.drawings().len(), 2);
 
+        // A drawing saved with the former Paintbrush tool, which drew as a brush, loads as one.
+        let paintbrush = current.replace("\"TrendLine\"", "\"Paintbrush\"");
+        let (storage, skipped) = DrawingStorage::from_json(&paintbrush).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(
+            storage.drawings()[1].drawing.tool_type,
+            DrawingToolType::Brush
+        );
+
         // A filter naming no timeframe loads as visible on every timeframe.
         let hidden = current.replacen("\"show_on_all\": true", "\"show_on_all\": false", 1);
         let (storage, skipped) = DrawingStorage::from_json(&hidden).unwrap();
@@ -819,7 +1191,19 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 7] = [
+        let cases: [(Spoil, &str); 14] = [
+            (
+                |s| first(s).drawing.screen_anchor = Some([f32::NAN, 0.5]),
+                "non-finite screen_anchor",
+            ),
+            (
+                |s| first(s).points[0].ts_ms = i64::MAX,
+                "anchor 0 has no time mapping",
+            ),
+            (
+                |s| first(s).points[0].subms_ns = 1_000_000,
+                "anchor 0 has no time mapping",
+            ),
             (
                 |s| first(s).drawing.stroke_width = f32::NAN,
                 "non-finite stroke_width",
@@ -845,8 +1229,43 @@ mod tests {
                 |s| first(s).drawing.fib_config.as_mut().unwrap().levels[0].value = f32::NAN,
                 "non-finite fib_config.levels[0].value",
             ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .pitchfork
+                        .get_or_insert_with(Default::default)
+                        .levels[0]
+                        .value = f32::NAN
+                },
+                "non-finite pitchfork.levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .price_levels[0] = f32::INFINITY
+                },
+                "non-finite gann.price_levels[0]",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .time_levels[0] = f32::NAN
+                },
+                "non-finite gann.time_levels[0]",
+            ),
             (|s| s.drawings.push(s.drawings[0].clone()), "duplicate id"),
             (|s| first(s).points.truncate(1), "Trend Line needs 2"),
+            (
+                |s| first(s).drawing.tool_type = DrawingToolType::Eraser,
+                "a cursor",
+            ),
         ];
         for (spoil, expected) in cases {
             let mut storage = DrawingStorage::new("AAPL");
@@ -858,6 +1277,10 @@ mod tests {
             let got = match storage.to_json() {
                 Err(SaveError::NonFinite { id, field }) => format!("{id}: non-finite {field}"),
                 Err(SaveError::DuplicateId { id }) => format!("{id}: duplicate id"),
+                Err(SaveError::Cursor { id }) => format!("{id}: a cursor"),
+                Err(SaveError::UnmappedAnchor { id, point }) => {
+                    format!("{id}: anchor {point} has no time mapping")
+                }
                 Err(SaveError::MissingAnchors {
                     id, tool, needed, ..
                 }) => {

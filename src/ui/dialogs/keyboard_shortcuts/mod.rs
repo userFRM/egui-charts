@@ -2,18 +2,20 @@
 //!
 //! Lists the handled keyboard shortcuts by category. The host opens it on `?` or `F1`.
 
+use crate::localization as l10n;
 use egui::{
     Color32, Context, FontId, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, RichText, Role,
     ScrollArea, Stroke, Ui, WidgetInfo,
 };
 
-use crate::config::KeyboardAction;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::dialog::{DialogFrame, dialog_frame, dialog_header};
+use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::widget::ShortcutMap;
 
 /// Action returned by the keyboard shortcuts dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyboardShortcutsAction {
     /// No action
     None,
@@ -34,6 +36,7 @@ impl Default for KeyboardShortcutsDialog {
 }
 
 impl KeyboardShortcutsDialog {
+    /// Create a [`KeyboardShortcutsDialog`] with default settings.
     pub fn new() -> Self {
         Self { is_open: false }
     }
@@ -55,10 +58,20 @@ impl KeyboardShortcutsDialog {
 
     /// Show the dialog. Returns the action taken.
     pub fn show(&mut self, ctx: &Context) -> KeyboardShortcutsAction {
+        self.show_with_shortcuts(ctx, &ShortcutMap::default())
+    }
+
+    /// Show only the host's bound shortcuts, using the same map as its chart.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        shortcuts: &ShortcutMap,
+    ) -> KeyboardShortcutsAction {
         if !self.is_open {
             return KeyboardShortcutsAction::None;
         }
 
+        let blocked_now = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let mut action = KeyboardShortcutsAction::None;
 
         DialogFrame::with_width(
@@ -66,7 +79,7 @@ impl KeyboardShortcutsDialog {
             DESIGN_TOKENS.sizing.dialog.default_width,
         )
         .show(ctx, |ui| {
-            action = self.render_contents(ui);
+            action = self.render_contents(ui, shortcuts);
         });
 
         // Escape belongs to an open popup or a focused text field first. egui closes both on
@@ -76,7 +89,10 @@ impl KeyboardShortcutsDialog {
         let blocked = ctx
             .data(|d| d.get_temp::<bool>(blocked_id))
             .unwrap_or(false);
-        if !blocked && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        if !blocked
+            && !blocked_now
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
             self.is_open = false;
             action = KeyboardShortcutsAction::Close;
         }
@@ -86,7 +102,7 @@ impl KeyboardShortcutsDialog {
         action
     }
 
-    fn render_contents(&mut self, ui: &mut Ui) -> KeyboardShortcutsAction {
+    fn render_contents(&mut self, ui: &mut Ui, shortcuts: &ShortcutMap) -> KeyboardShortcutsAction {
         let mut action = KeyboardShortcutsAction::None;
         let theme = ui.active_theme();
 
@@ -96,61 +112,66 @@ impl KeyboardShortcutsDialog {
         }
         // The chart reads its keys only while it has keyboard focus.
         ui.label(
-            RichText::new("Click the chart to use the chart keys.")
-                .size(theme.text.small)
-                .color(ui.visuals().weak_text_color()),
+            RichText::new(l10n::text(
+                ui.ctx(),
+                "Click the chart to use the chart keys.",
+            ))
+            .size(theme.text.small)
+            .color(ui.visuals().weak_text_color()),
         );
         ui.add_space(theme.spacing.lg);
 
-        let categories = KeyboardAction::all_by_category();
+        let categories = shortcuts.by_category();
         let font = FontId::proportional(theme.text.body);
+        let labels: Vec<_> = categories
+            .iter()
+            .flat_map(|(_, actions)| actions)
+            .map(|action| l10n::text(ui.ctx(), action.label()))
+            .collect();
         let widest = ui.fonts_mut(|f| {
-            categories
-                .iter()
-                .flat_map(|(_, actions)| actions)
-                .map(|a| {
-                    f.layout_no_wrap(a.label().to_owned(), font.clone(), Color32::PLACEHOLDER)
+            labels
+                .into_iter()
+                .map(|label| {
+                    f.layout_no_wrap(label, font.clone(), Color32::PLACEHOLDER)
                         .size()
                         .x
                 })
                 .fold(0.0, f32::max)
         });
-        let label_w = ((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0;
-
-        // The body scrolls once the dialog would pass the frame's screen cap.
-        let cap = ui.ctx().content_rect().shrink(theme.spacing.xxxl).height()
-            - dialog_frame(ui.style()).total_margin().sum().y
-            - ui.min_rect().height()
-            - ui.spacing().item_spacing.y;
+        let label_w = (((widest + theme.spacing.xxl) / 4.0).ceil() * 4.0)
+            .min((ui.available_width() - theme.spacing.sm) / 2.0);
 
         ui.scope(|ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ScrollArea::vertical()
                 .auto_shrink([false, true])
-                .max_height(cap)
-                // The window starts at egui's default height; this lets the body grow past it.
-                .min_scrolled_height(cap)
+                .max_height(ui.available_height())
                 .show(ui, |ui| {
                     for (idx, (name, actions)) in categories.iter().enumerate() {
                         if idx > 0 {
                             ui.add_space(theme.spacing.xxl - ui.spacing().item_spacing.y);
                         }
                         ui.label(
-                            RichText::new(*name)
+                            RichText::new(l10n::text(ui.ctx(), *name))
                                 .size(theme.text.small)
                                 .strong()
                                 .color(theme.ui.text_secondary),
                         );
                         egui::Grid::new(("shortcuts", idx))
                             .num_columns(2)
-                            .spacing([0.0, theme.spacing.sm])
+                            .spacing([theme.spacing.sm, theme.spacing.sm])
                             // With the spacing, a 24 px row pitch.
                             .min_row_height(theme.spacing.xxl + theme.spacing.sm)
                             .min_col_width(label_w)
+                            .max_col_width(label_w)
                             .show(ui, |ui| {
                                 for action in actions {
-                                    ui.label(RichText::new(action.label()).size(theme.text.body));
-                                    ui.horizontal(|ui| key_badges(ui, &theme, action.shortcuts()));
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), action.label()))
+                                            .size(theme.text.body),
+                                    );
+                                    let keys: Vec<_> = shortcuts.keys_for(*action).collect();
+                                    ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
                                 }
                             });
@@ -167,7 +188,7 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
     for (idx, shortcut) in shortcuts.iter().enumerate() {
         if idx > 0 {
             ui.label(
-                RichText::new("or")
+                RichText::new(l10n::text(ui.ctx(), "or"))
                     .size(theme.text.small)
                     .color(ui.visuals().weak_text_color()),
             );
@@ -197,12 +218,47 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                 theme.spacing.xs as i8,
             ))
             .show(ui, |ui| {
-                ui.label(
-                    RichText::new(text)
-                        .size(theme.text.small)
-                        .color(theme.ui.text),
+                let translated_label = l10n::text(ui.ctx(), &name);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(l10n::text(ui.ctx(), text))
+                            .size(theme.text.small)
+                            .color(theme.ui.text),
+                    )
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 )
-                .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+                .widget_info(|| WidgetInfo::labeled(Role::Label, true, &translated_label));
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_popup_opened_this_frame_gets_escape_before_the_dialog() {
+        let ctx = Context::default();
+        let mut dialog = KeyboardShortcutsDialog::new();
+        dialog.open();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                egui::Popup::open_id(ui.ctx(), Id::NULL.with("test popup"));
+                assert_eq!(dialog.show(ui.ctx()), KeyboardShortcutsAction::None);
+                assert!(dialog.is_open);
+                assert!(ui.input(|i| i.key_pressed(Key::Escape)));
+            },
+        )
+        .drop_without_applying_deltas();
     }
 }

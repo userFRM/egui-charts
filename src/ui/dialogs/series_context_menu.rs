@@ -1,14 +1,16 @@
 //! Series context menu - right-click menu when series is selected.
 //!
-//! Provides a full menu structure with icons, shortcuts, and submenus.
+//! Offers an alert, an indicator, the clicked price and the series settings.
 
 use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
 use crate::theme::Theme;
+use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, POINTER_GAP, format_price, show_menu};
 
 use egui::{Context, Id, Pos2};
+use std::collections::HashSet;
 
 // ============================================================================
 // SERIES CONTEXT MENU ACTIONS
@@ -16,37 +18,16 @@ use egui::{Context, Id, Pos2};
 
 /// Actions from the series context menu
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SeriesContextMenuAction {
     /// No action
     None,
     /// Add a price alert
     AddAlert,
-    /// Add a trading order
-    AddOrder,
     /// Add an indicator
     AddIndicator,
-    /// Add a financial metric overlay
-    AddFinancialMetric,
-    /// Show security information
-    SecurityInfo,
-    /// Show metrics submenu
-    Metrics,
     /// Copy the clicked price to clipboard
     CopyPrice,
-    /// Paste from clipboard
-    Paste,
-    /// Switch to table view
-    TableView,
-    /// Change visual ordering of overlays
-    VisualOrder,
-    /// Move series to another pane
-    MoveTo,
-    /// Pin series to a specific price scale
-    PinToScale,
-    /// Add symbol to a watchlist
-    AddToWatchlist,
-    /// Add a text note for the symbol
-    AddTextNote,
     /// Open series settings dialog
     OpenSettings,
 }
@@ -69,6 +50,9 @@ pub struct SeriesContextMenu {
     pub last_action: SeriesContextMenuAction,
     /// Skip close detection on first frame
     just_opened: bool,
+    /// Controls the host hid, set through
+    /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible).
+    pub(crate) hidden: HashSet<Control>,
 }
 
 impl Default for SeriesContextMenu {
@@ -88,6 +72,7 @@ impl SeriesContextMenu {
             click_price: 0.0,
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
+            hidden: HashSet::new(),
         }
     }
 
@@ -122,7 +107,10 @@ impl SeriesContextMenu {
     }
 
     /// Build menu items for the series context menu
-    fn build_menu_items(&self) -> Vec<MenuEntry<SeriesContextMenuAction>> {
+    pub(crate) fn build_menu_items(
+        &self,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) -> Vec<MenuEntry<SeriesContextMenuAction>> {
         let price_str = format_price(self.click_price);
         let symbol = &self.symbol;
         let has_symbol = !symbol.is_empty();
@@ -135,25 +123,16 @@ impl SeriesContextMenu {
         };
 
         let mut items = Vec::new();
-        // Alerts, orders, watchlists and notes need an instrument.
-        if has_symbol {
-            items.extend([
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add alert on {symbol} at {price_str}…"),
-                        SeriesContextMenuAction::AddAlert,
-                    )
-                    .with_icon(&embedded_icons::ALERTS)
-                    .with_shortcut(KeyboardAction::CreateAlert.shortcut()),
-                ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add order on {symbol} at {price_str}…"),
-                        SeriesContextMenuAction::AddOrder,
-                    )
-                    .with_icon(&embedded_icons::PLUS),
-                ),
-            ]);
+        // An alert needs an instrument.
+        if has_symbol && !self.hidden.contains(&Control::Alerts) {
+            items.push(MenuEntry::Item(
+                MenuItem::new(
+                    format!("Add alert on {symbol} at {price_str}…"),
+                    SeriesContextMenuAction::AddAlert,
+                )
+                .with_icon(&embedded_icons::ALERTS)
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
+            ));
         }
         items.extend([
             MenuEntry::Item(
@@ -163,87 +142,53 @@ impl SeriesContextMenu {
                 )
                 .with_icon(&embedded_icons::INDICATORS),
             ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    format!("Add financial metric{}…", of_symbol("for")),
-                    SeriesContextMenuAction::AddFinancialMetric,
-                )
-                .with_icon(&embedded_icons::BAR_CHART),
-            ),
             MenuEntry::Separator,
-            // Info section
-            MenuEntry::Item(
-                MenuItem::new("Security info…", SeriesContextMenuAction::SecurityInfo)
-                    .with_icon(&embedded_icons::INFO),
-            ),
-            MenuEntry::Item(
-                MenuItem::new("Metrics", SeriesContextMenuAction::Metrics)
-                    .with_icon(&embedded_icons::LAYOUT_GRID)
-                    .submenu(),
-            ),
-            MenuEntry::Separator,
-            // Edit section
             MenuEntry::Item(MenuItem::new(
                 format!("Copy price {price_str}"),
                 SeriesContextMenuAction::CopyPrice,
             )),
-            MenuEntry::Item(MenuItem::new("Paste", SeriesContextMenuAction::Paste).disabled()),
             MenuEntry::Separator,
-            // View section
-            MenuEntry::Item(MenuItem::new(
-                "Table view",
-                SeriesContextMenuAction::TableView,
-            )),
-            MenuEntry::Separator,
-            // Layout section
             MenuEntry::Item(
-                MenuItem::new("Visual order", SeriesContextMenuAction::VisualOrder).submenu(),
+                MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
+                    .with_icon(&embedded_icons::SETTINGS_GEAR),
             ),
-            MenuEntry::Item(MenuItem::new("Move to", SeriesContextMenuAction::MoveTo).submenu()),
-            MenuEntry::Item(
-                MenuItem::new(
-                    "Pin to scale (now right)",
-                    SeriesContextMenuAction::PinToScale,
-                )
-                .submenu(),
-            ),
-            MenuEntry::Separator,
         ]);
-        if has_symbol {
-            items.extend([
-                // Watchlist & notes section
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add {symbol} to watchlist"),
-                        SeriesContextMenuAction::AddToWatchlist,
-                    )
-                    .with_icon(&embedded_icons::WATCHLIST)
-                    .submenu(),
-                ),
-                MenuEntry::Item(
-                    MenuItem::new(
-                        format!("Add text note for {symbol}"),
-                        SeriesContextMenuAction::AddTextNote,
-                    )
-                    .with_icon(&embedded_icons::TEXT),
-                ),
-                MenuEntry::Separator,
-            ]);
-        }
-        // Settings (last item)
-        items.push(MenuEntry::Item(
-            MenuItem::new("Settings…", SeriesContextMenuAction::OpenSettings)
-                .with_icon(&embedded_icons::SETTINGS_GEAR),
-        ));
+        items.retain(|entry| {
+            let control = match entry {
+                MenuEntry::Item(item) => match item.action {
+                    SeriesContextMenuAction::AddIndicator => Control::Indicators,
+                    SeriesContextMenuAction::CopyPrice => Control::CopyPrice,
+                    SeriesContextMenuAction::OpenSettings => Control::Settings,
+                    _ => return true,
+                },
+                MenuEntry::Submenu { .. } | MenuEntry::Separator => return true,
+            };
+            !self.hidden.contains(&control)
+        });
+        crate::ui::context_menu::trim_separators(&mut items);
         items
     }
 
     /// Show the context menu
     pub fn show(&mut self, ctx: &Context, theme: &Theme) {
+        self.show_with_shortcuts(ctx, theme, &crate::widget::ShortcutMap::default());
+    }
+
+    /// Show menu hints from the same bindings used by chart input.
+    pub fn show_with_shortcuts(
+        &mut self,
+        ctx: &Context,
+        theme: &Theme,
+        shortcuts: &crate::widget::ShortcutMap,
+    ) {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items();
+        let entries = self.build_menu_items(shortcuts);
+        if entries.is_empty() {
+            self.close();
+            return;
+        }
         let just_opened = std::mem::take(&mut self.just_opened);
         let id = Id::unique("series_context_menu");
         if let Some(action) = show_menu(

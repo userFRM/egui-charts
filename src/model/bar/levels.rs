@@ -46,7 +46,7 @@ fn level_key(price: f64, grid: f64) -> i64 {
 /// Grid keys of a bar's low and high, or `None` for a non-finite or inverted bar.
 pub(crate) fn bar_level_keys(bar: &Bar, grid: f64) -> Option<(i64, i64)> {
     let (low, high) = (level_key(bar.low, grid), level_key(bar.high, grid));
-    (bar.low.is_finite() && bar.high.is_finite() && low <= high).then_some((low, high))
+    (bar.low.is_finite() && bar.high.is_finite() && bar.low <= bar.high).then_some((low, high))
 }
 
 #[cfg(test)]
@@ -62,6 +62,8 @@ mod tests {
             low: 99.0,
             close: 100.0,
             volume: 0.0,
+            colors: None,
+            payload: None,
         };
         let grid = super::level_grid(&[bar], 5e-324);
         assert!(grid.is_finite() && grid > 0.0, "grid {grid}");

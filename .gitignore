@@ -3,3 +3,5 @@
 *.swo
 *~
 .DS_Store
+/docs/capture/target
+/_site

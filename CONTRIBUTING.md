@@ -28,7 +28,7 @@ To add one: create a new file in `src/studies/builtin/`, implement `Indicator` (
 
 ### A new drawing tool
 
-Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/drawings/domain/tool_type/`](src/drawings/domain/tool_type), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
+Drawing tools live under [`src/drawings/`](src/drawings). The tool identity is the `DrawingToolType` enum in [`src/config/drawing_tool/`](src/config/drawing_tool), and the rendering for each family is under [`src/drawings/rendering/`](src/drawings/rendering) (for example `fibonacci.rs`, `gann.rs`, `patterns.rs`, `channels.rs`, `elliott.rs`).
 
 To add one: add a variant to `DrawingToolType`, slot it into the right category in `categories.rs`, define its interaction behavior in `behavior.rs` (interaction mode and required points), and implement its rendering in the matching file under `src/drawings/rendering/`.
 
@@ -46,7 +46,7 @@ To add one: add a `Theme::<name>()` constructor in `src/theme/presets.rs` and ad
 
 ## Development setup
 
-Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.95**. CI tests against both `1.95.0` and current `stable`.
+Install the Rust toolchain with [rustup](https://rustup.rs/). The minimum supported Rust version (MSRV) is **1.95**. CI runs the library and doc tests on Linux, macOS and Windows with current `stable` and `1.95.0`. Library tests run with default features, all features and no default features. Widget tests also run in headless Chrome with all features and with the widget alone.
 
 For the web demo you also need the WebAssembly target and [Trunk](https://trunkrs.dev/):
 
@@ -79,31 +79,75 @@ cd examples/demo && trunk build --release
 
 The bundled library examples can be run with the usual cargo invocation, for example `cargo run --example basic_chart`.
 
+### Measuring frame time
+
+`benches/frame_time.rs` renders the chart headlessly (layout, painting and tessellation through egui, with no window or GPU) on generated sample data, and prints the median frame time and the median tessellation time of each scenario as a Markdown table to paste into a pull request:
+
+```sh
+cargo bench --bench frame_time
+```
+
+The scenarios are one chart of 5,000,000 bars zoomed out and zoomed in, four charts of 100,000 bars, eight charts of 100,000 bars with ten studies each, and one chart of 10,000 bars with 500 drawings, every drawing tool in turn, all in view or spread across the history, in a 1920 by 1080 window with the pointer over the charts. `FRAME_TIME_FRAMES` sets the number of measured frames (default 300, after 60 warm-up frames), and arguments run only the scenarios whose name contains one of them, for example `cargo bench --bench frame_time -- "zoomed out"`. `benches/bare_chart.rs` times the frame of the `bare_chart` example in the same way.
+
+A second table prints the first frame and the median and 95th percentile of steady, tick and new-bar frames for candles and the five price-based chart types on 1,000,000 one-minute bars; `-- price-based` runs it alone. A third prints the vertices, frame time and tessellation time of volume bubbles from 100,000 trades with 200 bars in view; `-- bubbles` runs it alone.
+
+`benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
+
+`benches/order_flow.rs` pushes the order flow of a busy instrument, 18,000 trades, depth deltas and quotes a second from the demo's synthetic book, into one chart with a depth history and draws a frame per 1/60 s of market time. It prints the messages pushed per second, the frame time, the heap allocations per message and the heap the chart holds: `cargo bench --bench order_flow`. `ORDER_FLOW_SECONDS` sets the market time simulated (default 300).
+
+To compare two commits, build the bench on each and run the two binaries in turn, so that changes in machine load and clock speed affect both alike. `cargo bench --no-run` prints the path of the binary it builds:
+
+```sh
+git switch --detach <base> && cargo bench --bench frame_time --no-run
+cp target/release/deps/frame_time-<hash> /tmp/frame_time-base
+git switch <branch> && cargo bench --bench frame_time --no-run
+cp target/release/deps/frame_time-<hash> /tmp/frame_time-head
+for round in 1 2 3 4 5; do /tmp/frame_time-base; /tmp/frame_time-head; done
+```
+
+Compare the medians round by round, and quote the machine and the number of rounds with the figures.
+
+### Fuzzing
+
+`fuzz/` holds [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) targets that look for panics and hangs on hostile input: `bars` feeds appends, live updates, prepends and replacements of bars with non-finite prices and unordered timestamps to a chart and paints a frame, `studies` calculates and updates every study of the catalogue over such a series, and `drawings` loads saved drawing files from arbitrary bytes. They need a nightly toolchain:
+
+```sh
+cargo install cargo-fuzz
+cargo +nightly fuzz run bars -- -max_total_time=120 -timeout=10 -len_control=0 -max_len=8192
+mkdir -p fuzz/corpus/drawings
+cargo +nightly fuzz run drawings fuzz/corpus/drawings src/drawings/fixtures -- -max_total_time=120 -timeout=10
+```
+
+`-len_control=0` lets the inputs grow long enough to hold a series from the start, and `drawings` starts from the saved files in `src/drawings/fixtures/`, since arbitrary bytes rarely form a drawing file.
+
+A crash is saved under `fuzz/artifacts/<target>/`; rerun it with `cargo +nightly fuzz run <target> <file>`. A scheduled workflow (`.github/workflows/fuzz.yml`) runs every target weekly and uploads the crash inputs.
+
 ## Project layout
 
 A short map of the main modules (see the crate-level docs in [`src/lib.rs`](src/lib.rs) for the full table):
 
-- [`model`](src/model): domain types (`Bar`, `Symbol`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
-- [`data`](src/data): the `DataSource` and `Datafeed` contracts, trades, depth and bar merging.
-- [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays, `ChartBuilder` and `TradingChart`.
-- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; nothing calls them yet.
+- [`model`](src/model): domain types (`Bar`, `Instrument`, `Timeframe`, `ChartType`) and the Renko/Kagi/P&F transforms.
+- [`data`](src/data): the `Datafeed` contract, trades, depth and bar merging.
+- [`chart`](src/chart): rendering, hit-testing, coordinate mapping, overlays.
+- [`services`](src/services): traits a host implements for storage, symbol search, signals, alerts and a trading account; the trading UI routes confirmed orders to the broker.
 - [`drawings`](src/drawings): drawing tools, selection, handles, undo/redo.
 - [`studies`](src/studies): technical indicators, the `Indicator` trait, and `IndicatorRegistry`.
 - [`scales`](src/scales): price and time scales, tick generators, formatters.
 - [`config`](src/config): chart configuration and options.
 - [`theme`](src/theme) / [`tokens`](src/tokens) / [`styles`](src/styles): the design-token theme system.
-- [`widget`](src/widget): the `Chart` egui widget, with pan and zoom, keyboard and drawing input, and indicator panes.
-- [`ext`](src/ext): extension traits (`UiExt`, `ResponseExt`, widget builders), with the `ui` feature.
+- [`widget`](src/widget): the `Chart` egui widget and `ChartBuilder`, with pan and zoom, keyboard and drawing input, indicator panes and loading from a `Datafeed`.
+- [`ui_kit::ext`](src/ui_kit/ext): extension traits (`UiExt`, `ResponseExt`, widget builders), with the `ui` feature.
 - [`icons`](src/icons): compile-time embedded SVG icons.
 
 ### Feature flags
 
 The default build includes the chart widget, the icons, the built-in studies and the application-level UI components. An application that only shows charts uses `default-features = false, features = ["widget"]`. With `default-features = false` alone the crate is the headless engine (`model`, `scales`, `data`, `services`, `tokens`, `validation` and the `Indicator` trait layer of `studies`), which does not depend on egui.
 
-- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `drawings`, `config`, `theme`, `styles`, `widget`). Required by `icons` and `ui`.
+- `widget` (**default on**): the egui chart widget and the modules built on it (`chart`, `config`, `theme`, `styles`, `widget`). Required by `drawings`, `icons` and `ui`.
+- `drawings` (**default on**): drawing tools, geometry, interaction, undo and persistence. Implies `widget`; enabled by `ui`.
 - `studies` (**default on**): the built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. Required by `ui`.
 - `icons` (**default on**): compile-time embedded SVG icons. Required by `ui`.
-- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ext` helpers. Enables `icons` and `studies`.
+- `ui` (**default on**): application-level UI (toolbars, panels, sidebars, dialogs), the `ui_kit` widget library it is built on, and the `ui_kit::ext` helpers. Enables `icons`, `studies` and `drawings`.
 - `serde` (off): `Serialize` and `Deserialize` for `theme::Theme`.
 
 ## Contribution workflow

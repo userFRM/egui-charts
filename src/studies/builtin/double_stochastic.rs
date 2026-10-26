@@ -1,51 +1,40 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Double Stochastic
 /// Applies the stochastic formula twice for smoother signals
 /// More responsive to overbought/oversold conditions
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct DoubleStochastic {
     /// Period for stochastic calculation
     period: usize,
     /// Smoothing period
     smooth: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl DoubleStochastic {
+    /// Create with `period`, `smooth` in bars, each clamped to at least one.
     pub fn new(period: usize, smooth: usize) -> Self {
         Self {
             period: period.max(1),
             smooth: smooth.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            values: IndicatorValues::new(),
+            color: palette::ORANGE, // Orange
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    fn sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let sum: f64 = data[i + 1 - period..=i].iter().sum();
-                result.push(sum / period as f64);
-            }
-        }
-
-        result
     }
 }
 
@@ -55,24 +44,16 @@ impl Default for DoubleStochastic {
     }
 }
 
-impl Indicator for DoubleStochastic {
-    fn name(&self) -> &str {
-        "DS"
-    }
-
-    fn desc(&self) -> &str {
-        "Double Stochastic - Double-smoothed stochastic oscillator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl DoubleStochastic {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let min_period = self.period.saturating_add(self.smooth.saturating_mul(2));
         if data.len() < min_period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // First stochastic
@@ -99,7 +80,7 @@ impl Indicator for DoubleStochastic {
         }
 
         // Smooth the first stochastic
-        let smooth_stoch1 = Self::sma(&stoch1, self.smooth);
+        let smooth_stoch1 = helpers::sma(&stoch1, self.smooth);
 
         // Second stochastic on the smoothed values
         let mut stoch2: Vec<f64> = Vec::with_capacity(data.len());
@@ -138,18 +119,43 @@ impl Indicator for DoubleStochastic {
         }
 
         // Final smoothing
-        let ds = Self::sma(&stoch2, self.smooth);
+        let ds = helpers::sma(&stoch2, self.smooth);
 
         for i in 0..data.len() {
             if i < min_period - 1 || ds[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Single(ds[i]));
+                values.push(IndicatorValue::Single(ds[i]));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for DoubleStochastic {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        smooth: length("Smooth", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "DS"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Double Stochastic - Double-smoothed stochastic oscillator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -197,6 +203,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 

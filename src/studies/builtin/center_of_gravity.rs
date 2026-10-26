@@ -1,34 +1,36 @@
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Center of Gravity Oscillator
 /// Developed by John Ehlers
 /// Uses a weighted moving avg to identify reversal points
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct CenterOfGravity {
     /// Lookback period (typically 10)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [COG, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl CenterOfGravity {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.bullish,     // Teal - COG
-                DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
+                palette::UP,          // Teal - COG
+                palette::DEEP_ORANGE, // Deep Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
@@ -42,6 +44,16 @@ impl Default for CenterOfGravity {
 }
 
 impl Indicator for CenterOfGravity {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "COG"
     }
@@ -85,26 +97,28 @@ impl Indicator for CenterOfGravity {
             }
 
             let cog = if den != 0.0 { -num / den } else { 0.0 };
-            let signal = prev_cog;
+            // The first value has no previous one to signal on.
+            let signal = if i + 1 == self.period {
+                f64::NAN
+            } else {
+                prev_cog
+            };
 
             prev_cog = cog;
             cog_values.push((cog, signal));
         }
 
         // Store results
-        for (i, (cog, signal)) in cog_values.iter().enumerate() {
+        for (cog, signal) in &cog_values {
             if cog.is_nan() {
                 self.values.push(IndicatorValue::None);
-            } else if i < self.period || signal.is_nan() || *signal == 0.0 {
-                self.values.push(IndicatorValue::Single(*cog));
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![*cog, *signal]));
+                self.values.push_lines(&[*cog, *signal]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -152,6 +166,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -176,6 +192,7 @@ mod tests {
         // Should have valid values after period
         let valid_cnt = cog
             .values
+            .to_rows()
             .iter()
             .filter(|v| !matches!(v, IndicatorValue::None))
             .count();

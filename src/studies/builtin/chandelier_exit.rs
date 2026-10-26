@@ -1,19 +1,19 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Chandelier Exit
 /// Trailing stop-loss indicator based on Wilder's ATR
 /// Developed by Chuck LeBeau
-use crate::studies::{ATR, Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct ChandelierExit {
     /// ATR period (typically 22)
     period: usize,
     /// ATR multiplier (typically 3.0)
     multiplier: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Long exit, Short exit]
     colors: Vec<Color32>,
     visible: bool,
@@ -25,30 +25,31 @@ impl ChandelierExit {
         Self {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Long exit
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Short exit
+                palette::GREEN, // Green - Long exit
+                palette::RED,   // Red - Short exit
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let mut atr = ATR::new(self.period);
         atr.calculate(data);
 
-        for (i, value) in atr.values().iter().enumerate() {
-            match *value {
-                IndicatorValue::Single(atr) if !atr.is_nan() => {
+        for i in 0..data.len() {
+            match atr.values().value(0, i) {
+                Some(atr) => {
                     // Find highest high and lowest low in period
                     let window = &data[i + 1 - self.period..=i];
                     let highest = window
@@ -62,7 +63,7 @@ impl ChandelierExit {
                     // Short exit = Lowest Low + ATR * multiplier
                     let short_exit = lowest + atr * self.multiplier;
 
-                    values.push(IndicatorValue::Multiple(vec![long_exit, short_exit]));
+                    values.push_lines(&[long_exit, short_exit]);
                 }
                 _ => values.push(IndicatorValue::None),
             }
@@ -78,6 +79,11 @@ impl Default for ChandelierExit {
 }
 
 impl Indicator for ChandelierExit {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        multiplier: number("Multiplier", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Chandelier"
     }
@@ -94,7 +100,7 @@ impl Indicator for ChandelierExit {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -124,7 +130,7 @@ impl Indicator for ChandelierExit {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -149,6 +155,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -184,7 +192,7 @@ mod tests {
         ];
 
         let mut failures = Vec::new();
-        if ChandelierExit::new(3, 2.0).line_cnt() != 2 {
+        if ChandelierExit::new(3, 2.0).line_count() != 2 {
             failures.push("short exit line is not drawn".to_string());
         }
         for (label, bars, expected) in cases {
@@ -192,7 +200,7 @@ mod tests {
             let mut ce = ChandelierExit::new(3, 2.0);
             ce.calculate(&data);
 
-            let got = ce.values();
+            let got = ce.values().to_rows();
             let warm_up = got
                 .iter()
                 .take(2)

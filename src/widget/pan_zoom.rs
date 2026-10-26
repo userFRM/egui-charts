@@ -17,7 +17,6 @@
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 use web_time::Instant;
 
-use crate::chart::state::BoxZoomMode;
 use crate::scales::PriceTransform;
 use crate::widget::Chart;
 
@@ -119,9 +118,8 @@ impl Chart {
                     pending_price_zoom = Some(delta_y);
                 } else {
                     let zoom_scale = (-delta_y / 100.0).clamp(-0.5, 0.5);
-                    // Zoom centered on mouse position by default
-                    // With Ctrl/Cmd held: anchor at right edge (for "zoom to latest" behavior)
-                    let zoom_point_x = hp.x - chart_rect_min_x; // Always use mouse position
+                    // Zoom around the pointer, or the right edge while the right bar stays on scroll
+                    let zoom_point_x = self.zoom_anchor(hp.x - chart_rect_min_x, chart_width);
 
                     log::debug!(
                         "[ZOOM INPUT] mouse_x={:.1}, chart_min_x={:.1}, anchor_x={:.1}, chart_width={:.1}",
@@ -142,7 +140,8 @@ impl Chart {
                     // CRITICAL: Reset drag state after zoom to prevent jump
                     // If user was dragging while zooming, the old start_offset is now invalid
                     if self.scroll_start_offset.is_some() {
-                        self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+                        self.scroll_start_offset =
+                            Some(self.state.time_scale().right_offset_precise());
                         self.scroll_start_pos = response.interact_pointer_pos();
                     }
                 }
@@ -162,8 +161,8 @@ impl Chart {
 
     /// Handles pinch-to-zoom for touch/trackpad gestures
     ///
-    /// This uses egui's multi-touch zoom_delta which is provided by trackpad
-    /// pinch gestures and mobile two-finger pinch.
+    /// Native zoom events and contact-based pinches share the pointer anchor.
+    /// Contact gestures take precedence when a backend reports both.
     pub fn handle_pinch_zoom(
         &mut self,
         ui: &Ui,
@@ -171,7 +170,7 @@ impl Chart {
         chart_width: f32,
         chart_rect_min_x: f32,
     ) {
-        if !response.hovered() || !self.chart_options.handle_scale.pinch {
+        if !response.hovered() {
             return;
         }
 
@@ -179,20 +178,39 @@ impl Chart {
         let zoom_info = ui.input(|i| {
             i.multi_touch()
                 .map(|mt| (mt.zoom_delta, mt.translation_delta, i.pointer.hover_pos()))
+                .or_else(|| {
+                    // Wheel zoom is handled separately, including its Ctrl/Cmd variant.
+                    let native_zoom: f32 = i
+                        .events
+                        .iter()
+                        .filter_map(|event| {
+                            if let Event::Zoom(delta) = event {
+                                Some(*delta)
+                            } else {
+                                None
+                            }
+                        })
+                        .product();
+                    (native_zoom != 1.0).then_some((native_zoom, Vec2::ZERO, i.pointer.hover_pos()))
+                })
         });
 
         if let Some((zoom_delta, translation_delta, hover_pos)) = zoom_info {
             // Handle pinch zoom
-            if (zoom_delta - 1.0).abs() > 0.001 {
+            if self.chart_options.handle_scale.pinch && (zoom_delta - 1.0).abs() > 0.001 {
                 // Convert zoom_delta to our zoom scale format
                 // zoom_delta > 1.0 means fingers spreading (zoom in)
                 // zoom_delta < 1.0 means fingers pinching (zoom out)
                 let zoom_scale = (zoom_delta - 1.0) * 2.0;
+                self.pending_scroll_time = None;
+                self.tracking_mode_active = false;
+                self.kinetic_scroll.is_active = false;
 
                 // Use hover position or center of chart as zoom anchor
-                let zoom_point_x = hover_pos
-                    .map(|p| p.x - chart_rect_min_x)
-                    .unwrap_or(chart_width / 2.0);
+                let zoom_point_x = self.zoom_anchor(
+                    hover_pos.map_or(chart_width / 2.0, |p| p.x - chart_rect_min_x),
+                    chart_width,
+                );
 
                 log::debug!(
                     "[PINCH ZOOM] zoom_delta={zoom_delta:.4}, zoom_scale={zoom_scale:.4}, anchor_x={zoom_point_x:.1}"
@@ -207,16 +225,29 @@ impl Chart {
 
                 // Reset drag state to prevent jump after pinch
                 if self.scroll_start_offset.is_some() {
-                    self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+                    self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
                     self.scroll_start_pos = response.interact_pointer_pos();
                 }
             }
 
             // Handle two-finger pan (translation during pinch)
-            if translation_delta.x.abs() > 0.5 {
+            if self.chart_options.handle_scroll.horz_touch_drag && translation_delta.x.abs() > 0.5 {
+                self.pending_scroll_time = None;
                 self.state
                     .time_scale_mut()
                     .scroll_pixels(translation_delta.x);
+            }
+            if self.chart_options.handle_scroll.vert_touch_drag
+                && self.state.price_scale().is_manual()
+                && translation_delta.y.abs() > 0.5
+            {
+                let y = hover_pos.map_or(0.0, |pos| pos.y);
+                let map = self.last_price_map;
+                let shift = map.y_to_scale(y - translation_delta.y) - map.y_to_scale(y);
+                let range = self.state.price_scale().range();
+                self.state
+                    .price_scale_mut()
+                    .set_range(range.min + shift, range.max + shift);
             }
         }
     }
@@ -224,7 +255,8 @@ impl Chart {
     /// Handle drag-to-pan, price-axis scaling, and time-axis drag-zoom.
     ///
     /// When the drag starts on the main chart area, horizontal movement pans the
-    /// time axis. Starting on the price axis enables price scale dragging.
+    /// time axis and, while auto-scale is off, vertical movement pans the price
+    /// axis. Starting on the price axis enables price scale dragging.
     /// Starting on the time axis enables drag-to-zoom the time scale. Also
     /// tracks velocity for kinetic scrolling continuation after release.
     pub fn handle_drag_pan(
@@ -238,45 +270,54 @@ impl Chart {
     ) {
         // CRITICAL: Skip panning if box zoom is active (right-click drag)
         let box_zoom_active = self.box_zoom.active;
+        let (is_touch, multi_touch) = ui.input(|i| {
+            (
+                i.any_touches()
+                    || i.events
+                        .iter()
+                        .any(|event| matches!(event, Event::Touch { .. })),
+                i.multi_touch().is_some(),
+            )
+        });
 
-        if !response.dragged()
-            || !self.chart_options.handle_scroll.pressed_mouse_move
-            || has_active_drawing_tool
-            || box_zoom_active
-        {
+        if !response.dragged() || multi_touch || has_active_drawing_tool || box_zoom_active {
             // Drag ended - handle kinetic scrolling
-            if !has_active_drawing_tool
+            if response.drag_stopped()
+                && !has_active_drawing_tool
+                && !multi_touch
+                && is_touch
+                && self.chart_options.handle_scroll.horz_touch_drag
                 && self.chart_options.kinetic_scroll.enabled
                 && self.scroll_start_pos.is_some()
             {
-                let is_trackpad_gesture =
-                    ui.input(|i| i.multi_touch().is_some() || i.any_touches());
+                let move_distance = self
+                    .kinetic_scroll
+                    .last_pos
+                    .and_then(|last| self.scroll_start_pos.map(|start| (last.x - start.x).abs()))
+                    .unwrap_or(0.0);
 
-                if is_trackpad_gesture {
-                    let move_distance = self
-                        .kinetic_scroll
-                        .last_pos
-                        .and_then(|last| {
-                            self.scroll_start_pos.map(|start| (last.x - start.x).abs())
-                        })
-                        .unwrap_or(0.0);
+                let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
+                let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
 
-                    let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-                    let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
-
-                    if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
-                        && self.kinetic_scroll.velocity.abs() >= min_v_px_s
-                    {
-                        self.kinetic_scroll.is_active = true;
-                        self.kinetic_scroll.velocity =
-                            self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
-                        self.kinetic_scroll.anim_last_time = Some(Instant::now());
-                    }
+                if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
+                    && self.kinetic_scroll.velocity.abs() >= min_v_px_s
+                {
+                    self.kinetic_scroll.is_active = true;
+                    self.kinetic_scroll.velocity =
+                        self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
+                    self.kinetic_scroll.anim_last_time = Some(Instant::now());
                 }
             }
 
-            self.scroll_start_pos = None;
-            self.scroll_start_offset = None;
+            if multi_touch {
+                self.kinetic_scroll.is_active = false;
+                // Rebase the pointer drag while contacts own translation, including finger lifts.
+                self.scroll_start_pos = response.interact_pointer_pos();
+                self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
+            } else {
+                self.scroll_start_pos = None;
+                self.scroll_start_offset = None;
+            }
             self.kinetic_scroll.last_pos = None;
             self.kinetic_scroll.last_time = None;
             return;
@@ -286,8 +327,8 @@ impl Chart {
         self.kinetic_scroll.is_active = false;
 
         if self.scroll_start_pos.is_none() {
-            self.scroll_start_pos = response.interact_pointer_pos();
-            self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+            self.scroll_start_pos = ui.input(|i| i.pointer.press_origin());
+            self.scroll_start_offset = Some(self.state.time_scale().right_offset_precise());
         }
 
         if let (Some(start_pos), Some(start_offset), Some(curr_pos)) = (
@@ -295,58 +336,77 @@ impl Chart {
             self.scroll_start_offset,
             response.interact_pointer_pos(),
         ) {
-            if price_axis_rect.contains(start_pos)
-                && self
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(start_pos);
+            if price_axis_rect.contains(origin) {
+                if self
                     .chart_options
                     .handle_scale
                     .axis_pressed_mouse_move
                     .price
-            {
-                // Zoom by this frame's movement around the point where the drag began.
-                let anchor_y = ui
-                    .input(|i| i.pointer.press_origin())
-                    .unwrap_or(start_pos)
-                    .y;
-                self.price_axis_drag = Some((anchor_y, response.drag_delta().y));
-            } else if time_axis_rect.contains(start_pos)
-                && self.chart_options.handle_scale.axis_pressed_mouse_move.time
-            {
-                let dx = curr_pos.x - start_pos.x;
-                if dx.abs() > 0.1 {
-                    let zoom_point_x = curr_pos.x - chart_rect_min_x;
-                    let zoom_scale = (dx / 100.0).signum() * (dx / 100.0).abs().min(1.0);
-                    let chart_width = time_axis_rect.width();
-                    self.state.time_scale_mut().zoom(
-                        zoom_scale,
-                        zoom_point_x,
-                        chart_rect_min_x,
-                        chart_width,
-                    );
-                    self.scroll_start_pos = Some(curr_pos);
-                }
-            } else {
-                let drag_delta_x = curr_pos.x - start_pos.x;
-                let bar_spacing = self.state.time_scale().bar_spacing();
-                let drag_in_bars = drag_delta_x / bar_spacing;
-                let new_offset = start_offset - drag_in_bars;
-
-                self.state.time_scale_mut().set_right_offset(new_offset);
-            }
-
-            // Track velocity for kinetic scrolling
-            if self.chart_options.kinetic_scroll.enabled {
-                let now = Instant::now();
-                if let (Some(last_pos), Some(last_time)) =
-                    (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
                 {
-                    let dt = now.duration_since(last_time).as_secs_f32();
-                    if dt > 0.0 {
-                        let dx = curr_pos.x - last_pos.x;
-                        self.kinetic_scroll.velocity = dx / dt;
+                    // Zoom by this frame's movement around the point where the drag began.
+                    self.price_axis_drag = Some((origin.y, response.drag_delta().y));
+                }
+            } else if time_axis_rect.contains(origin) {
+                if self.chart_options.handle_scale.axis_pressed_mouse_move.time {
+                    let dx = curr_pos.x - start_pos.x;
+                    if dx.abs() > 0.1 {
+                        let zoom_point_x = curr_pos.x - chart_rect_min_x;
+                        let zoom_scale = (dx / 100.0).signum() * (dx / 100.0).abs().min(1.0);
+                        let chart_width = time_axis_rect.width();
+                        self.state.time_scale_mut().zoom(
+                            zoom_scale,
+                            zoom_point_x,
+                            chart_rect_min_x,
+                            chart_width,
+                        );
+                        self.scroll_start_pos = Some(curr_pos);
                     }
                 }
-                self.kinetic_scroll.last_pos = Some(curr_pos);
-                self.kinetic_scroll.last_time = Some(now);
+            } else {
+                let scroll = self.chart_options.handle_scroll;
+                let horizontal = if is_touch {
+                    scroll.horz_touch_drag
+                } else {
+                    scroll.pressed_mouse_move
+                };
+                let vertical = if is_touch {
+                    scroll.vert_touch_drag
+                } else {
+                    scroll.pressed_mouse_move
+                };
+                if horizontal {
+                    let drag_delta_x = curr_pos.x - start_pos.x;
+                    let bar_spacing = self.state.time_scale().bar_spacing();
+                    let drag_in_bars = drag_delta_x / bar_spacing;
+                    let new_offset = start_offset - f64::from(drag_in_bars);
+                    self.state.time_scale_mut().set_right_offset(new_offset);
+
+                    if self.chart_options.kinetic_scroll.enabled {
+                        let now = Instant::now();
+                        if let (Some(last_pos), Some(last_time)) =
+                            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
+                        {
+                            let dt = now.duration_since(last_time).as_secs_f32();
+                            if dt > 0.0 {
+                                self.kinetic_scroll.velocity = (curr_pos.x - last_pos.x) / dt;
+                            }
+                        }
+                        self.kinetic_scroll.last_pos = Some(curr_pos);
+                        self.kinetic_scroll.last_time = Some(now);
+                    }
+                }
+
+                // Manual prices follow only the movement enabled for this input device.
+                if vertical && self.state.price_scale().is_manual() {
+                    let map = self.last_price_map;
+                    let dy = response.drag_delta().y;
+                    let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
+                    let range = self.state.price_scale().range();
+                    self.state
+                        .price_scale_mut()
+                        .set_range(range.min + shift, range.max + shift);
+                }
             }
         }
     }
@@ -374,13 +434,13 @@ impl Chart {
             let velocity_in_bars_per_s =
                 self.kinetic_scroll.velocity / self.state.time_scale().bar_spacing();
             let delta_offset = velocity_in_bars_per_s * dt;
-            let curr_offset = self.state.time_scale().right_offset();
-            let new_offset = curr_offset - delta_offset;
+            let curr_offset = self.state.time_scale().right_offset_precise();
+            let new_offset = curr_offset - f64::from(delta_offset);
 
             self.state.time_scale_mut().set_right_offset(new_offset);
 
             let frames = (dt * 60.0).max(0.0);
-            let damping = self.chart_options.kinetic_scroll.dumping_coeff.powf(frames);
+            let damping = self.chart_options.kinetic_scroll.damping_coeff.powf(frames);
             self.kinetic_scroll.velocity *= damping;
 
             let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
@@ -414,6 +474,7 @@ impl Chart {
                     .time_scale_mut()
                     .set_bar_spacing(self.chart_options.time_scale.bar_spacing);
                 self.state.time_scale_mut().jump_to_latest();
+                self.pending_scroll_time = None;
             }
             if self
                 .chart_options
@@ -429,8 +490,7 @@ impl Chart {
 
     /// Handle box-zoom interaction (left-click drag when zoom mode is active).
     ///
-    /// On press, starts tracking the selection rectangle. On release, either
-    /// zooms into the rectangle (Zoom mode) or measures price/bar delta (Measure mode).
+    /// On press, starts tracking the selection rectangle. On release, zooms into the rectangle.
     /// Returns `true` if a zoom was successfully applied this frame.
     pub fn handle_box_zoom(
         &mut self,
@@ -466,17 +526,7 @@ impl Chart {
             if let (Some(start), Some(end)) = (self.box_zoom.start_pos, self.box_zoom.curr_pos)
                 && (chart_rect.contains(start) || chart_rect.contains(end))
             {
-                match self.box_zoom.mode {
-                    BoxZoomMode::Zoom => {
-                        zoom_applied = self.execute_box_zoom(start, end, chart_rect, chart_width);
-                    }
-                    BoxZoomMode::Measure => {
-                        // TODO(P1): Display measurement overlay showing price delta, percentage
-                        // change, and bar count between start/end of the box-select region.
-                        // Render as a floating tooltip anchored to the selection rectangle,
-                        // similar to a Measure tool (Alt+click drag).
-                    }
-                }
+                zoom_applied = self.execute_box_zoom(start, end, chart_rect, chart_width);
             }
             self.box_zoom.reset();
         }
@@ -507,31 +557,19 @@ impl Chart {
         // Save current zoom state to history before applying new zoom
         self.state.push_zoom_state();
 
-        let left_x_relative = min_x - chart_rect.min.x;
-        let right_x_relative = max_x - chart_rect.min.x;
-
-        let left_idx = self
-            .state
-            .time_scale()
-            .coord_to_idx(min_x, chart_rect.min.x, chart_width);
-        let right_idx = self
-            .state
-            .time_scale()
-            .coord_to_idx(max_x, chart_rect.min.x, chart_width);
-
-        let num_bars = right_idx.max(left_idx) - right_idx.min(left_idx) + 1.0;
-        if num_bars > 0.0 {
-            let new_spacing = (right_x_relative - left_x_relative) / num_bars;
-            self.state.time_scale_mut().set_bar_spacing(new_spacing);
-
-            let center_idx = (left_idx + right_idx) / 2.0;
-            let base_idx = self.state.time_scale().base_idx() as f32;
-            let visible_bars = chart_width / self.state.time_scale().bar_spacing();
-            let target_right_offset = center_idx + (visible_bars / 2.0) - base_idx;
-            self.state
-                .time_scale_mut()
-                .set_right_offset(target_right_offset);
-        }
+        // Horizontal zoom: the box's bars fill the width (up to the maximum spacing), centred.
+        // A box inside one bar shows that bar across the width, or keeps a wider spacing.
+        let time_scale = self.state.time_scale_mut();
+        let center_idx =
+            time_scale.coord_to_idx_precise((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
+        let old = time_scale.bar_spacing();
+        time_scale.set_bar_spacing((old * chart_width / (max_x - min_x)).min(chart_width.max(old)));
+        // The inverse of `coord_to_idx` at the middle of the width.
+        let spacing = time_scale.bar_spacing();
+        let base_idx = time_scale.base_idx() as f64;
+        time_scale.set_right_offset(
+            center_idx - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing) - 0.5,
+        );
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
         // visible close (the base of the relative modes) can differ from the one it was drawn on.
@@ -539,9 +577,20 @@ impl Chart {
             self.last_price_map.y_to_price(min_y),
             self.last_price_map.y_to_price(max_y),
         );
-        let transform = self.state.fit_price_scale();
+        let transform = self.state.fit_price_scale(
+            self.studies
+                .indicators()
+                .iter()
+                .zip(&self.study_autoscale)
+                .filter(|(_, autoscale)| **autoscale && !self.chart_type.is_time_independent())
+                .map(|(study, _)| study.as_ref()),
+        );
         let (a, b) = (transform.to_scale(p), transform.to_scale(q));
-        self.state.price_scale_mut().set_range(a.min(b), a.max(b));
+        let scale = self.state.price_scale_mut();
+        // Widened around its middle to the span zooming stops at.
+        let pad = (scale.min_span() - (a - b).abs()).max(0.0) / 2.0;
+        scale.set_range(a.min(b) - pad, a.max(b) + pad);
+        self.pending_scroll_time = None;
 
         true // Zoom successfully applied
     }
@@ -573,6 +622,10 @@ impl Chart {
     /// Apply pending timescale configuration: width, initial visible bars,
     /// lock-on-resize behavior, and pending start-index jumps.
     pub fn apply_timescale_config(&mut self, chart_width: f32) {
+        // Hidden or collapsed layouts cannot establish a zoom or a resize baseline.
+        if !chart_width.is_finite() || chart_width <= 1.0 {
+            return;
+        }
         self.state.time_scale_mut().set_width(chart_width);
 
         if self.apply_visible_bars_once {
@@ -581,26 +634,48 @@ impl Chart {
             {
                 let spacing = self.calculate_bar_spacing(chart_width, desired);
                 self.state.time_scale_mut().set_bar_spacing(spacing);
+                if self.prev_width.is_none() {
+                    self.state.time_scale_mut().jump_to_latest();
+                }
             }
             self.apply_visible_bars_once = false;
-        }
-
-        // lockVisibleTimeRangeOnResize
-        if self
+        } else if self
             .chart_options
             .time_scale
             .lock_visible_time_range_on_resize
+            && let Some(prev_width) = self.prev_width
+            && (chart_width - prev_width).abs() > 1.0
         {
-            if let Some(prev_width) = self.prev_width
-                && (chart_width - prev_width).abs() > 1.0
-            {
-                let prev_visible_bars = self.calculate_visible_bars(prev_width);
-                if prev_visible_bars > 0 {
-                    let spacing = chart_width / prev_visible_bars as f32;
-                    self.state.time_scale_mut().set_bar_spacing(spacing);
-                }
+            let spacing = self.state.time_scale().bar_spacing() * chart_width / prev_width;
+            self.state.time_scale_mut().set_bar_spacing(spacing);
+        }
+        self.prev_width = Some(chart_width);
+
+        if let Some(time) = self.pending_scroll_time
+            && let Some(first) = self.state.data().bars.first()
+        {
+            let bars = &self.state.data().bars;
+            let next = bars.partition_point(|bar| bar.time < time);
+            let index = if next == 0 {
+                0
+            } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
+                next - 1
+            } else {
+                next
+            };
+            let needs_history = time < first.time
+                && !self.symbol.is_empty()
+                && !self.feed.history_complete
+                && self
+                    .feed_link
+                    .as_ref()
+                    .is_some_and(|link| !link.paging_stopped);
+            let scale = self.state.time_scale_mut();
+            let half_window = (chart_width / scale.bar_spacing() - 1.0) / 2.0;
+            scale.set_right_offset(index as f64 - scale.base_idx() as f64 + f64::from(half_window));
+            if !needs_history {
+                self.pending_scroll_time = None;
             }
-            self.prev_width = Some(chart_width);
         }
 
         // Apply pending start index
@@ -608,8 +683,8 @@ impl Chart {
             let bar_spacing = self.state.time_scale().bar_spacing();
             if bar_spacing > 0.0 {
                 let visible_len = chart_width / bar_spacing;
-                let base_idx = self.state.time_scale().base_idx() as f32;
-                let desired_right_border = (target_start as f32) + visible_len - 1.0;
+                let base_idx = self.state.time_scale().base_idx() as f64;
+                let desired_right_border = target_start as f64 + f64::from(visible_len) - 1.0;
                 let desired_offset = desired_right_border - base_idx;
                 self.state.time_scale_mut().set_right_offset(desired_offset);
             }
@@ -621,16 +696,158 @@ impl Chart {
 mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
+    use crate::widget::Chart;
     use crate::widget::test_frames::{chart, frame};
-    use egui::{Event, Modifiers, PointerButton, Pos2};
+    use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
-    /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
-    fn drag_price_axis(steps: usize) -> (f64, f64) {
+    /// Native zoom and contact pinch each scale once, retaining the bar under the pointer.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn native_and_contact_pinch_keep_the_zoom_anchor() {
+        for (contacts, native, enabled, tracking, kinetic) in [
+            (false, true, true, false, false),
+            (true, false, true, false, false),
+            (true, true, true, false, false),
+            (false, true, false, false, false),
+            (false, true, true, true, false),
+            (false, true, true, false, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            chart.chart_options.handle_scale.pinch = enabled;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let rect = chart.last_rendered_price_rect;
+            let pointer = Pos2::new(rect.left() + rect.width() * 0.25, rect.center().y);
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
+            let touch = |id, phase, x| Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(id),
+                phase,
+                pos: Pos2::new(x, pointer.y),
+                force: None,
+            };
+            if contacts {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.04,
+                    vec![
+                        touch(1, egui::TouchPhase::Start, pointer.x - 50.0),
+                        touch(2, egui::TouchPhase::Start, pointer.x + 50.0),
+                    ],
+                );
+            }
+            if tracking {
+                chart.enable_tracking_mode();
+            }
+            if kinetic {
+                chart.chart_options.kinetic_scroll.enabled = true;
+                chart.kinetic_scroll.is_active = true;
+                chart.kinetic_scroll.velocity = 120.0;
+                chart.kinetic_scroll.anim_last_time = Some(web_time::Instant::now());
+            }
+            let (spacing, offset) = chart.get_time_scale_state();
+            let mut events = Vec::new();
+            if contacts {
+                events.extend([
+                    touch(1, egui::TouchPhase::Move, pointer.x - 75.0),
+                    touch(2, egui::TouchPhase::Move, pointer.x + 75.0),
+                ]);
+            }
+            if native {
+                events.push(Event::Zoom(1.5));
+            }
+            frame(&ctx, &mut chart, 0.06, events);
+            assert!(!chart.kinetic_scroll.is_active);
+            let (zoomed, moved) = chart.get_time_scale_state();
+            // The existing pinch sensitivity maps a 1.5 gesture to a 10% spacing increase.
+            let expected_spacing = if enabled { spacing * 1.1 } else { spacing };
+            assert!(
+                (zoomed - expected_spacing).abs() < 1e-5,
+                "contacts={contacts}, native={native}, enabled={enabled}: {zoomed}"
+            );
+            let expected_offset =
+                offset + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
+            assert!((moved - expected_offset).abs() < 1e-4);
+            frame(&ctx, &mut chart, 0.08, vec![]);
+            assert_eq!(chart.get_time_scale_state(), (zoomed, moved));
+            if tracking {
+                assert!(!chart.is_tracking_mode_active());
+            }
+        }
+    }
+
+    /// Startup and suspended layouts must not consume the requested zoom or move the right edge.
+    #[test]
+    fn degenerate_width_preserves_pending_view_and_resize_anchor() {
+        for lock in [false, true] {
+            for pixels in [None, Some(60.0)] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0], &[105.0]).visible_bars(100);
+                let options = &mut chart.chart_options.time_scale;
+                options.min_bar_spacing = 0.01;
+                options.lock_visible_time_range_on_resize = lock;
+                options.right_offset_pixels = pixels;
+                let options = chart.chart_options.clone();
+                chart = chart.with_chart_options(options);
+                let show = |chart: &mut Chart, width| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                show(&mut chart, 0.0);
+                show(&mut chart, 1.0);
+                assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
+                assert!(chart.apply_visible_bars_once);
+                show(&mut chart, 1064.0);
+                let width = chart.last_rendered_price_rect.width();
+                let scale = chart.state.time_scale();
+                let spacing = width / 100.0;
+                assert!((scale.bar_spacing() - spacing).abs() < 1e-5);
+                let offset = pixels.map_or(2.5, |px| px / spacing);
+                assert!((scale.right_offset() - offset).abs() < 1e-5);
+                chart.state.time_scale_mut().set_right_offset(-20.0);
+                show(&mut chart, 0.0);
+                show(&mut chart, 1.0);
+                show(&mut chart, 1064.0);
+                assert!((chart.state.time_scale().bar_spacing() - spacing).abs() < 1e-5);
+                assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                show(&mut chart, 1564.0);
+                let expected = if lock {
+                    chart.last_rendered_price_rect.width() / 100.0
+                } else {
+                    spacing
+                };
+                assert!((chart.state.time_scale().bar_spacing() - expected).abs() < 1e-5);
+                assert_eq!(chart.state.time_scale().right_offset(), -20.0);
+                chart.set_visible_bars(80);
+                show(&mut chart, 1264.0);
+                assert!(
+                    (chart.state.time_scale().bar_spacing()
+                        - chart.last_rendered_price_rect.width() / 80.0)
+                        .abs()
+                        < 1e-5,
+                    "a pending view must take precedence over a locked resize"
+                );
+            }
+        }
+    }
+
+    /// Drags down by 100 points in `steps` frames from the point `start` picks given the price pane.
+    fn drag_down(chart: &mut Chart, start: fn(Rect) -> Pos2, steps: usize, touch: bool) {
         let ctx = egui::Context::default();
-        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-        frame(&ctx, &mut chart, 0.0, Vec::new());
-        let rect = chart.last_rendered_price_rect;
-        let start = Pos2::new(rect.max.x + 10.0, rect.center().y);
+        frame(&ctx, chart, 0.0, Vec::new());
+        let start = start(chart.last_rendered_price_rect);
         let button = |pos, pressed| Event::PointerButton {
             pos,
             button: PointerButton::Primary,
@@ -642,14 +859,50 @@ mod tests {
             t += 0.02;
             frame(&ctx, chart, t, events);
         };
-        step(&mut chart, vec![Event::PointerMoved(start)]);
-        step(&mut chart, vec![button(start, true)]);
+        step(chart, vec![Event::PointerMoved(start)]);
+        let contact = |phase, pos| Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(1),
+            phase,
+            pos,
+            force: None,
+        };
+        let mut events = vec![button(start, true)];
+        if touch {
+            events.push(contact(egui::TouchPhase::Start, start));
+        }
+        step(chart, events);
         let mut pos = start;
         for _ in 0..steps {
             pos.y += 100.0 / steps as f32;
-            step(&mut chart, vec![Event::PointerMoved(pos)]);
+            let mut events = vec![Event::PointerMoved(pos)];
+            if touch {
+                events.push(contact(egui::TouchPhase::Move, pos));
+            }
+            step(chart, events);
         }
-        step(&mut chart, vec![button(pos, false)]);
+        let mut events = vec![button(pos, false)];
+        if touch {
+            events.push(contact(egui::TouchPhase::End, pos));
+        }
+        step(chart, events);
+    }
+
+    /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
+    fn drag_price_axis(steps: usize, left: bool) -> (f64, f64) {
+        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        chart.config.show_left_axis = left;
+        chart.config.show_right_axis = !left;
+        drag_down(
+            &mut chart,
+            if left {
+                |rect| Pos2::new(rect.left() - 10.0, rect.center().y)
+            } else {
+                |rect| Pos2::new(rect.right() + 10.0, rect.center().y)
+            },
+            steps,
+            false,
+        );
         let range = chart.state.price_scale().range();
         (range.min, range.max)
     }
@@ -701,15 +954,23 @@ mod tests {
 
     /// A wheel notch over the chart zooms the time axis, also with the zoom modifier (Ctrl, or
     /// Cmd on macOS) held, which egui leaves out of its smoothed scroll delta.
-    #[test]
+    /// While the right bar stays on scroll, the zoom keeps the right offset.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn wheel_zooms_the_time_axis_with_and_without_the_zoom_modifier() {
-        for modifiers in [Modifiers::NONE, Modifiers::COMMAND] {
+        for (modifiers, right_bar_stays, fraction) in [
+            (Modifiers::NONE, false, 0.25),
+            (Modifiers::COMMAND, false, 0.75),
+            (Modifiers::NONE, true, 0.25),
+        ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+            chart.chart_options.time_scale.right_bar_stays_on_scroll = right_bar_stays;
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            let spacing = chart.state.time_scale().bar_spacing();
-            let center = chart.last_rendered_price_rect.center();
-            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(center)]);
+            let (spacing, offset) = chart.get_time_scale_state();
+            let rect = chart.last_rendered_price_rect;
+            let pointer = Pos2::new(rect.left() + rect.width() * fraction, rect.center().y);
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
             let wheel = Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, -1.0),
@@ -721,10 +982,26 @@ mod tests {
             for i in 3..10 {
                 frame(&ctx, &mut chart, i as f64 * 0.02, Vec::new());
             }
-            let zoomed = chart.state.time_scale().bar_spacing();
+            let (zoomed, moved) = chart.get_time_scale_state();
             assert!(
                 zoomed > spacing,
                 "{modifiers:?}: spacing {spacing} -> {zoomed}"
+            );
+            // Zooming around the centre moves the right edge unless the right bar stays.
+            assert_eq!(
+                moved == offset,
+                right_bar_stays,
+                "offset {offset} -> {moved}"
+            );
+            let anchor = if right_bar_stays {
+                rect.right() - 1.0
+            } else {
+                pointer.x
+            };
+            let expected = offset + (rect.right() - anchor - 1.0) * (1.0 / zoomed - 1.0 / spacing);
+            assert!(
+                (moved - expected).abs() < 1e-4,
+                "the logical bar at the zoom anchor must stay at the same pixel"
             );
         }
     }
@@ -732,20 +1009,340 @@ mod tests {
     /// Zoom speed must not depend on how many frames a drag spans.
     #[test]
     fn price_axis_drag_zoom_is_frame_independent() {
-        let (one, ten) = (drag_price_axis(1), drag_price_axis(10));
-        let span = one.1 - one.0;
-        // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
-        assert!(span > 18.0, "1 frame: {one:?}");
-        assert!(
-            (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
-            "1 frame: {one:?}, 10 frames: {ten:?}"
-        );
+        for left in [false, true] {
+            let (one, ten) = (drag_price_axis(1, left), drag_price_axis(10, left));
+            let span = one.1 - one.0;
+            // Dragging down zooms out from the autoscaled 93.5..111.5 (95..110 plus 10% margins).
+            assert!(span > 18.0, "1 frame: {one:?}");
+            assert!(
+                (one.0 - ten.0).abs() < span * 1e-9 && (one.1 - ten.1).abs() < span * 1e-9,
+                "1 frame: {one:?}, 10 frames: {ten:?}"
+            );
+        }
     }
 
-    /// The prices inside a zoom box fill the pane on the next frame. The box re-centres the time
-    /// window, so the relative modes rebase on another first visible close than the box was drawn on.
+    /// With auto-scale off, the prices follow a drag on the chart: 100 points down moves the
+    /// 20-wide range up by 20 * 100 / height, or down by as much on an inverted scale.
     #[test]
-    fn box_zoom_fills_the_pane_with_the_selected_prices() {
+    fn chart_drag_pans_a_manual_price_range() {
+        for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
+            for (touch, mouse, vertical) in [
+                (false, true, false),
+                (false, false, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.apply_series_settings(&SeriesSettings {
+                    invert_scale,
+                    ..SeriesSettings::default()
+                });
+                chart.chart_options.handle_scroll.pressed_mouse_move = mouse;
+                chart.chart_options.handle_scroll.vert_touch_drag = vertical;
+                chart.chart_options.handle_scroll.horz_touch_drag = false;
+                chart.chart_options.kinetic_scroll.enabled = false;
+                chart.state.price_scale_mut().set_range(90.0, 110.0);
+                drag_down(&mut chart, |rect| rect.center(), 10, touch);
+                let enabled = if touch { vertical } else { mouse };
+                let shift = if enabled {
+                    sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64
+                } else {
+                    0.0
+                };
+                let range = chart.state.price_scale().range();
+                assert!(
+                    (range.min - (90.0 + shift)).abs() < 1e-4
+                        && (range.max - (110.0 + shift)).abs() < 1e-4,
+                    "inverted {invert_scale}, touch={touch}, mouse={mouse}, vertical={vertical}: {range:?}, expected a shift of {shift}"
+                );
+            }
+        }
+    }
+
+    /// A grabbed bar follows the entire horizontal drag, including its first movement frame.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn chart_drag_keeps_the_grabbed_bar_under_the_pointer() {
+        for steps in [1, 10] {
+            for (touch, mouse, horizontal) in [
+                (false, true, false),
+                (false, false, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                for distance in [-60.0, 60.0] {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    chart.chart_options.handle_scroll.pressed_mouse_move = mouse;
+                    chart.chart_options.handle_scroll.horz_touch_drag = horizontal;
+                    chart.chart_options.handle_scroll.vert_touch_drag = false;
+                    chart.chart_options.kinetic_scroll.enabled = false;
+                    let contact = |phase, pos| Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(1),
+                        phase,
+                        pos,
+                        force: None,
+                    };
+                    let start = chart.last_rendered_price_rect.center();
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                    let mut events = vec![button(start, true)];
+                    if touch {
+                        events.push(contact(egui::TouchPhase::Start, start));
+                    }
+                    frame(&ctx, &mut chart, 0.04, events);
+                    let mut end = start;
+                    for i in 1..=steps {
+                        end.x = start.x + distance * i as f32 / steps as f32;
+                        let mut events = vec![Event::PointerMoved(end)];
+                        if touch {
+                            events.push(contact(egui::TouchPhase::Move, end));
+                        }
+                        frame(&ctx, &mut chart, 0.04 + i as f64 * 0.02, events);
+                    }
+                    let mut events = vec![button(end, false)];
+                    if touch {
+                        events.push(contact(egui::TouchPhase::End, end));
+                    }
+                    frame(&ctx, &mut chart, 0.5, events);
+                    // Moving 60 pixels at six pixels per bar moves the right offset by ten bars.
+                    let enabled = if touch { horizontal } else { mouse };
+                    let expected = offset - if enabled { distance / spacing } else { 0.0 };
+                    let (after_spacing, after_offset) = chart.get_time_scale_state();
+                    assert_eq!(after_spacing, spacing);
+                    assert!(
+                        (after_offset - expected).abs() < 1e-4,
+                        "touch={touch}, mouse={mouse}, horizontal={horizontal}, {steps} steps, {distance} pixels: {after_offset}, expected {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Two contacts translate each enabled axis once, independently of pinch scaling.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn two_finger_translation_respects_touch_permissions() {
+        for pinch in [false, true] {
+            for (horizontal, vertical) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.chart_options.handle_scroll.horz_touch_drag = horizontal;
+                chart.chart_options.handle_scroll.vert_touch_drag = vertical;
+                chart.chart_options.handle_scale.pinch = pinch;
+                chart.chart_options.kinetic_scroll.enabled = false;
+                chart.state.price_scale_mut().set_range(90.0, 110.0);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let rect = chart.last_rendered_price_rect;
+                let start = rect.center();
+                let (spacing, offset) = chart.get_time_scale_state();
+                let contact = |id, phase, pos| Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(id),
+                    phase,
+                    pos,
+                    force: None,
+                };
+                frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.02,
+                    vec![
+                        Event::PointerMoved(start),
+                        Event::PointerButton {
+                            pos: start,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                        contact(1, egui::TouchPhase::Start, start),
+                        contact(2, egui::TouchPhase::Start, start + egui::vec2(100.0, 0.0)),
+                    ],
+                );
+                for step in 1..=2 {
+                    let pos = start + egui::vec2(30.0, 30.0) * step as f32;
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.02 + step as f64 * 0.02,
+                        vec![
+                            Event::PointerMoved(pos),
+                            contact(1, egui::TouchPhase::Move, pos),
+                            contact(2, egui::TouchPhase::Move, pos + egui::vec2(100.0, 0.0)),
+                        ],
+                    );
+                }
+                let pos = start + egui::vec2(60.0, 60.0);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.08,
+                    vec![contact(
+                        2,
+                        egui::TouchPhase::End,
+                        pos + egui::vec2(100.0, 0.0),
+                    )],
+                );
+                let pos = start + egui::vec2(90.0, 90.0);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.10,
+                    vec![
+                        Event::PointerMoved(pos),
+                        contact(1, egui::TouchPhase::Move, pos),
+                    ],
+                );
+                let expected_offset = offset - if horizontal { 90.0 / spacing } else { 0.0 };
+                let shift = if vertical {
+                    20.0 * 90.0 / rect.height() as f64
+                } else {
+                    0.0
+                };
+                let range = chart.state.price_scale().range();
+                assert!(
+                    (chart.state.time_scale().right_offset() - expected_offset).abs() < 1e-4,
+                    "pinch={pinch}, horizontal={horizontal}, vertical={vertical}"
+                );
+                assert!(
+                    (range.min - 90.0 - shift).abs() < 1e-4
+                        && (range.max - 110.0 - shift).abs() < 1e-4,
+                    "pinch={pinch}, horizontal={horizontal}, vertical={vertical}: {range:?}"
+                );
+                assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+            }
+        }
+    }
+
+    /// Axis drags keep their own permission after leaving the axis, including in narrow layouts.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn axis_drag_permissions_are_independent_of_plot_drag() {
+        for (theme, width) in [
+            (crate::theme::Theme::light(), 800.0),
+            (crate::theme::Theme::dark(), 800.0),
+            (crate::theme::Theme::light(), 360.0),
+            (crate::theme::Theme::dark(), 360.0),
+        ] {
+            let frame = |ctx: &egui::Context, chart: &mut Chart, time, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            chart.show(ui);
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            for price in [false, true] {
+                for plot in [false, true] {
+                    for axis in [true, false] {
+                        let ctx = egui::Context::default();
+                        let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                        chart.set_theme(&ctx, &theme);
+                        chart.chart_options.handle_scroll.pressed_mouse_move = plot;
+                        chart
+                            .chart_options
+                            .handle_scale
+                            .axis_pressed_mouse_move
+                            .price = axis;
+                        chart
+                            .chart_options
+                            .handle_scale
+                            .axis_pressed_mouse_move
+                            .time = axis;
+                        frame(&ctx, &mut chart, 0.0, vec![]);
+                        let rect = chart.last_rendered_price_rect;
+                        let start = if price {
+                            Pos2::new(rect.right() + 10.0, rect.center().y)
+                        } else {
+                            Pos2::new(
+                                rect.center().x,
+                                rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                            )
+                        };
+                        let end = start
+                            + if price {
+                                egui::vec2(-100.0, 100.0)
+                            } else {
+                                egui::vec2(100.0, -100.0)
+                            };
+                        let before = chart.state.price_scale().range();
+                        let before = before.max - before.min;
+                        let (spacing, offset) = chart.get_time_scale_state();
+                        let button = |pos, pressed| Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        };
+                        frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                        frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.06,
+                            vec![Event::PointerMoved(start.lerp(end, 0.5))],
+                        );
+                        frame(&ctx, &mut chart, 0.08, vec![Event::PointerMoved(end)]);
+                        frame(&ctx, &mut chart, 0.10, vec![button(end, false)]);
+                        let expected_span = if price && axis {
+                            before * (100.0 / rect.height() as f64).exp()
+                        } else {
+                            before
+                        };
+                        let expected_spacing = if !price && axis {
+                            spacing * 1.05 * 1.05
+                        } else {
+                            spacing
+                        };
+                        assert!(
+                            ((chart.state.price_scale().range().max
+                                - chart.state.price_scale().range().min)
+                                - expected_span)
+                                .abs()
+                                < 1e-5,
+                            "price={price}, plot={plot}, axis={axis}"
+                        );
+                        assert!(
+                            (chart.state.time_scale().bar_spacing() - expected_spacing).abs()
+                                < 1e-5,
+                            "price={price}, plot={plot}, axis={axis}"
+                        );
+                        if !axis {
+                            assert_eq!(chart.state.time_scale().right_offset(), offset);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The bars and prices inside a zoom box fill the pane on the next frame. The box re-centres
+    /// the time window, so the relative modes rebase on another first visible close than the box
+    /// was drawn on.
+    #[test]
+    fn box_zoom_fills_the_pane_with_the_selected_bars_and_prices() {
         let lows: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
         let highs: Vec<f64> = lows.iter().map(|low| low + 1.0).collect();
         for mode in [PriceScaleMode::Normal, PriceScaleMode::Percentage] {
@@ -764,8 +1361,20 @@ mod tests {
                 Pos2::new(rect.right() - 150.0, y_hi),
                 Pos2::new(rect.right() - 50.0, y_lo),
             );
+            let idx = |x| {
+                let ts = chart.state.time_scale();
+                ts.coord_to_idx(x, rect.left(), rect.width())
+            };
+            let (left, right) = (idx(start.x), idx(end.x));
             assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
             frame(&ctx, &mut chart, 0.1, Vec::new());
+            let ts = chart.state.time_scale();
+            let x = |idx| ts.idx_to_coord_precise(idx, rect.left(), rect.width());
+            let (x_left, x_right) = (x(left), x(right));
+            assert!(
+                (x_left - rect.left()).abs() < 0.5 && (x_right - rect.right()).abs() < 0.5,
+                "{mode:?}: bars {left}..{right} at x {x_left}..{x_right}, pane {rect:?}"
+            );
             let after = chart.get_chart_mapping().price;
             let (top, bottom) = after.extent();
             let (y_hi, y_lo) = (after.price_to_y(hi), after.price_to_y(lo));
@@ -774,5 +1383,34 @@ mod tests {
                 "{mode:?}: {lo}..{hi} at y {y_lo}..{y_hi}, pane {top}..{bottom}"
             );
         }
+
+        // A box inside one bar zooms to one bar across the pane, no further.
+        let ctx = egui::Context::default();
+        let mut one_bar = chart(&lows, &highs);
+        frame(&ctx, &mut one_bar, 0.0, Vec::new());
+        let rect = one_bar.last_rendered_price_rect;
+        one_bar.state.time_scale_mut().set_bar_spacing(40.0);
+        let (x, y) = (rect.center().x, rect.top() + 100.0);
+        let (start, end) = (Pos2::new(x, y), Pos2::new(x + 25.0, y + 100.0));
+        assert!(one_bar.execute_box_zoom(start, end, rect, rect.width()));
+        assert_eq!(one_bar.state.time_scale().bar_spacing(), rect.width());
+
+        // A box over a range narrower than the zoom floor widens to it: a millionth of the
+        // visible data's highest price, 110.
+        let ctx = egui::Context::default();
+        let mut narrow = chart(&[95.0, 100.0], &[105.0, 110.0]);
+        narrow.state.price_scale_mut().set_range(100.0, 100.00001);
+        frame(&ctx, &mut narrow, 0.0, Vec::new());
+        let rect = narrow.last_rendered_price_rect;
+        let (start, end) = (
+            Pos2::new(rect.right() - 150.0, rect.top() + 100.0),
+            Pos2::new(rect.right() - 50.0, rect.top() + 200.0),
+        );
+        assert!(narrow.execute_box_zoom(start, end, rect, rect.width()));
+        let range = narrow.state.price_scale().range();
+        assert!(
+            (range.max - range.min - 1.1e-4).abs() < 1e-10,
+            "{range:?}, expected a span of 1.1e-4"
+        );
     }
 }

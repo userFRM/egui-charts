@@ -1,7 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
-use crate::studies::{ADX, ATR, Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{ADX, ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Commodity Selection Index (CSI), J. Welles Wilder, New Concepts in Technical Trading Systems (1978).
@@ -19,20 +19,21 @@ pub struct CommoditySelectionIndex {
     point_value: f64,
     margin: f64,
     commission: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl CommoditySelectionIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
             point_value: 1.0,
             margin: 1.0,
             commission: 0.0,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.brown, // Brown
+            values: IndicatorValues::new(),
+            color: palette::BROWN, // Brown
             visible: true,
         }
     }
@@ -55,33 +56,28 @@ impl CommoditySelectionIndex {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
     }
 
     /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::with_capacity(data.len());
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let mut adx = ADX::new(self.period);
         adx.calculate(data);
         let mut atr = ATR::new(self.period);
         atr.calculate(data);
-        let adx_at = |i: usize| match adx.values().get(i) {
-            Some(IndicatorValue::Multiple(v)) => Some(v[0]),
-            _ => None,
-        };
+        let adx_at = |i: usize| adx.values().value(0, i);
         let scale = self.point_value / self.margin.sqrt() / (150.0 + self.commission) * 100.0;
 
         for i in 0..data.len() {
             let adxr = i
                 .checked_sub(self.period)
                 .and_then(|lagged| Some((adx_at(i)? + adx_at(lagged)?) / 2.0));
-            let atr_i = match atr.values().get(i) {
-                Some(IndicatorValue::Single(v)) => Some(*v),
-                _ => None,
-            };
+            let atr_i = atr.values().value(0, i);
             values.push(match (adxr, atr_i) {
                 (Some(adxr), Some(atr)) => IndicatorValue::Single(adxr * atr * scale),
                 _ => IndicatorValue::None,
@@ -98,6 +94,13 @@ impl Default for CommoditySelectionIndex {
 }
 
 impl Indicator for CommoditySelectionIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        point_value: number("Point value", 0.0, f64::MAX),
+        margin: number("Margin", f64::EPSILON, f64::MAX),
+        commission: number("Commission", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "CSI"
     }
@@ -114,7 +117,7 @@ impl Indicator for CommoditySelectionIndex {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -157,21 +160,23 @@ impl Indicator for CommoditySelectionIndex {
 #[derive(Clone)]
 pub struct TrendDetectionIndex {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl TrendDetectionIndex {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Indigo (using INFO blue as closest match)
+            values: IndicatorValues::new(),
+            color: palette::BLUE, // Indigo (using INFO blue as closest match)
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -185,6 +190,10 @@ impl Default for TrendDetectionIndex {
 }
 
 impl Indicator for TrendDetectionIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TDI"
     }
@@ -222,7 +231,7 @@ impl Indicator for TrendDetectionIndex {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -270,6 +279,8 @@ mod tests {
             low: close - 1.0,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -294,7 +305,7 @@ mod tests {
             let first = 3 * period - 1;
             assert_eq!(tdi.values.len(), closes.len());
             for (k, want) in expected.iter().enumerate() {
-                match tdi.values[first + k] {
+                match tdi.values.to_rows()[first + k] {
                     IndicatorValue::Single(got) => {
                         assert!(
                             (got - want).abs() < 1e-12,
@@ -306,7 +317,7 @@ mod tests {
                 }
             }
             assert!(
-                tdi.values[..first]
+                tdi.values.to_rows()[..first]
                     .iter()
                     .all(|v| matches!(v, IndicatorValue::None))
             );

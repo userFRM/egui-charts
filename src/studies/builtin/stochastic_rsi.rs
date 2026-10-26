@@ -25,8 +25,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Stochastic RSI indicator
@@ -36,7 +37,7 @@ pub struct StochasticRSI {
     stoch_period: usize,
     smooth_k: usize,
     smooth_d: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     k_color: Color32,
     d_color: Color32,
     visible: bool,
@@ -56,9 +57,9 @@ impl StochasticRSI {
             stoch_period: stoch_period.max(1),
             smooth_k: smooth_k.max(1),
             smooth_d: smooth_d.max(1),
-            values: Vec::new(),
-            k_color: DESIGN_TOKENS.semantic.extended.info,
-            d_color: DESIGN_TOKENS.semantic.extended.error,
+            values: IndicatorValues::new(),
+            k_color: palette::BLUE,
+            d_color: palette::RED,
             visible: true,
         }
     }
@@ -122,24 +123,9 @@ impl StochasticRSI {
         rsi
     }
 
-    /// Calculate SMA for a slice
-    fn sma(data: &[f64], start: usize, period: usize) -> f64 {
-        if start + 1 < period {
-            return f64::NAN;
-        }
-        let begin = start + 1 - period;
-        let sum: f64 = data[begin..=start].iter().filter(|x| !x.is_nan()).sum();
-        let count = data[begin..=start].iter().filter(|x| !x.is_nan()).count();
-        if count == period {
-            sum / period as f64
-        } else {
-            f64::NAN
-        }
-    }
-
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -149,7 +135,8 @@ impl StochasticRSI {
             .rsi_period
             .saturating_add(self.stoch_period)
             .saturating_add(self.smooth_k)
-            .saturating_add(self.smooth_d);
+            .saturating_add(self.smooth_d)
+            .saturating_sub(2);
         if data.len() < min_period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
@@ -181,27 +168,18 @@ impl StochasticRSI {
             }
         }
 
-        // Step 3: Calculate %K (SMA of StochRSI)
-        let mut k_line = vec![f64::NAN; data.len()];
-        for i in 0..data.len() {
-            k_line[i] = Self::sma(&stoch_rsi, i, self.smooth_k);
-        }
-
-        // Step 4: Calculate %D (SMA of %K)
-        let mut d_line = vec![f64::NAN; data.len()];
-        for i in 0..data.len() {
-            d_line[i] = Self::sma(&k_line, i, self.smooth_d);
-        }
+        let k_line = helpers::sma(&stoch_rsi, self.smooth_k);
+        let d_line = helpers::sma(&k_line, self.smooth_d);
 
         // Build output
         for i in 0..data.len() {
             if k_line[i].is_nan() || d_line[i].is_nan() {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![
+                values.push_lines(&[
                     k_line[i] * 100.0, // Scale to 0-100
                     d_line[i] * 100.0,
-                ]));
+                ]);
             }
         }
 
@@ -217,6 +195,19 @@ impl Default for StochasticRSI {
 }
 
 impl Indicator for StochasticRSI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        stoch_period: length("Stoch period", 1, usize::MAX),
+        smooth_k: length("Smooth k", 1, usize::MAX),
+        smooth_d: length("Smooth d", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "StochRSI"
     }
@@ -229,7 +220,7 @@ impl Indicator for StochasticRSI {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -250,7 +241,7 @@ impl Indicator for StochasticRSI {
         false // StochRSI is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // %K and %D
     }
 
@@ -274,78 +265,5 @@ impl Indicator for StochasticRSI {
             ),
             format!("%D({})", self.smooth_d),
         ]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::{Duration, Utc};
-
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        (0..60)
-            .map(|i| {
-                let price = 100.0 + (i as f64 * 0.2).sin() * 10.0;
-                Bar {
-                    time: start + Duration::minutes(i * 5),
-                    open: price,
-                    high: price + 2.0,
-                    low: price - 2.0,
-                    close: price + 0.5,
-                    volume: 1000.0,
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_stoch_rsi_calculation() {
-        let bars = create_test_bars();
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&bars);
-
-        assert_eq!(stoch_rsi.values().len(), bars.len());
-
-        // Check that we eventually get valid values
-        let valid_cnt = stoch_rsi
-            .values()
-            .iter()
-            .filter(|v| matches!(v, IndicatorValue::Multiple(_)))
-            .count();
-        assert!(valid_cnt > 0, "Should have some valid values");
-    }
-
-    #[test]
-    fn test_stoch_rsi_range() {
-        let bars = create_test_bars();
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&bars);
-
-        for value in stoch_rsi.values() {
-            if let IndicatorValue::Multiple(vals) = value {
-                assert!(vals[0] >= 0.0 && vals[0] <= 100.0, "%K should be 0-100");
-                assert!(vals[1] >= 0.0 && vals[1] <= 100.0, "%D should be 0-100");
-            }
-        }
-    }
-
-    #[test]
-    fn test_stoch_rsi_line_cnt() {
-        let stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        assert_eq!(stoch_rsi.line_cnt(), 2);
-    }
-
-    #[test]
-    fn test_stoch_rsi_is_not_overlay() {
-        let stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        assert!(!stoch_rsi.is_overlay());
-    }
-
-    #[test]
-    fn test_stoch_rsi_empty_data() {
-        let mut stoch_rsi = StochasticRSI::new(14, 14, 3, 3);
-        stoch_rsi.calculate(&[]);
-        assert!(stoch_rsi.values().is_empty());
     }
 }

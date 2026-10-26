@@ -1,30 +1,34 @@
+//! Linear Regression Indicators
+//! Includes Linear Regression Line, Slope, and R-Squared
+//! Popular for trend analysis
+
 use crate::model::Bar;
-/// Linear Regression Indicators
-/// Includes Linear Regression Line, Slope, and R-Squared
-/// Popular for trend analysis
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Linear regression fitted to closing prices over a rolling window.
 #[derive(Clone)]
 pub struct LinearRegression {
     /// Lookback period (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl LinearRegression {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info,
+            values: IndicatorValues::new(),
+            color: palette::BLUE,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -38,6 +42,16 @@ impl Default for LinearRegression {
 }
 
 impl Indicator for LinearRegression {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LinReg"
     }
@@ -87,7 +101,7 @@ impl Indicator for LinearRegression {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -126,21 +140,23 @@ impl Indicator for LinearRegression {
 #[derive(Clone)]
 pub struct LinearRegressionSlope {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl LinearRegressionSlope {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning,
+            values: IndicatorValues::new(),
+            color: palette::ORANGE,
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -154,6 +170,16 @@ impl Default for LinearRegressionSlope {
 }
 
 impl Indicator for LinearRegressionSlope {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LinReg Slope"
     }
@@ -199,7 +225,7 @@ impl Indicator for LinearRegressionSlope {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 

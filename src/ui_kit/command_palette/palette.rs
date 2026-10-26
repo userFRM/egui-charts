@@ -3,9 +3,11 @@
 use super::command::Command;
 use super::fuzzy::{FuzzyMatch, fuzzy_match};
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Context, Key, Order, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
+use egui::text::{LayoutJob, TextWrapping};
+use egui::{Color32, Context, Key, Rect, RichText, ScrollArea, Sense, TextEdit, Vec2};
 
 /// Command palette widget for quick command access
 pub struct CommandPalette {
@@ -17,6 +19,8 @@ pub struct CommandPalette {
     selected_index: usize,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
+    focus_search: bool,
+    context: Option<Context>,
 }
 
 impl CommandPalette {
@@ -27,6 +31,8 @@ impl CommandPalette {
             search_query: String::new(),
             selected_index: 0,
             filtered: Vec::new(),
+            focus_search: true,
+            context: None,
         }
     }
 
@@ -50,6 +56,7 @@ impl CommandPalette {
         self.search_query.clear();
         self.selected_index = 0;
         self.filtered.clear();
+        self.focus_search = true;
     }
 
     /// Update filtered results based on current query
@@ -70,7 +77,17 @@ impl CommandPalette {
         } else {
             // Fuzzy match against all commands
             for (idx, cmd) in self.commands.iter().enumerate() {
-                if let Some(m) = fuzzy_match(&self.search_query, &cmd.searchable_text()) {
+                let mut searchable = cmd.searchable_text();
+                if let Some(ctx) = &self.context {
+                    for text in std::iter::once(&cmd.label)
+                        .chain(cmd.description.iter())
+                        .chain(cmd.category.iter())
+                    {
+                        searchable.push(' ');
+                        searchable.push_str(&l10n::text(ctx, text));
+                    }
+                }
+                if let Some(m) = fuzzy_match(&self.search_query, &searchable) {
                     self.filtered.push((idx, m));
                 }
             }
@@ -105,20 +122,26 @@ impl CommandPalette {
 
     /// Show the command palette modal
     ///
-    /// Returns the ID of the executed command if any
+    /// Returns the ID of the executed command if any. Keyboard activation consumes its key so
+    /// the host can open another dialog in the same frame.
     pub fn show(&mut self, ctx: &Context, open: &mut bool) -> Option<String> {
         if !*open {
             return None;
         }
+        self.context = Some(ctx.clone());
+        self.update_filter();
 
         let mut executed_command = None;
 
+        let search_id = egui::Id::unique("command_palette_search");
+        let focus_search = std::mem::take(&mut self.focus_search);
+        let search_focused = ctx.memory(|m| m.has_focus(search_id));
         // Handle keyboard navigation
         let (move_up, move_down, execute, close) = ctx.input(|i| {
             (
-                i.key_pressed(Key::ArrowUp),
-                i.key_pressed(Key::ArrowDown),
-                i.key_pressed(Key::Enter),
+                search_focused && i.key_pressed(Key::ArrowUp),
+                search_focused && i.key_pressed(Key::ArrowDown),
+                search_focused && i.key_pressed(Key::Enter),
                 i.key_pressed(Key::Escape),
             )
         });
@@ -137,6 +160,7 @@ impl CommandPalette {
         }
 
         if execute && !self.filtered.is_empty() {
+            ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Enter));
             let (cmd_idx, _) = self.filtered[self.selected_index];
             executed_command = Some(self.commands[cmd_idx].id.clone());
             *open = false;
@@ -144,147 +168,66 @@ impl CommandPalette {
             return executed_command;
         }
 
-        // Render the modal
-        let screen_rect = ctx.content_rect();
-        let modal_width = DESIGN_TOKENS
-            .sizing
-            .command_palette
-            .width
-            .min(screen_rect.width() - DESIGN_TOKENS.sizing.command_palette.margin_x);
-        let modal_max_height = DESIGN_TOKENS
-            .sizing
-            .command_palette
-            .height
-            .min(screen_rect.height() - DESIGN_TOKENS.sizing.command_palette.margin_y);
-
-        // Modal window
-        egui::Area::new(egui::Id::unique("command_palette"))
-            .order(Order::Foreground)
-            .anchor(
-                egui::Align2::CENTER_TOP,
-                Vec2::new(0.0, DESIGN_TOKENS.sizing.command_palette.margin_y),
-            )
-            .show(ctx, |ui| {
-                // The scrim goes in the palette's own layer before its frame, so it dims only
-                // what lies below the palette.
-                ui.ctx().layer_painter(ui.layer_id()).rect_filled(
-                    screen_rect,
-                    0.0,
-                    DESIGN_TOKENS.semantic.modal.overlay_bg,
-                );
-                egui::Frame::new()
-                    .fill(ui.visuals().window_fill)
-                    .stroke(ui.visuals().window_stroke)
-                    .corner_radius(ui.visuals().window_corner_radius)
-                    .shadow(ui.visuals().window_shadow)
-                    .show(ui, |ui| {
-                        ui.set_width(modal_width);
-                        ui.set_max_height(modal_max_height);
-
-                        // Search input
-                        ui.add_space(DESIGN_TOKENS.spacing.md);
-                        ui.horizontal(|ui| {
-                            ui.add_space(DESIGN_TOKENS.spacing.md);
-
-                            // Search icon
-                            let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
-                            ui.add(
-                                icons::QUICK_SEARCH.as_image_tinted(
-                                    Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
-                                    tint,
-                                ),
-                            );
-                            ui.add_space(DESIGN_TOKENS.spacing.sm);
-
-                            // Search input
-                            let response = ui.add(
-                                TextEdit::singleline(&mut self.search_query)
-                                    .hint_text("Search commands...")
-                                    // No background, with egui's default text margin.
-                                    .frame(
-                                        egui::Frame::new()
-                                            .inner_margin(egui::Margin::symmetric(4, 2)),
-                                    )
-                                    .desired_width(
-                                        modal_width
-                                            - DESIGN_TOKENS.sizing.command_palette.input_padding,
-                                    )
-                                    .font(egui::TextStyle::Body),
-                            );
-
-                            // Auto-focus the input
-                            response.request_focus();
-
-                            // Update filter when query changes
-                            if response.changed() {
-                                self.update_filter();
-                            }
-
-                            ui.add_space(DESIGN_TOKENS.spacing.md);
-                        });
-
-                        ui.add_space(DESIGN_TOKENS.spacing.sm);
-                        ui.separator();
-
-                        // Initial filter if empty
-                        if self.filtered.is_empty() && self.search_query.is_empty() {
-                            self.update_filter();
-                        }
-
-                        // Results list
-                        if self.filtered.is_empty() {
-                            ui.add_space(DESIGN_TOKENS.spacing.xl);
-                            ui.centered_and_justified(|ui| {
-                                ui.label(
-                                    RichText::new("No commands found")
-                                        .color(ui.visuals().weak_text_color()),
-                                );
-                            });
-                            ui.add_space(DESIGN_TOKENS.spacing.xl);
-                        } else {
-                            ScrollArea::vertical()
-                                .max_height(
-                                    modal_max_height
-                                        - DESIGN_TOKENS.sizing.command_palette.scroll_padding,
-                                )
-                                .show(ui, |ui| {
-                                    ui.add_space(DESIGN_TOKENS.spacing.xs);
-
-                                    for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate()
-                                    {
-                                        let cmd = &self.commands[*cmd_idx];
-                                        if command_row(ui, cmd, list_idx == self.selected_index)
-                                            .clicked()
-                                        {
-                                            executed_command = Some(cmd.id.clone());
-                                        }
-                                    }
-
-                                    ui.add_space(DESIGN_TOKENS.spacing.xs);
-                                });
-                        }
+        crate::ui_kit::modal::Modal::new("command_palette", "Search actions")
+            .width(480.0)
+            .height(680.0)
+            .rounding(ctx.active_theme().radius.lg)
+            .show(ctx, open, |ui| {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.add(
+                        icons::QUICK_SEARCH
+                            .as_image_tinted(Vec2::splat(20.0), ui.visuals().text_color()),
+                    );
+                    if focus_search {
+                        ui.memory_mut(|memory| memory.request_focus(search_id));
+                    }
+                    let response = ui
+                        .add(
+                            TextEdit::singleline(&mut self.search_query)
+                                .id(search_id)
+                                .hint_text(l10n::text(ui.ctx(), "Search actions"))
+                                .frame(egui::Frame::NONE)
+                                .desired_width(ui.available_width())
+                                .font(egui::FontId::proportional(14.0)),
+                        )
+                        .accessible_name(l10n::text(ui.ctx(), "Search actions"));
+                    // Sizing passes clear invisible widgets' focus while building the field.
+                    if focus_search {
+                        response.request_focus();
+                    }
+                    if response.changed() {
+                        self.update_filter();
+                    }
+                });
+                ui.separator();
+                ui.add_space(12.0);
+                if self.filtered.is_empty() {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), "No matching actions")).size(14.0),
+                        );
                     });
+                } else {
+                    ScrollArea::vertical()
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| {
+                            for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
+                                let cmd = &self.commands[*cmd_idx];
+                                if command_row(ui, cmd, list_idx == self.selected_index).clicked() {
+                                    executed_command = Some(cmd.id.clone());
+                                }
+                            }
+                        });
+                }
             });
 
-        // Close on click outside
-        if ctx.input(|i| i.pointer.any_pressed()) {
-            let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
-            if let Some(pos) = pointer_pos {
-                let modal_rect = Rect::from_center_size(
-                    egui::pos2(
-                        screen_rect.center().x,
-                        DESIGN_TOKENS.sizing.command_palette.margin_y + modal_max_height / 2.0,
-                    ),
-                    Vec2::new(modal_width, modal_max_height),
-                );
-                if !modal_rect.contains(pos) {
-                    *open = false;
-                    self.clear();
-                }
-            }
-        }
-
-        if executed_command.is_some() {
+        if executed_command.is_some() || !*open {
+            ctx.input_mut(|i| {
+                i.consume_key(i.modifiers, Key::Enter);
+                i.consume_key(i.modifiers, Key::Space);
+            });
             *open = false;
             self.clear();
         }
@@ -307,8 +250,14 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
     };
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    let translated_label = l10n::text(ui.ctx(), &cmd.label);
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_selected, &cmd.label)
+        egui::WidgetInfo::selected(
+            egui::Role::Button,
+            ui.is_enabled(),
+            is_selected,
+            &translated_label,
+        )
     });
     if !ui.is_rect_visible(rect) {
         return response;
@@ -328,7 +277,12 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         (fill, visuals.text_color(), tint, visuals.weak_text_color())
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, fill);
+    painter.rect_filled(
+        rect.shrink2(Vec2::new(theme.spacing.sm, 0.0)),
+        ui.active_theme().radius.sm,
+        fill,
+    );
+    crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
     // Every row reserves the icon slot, so labels line up.
     let icon_size = DESIGN_TOKENS.sizing.icon_sm;
@@ -344,27 +298,10 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
 
     let text_x = icon_x + icon_size + theme.spacing.lg;
     let small = egui::FontId::proportional(theme.text.small);
-    // A description goes under the label; both meet at the row's middle.
-    let label_align = if cmd.description.is_some() {
-        egui::Align2::LEFT_BOTTOM
-    } else {
-        egui::Align2::LEFT_CENTER
-    };
-    let text_pos = egui::pos2(text_x, rect.center().y);
-    let body = egui::FontId::proportional(theme.text.body);
-    painter.text(text_pos, label_align, &cmd.label, body, text);
-    if let Some(description) = &cmd.description {
-        painter.text(
-            text_pos,
-            egui::Align2::LEFT_TOP,
-            description,
-            small.clone(),
-            secondary,
-        );
-    }
-
     // Shortcut at the right edge, the category to its left.
     let mut right = rect.max.x - theme.spacing.md;
+    // Leave at least half the text space for the command and its description.
+    let metadata_left = (text_x + right) / 2.0;
     let shortcut = cmd
         .shortcut
         .map(|shortcut| ui.ctx().format_shortcut(&shortcut));
@@ -372,14 +309,42 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         .into_iter()
         .flatten()
     {
-        let drawn = painter.text(
-            egui::pos2(right, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            label,
+        if right <= metadata_left {
+            break;
+        }
+        let mut job = LayoutJob::simple_singleline(
+            l10n::text(ui.ctx(), label.clone()),
             small.clone(),
             secondary,
         );
-        right = drawn.min.x - theme.spacing.lg;
+        job.wrap = TextWrapping::truncate_at_width(right - metadata_left);
+        let galley = painter.layout_job(job);
+        let pos = egui::pos2(
+            right - galley.size().x,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        painter.galley(pos, galley, secondary);
+        right = pos.x - theme.spacing.lg;
+    }
+
+    // A description goes under the label; both meet at the row's middle.
+    for (label, font, color, align) in [
+        (
+            Some(&cmd.label),
+            egui::FontId::proportional(14.0),
+            text,
+            if cmd.description.is_some() { 1.0 } else { 0.5 },
+        ),
+        (cmd.description.as_ref(), small, secondary, 0.0),
+    ] {
+        if let Some(label) = label {
+            let mut job =
+                LayoutJob::simple_singleline(l10n::text(ui.ctx(), label.clone()), font, color);
+            job.wrap = TextWrapping::truncate_at_width((right - text_x).max(0.0));
+            let galley = painter.layout_job(job);
+            let pos = egui::pos2(text_x, rect.center().y - galley.size().y * align);
+            painter.galley(pos, galley, color);
+        }
     }
 
     response
@@ -445,7 +410,11 @@ impl CommandPaletteHandler {
             self.open();
         }
 
-        // Show the palette if open
+        self.show(ctx)
+    }
+
+    /// Show the palette when a host dispatcher owns its opening shortcut.
+    pub fn show(&mut self, ctx: &Context) -> Option<String> {
         self.palette.show(ctx, &mut self.open)
     }
 }
@@ -479,6 +448,97 @@ mod tests {
     }
 
     #[test]
+    fn search_and_focused_rows_consume_their_activation_key() {
+        for (_, theme) in crate::theme::presets() {
+            for (focus_row, key) in [(false, Key::Enter), (true, Key::Enter), (true, Key::Space)] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut palette = CommandPalette::new(vec![
+                    Command::new("a", "First"),
+                    Command::new("b", "Second"),
+                ]);
+                frame(&ctx, &mut palette, None);
+                frame(&ctx, &mut palette, None);
+                if focus_row {
+                    let search = ctx.memory(|m| m.focused());
+                    frame(&ctx, &mut palette, Some(Key::Tab));
+                    assert_ne!(ctx.memory(|m| m.focused()), search);
+                    frame(&ctx, &mut palette, Some(Key::Tab));
+                }
+                assert_eq!(
+                    frame(&ctx, &mut palette, Some(key)).as_deref(),
+                    Some(if focus_row { "b" } else { "a" })
+                );
+                assert!(!ctx.input(|i| i.key_pressed(key)));
+            }
+        }
+    }
+
+    #[test]
+    fn row_text_stays_inside_its_columns_after_narrow_resizing() {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let commands = [
+                Command::new("study", "Add Moving Average Convergence Divergence")
+                    .description("Add this study to the current chart in a separate pane")
+                    .icon(&icons::RAY)
+                    .category("Studies")
+                    .shortcut(egui::KeyboardShortcut::new(Modifiers::CTRL, Key::I)),
+                Command::new("settings", "Open settings")
+                    .category("Chart appearance and scale settings"),
+            ];
+            for width in [480.0, 238.0, 278.0, 480.0] {
+                for selected in [false, true] {
+                    for command in &commands {
+                        let mut row = Rect::NOTHING;
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    Vec2::new(width, 200.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| row = command_row(ui, command, selected).rect,
+                        );
+                        let text: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| {
+                                if let egui::Shape::Text(text) = &shape.shape {
+                                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        output.drop_without_applying_deltas();
+                        assert_eq!(
+                            text.len(),
+                            if command.description.is_some() { 4 } else { 2 }
+                        );
+                        for (i, rect) in text.iter().enumerate() {
+                            assert!(
+                                row.contains_rect(*rect),
+                                "text outside row: {rect:?} {row:?}"
+                            );
+                            for other in &text[..i] {
+                                let overlap = rect.intersect(*other);
+                                assert!(
+                                    overlap.width() <= 0.0 || overlap.height() <= 0.0,
+                                    "text columns overlap at width {width}: {rect:?} {other:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn changing_the_commands_keeps_the_rows_on_listed_commands() {
         let palette = || {
             CommandPalette::new(
@@ -500,6 +560,33 @@ mod tests {
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("a");
+        assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
+
+        let (ctx, mut p) = (Context::default(), palette());
+        l10n::set_translator(&ctx, |english| (english == "b").then(|| "zweite".into()));
+        for (query, expected) in [("zweite", vec!["b"]), ("b", vec!["b"])] {
+            p.search_query = query.into();
+            frame(&ctx, &mut p, None);
+            let ids: Vec<_> = p
+                .filtered
+                .iter()
+                .map(|(i, _)| p.commands[*i].id.as_str())
+                .collect();
+            assert_eq!(ids, expected);
+        }
+        p.search_query = "zweite".into();
+        l10n::clear_translator(&ctx);
+        frame(&ctx, &mut p, None);
+        assert!(p.filtered.is_empty());
+
+        let (ctx, mut p) = (Context::default(), palette());
+        l10n::set_translator(&ctx, |english| Some(format!("Aktion {english}")));
+        p.search_query = "Aktion".into();
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, None);
+        frame(&ctx, &mut p, Some(Key::ArrowDown));
+        assert_eq!(p.selected_index, 1);
+        p.remove_command("c");
         assert_eq!(frame(&ctx, &mut p, Some(Key::Enter)).as_deref(), Some("b"));
     }
 }

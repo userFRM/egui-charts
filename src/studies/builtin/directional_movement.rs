@@ -1,43 +1,46 @@
-use super::over_finite_bars;
+use super::{ADX, over_finite_bars};
 use crate::model::Bar;
-/// Directional Movement Index (DMI / DI+ / DI-)
-/// Shows the positive and negative directional indicators
-/// Part of the ADX family but shows the components
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
+/// Directional Movement Index (DMI / DI+ / DI-)
+/// Shows the positive and negative directional indicators and the ADX
+/// of the same length (Wilder 1978)
 #[derive(Clone)]
 pub struct DirectionalMovement {
     /// Period for smoothing (typically 14)
     period: usize,
-    values: Vec<IndicatorValue>,
-    /// Colors: [+DI, -DI]
+    values: IndicatorValues,
+    /// Colors: [+DI, -DI, ADX]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl DirectionalMovement {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - +DI
-                DESIGN_TOKENS.semantic.extended.error,   // Red - -DI
+                palette::GREEN, // Green - +DI
+                palette::RED,   // Red - -DI
+                palette::GOLD,  // Amber - ADX
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period.saturating_add(1) {
             for _ in 0..data.len() {
@@ -115,14 +118,20 @@ impl DirectionalMovement {
             }
         }
 
-        // Calculate +DI and -DI
+        // Calculate +DI and -DI, next to the ADX line of the ADX study
+        let adx = ADX::new(self.period).compute(data);
         for i in 0..data.len() {
+            let adx = adx.value(0, i).unwrap_or(f64::NAN);
             if smoothed_tr[i].is_nan() || smoothed_tr[i] == 0.0 {
-                values.push(IndicatorValue::None);
+                values.push(if adx.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![f64::NAN, f64::NAN, adx])
+                });
             } else {
                 let plus_di = 100.0 * smoothed_plus_dm[i] / smoothed_tr[i];
                 let minus_di = 100.0 * smoothed_minus_dm[i] / smoothed_tr[i];
-                values.push(IndicatorValue::Multiple(vec![plus_di, minus_di]));
+                values.push_lines(&[plus_di, minus_di, adx]);
             }
         }
 
@@ -137,12 +146,16 @@ impl Default for DirectionalMovement {
 }
 
 impl Indicator for DirectionalMovement {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "DMI"
     }
 
     fn desc(&self) -> &str {
-        "Directional Movement Index - +DI and -DI lines"
+        "Directional Movement Index - +DI, -DI and ADX lines"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -153,7 +166,7 @@ impl Indicator for DirectionalMovement {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -162,8 +175,8 @@ impl Indicator for DirectionalMovement {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if colors.len() >= 2 {
-            self.colors = colors;
+        for (line, color) in self.colors.iter_mut().zip(colors) {
+            *line = color;
         }
     }
 
@@ -187,6 +200,7 @@ impl Indicator for DirectionalMovement {
         vec![
             format!("+DI({})", self.period),
             format!("-DI({})", self.period),
+            format!("ADX({})", self.period),
         ]
     }
 }

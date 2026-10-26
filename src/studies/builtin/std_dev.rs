@@ -21,15 +21,15 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Standard Deviation indicator
 #[derive(Clone)]
 pub struct StandardDeviation {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -42,8 +42,8 @@ impl StandardDeviation {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.favorite_gold,
+            values: IndicatorValues::new(),
+            color: palette::GOLD,
             visible: true,
         }
     }
@@ -68,6 +68,20 @@ impl Default for StandardDeviation {
 }
 
 impl Indicator for StandardDeviation {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "StdDev"
     }
@@ -107,7 +121,7 @@ impl Indicator for StandardDeviation {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -125,7 +139,7 @@ impl Indicator for StandardDeviation {
         false // StdDev is typically in a separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 
@@ -163,13 +177,15 @@ mod tests {
                 low: 1234.56,
                 close: 1234.56,
                 volume: 1000.0,
+                colors: None,
+                payload: None,
             })
             .collect();
 
         let mut std_dev = StandardDeviation::new(20);
         std_dev.calculate(&bars);
 
-        for value in std_dev.values().iter().skip(19) {
+        for value in std_dev.values().to_rows().iter().skip(19) {
             assert!(
                 matches!(value, IndicatorValue::Single(v) if v.abs() < 1e-9),
                 "a window without deviation reads 0, got {value:?}"

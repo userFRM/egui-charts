@@ -1,6 +1,7 @@
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Connors RSI (CRSI)
@@ -19,23 +20,25 @@ pub struct ConnorsRSI {
     streak_period: usize,
     /// Percent Rank lookback (typically 100)
     rank_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl ConnorsRSI {
+    /// Create with price RSI 3, streak RSI 2 and percent-rank period 100.
     pub fn new() -> Self {
         Self {
             rsi_period: 3,
             streak_period: 2,
             rank_period: 100,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.pink, // Pink
+            values: IndicatorValues::new(),
+            color: palette::PINK, // Pink
             visible: true,
         }
     }
 
+    /// Set price RSI, streak RSI and percent-rank periods in bars, each at least one.
     pub fn with_periods(mut self, rsi: usize, streak: usize, rank: usize) -> Self {
         self.rsi_period = rsi.max(1);
         self.streak_period = streak.max(1);
@@ -43,6 +46,7 @@ impl ConnorsRSI {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -163,18 +167,10 @@ impl Default for ConnorsRSI {
     }
 }
 
-impl Indicator for ConnorsRSI {
-    fn name(&self) -> &str {
-        "Connors RSI"
-    }
-
-    fn desc(&self) -> &str {
-        "Connors RSI - Composite momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl ConnorsRSI {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         let required = self
             .rsi_period
             .max(self.streak_period)
@@ -182,9 +178,9 @@ impl Indicator for ConnorsRSI {
             .saturating_add(1);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // 1. Calculate standard RSI of close prices
@@ -202,15 +198,43 @@ impl Indicator for ConnorsRSI {
         // Combine: CRSI = (RSI + StreakRSI + PercentRank) / 3
         for i in 0..data.len() {
             if rsi[i].is_nan() || streak_rsi[i].is_nan() || percent_rank[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let crsi = (rsi[i] + streak_rsi[i] + percent_rank[i]) / 3.0;
-                self.values.push(IndicatorValue::Single(crsi));
+                values.push(IndicatorValue::Single(crsi));
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for ConnorsRSI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        rsi_period: length("RSI period", 1, usize::MAX),
+        streak_period: length("Streak period", 1, usize::MAX),
+        rank_period: length("Rank period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Connors RSI"
+    }
+
+    fn desc(&self) -> &str {
+        "Connors RSI - Composite momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -261,6 +285,8 @@ mod tests {
             low: close - 1.0,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -301,6 +327,7 @@ mod tests {
         // Should have valid values after warm-up period
         let valid_cnt = crsi
             .values
+            .to_rows()
             .iter()
             .filter(|v| matches!(v, IndicatorValue::Single(_)))
             .count();
@@ -317,10 +344,13 @@ mod tests {
         crsi.calculate(&data);
 
         // CRSI should be bounded between 0 and 100
-        for value in &crsi.values {
+        let mut checked = 0;
+        for value in &crsi.values.to_rows() {
             if let IndicatorValue::Single(v) = value {
                 assert!(*v >= 0.0 && *v <= 100.0, "CRSI {v} out of range");
+                checked += 1;
             }
         }
+        assert!(checked > 0, "no value to check");
     }
 }

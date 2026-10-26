@@ -1,5 +1,23 @@
 # Third-party notices
 
+## Documentation site
+
+The guide built from `docs/site` ships Astro 7.4.0 and Starlight 0.42.6 styles and browser scripts, Expressive Code's code-block styles and copy button, and Pagefind 1.5.2 search (including its Svelte UI runtime and mark.js highlight helper), all under the MIT License. Starlight's inline interface icons come from Unicons (IconScout Simple License); the GitHub brand icon comes from Simple Icons (CC0). Copyright notices and license terms are in [`docs/site/public/licenses.txt`](docs/site/public/licenses.txt), published at `/egui-charts/docs/licenses.txt`. The guide uses system fonts and ships no font files.
+
+The generated API reference retains rustdoc's scripts and styles under the MIT or Apache License 2.0, Fira, Source Code Pro, Source Serif 4 and Nanum Barun Gothic under the SIL Open Font License 1.1, and the Rust Foundation's unmodified logos under Creative Commons Attribution 4.0 (terms also included in `docs/site/public/licenses.txt`). Their copyright notices and other license files ship in `/egui-charts/docs/api/static.files/` with rustdoc's generated filename suffixes.
+
+## Original interface icons
+
+`src/ui/top_toolbar/menu.svg` and `docs/site/public/favicon.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
+`assets/icons/lines/cursor-demonstration.svg`, `assets/icons/ui/compare-add.svg`, `assets/icons/ui/layout-single.svg`, `assets/icons/ui/drawing-keep.svg`, `assets/icons/ui/drawing-magnet.svg`, `assets/icons/ui/pin-scale.svg` and `assets/icons/ui/widget-bar-layers.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
+`assets/icons/ui/layout-2-columns.svg`, `layout-2-rows.svg`, `layout-3.svg` to `layout-16.svg`, `layout-tabs.svg`, `publish.svg`, `quick-search.svg` and `settings-nut.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
+`assets/icons/shapes-annotations/arrow-mark-left.svg`, `arrow-mark-right.svg`, `sector.svg` and `sticker.svg` in the same directory, and the vector glyphs in `src/drawings/glyphs.rs`, are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
+`assets/icons/ui/columns.svg`, `maximize.svg`, `square-plus.svg`, `screener.svg`, `hotlists.svg` and `news.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
 ## Lucide icons
 
 Some interface icons under `assets/icons/` are taken from [Lucide](https://github.com/lucide-icons/lucide), restyled to a 1.5 px stroke and a white root colour. Lucide is licensed under the ISC License, and the subset of its icons derived from Feather under the MIT License; the full text is in [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt). All other icons in the set are original artwork of this project.
@@ -35,12 +53,15 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/menu.svg` | `menu.svg` |
 | `ui/more.svg` | `ellipsis.svg` |
 | `ui/move-pane.svg` | `arrow-up-down.svg` |
+| `ui/move-vertical.svg` | `move-vertical.svg` |
 | `ui/object-tree.svg` | `list-tree.svg` |
 | `ui/pause.svg` | `pause.svg` |
+| `ui/percent.svg` | `percent.svg` |
 | `ui/play.svg` | `play.svg` |
 | `ui/plus.svg` | `plus.svg` |
 | `ui/redo.svg` | `redo-2.svg` |
 | `ui/replay.svg` | `rewind.svg` |
+| `ui/rotate-ccw.svg` | `rotate-ccw.svg` |
 | `ui/scales-lines.svg` | `ruler.svg` |
 | `ui/search.svg` | `search.svg` |
 | `ui/settings.svg` | `settings.svg` |
@@ -61,3 +82,13 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/watchlist.svg` | `list-plus.svg` |
 | `ui/zoom-in.svg` | `zoom-in.svg` |
 | `ui/zoom-out.svg` | `zoom-out.svg` |
+
+## Roboto
+
+`assets/fonts/Roboto-Latin.ttf` is Roboto 3.015 from the [upstream release](https://github.com/googlefonts/roboto-3-classic/releases/tag/v3.015), embedded by the chart widget. It is limited to weights 400 to 600 at normal width and subset to Latin, with punctuation, currency, arrows, math and interface markers. Roboto is licensed under the SIL Open Font License 1.1; the full text is in [`assets/fonts/LICENSE-roboto.txt`](assets/fonts/LICENSE-roboto.txt).
+
+The source is `web/split/Roboto[wdth,wght].ttf` in `Roboto_v3.015.zip` (SHA-256 `d7598e12c5dbef095ff8272cfc55da0250bd07fbdecbac8a530b9b277872a134` for the TTF). The subset retains hinting and the source timestamp.
+
+## Fonts in the web demo
+
+The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.

@@ -1,133 +1,92 @@
-//! Layout Menu
-//!
-//! A dropdown menu for saving, loading, and managing chart layouts.
-use crate::styles::typography;
+//! Named layouts, kept in the host's storage when it supplies one.
+
+use crate::config::KeyboardAction;
+use crate::data::FeedError;
+use crate::data::inbox::Inbox;
+use crate::localization as l10n;
+use crate::services::{Storage, StoreKind};
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
-use chrono::{DateTime, Utc};
-use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
-
-/// Theme colors extracted from visuals for menu rendering
-struct MenuColors {
-    bg: Color32,
-    border: Color32,
-    hover: Color32,
-    selected: Color32,
-    text: Color32,
-    muted: Color32,
-    /// Text and icons drawn on the `selected` fill.
-    on_selected: Color32,
-    faint_bg: Color32,
-}
-
-impl MenuColors {
-    fn from_visuals(visuals: &egui::Visuals) -> Self {
-        Self {
-            bg: visuals.window_fill,
-            border: visuals.widgets.noninteractive.bg_stroke.color,
-            hover: visuals.widgets.hovered.bg_fill,
-            selected: visuals.selection.bg_fill,
-            text: visuals.text_color(),
-            muted: visuals.widgets.noninteractive.fg_stroke.color,
-            on_selected: visuals.selection.stroke.color,
-            faint_bg: visuals.faint_bg_color,
-        }
-    }
-}
-
-/// Layout information
-#[derive(Debug, Clone)]
-pub struct LayoutInfo {
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-    pub modified_at: DateTime<Utc>,
-    pub is_default: bool,
-    pub is_cloud_synced: bool,
-}
-
-impl LayoutInfo {
-    pub fn new(name: impl Into<String>) -> Self {
-        let now = Utc::now();
-        Self {
-            name: name.into(),
-            created_at: now,
-            modified_at: now,
-            is_default: false,
-            is_cloud_synced: false,
-        }
-    }
-
-    pub fn default_layout() -> Self {
-        Self {
-            name: "Default".to_string(),
-            created_at: Utc::now(),
-            modified_at: Utc::now(),
-            is_default: true,
-            is_cloud_synced: false,
-        }
-    }
-}
+use crate::widget::SavedLayout;
+use egui::Ui;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Configuration for layout menu
 #[derive(Debug, Clone)]
 pub struct LayoutMenuConfig {
+    /// Menu width, in egui logical points.
     pub menu_width: f32,
-    pub item_height: f32,
-    pub bg_color: Color32,
-    pub hover_color: Color32,
-    pub text_color: Color32,
-    pub muted_color: Color32,
-    pub accent_color: Color32,
 }
 
 impl Default for LayoutMenuConfig {
     fn default() -> Self {
-        // Colors are TRANSPARENT to signal that colors should be fetched from
-        // ui.style().visuals at render time for proper theme support.
-        Self {
-            menu_width: 220.0,
-            item_height: 32.0,
-            bg_color: Color32::TRANSPARENT,
-            hover_color: Color32::TRANSPARENT,
-            text_color: Color32::TRANSPARENT,
-            muted_color: Color32::TRANSPARENT,
-            accent_color: Color32::TRANSPARENT,
-        }
+        Self { menu_width: 220.0 }
     }
 }
 
 /// Action from layout menu
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum LayoutAction {
+    /// No action requested.
     None,
-    /// Open the layout management menu
-    OpenMenu,
+    /// Select a tiled or tabbed chart arrangement.
+    SelectGrid(crate::widget::ChartLayoutMode),
+    /// Save the current layout under its name (Save layout, Ctrl+S).
     Save,
+    /// Save the current layout under a new name, which becomes current (Save layout as).
     SaveAs(String),
+    /// Request a chart image download.
     DownloadImage,
+    /// Request a new layout.
     CreateNew,
+    /// Open the named layout.
     Open(String),
+    /// Delete the named layout.
     Delete(String),
+    /// Rename the current layout from the first name to the second.
     Rename(String, String),
-    SetDefault(String),
 }
 
-/// Layout menu
+enum Request {
+    List,
+    Open(String),
+    Save(String, String),
+    /// Saving under the second name, then deleting the first.
+    Rename(String, String, String),
+    Delete(String),
+}
+
+/// Named layout menu. The host handles the returned intents, capturing a [`SavedLayout`] for
+/// each save. With [`set_storage`](Self::set_storage) the menu lists the layouts of
+/// [`StoreKind::Layouts`] and [`save`](Self::save), [`open`](Self::open),
+/// [`rename`](Self::rename) and [`delete`](Self::delete) keep them there; without it the host
+/// supplies `layouts` and keeps them itself.
 pub struct LayoutMenu {
-    /// Is menu open
-    is_open: bool,
-    /// Current layout name
+    /// Name of the current layout.
     pub curr_layout: Option<String>,
-    /// Available layouts
-    pub layouts: Vec<LayoutInfo>,
-    /// Configuration
+    /// The layouts available to open, sorted by name when read from storage.
+    pub layouts: Vec<String>,
+    /// Menu sizing.
     pub config: LayoutMenuConfig,
-    /// Show save as dialog
-    show_save_as: bool,
-    /// New layout name input
+    /// Whether the current layout is saved after each change; see
+    /// [`autosave_due`](Self::autosave_due).
+    pub autosave: bool,
+    editing: Option<bool>,
     new_name: String,
-    /// Show rename dialog
-    show_rename: Option<String>,
+    storage: Option<Arc<dyn Storage>>,
+    inbox: Arc<Inbox>,
+    pending: Option<Request>,
+    requests: VecDeque<Request>,
+    failing: bool,
+    /// The edit count given to `autosave_due` last, and the one saved or opened.
+    edits: u64,
+    saved_edits: Option<u64>,
+    observed_layout: Option<String>,
+    /// A changed edit count with the input time it was first seen.
+    changed: Option<(u64, f64)>,
+    error: Option<String>,
 }
 
 impl Default for LayoutMenu {
@@ -137,511 +96,586 @@ impl Default for LayoutMenu {
 }
 
 impl LayoutMenu {
+    /// Creates an unnamed layout menu.
     pub fn new() -> Self {
         Self {
-            is_open: false,
-            curr_layout: Some("Default".to_string()),
-            layouts: vec![LayoutInfo::default_layout()],
+            curr_layout: Some("Unnamed".into()),
+            layouts: Vec::new(),
             config: LayoutMenuConfig::default(),
-            show_save_as: false,
+            autosave: false,
+            editing: None,
             new_name: String::new(),
-            show_rename: None,
+            storage: None,
+            inbox: Arc::default(),
+            pending: None,
+            requests: VecDeque::new(),
+            failing: false,
+            edits: 0,
+            saved_edits: None,
+            observed_layout: None,
+            changed: None,
+            error: None,
         }
     }
 
-    /// Add a layout
-    pub fn add_layout(&mut self, layout: LayoutInfo) {
-        self.layouts.push(layout);
+    /// How long the layout stays unchanged before [`autosave_due`](Self::autosave_due) asks
+    /// for a save.
+    pub const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+
+    /// Keep layouts in `storage` and list them from it.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.inbox = Arc::default();
+        self.requests.clear();
+        self.pending = None;
+        self.layouts.clear();
+        self.saved_edits = None;
+        self.changed = None;
+        self.storage = Some(storage);
+        self.request(Request::List);
     }
 
-    /// Show the layout menu
-    pub fn show(&mut self, ui: &mut Ui) -> LayoutAction {
-        let mut action = LayoutAction::None;
+    fn request(&mut self, request: Request) {
+        self.requests.push_back(request);
+        self.send_next();
+    }
 
-        // Main button
-        let btn_res = self.draw_btn(ui);
-        if btn_res.clicked() {
-            self.is_open = !self.is_open;
-            self.show_save_as = false;
-            self.show_rename = None;
+    fn send_next(&mut self) {
+        let Some(storage) = &self.storage else { return };
+        if self.pending.is_some() {
+            return;
         }
-
-        // Dropdown menu
-        if self.is_open {
-            let btn_rect = btn_res.rect;
-            action = self.draw_menu(ui, btn_rect);
-
-            // Close on click outside
-            if ui.input(|i| i.pointer.any_click())
-                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
-            {
-                let menu_height = self.calculate_menu_height();
-                let menu_rect = Rect::from_min_size(
-                    Pos2::new(btn_rect.min.x, btn_rect.max.y + 2.0),
-                    Vec2::new(self.config.menu_width, menu_height),
+        let Some(request) = self.requests.pop_front() else {
+            return;
+        };
+        match &request {
+            Request::List => storage.list(StoreKind::Layouts, self.inbox.reply(0)),
+            Request::Open(name) => storage.load(StoreKind::Layouts, name, self.inbox.reply(0)),
+            Request::Save(name, document) | Request::Rename(_, name, document) => {
+                storage.save(
+                    StoreKind::Layouts,
+                    name,
+                    document.clone(),
+                    self.inbox.reply(0),
                 );
-                if !btn_rect.contains(pos) && !menu_rect.contains(pos) {
-                    self.is_open = false;
+            }
+            Request::Delete(name) => storage.delete(StoreKind::Layouts, name, self.inbox.reply(0)),
+        }
+        self.pending = Some(request);
+    }
+
+    /// Saves `layout` as `name`, which becomes the current layout. With a layout of that name,
+    /// replaces it.
+    pub fn save(&mut self, name: &str, layout: &SavedLayout) {
+        if name.trim().is_empty() {
+            self.error = Some("Enter a layout name".into());
+            return;
+        }
+        self.curr_layout = Some(name.to_owned());
+        self.saved_edits = Some(self.edits);
+        match layout.to_json() {
+            Ok(document) => self.request(Request::Save(name.to_owned(), document)),
+            Err(error) => self.error = Some(format!("Could not save {name}: {error}")),
+        }
+    }
+
+    /// Reads the layout `name`; [`poll`](Self::poll) returns it to restore.
+    pub fn open(&mut self, name: &str) {
+        self.request(Request::Open(name.to_owned()));
+    }
+
+    /// Renames the current layout to `name` by saving `layout`, the current layout, under it
+    /// and then deleting the old one.
+    pub fn rename(&mut self, name: &str, layout: &SavedLayout) {
+        if name.trim().is_empty() {
+            self.error = Some("Enter a layout name".into());
+            return;
+        }
+        let old = self.curr_layout.clone().unwrap_or_default();
+        self.saved_edits = Some(self.edits);
+        match layout.to_json() {
+            Ok(document) => self.request(Request::Rename(old, name.to_owned(), document)),
+            Err(error) => self.error = Some(format!("Could not rename to {name}: {error}")),
+        }
+    }
+
+    /// Deletes the layout `name`.
+    pub fn delete(&mut self, name: &str) {
+        self.request(Request::Delete(name.to_owned()));
+    }
+
+    /// Receives storage's answers, updating the list, and wakes the UI on the next answer.
+    /// Returns a layout [`open`](Self::open) read, now the current layout, for the host to
+    /// restore before its next [`autosave_due`](Self::autosave_due).
+    pub fn poll(&mut self, ctx: &egui::Context) -> Option<(String, SavedLayout)> {
+        let repaint = ctx.clone();
+        self.inbox.set_waker(move || repaint.request_repaint());
+        let mut opened = None;
+        loop {
+            let answers = self.inbox.drain().answers;
+            if answers.is_empty() {
+                break;
+            }
+            for (_, answer) in answers {
+                let Some(request) = self.pending.take() else {
+                    continue;
+                };
+                let failed =
+                    |action: &str, error: FeedError| format!("Could not {action}: {error}");
+                match request {
+                    Request::List => {
+                        match *answer
+                            .downcast::<Result<Vec<String>, FeedError>>()
+                            .expect("layout list")
+                        {
+                            Ok(mut names) => {
+                                names.sort();
+                                self.layouts = names;
+                            }
+                            Err(error) => self.error = Some(failed("list layouts", error)),
+                        }
+                    }
+                    Request::Open(name) => {
+                        let answer = *answer
+                            .downcast::<Result<Option<String>, FeedError>>()
+                            .expect("layout load");
+                        match answer {
+                            Ok(Some(document)) => match SavedLayout::from_json(&document) {
+                                Ok(layout) => {
+                                    self.curr_layout = Some(name.clone());
+                                    self.saved_edits = None;
+                                    opened = Some((name, layout));
+                                }
+                                Err(error) => {
+                                    self.error = Some(format!("Could not open {name}: {error}"));
+                                }
+                            },
+                            Ok(None) => {
+                                self.layouts.retain(|layout| *layout != name);
+                                self.error = Some(format!("{name} no longer exists"));
+                            }
+                            Err(error) => self.error = Some(failed(&format!("open {name}"), error)),
+                        }
+                    }
+                    request => {
+                        let answer = *answer
+                            .downcast::<Result<(), FeedError>>()
+                            .expect("layout write");
+                        let report = answer.is_err() && !self.failing;
+                        self.failing = answer.is_err();
+                        match (request, answer) {
+                            (Request::Save(name, _), Ok(())) => self.insert(name),
+                            (Request::Rename(old, name, _), Ok(())) => {
+                                if self.curr_layout.as_ref() == Some(&old) {
+                                    self.curr_layout = Some(name.clone());
+                                }
+                                if old != name {
+                                    self.requests.push_front(Request::Delete(old));
+                                }
+                                self.insert(name);
+                            }
+                            (Request::Delete(name), Ok(())) => {
+                                self.layouts.retain(|layout| *layout != name);
+                            }
+                            (Request::Save(name, _), Err(error)) => {
+                                if report {
+                                    self.error = Some(failed(&format!("save {name}"), error));
+                                }
+                            }
+                            (Request::Rename(old, name, _), Err(error)) => {
+                                if self.curr_layout.as_ref() == Some(&name) {
+                                    self.curr_layout = Some(old);
+                                }
+                                self.error = Some(failed(&format!("rename to {name}"), error));
+                            }
+                            (Request::Delete(name), Err(error)) => {
+                                self.error = Some(failed(&format!("delete {name}"), error));
+                            }
+                            (Request::List | Request::Open(_), _) => unreachable!("not a write"),
+                        }
+                    }
+                }
+            }
+            self.send_next();
+        }
+        opened
+    }
+
+    fn insert(&mut self, name: String) {
+        if let Err(at) = self.layouts.binary_search(&name) {
+            self.layouts.insert(at, name);
+        }
+    }
+
+    /// Call every frame with a count that changes whenever the layout does, such as the sum of
+    /// [`Chart::edit_count`](crate::widget::Chart::edit_count) over its charts. Returns `true`
+    /// when the host should save the current layout: autosave is on, the layout is stored, and
+    /// the count changed and then stayed the same for [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY).
+    pub fn autosave_due(&mut self, ctx: &egui::Context, edits: u64) -> bool {
+        self.edits = edits;
+        if self.observed_layout != self.curr_layout {
+            self.observed_layout = self.curr_layout.clone();
+            self.saved_edits = None;
+            self.changed = None;
+        }
+        let saved = *self.saved_edits.get_or_insert(edits);
+        let stored = self
+            .curr_layout
+            .as_ref()
+            .is_some_and(|name| self.layouts.contains(name));
+        if !self.autosave || !stored || self.storage.is_none() || edits == saved {
+            self.changed = None;
+            return false;
+        }
+        let now = ctx.input(|i| i.time);
+        let since = match self.changed {
+            Some((changed, since)) if changed == edits => since,
+            _ => {
+                self.changed = Some((edits, now));
+                now
+            }
+        };
+        let wait = Self::AUTOSAVE_DELAY.as_secs_f64() - (now - since);
+        if wait > 0.0 {
+            ctx.request_repaint_after(Duration::from_secs_f64(wait));
+            return false;
+        }
+        self.changed = None;
+        true
+    }
+
+    /// The error of a failed storage request since the last call, to show to the user.
+    pub fn take_error(&mut self) -> Option<String> {
+        self.error.take()
+    }
+
+    /// Width of the named trigger.
+    pub fn width(&self, ui: &Ui) -> f32 {
+        let label = l10n::text(ui.ctx(), self.curr_layout.as_deref().unwrap_or("Unnamed"));
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(
+                label,
+                egui::FontId::proportional(14.0),
+                ui.visuals().text_color(),
+            )
+            .size()
+            .x
+        })
+        .min(self.config.menu_width - 32.0)
+            + 32.0
+    }
+
+    /// Shows the current name and an anchored menu. Actions do not mutate the host's catalog.
+    pub fn show(&mut self, ui: &mut Ui) -> LayoutAction {
+        let (rect, button) =
+            ui.allocate_exact_size(egui::vec2(self.width(ui), 28.0), egui::Sense::click());
+        if button.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                ui.active_theme().radius.sm,
+                ui.visuals().widgets.hovered.bg_fill,
+            );
+        }
+        ui.painter()
+            .with_clip_rect(egui::Rect::from_min_max(
+                rect.min,
+                rect.max - egui::vec2(22.0, 0.0),
+            ))
+            .text(
+                rect.left_center() + egui::vec2(4.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                l10n::text(ui.ctx(), self.curr_layout.as_deref().unwrap_or("Unnamed")),
+                egui::FontId::proportional(14.0),
+                ui.visuals().text_color(),
+            );
+        crate::icons::icons::CHEVRON_DOWN
+            .as_image_tinted(egui::Vec2::splat(12.0), ui.visuals().text_color())
+            .paint_at(
+                ui,
+                egui::Rect::from_center_size(
+                    rect.right_center() - egui::vec2(10.0, 0.0),
+                    egui::Vec2::splat(12.0),
+                ),
+            );
+        let mut action = LayoutAction::None;
+        let translated_label = l10n::text(ui.ctx(), "Named layouts");
+        button.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &translated_label)
+        });
+        crate::styles::focus::draw_focus_ring(ui, &button, ui.active_theme().radius.sm);
+        egui::Popup::menu(&button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                action = self.show_menu(ui);
+            });
+        action
+    }
+
+    /// Named layout menu contents, shared with the save dropdown.
+    pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
+        let width = self
+            .config
+            .menu_width
+            .min(ui.ctx().content_rect().width() - 24.0);
+        ui.set_width(width.max(0.0));
+        let mut action = LayoutAction::None;
+        let ctx = ui.ctx().clone();
+        let shortcut = ctx
+            .data(|data| {
+                data.get_temp::<crate::widget::ShortcutMap>(egui::Id::NULL.with("chart_shortcuts"))
+            })
+            .map_or_else(
+                || KeyboardAction::SaveLayout.shortcut(),
+                |map| map.shortcut(KeyboardAction::SaveLayout),
+            );
+        let save = egui::Button::new(l10n::text(ui.ctx(), "Save layout")).shortcut_text(
+            shortcut
+                .map(|s| ctx.format_shortcut(&s))
+                .unwrap_or_default(),
+        );
+        if ui.add(save).clicked() {
+            action = LayoutAction::Save;
+            ui.close();
+        }
+        let curr = self.curr_layout.clone().unwrap_or_default();
+        let rename = ui.button(l10n::text(ui.ctx(), "Rename…")).clicked();
+        let save_as = ui.button(l10n::text(ui.ctx(), "Save layout as…")).clicked();
+        if rename {
+            self.editing = Some(true);
+            self.new_name = curr.clone();
+        }
+        if save_as {
+            self.editing = Some(false);
+            self.new_name.clear();
+        }
+        for (label, value) in [
+            ("New layout", LayoutAction::CreateNew),
+            ("Download chart image", LayoutAction::DownloadImage),
+        ] {
+            if ui.button(l10n::text(ui.ctx(), label)).clicked() {
+                action = value;
+                ui.close();
+            }
+        }
+        ui.toggle_value(&mut self.autosave, "Autosave")
+            .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"));
+        if let Some(is_rename) = self.editing {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.new_name).desired_width(ui.available_width()),
+            );
+            if save_as || rename {
+                response.request_focus();
+            }
+            let name = self.new_name.trim();
+            let valid = !name.is_empty() && !self.layouts.iter().any(|l| l == name);
+            if ui
+                .add_enabled(valid, egui::Button::new(l10n::text(ui.ctx(), "Apply")))
+                .clicked()
+                || (valid && response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
+                action = if is_rename {
+                    LayoutAction::Rename(
+                        self.curr_layout.clone().unwrap_or_default(),
+                        name.to_owned(),
+                    )
+                } else {
+                    LayoutAction::SaveAs(name.to_owned())
+                };
+                self.editing = None;
+                ui.close();
+            }
+        }
+        if self.layouts.is_empty() {
+            return action;
+        }
+        ui.separator();
+        ui.colored_label(
+            ui.active_theme().ui.text_secondary,
+            l10n::text(ui.ctx(), "Layouts"),
+        );
+        egui::ScrollArea::vertical()
+            .max_height(ui.available_height().clamp(0.0, 240.0))
+            .show(ui, |ui| {
+                for layout in &self.layouts {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_sized(
+                                egui::vec2(
+                                    (ui.available_width() - 28.0).max(0.0),
+                                    ui.spacing().interact_size.y,
+                                ),
+                                egui::Button::new(l10n::text(ui.ctx(), layout))
+                                    .selected(self.curr_layout.as_deref() == Some(layout.as_str()))
+                                    .frame(false)
+                                    .truncate(),
+                            )
+                            .on_hover_text(l10n::text(ui.ctx(), layout))
+                            .clicked()
+                        {
+                            action = LayoutAction::Open(layout.clone());
+                            ui.close();
+                        }
+                        if ui
+                            .small_button("×")
+                            .on_hover_text(l10n::text(ui.ctx(), "Delete layout"))
+                            .clicked()
+                        {
+                            action = LayoutAction::Delete(layout.clone());
+                            ui.close();
+                        }
+                    });
+                }
+            });
+        action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Reply;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Host(Mutex<BTreeMap<String, String>>, Mutex<Option<Reply<()>>>);
+
+    impl Storage for Host {
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().keys().rev().cloned().collect()));
+        }
+        fn load(&self, _: StoreKind, name: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
+        }
+        fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            self.0.lock().unwrap().insert(name.into(), document);
+            if name == "Delayed" {
+                assert!(
+                    self.1.lock().unwrap().replace(reply).is_none(),
+                    "writes must be serialized"
+                );
+            } else {
+                reply.send(Ok(()));
+            }
+        }
+        fn delete(&self, _: StoreKind, name: &str, reply: Reply<()>) {
+            self.0.lock().unwrap().remove(name);
+            reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn layouts_save_rename_open_and_autosave_through_storage() {
+        let ctx = egui::Context::default();
+        let at = |time: f64, run: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| run(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+        };
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("B".into(), layout.to_json().unwrap());
+        let mut menu = LayoutMenu::new();
+        menu.set_storage(host.clone());
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["B"]);
+        menu.save("C", &layout);
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["B", "C"]);
+        // A rename writes the new name before it deletes the old one.
+        menu.rename("A", &layout);
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert!(host.0.lock().unwrap().contains_key("A"));
+        at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+        assert_eq!(menu.layouts, ["A", "B"]);
+        assert_eq!(
+            host.0.lock().unwrap().keys().collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        menu.rename("A", &layout);
+        at(0.0, &mut |ctx| {
+            menu.poll(ctx);
+        });
+        assert!(
+            host.0.lock().unwrap().contains_key("A"),
+            "renaming to the same name must not delete it"
+        );
+        menu.open("B");
+        at(0.0, &mut |ctx| {
+            let (name, opened) = menu.poll(ctx).unwrap();
+            assert_eq!((name.as_str(), opened.mode), ("B", layout.mode));
+        });
+        assert_eq!(menu.curr_layout.as_deref(), Some("B"));
+        // Autosave waits for the layout to stay unchanged after an edit.
+        menu.autosave = true;
+        let mut due = Vec::new();
+        for (time, edits) in [(0.0, 5), (1.0, 6), (2.5, 7), (4.0, 7), (4.6, 7), (5.0, 7)] {
+            at(time, &mut |ctx| due.push(menu.autosave_due(ctx, edits)));
+            if due.last() == Some(&true) {
+                menu.save("B", &layout);
+            }
+        }
+        assert_eq!(due, [false, false, false, false, true, false]);
+        menu.poll(&ctx);
+        menu.save("Delayed", &layout);
+        let mut latest = layout.clone();
+        latest.mode = crate::widget::ChartLayoutMode::Single;
+        menu.save("Delayed", &latest);
+        let first = host.0.lock().unwrap()["Delayed"].clone();
+        assert_eq!(SavedLayout::from_json(&first).unwrap().mode, layout.mode);
+        host.1.lock().unwrap().take().unwrap().send(Ok(()));
+        menu.poll(&ctx);
+        let last = host.0.lock().unwrap()["Delayed"].clone();
+        assert_eq!(SavedLayout::from_json(&last).unwrap().mode, latest.mode);
+        host.1.lock().unwrap().take().unwrap().send(Ok(()));
+        menu.poll(&ctx);
+        // Changing tabs starts a new debounce, without autosaving an unchanged tab.
+        menu.curr_layout = Some("A".into());
+        at(10.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
+        at(20.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
+    }
+
+    #[test]
+    fn long_layout_names_keep_menu_actions_inside_both_theme_windows() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for size in [egui::vec2(320.0, 360.0), egui::vec2(1440.0, 900.0)] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut menu = LayoutMenu::new();
+                menu.layouts = (0..20)
+                    .map(|i| format!("{i} {}", "Long layout ".repeat(30)))
+                    .collect();
+                menu.curr_layout = Some(menu.layouts[0].clone());
+                menu.editing = Some(true);
+                menu.new_name = menu.layouts[0].clone();
+                for _ in 0..2 {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            assert!(menu.width(ui) <= menu.config.menu_width);
+                            egui::Area::new(egui::Id::NULL.with("layout menu"))
+                                .fixed_pos(egui::pos2(8.0, 8.0))
+                                .show(ui.ctx(), |ui| {
+                                    menu.show_menu(ui);
+                                    assert!(ui.min_rect().right() <= size.x);
+                                    assert!(ui.min_rect().bottom() <= size.y);
+                                });
+                        },
+                    )
+                    .drop_without_applying_deltas();
                 }
             }
         }
-
-        action
-    }
-
-    fn draw_btn(&self, ui: &mut Ui) -> Response {
-        // Get colors from theme
-        let visuals = ui.style().visuals.clone();
-        let hover_color = visuals.widgets.hovered.bg_fill;
-        let border_color = visuals.widgets.noninteractive.bg_stroke.color;
-        let text_color = visuals.text_color();
-        let muted_color = visuals.widgets.noninteractive.fg_stroke.color;
-
-        let layout_name = self.curr_layout.as_deref().unwrap_or("Untitled");
-        // Approximate text width (roughly 7 pixels per character for 12pt font)
-        let text_width = layout_name.len() as f32 * 7.0;
-        let desired_size = Vec2::new(
-            text_width.max(DESIGN_TOKENS.sizing.dialog.button_min_width_xs)
-                + DESIGN_TOKENS.spacing.section_lg,
-            DESIGN_TOKENS.sizing.button_md,
-        );
-        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-
-        let bg_color = if self.is_open || response.hovered() {
-            hover_color
-        } else {
-            Color32::TRANSPARENT
-        };
-
-        ui.painter()
-            .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
-        ui.painter().rect_stroke(
-            rect,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-            StrokeKind::Outside,
-        );
-
-        // Layout name
-        ui.painter().text(
-            rect.center() - Vec2::new(8.0, 0.0),
-            egui::Align2::CENTER_CENTER,
-            layout_name,
-            egui::FontId::proportional(typography::SM_MD),
-            text_color,
-        );
-
-        // Dropdown arrow
-        ui.painter().text(
-            Pos2::new(rect.right() - 12.0, rect.center().y),
-            egui::Align2::CENTER_CENTER,
-            "▾",
-            egui::FontId::proportional(typography::XS),
-            muted_color,
-        );
-
-        response
-    }
-
-    fn calculate_menu_height(&self) -> f32 {
-        let base_items = 4; // Save, Download, separator, Create new
-        let layout_items = self.layouts.len();
-        let total = base_items + layout_items + 2; // +2 for header and separator
-        (total as f32 * self.config.item_height).min(400.0)
-    }
-
-    fn draw_menu(&mut self, ui: &mut Ui, btn_rect: Rect) -> LayoutAction {
-        let mut action = LayoutAction::None;
-        let colors = MenuColors::from_visuals(&ui.style().visuals);
-
-        let menu_pos = Pos2::new(btn_rect.min.x, btn_rect.max.y + 2.0);
-        let menu_height = self.calculate_menu_height();
-        let menu_rect =
-            Rect::from_min_size(menu_pos, Vec2::new(self.config.menu_width, menu_height));
-
-        // Draw menu background with shadow
-        self.draw_menu_background(ui, menu_rect, &colors);
-
-        let inner_rect = menu_rect.shrink(4.0);
-        let mut y = inner_rect.min.y;
-
-        // Action menu items
-        action = self.draw_action_items(ui, &mut y, inner_rect, &colors, action);
-
-        // Save as dialog (if open)
-        if self.show_save_as
-            && let Some(a) = self.draw_save_as_dialog(ui, &mut y, inner_rect, &colors)
-        {
-            action = a;
-        }
-
-        // Layouts section
-        action = self.draw_layouts_section(ui, &mut y, inner_rect, &colors, action);
-
-        action
-    }
-
-    /// Draw menu background with shadow
-    fn draw_menu_background(&self, ui: &mut Ui, menu_rect: Rect, colors: &MenuColors) {
-        let shadow_rect = menu_rect.translate(Vec2::splat(DESIGN_TOKENS.shadow.offset_sm));
-        ui.painter().rect_filled(
-            shadow_rect,
-            DESIGN_TOKENS.rounding.md,
-            Color32::from_black_alpha(60),
-        );
-        ui.painter()
-            .rect_filled(menu_rect, DESIGN_TOKENS.rounding.md, colors.bg);
-        ui.painter().rect_stroke(
-            menu_rect,
-            DESIGN_TOKENS.rounding.md,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, colors.border),
-            StrokeKind::Outside,
-        );
-    }
-
-    /// Draw action menu items (Save, Download, Create new)
-    fn draw_action_items(
-        &mut self,
-        ui: &mut Ui,
-        y: &mut f32,
-        inner_rect: Rect,
-        colors: &MenuColors,
-        mut action: LayoutAction,
-    ) -> LayoutAction {
-        // Save layout
-        if let Some(a) = self.draw_menu_item(
-            ui,
-            ">",
-            "Save layout",
-            *y,
-            inner_rect.min.x,
-            inner_rect.width(),
-        ) && a.clicked()
-        {
-            action = LayoutAction::Save;
-            self.is_open = false;
-        }
-        *y += self.config.item_height;
-
-        // Download chart image
-        if let Some(a) = self.draw_menu_item(
-            ui,
-            ">",
-            "Download chart image",
-            *y,
-            inner_rect.min.x,
-            inner_rect.width(),
-        ) && a.clicked()
-        {
-            action = LayoutAction::DownloadImage;
-            self.is_open = false;
-        }
-        *y += self.config.item_height;
-
-        // Separator
-        *y += 4.0;
-        self.draw_separator(ui, *y, inner_rect.min.x, inner_rect.width(), colors.border);
-        *y += 8.0;
-
-        // Create new layout
-        if let Some(a) = self.draw_menu_item(
-            ui,
-            "+",
-            "Create new layout",
-            *y,
-            inner_rect.min.x,
-            inner_rect.width(),
-        ) && a.clicked()
-        {
-            self.show_save_as = true;
-            self.new_name.clear();
-        }
-        *y += self.config.item_height;
-
-        action
-    }
-
-    /// Draw the layouts section (header + list)
-    fn draw_layouts_section(
-        &mut self,
-        ui: &mut Ui,
-        y: &mut f32,
-        inner_rect: Rect,
-        colors: &MenuColors,
-        mut action: LayoutAction,
-    ) -> LayoutAction {
-        // Separator before layouts
-        *y += 4.0;
-        self.draw_separator(ui, *y, inner_rect.min.x, inner_rect.width(), colors.border);
-        *y += 8.0;
-
-        // Layouts header
-        ui.painter().text(
-            Pos2::new(inner_rect.min.x + 8.0, *y + 8.0),
-            egui::Align2::LEFT_CENTER,
-            "Layouts",
-            egui::FontId::proportional(typography::SM),
-            colors.muted,
-        );
-        *y += 20.0;
-
-        // Layout items - collect data to avoid borrow issues
-        let layouts: Vec<_> = self.layouts.to_vec();
-        for layout in &layouts {
-            if *y + self.config.item_height > inner_rect.max.y {
-                break;
-            }
-
-            let is_current = self.curr_layout.as_ref() == Some(&layout.name);
-            let item_rect = Rect::from_min_size(
-                Pos2::new(inner_rect.min.x, *y),
-                Vec2::new(inner_rect.width(), self.config.item_height),
-            );
-
-            if let Some(a) = self.draw_layout_item(ui, layout, item_rect, is_current, colors) {
-                action = a;
-                self.curr_layout = Some(layout.name.clone());
-                self.is_open = false;
-            }
-            *y += self.config.item_height;
-        }
-
-        action
-    }
-
-    fn draw_menu_item(
-        &self,
-        ui: &mut Ui,
-        icon: &str,
-        label: &str,
-        y: f32,
-        x: f32,
-        width: f32,
-    ) -> Option<Response> {
-        // Get colors from theme
-        let visuals = ui.style().visuals.clone();
-        let hover_color = visuals.widgets.hovered.bg_fill;
-        let text_color = visuals.text_color();
-        let muted_color = visuals.widgets.noninteractive.fg_stroke.color;
-
-        let item_rect =
-            Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, self.config.item_height));
-
-        let response = ui.allocate_rect(item_rect, Sense::click());
-
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(item_rect, DESIGN_TOKENS.rounding.sm, hover_color);
-        }
-
-        // Icon
-        ui.painter().text(
-            Pos2::new(item_rect.min.x + 12.0, item_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            icon,
-            egui::FontId::proportional(typography::LG),
-            muted_color,
-        );
-
-        // Label
-        ui.painter().text(
-            Pos2::new(item_rect.min.x + 36.0, item_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(typography::MD),
-            text_color,
-        );
-
-        Some(response)
-    }
-
-    /// Draw a horizontal separator line
-    fn draw_separator(&self, ui: &mut Ui, y: f32, x: f32, width: f32, color: Color32) {
-        let sep_rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, 1.0));
-        ui.painter()
-            .rect_filled(sep_rect, DESIGN_TOKENS.rounding.none, color);
-    }
-
-    /// Draw the save-as dialog section
-    fn draw_save_as_dialog(
-        &mut self,
-        ui: &mut Ui,
-        y: &mut f32,
-        inner_rect: Rect,
-        colors: &MenuColors,
-    ) -> Option<LayoutAction> {
-        *y += DESIGN_TOKENS.spacing.sm;
-
-        let enter_pressed = self.draw_name_input(ui, y, inner_rect, colors);
-        if enter_pressed && !self.new_name.is_empty() {
-            return self.complete_save_as();
-        }
-
-        *y += DESIGN_TOKENS.sizing.button_md;
-
-        let btn_clicked = self.draw_create_button(ui, y, inner_rect, colors);
-        if btn_clicked && !self.new_name.is_empty() {
-            return self.complete_save_as();
-        }
-
-        *y += DESIGN_TOKENS.sizing.button_md;
-        None
-    }
-
-    fn draw_name_input(
-        &mut self,
-        ui: &mut Ui,
-        y: &f32,
-        inner_rect: Rect,
-        colors: &MenuColors,
-    ) -> bool {
-        let input_rect = Rect::from_min_size(
-            Pos2::new(inner_rect.min.x + DESIGN_TOKENS.spacing.sm, *y),
-            Vec2::new(
-                inner_rect.width() - DESIGN_TOKENS.spacing.lg,
-                DESIGN_TOKENS.sizing.button_sm,
-            ),
-        );
-
-        ui.painter()
-            .rect_filled(input_rect, DESIGN_TOKENS.rounding.md, colors.faint_bg);
-        ui.painter().rect_stroke(
-            input_rect,
-            DESIGN_TOKENS.rounding.sm,
-            Stroke::new(DESIGN_TOKENS.stroke.hairline, ui.active_theme().ui.accent),
-            StrokeKind::Outside,
-        );
-
-        let text_rect = input_rect.shrink(DESIGN_TOKENS.spacing.sm);
-        let mut text_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(text_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        let response = text_ui.add(
-            egui::TextEdit::singleline(&mut self.new_name)
-                .hint_text("Layout name")
-                // No background, with egui's default text margin.
-                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2))),
-        );
-
-        response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-    }
-
-    fn draw_create_button(
-        &self,
-        ui: &mut Ui,
-        y: &f32,
-        inner_rect: Rect,
-        colors: &MenuColors,
-    ) -> bool {
-        let btn_rect = Rect::from_min_size(
-            Pos2::new(inner_rect.min.x + DESIGN_TOKENS.spacing.sm, *y),
-            Vec2::new(
-                inner_rect.width() - DESIGN_TOKENS.spacing.lg,
-                DESIGN_TOKENS.sizing.button_sm,
-            ),
-        );
-        let btn_res = ui.allocate_rect(btn_rect, Sense::click());
-
-        let btn_bg = if btn_res.hovered() {
-            colors.selected
-        } else {
-            colors.hover
-        };
-        ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, btn_bg);
-
-        ui.painter().text(
-            btn_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Create",
-            egui::FontId::proportional(typography::SM),
-            colors.on_selected,
-        );
-
-        btn_res.clicked()
-    }
-
-    fn complete_save_as(&mut self) -> Option<LayoutAction> {
-        let action = LayoutAction::SaveAs(self.new_name.clone());
-        self.layouts.push(LayoutInfo::new(&self.new_name));
-        self.curr_layout = Some(self.new_name.clone());
-        self.show_save_as = false;
-        self.is_open = false;
-        Some(action)
-    }
-
-    /// Draw a single layout item
-    fn draw_layout_item(
-        &self,
-        ui: &mut Ui,
-        layout: &LayoutInfo,
-        item_rect: Rect,
-        is_current: bool,
-        colors: &MenuColors,
-    ) -> Option<LayoutAction> {
-        let item_res = ui.allocate_rect(item_rect, Sense::click());
-
-        // Background
-        if is_current || item_res.hovered() {
-            let bg = if is_current {
-                colors.selected
-            } else {
-                colors.hover
-            };
-            ui.painter()
-                .rect_filled(item_rect, DESIGN_TOKENS.rounding.sm, bg);
-        }
-
-        // Layout icon
-        let icon = if layout.is_default { "*" } else { "-" };
-        let icon_color = if is_current {
-            colors.on_selected
-        } else {
-            colors.muted
-        };
-        ui.painter().text(
-            Pos2::new(item_rect.min.x + 12.0, item_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            icon,
-            egui::FontId::proportional(typography::SM_MD),
-            icon_color,
-        );
-
-        // Layout name
-        let name_color = if is_current {
-            colors.on_selected
-        } else {
-            colors.text
-        };
-        ui.painter().text(
-            Pos2::new(item_rect.min.x + 32.0, item_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            &layout.name,
-            egui::FontId::proportional(typography::MD),
-            name_color,
-        );
-
-        // Cloud sync indicator
-        if layout.is_cloud_synced {
-            let cloud_color = if is_current {
-                colors.on_selected
-            } else {
-                colors.muted
-            };
-            ui.painter().text(
-                Pos2::new(item_rect.right() - 12.0, item_rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                "c",
-                egui::FontId::proportional(typography::SM_MD),
-                cloud_color,
-            );
-        }
-
-        if item_res.clicked() {
-            return Some(LayoutAction::Open(layout.name.clone()));
-        }
-        None
     }
 }

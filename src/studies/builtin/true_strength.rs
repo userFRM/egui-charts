@@ -1,7 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// True Strength Index (TSI), William Blau, "Momentum, Direction, and Divergence" (1995).
@@ -17,52 +18,38 @@ pub struct TrueStrengthIndex {
     short_period: usize,
     /// Signal line period (typically 7)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [TSI, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl TrueStrengthIndex {
+    /// Create with `long_period`, `short_period`, `signal_period` in bars, each clamped to at
+    /// least one.
     pub fn new(long_period: usize, short_period: usize, signal_period: usize) -> Self {
         Self {
             long_period: long_period.max(1),
             short_period: short_period.max(1),
             signal_period: signal_period.max(1),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,        // Blue - TSI
-                DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
+                palette::BLUE,        // Blue - TSI
+                palette::DEEP_ORANGE, // Deep Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
     }
 
-    fn ema(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-        if data.is_empty() || period == 0 {
-            return result;
-        }
-
-        let multiplier = 2.0 / (period as f64 + 1.0);
-        result.push(data[0]);
-
-        for i in 1..data.len() {
-            let ema = (data[i] - result[i - 1]) * multiplier + result[i - 1];
-            result.push(ema);
-        }
-
-        result
-    }
-
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let min_period = self
             .long_period
@@ -81,12 +68,12 @@ impl TrueStrengthIndex {
         let abs_pc: Vec<f64> = pc.iter().map(|x| x.abs()).collect();
 
         // Double smooth the price change
-        let pc_smooth1 = Self::ema(&pc, self.long_period);
-        let pc_smooth2 = Self::ema(&pc_smooth1, self.short_period);
+        let pc_smooth1 = helpers::ema(&pc, self.long_period);
+        let pc_smooth2 = helpers::ema(&pc_smooth1, self.short_period);
 
         // Double smooth the absolute price change
-        let abs_pc_smooth1 = Self::ema(&abs_pc, self.long_period);
-        let abs_pc_smooth2 = Self::ema(&abs_pc_smooth1, self.short_period);
+        let abs_pc_smooth1 = helpers::ema(&abs_pc, self.long_period);
+        let abs_pc_smooth2 = helpers::ema(&abs_pc_smooth1, self.short_period);
 
         // Calculate TSI values
         let mut tsi_values: Vec<f64> = Vec::with_capacity(pc.len());
@@ -99,17 +86,14 @@ impl TrueStrengthIndex {
         }
 
         // Calculate signal line
-        let signal = Self::ema(&tsi_values, self.signal_period);
+        let signal = helpers::ema(&tsi_values, self.signal_period);
 
         // Build output
         for i in 0..data.len() {
             if i < min_period - 1 {
                 values.push(IndicatorValue::None);
             } else {
-                values.push(IndicatorValue::Multiple(vec![
-                    tsi_values[i - 1],
-                    signal[i - 1],
-                ]));
+                values.push_lines(&[tsi_values[i - 1], signal[i - 1]]);
             }
         }
 
@@ -124,6 +108,18 @@ impl Default for TrueStrengthIndex {
 }
 
 impl Indicator for TrueStrengthIndex {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        long_period: length("Long period", 1, usize::MAX),
+        short_period: length("Short period", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "TSI"
     }
@@ -136,7 +132,7 @@ impl Indicator for TrueStrengthIndex {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -166,7 +162,7 @@ impl Indicator for TrueStrengthIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -191,6 +187,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -247,15 +245,18 @@ mod tests {
 
         assert_eq!(tsi.values.len(), data.len());
         assert!(
-            tsi.values[..8]
+            tsi.values.to_rows()[..8]
                 .iter()
                 .all(|v| matches!(v, IndicatorValue::None))
         );
         for (bar, main, signal) in expected {
-            let IndicatorValue::Multiple(ref got) = tsi.values[bar] else {
-                panic!("bar {bar}: expected a value, got {:?}", tsi.values[bar]);
+            let IndicatorValue::Multiple(ref got) = tsi.values.to_rows()[bar] else {
+                panic!(
+                    "bar {bar}: expected a value, got {:?}",
+                    tsi.values.to_rows()[bar]
+                );
             };
-            assert_eq!(got.len(), tsi.line_cnt());
+            assert_eq!(got.len(), tsi.line_count());
             assert!(
                 (got[0] - main).abs() < 1e-12,
                 "bar {bar}: TSI {} vs {main}",

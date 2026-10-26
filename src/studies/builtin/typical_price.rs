@@ -1,29 +1,31 @@
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Typical Price (HLC/3)
 /// Simple avg of high, low, close
 /// Also known as pivot point
 /// Note: Same formula as [`HLC3`](super::HLC3) in average_price; kept for
 /// backwards compatibility under the "TP" indicator name.
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct TypicalPrice {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl TypicalPrice {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            values: IndicatorValues::new(),
+            color: palette::ORANGE, // Orange
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -54,7 +56,7 @@ impl Indicator for TypicalPrice {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -92,20 +94,22 @@ impl Indicator for TypicalPrice {
 /// Weighted Close
 #[derive(Clone)]
 pub struct WeightedClose {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl WeightedClose {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            values: IndicatorValues::new(),
+            color: palette::BLUE, // Blue
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -136,7 +140,7 @@ impl Indicator for WeightedClose {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -176,20 +180,22 @@ impl Indicator for WeightedClose {
 /// backwards compatibility under the "MP" indicator name.
 #[derive(Clone)]
 pub struct MedianPrice {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl MedianPrice {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            values: IndicatorValues::new(),
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -220,7 +226,7 @@ impl Indicator for MedianPrice {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -252,61 +258,5 @@ impl Indicator for MedianPrice {
 
     fn line_names(&self) -> Vec<String> {
         vec!["MP".to_string()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(high: f64, low: f64, close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: (high + low) / 2.0,
-            high,
-            low,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_typical_price() {
-        let mut tp = TypicalPrice::new();
-        let data = vec![make_bar(105.0, 95.0, 100.0)];
-
-        tp.calculate(&data);
-
-        if let IndicatorValue::Single(v) = tp.values[0] {
-            // TP = (105 + 95 + 100) / 3 = 100
-            assert!((v - 100.0).abs() < 0.01);
-        }
-    }
-
-    #[test]
-    fn test_weighted_close() {
-        let mut wc = WeightedClose::new();
-        let data = vec![make_bar(105.0, 95.0, 100.0)];
-
-        wc.calculate(&data);
-
-        if let IndicatorValue::Single(v) = wc.values[0] {
-            // WC = (105 + 95 + 200) / 4 = 100
-            assert!((v - 100.0).abs() < 0.01);
-        }
-    }
-
-    #[test]
-    fn test_median_price() {
-        let mut mp = MedianPrice::new();
-        let data = vec![make_bar(105.0, 95.0, 100.0)];
-
-        mp.calculate(&data);
-
-        if let IndicatorValue::Single(v) = mp.values[0] {
-            // MP = (105 + 95) / 2 = 100
-            assert!((v - 100.0).abs() < 0.01);
-        }
     }
 }

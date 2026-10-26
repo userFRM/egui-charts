@@ -27,7 +27,7 @@
 //!
 //! # Default colour
 //!
-//! Purple (from the design-token `indicators.rsi`).
+//! Blue (#2962ff), with a two-pixel line.
 //!
 //! # Example
 //!
@@ -38,13 +38,13 @@
 //! let mut rsi = RSI::new(14);
 //! rsi.calculate(&bars);
 //! // The first `period` values are warmup.
-//! assert!(rsi.values()[..14].iter().all(|v| matches!(v, IndicatorValue::None)));
-//! assert!(matches!(rsi.values()[14], IndicatorValue::Single(_)));
+//! assert!(rsi.values().to_rows()[..14].iter().all(|v| matches!(v, IndicatorValue::None)));
+//! assert!(matches!(rsi.values().to_rows()[14], IndicatorValue::Single(_)));
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Relative Strength Index (RSI) indicator.
@@ -54,9 +54,29 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct RSI {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone)]
+struct State {
+    previous: Option<f64>,
+    usable: usize,
+    gain: f64,
+    loss: f64,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            previous: None,
+            usable: 0,
+            gain: -0.0,
+            loss: -0.0,
+        }
+    }
 }
 
 impl RSI {
@@ -67,8 +87,9 @@ impl RSI {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.indicators.rsi, // Purple
+            values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            color: Color32::from_rgb(41, 98, 255),
             visible: true,
         }
     }
@@ -88,8 +109,29 @@ impl Default for RSI {
 }
 
 impl Indicator for RSI {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "RSI"
+    }
+
+    fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
+        crate::studies::IndicatorLineStyle {
+            width: 2.0,
+            ..Default::default()
+        }
+    }
+
+    fn precision(&self) -> Option<usize> {
+        Some(2)
     }
 
     fn desc(&self) -> &str {
@@ -97,51 +139,47 @@ impl Indicator for RSI {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        if data.len() < self.period.saturating_add(1) {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
-        }
-
-        let mut gains = Vec::new();
-        let mut losses = Vec::new();
-
-        // Calculate price changes
-        for i in 1..data.len() {
-            let change = data[i].close - data[i - 1].close;
-            gains.push(if change > 0.0 { change } else { 0.0 });
-            losses.push(if change < 0.0 { -change } else { 0.0 });
-        }
-
-        // Initial average gain/loss is the simple mean of the first `period`
-        // price changes (the changes spanning bars 1..=period).
-        let mut avg_gain = gains[..self.period].iter().sum::<f64>() / self.period as f64;
-        let mut avg_loss = losses[..self.period].iter().sum::<f64>() / self.period as f64;
-
-        // Warmup: bars 0..period have no value. The first computable RSI lands
-        // at bar `period`, so exactly `period` leading `None`s keep the output
-        // one-to-one with the input bars (values.len() == data.len()).
-        for _ in 0..self.period {
-            self.values.push(IndicatorValue::None);
-        }
-
-        let rs = avg_gain / avg_loss.max(1e-10);
-        let rsi = 100.0 - (100.0 / (1.0 + rs));
-        self.values.push(IndicatorValue::Single(rsi));
-
-        // Calculate remaining RSI values using smoothing
-        for i in self.period..gains.len() {
-            avg_gain = (avg_gain * (self.period - 1) as f64 + gains[i]) / self.period as f64;
-            avg_loss = (avg_loss * (self.period - 1) as f64 + losses[i]) / self.period as f64;
-
-            let rs = avg_gain / avg_loss.max(1e-10);
-            let rsi = 100.0 - (100.0 / (1.0 + rs));
-            self.values.push(IndicatorValue::Single(rsi));
-        }
+        self.update(data, 0);
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let period = self.period;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let previous = state.previous.replace(bar.close);
+                let i = state.usable;
+                state.usable += 1;
+                let Some(previous) = previous else {
+                    return IndicatorValue::None;
+                };
+                let change = bar.close - previous;
+                let gain = if change > 0.0 { change } else { 0.0 };
+                let loss = if change < 0.0 { -change } else { 0.0 };
+                if i <= period {
+                    state.gain += gain;
+                    state.loss += loss;
+                    if i < period {
+                        return IndicatorValue::None;
+                    }
+                    state.gain /= period as f64;
+                    state.loss /= period as f64;
+                } else {
+                    state.gain = (state.gain * (period - 1) as f64 + gain) / period as f64;
+                    state.loss = (state.loss * (period - 1) as f64 + loss) / period as f64;
+                }
+                let rs = state.gain / state.loss.max(1e-10);
+                IndicatorValue::Single(100.0 - (100.0 / (1.0 + rs)))
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -152,6 +190,18 @@ impl Indicator for RSI {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            height: Some(138.0),
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (70.0, Color32::from_gray(128), "Overbought"),
+                (30.0, Color32::from_gray(128), "Oversold"),
+            ],
+            fill_between_levels: true,
         }
     }
 
@@ -208,7 +258,7 @@ mod tests {
         let mut rsi = RSI::new(14);
         rsi.calculate(&bars);
 
-        match rsi.values()[14] {
+        match rsi.values().to_rows()[14] {
             IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-6),
             _ => panic!("expected first RSI at index 14"),
         }

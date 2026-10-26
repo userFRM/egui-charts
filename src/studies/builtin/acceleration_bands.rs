@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Acceleration Bands (Price Headley), a price envelope that widens on wide bars.
@@ -15,7 +15,7 @@ pub struct AccelerationBands {
     period: usize,
     /// Band width factor (typically 4.0)
     factor: f64,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [Upper, Middle, Lower]
     colors: Vec<Color32>,
     visible: bool,
@@ -27,16 +27,17 @@ impl AccelerationBands {
         Self {
             period: period.max(1),
             factor: clamp_param(factor, 0.0, f64::MAX),
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::GOLD,  // Amber - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
@@ -50,6 +51,11 @@ impl Default for AccelerationBands {
 }
 
 impl Indicator for AccelerationBands {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        factor: number("Factor", 0.0, f64::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "AccBands"
     }
@@ -87,16 +93,12 @@ impl Indicator for AccelerationBands {
                     lower += b.low * (1.0 - self.factor * r);
                 }
 
-                self.values.push(IndicatorValue::Multiple(vec![
-                    upper / n,
-                    middle / n,
-                    lower / n,
-                ]));
+                self.values.push_lines(&[upper / n, middle / n, lower / n]);
             }
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -114,7 +116,7 @@ impl Indicator for AccelerationBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
@@ -152,6 +154,8 @@ mod tests {
             low,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -181,16 +185,16 @@ mod tests {
         ab.calculate(&data);
 
         let mut failures = Vec::new();
-        if ab.line_cnt() != 3 {
-            failures.push(format!("line_cnt {}, want 3", ab.line_cnt()));
+        if ab.line_count() != 3 {
+            failures.push(format!("line_count {}, want 3", ab.line_count()));
         }
         assert_eq!(ab.values.len(), bars.len());
         assert!(matches!(
-            ab.values[..2],
+            ab.values.to_rows()[..2],
             [IndicatorValue::None, IndicatorValue::None]
         ));
         for (i, want) in expected.iter().enumerate() {
-            let IndicatorValue::Multiple(got) = &ab.values[i + 2] else {
+            let IndicatorValue::Multiple(got) = &ab.values.to_rows()[i + 2] else {
                 panic!("bar {}: no value", i + 2);
             };
             assert_eq!(got.len(), 3, "bar {}", i + 2);

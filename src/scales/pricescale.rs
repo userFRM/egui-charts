@@ -12,11 +12,13 @@
 use std::fmt;
 use std::str::FromStr;
 
+use super::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConfig};
+
 /// Scaling mode for the price (Y) axis.
 ///
 /// Determines how raw price values are transformed before being mapped to
 /// pixel coordinates.  The default is [`Normal`](PriceScaleMode::Normal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PriceScaleMode {
     /// Prices on a linear axis: equal price differences take equal heights.
     #[default]
@@ -55,7 +57,7 @@ impl FromStr for PriceScaleMode {
 }
 
 /// A min/max price range, used throughout the scale engine.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceRange {
     /// Minimum price in the range.
     pub min: f64,
@@ -80,13 +82,15 @@ impl PriceRange {
     }
 }
 
-/// Top and bottom margins for the price scale, expressed as fractions of the
-/// visible data range.
-#[derive(Debug, Clone, Copy)]
+/// Space auto-scaling leaves above and below the data, as fractions of the pane height.
+///
+/// The defaults keep the data in the middle 80% of the pane. Margins that together
+/// leave no room for the data are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleMargins {
-    /// Top margin as a fraction of the data range (0.0 to 1.0)
+    /// Space above the highest value, as a fraction of the pane height (0.0 to 1.0)
     pub top: f64,
-    /// Bottom margin as a fraction of the data range (0.0 to 1.0)
+    /// Space below the lowest value, as a fraction of the pane height (0.0 to 1.0)
     pub bottom: f64,
 }
 
@@ -145,7 +149,7 @@ impl fmt::Display for PriceScaleId {
 }
 
 /// Configuration options for a [`PriceScale`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleOptions {
     /// Price scale mode
     pub mode: PriceScaleMode,
@@ -155,13 +159,16 @@ pub struct PriceScaleOptions {
 
     /// Margins (top and bottom)
     pub scale_margins: PriceScaleMargins,
+
+    /// Spacing and number of the tick marks, which place the axis labels and grid lines
+    pub tick_marks: PriceMarkGeneratorConfig,
 }
 
 /// How one series' prices become scale units.
 ///
 /// Percentage and indexed modes are relative to `base`, the series' first
 /// visible close; normal and logarithmic modes ignore it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PriceTransform {
     /// Scale mode
     pub mode: PriceScaleMode,
@@ -170,6 +177,20 @@ pub struct PriceTransform {
 }
 
 impl PriceTransform {
+    /// Relative modes without a finite, nonzero reference show ordinary prices instead.
+    pub(crate) fn new(mode: PriceScaleMode, base: f64) -> Self {
+        match mode {
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => {
+                if base.is_finite() && base != 0.0 {
+                    Self { mode, base }
+                } else {
+                    Self::default()
+                }
+            }
+            _ => Self { mode, base: 0.0 },
+        }
+    }
+
     /// Converts a price to scale units.
     ///
     /// Logarithmic maps non-positive prices to negative infinity, which
@@ -194,19 +215,39 @@ impl PriceTransform {
         }
     }
 
+    /// The value an axis label shows for a scale value: the price in the normal and logarithmic
+    /// modes, the percentage or index value otherwise.
+    pub(crate) fn axis_value(&self, value: f64) -> f64 {
+        if self.mode == PriceScaleMode::Logarithmic {
+            self.to_price(value)
+        } else {
+            value
+        }
+    }
+
     /// Formats a scale value for the axis: prices, signed percentages or index values.
-    pub(crate) fn label(&self, value: f64, decimals: usize) -> String {
-        match self.mode {
-            PriceScaleMode::Percentage => format!("{value:+.decimals$}%"),
-            PriceScaleMode::Logarithmic => format!("{:.decimals$}", self.to_price(value)),
-            _ => format!("{value:.decimals$}"),
+    ///
+    /// A host `formatter` receives the price in the normal and logarithmic modes and
+    /// the percentage or index value otherwise, and replaces `decimals`.
+    pub(crate) fn label(
+        &self,
+        value: f64,
+        decimals: usize,
+        formatter: Option<&dyn super::PriceFormatter>,
+    ) -> String {
+        use super::{DefaultPriceFormatter, PriceFormatter};
+        let value = self.axis_value(value);
+        match (formatter, self.mode) {
+            (Some(formatter), _) => formatter.format(value),
+            (None, PriceScaleMode::Percentage) => format!("{value:+.decimals$}%"),
+            (None, _) => DefaultPriceFormatter::with_precision(decimals).format(value),
         }
     }
 }
 
 /// One price axis: options and the visible range in scale units, fitted to the
 /// data until the user scales it by hand.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PriceScale {
     options: PriceScaleOptions,
     /// Visible range in scale units
@@ -215,6 +256,10 @@ pub struct PriceScale {
     transform: PriceTransform,
     /// The user zoomed or set the range, so autoscale leaves it alone until reset.
     manual: bool,
+    /// Larger magnitude of the data at the last fit, in scale units
+    level: f64,
+    price_precision: Option<u8>,
+    bar_ratio: Option<f64>,
 }
 
 impl PriceScale {
@@ -225,6 +270,51 @@ impl PriceScale {
             range: PriceRange::new(0.0, 100.0),
             transform: PriceTransform::default(),
             manual: false,
+            level: 0.0,
+            price_precision: None,
+            bar_ratio: None,
+        }
+    }
+
+    /// Sets the decimals used by price ticks and tags. `None` derives them from the tick step.
+    pub fn set_price_precision(&mut self, decimals: Option<u8>) {
+        self.price_precision = decimals;
+    }
+
+    /// Locks scale units per bar at the current bar spacing and pane height.
+    /// Invalid dimensions leave the scale unlocked. Unlocking keeps the current manual range.
+    pub fn set_bar_ratio_locked(&mut self, locked: bool, bar_spacing: f32, height: f32) {
+        self.bar_ratio = (locked
+            && self.range.max > self.range.min
+            && (self.range.max - self.range.min).is_finite()
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+            && height.is_finite()
+            && height > 0.0)
+            .then(|| (self.range.max - self.range.min) * f64::from(bar_spacing / height));
+        if self.bar_ratio.is_some() {
+            self.manual = true;
+        }
+    }
+
+    /// Whether horizontal zoom and pane resizing preserve scale units per bar.
+    pub fn bar_ratio_locked(&self) -> bool {
+        self.bar_ratio.is_some()
+    }
+
+    /// Preserves the locked ratio about the range centre after horizontal zoom or pane resize.
+    pub fn update_bar_ratio(&mut self, bar_spacing: f32, height: f32) {
+        if let Some(ratio) = self.bar_ratio
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+            && height.is_finite()
+            && height > 0.0
+        {
+            let span = ratio * f64::from(height / bar_spacing);
+            let centre = self.range.min / 2.0 + self.range.max / 2.0;
+            if span.is_finite() && span > 0.0 {
+                self.range = PriceRange::new(centre - span / 2.0, centre + span / 2.0);
+            }
         }
     }
 
@@ -272,19 +362,43 @@ impl PriceScale {
     ///
     /// Non-finite bounds (no drawable data) keep the current range.
     pub fn autoscale(&mut self, min: f64, max: f64) {
-        if self.manual || !min.is_finite() || !max.is_finite() {
+        if !min.is_finite() || !max.is_finite() {
             return;
         }
-        let span = auto_scale_span(min, max);
-        let margins = self.options.scale_margins;
-        self.range = PriceRange::new(min - span * margins.bottom, max + span * margins.top);
+        self.level = min.abs().max(max.abs());
+        if self.manual {
+            return;
+        }
+        let span = match self.transform.mode {
+            // Log units measure ratios: flat data gets 0.01, which is 1% of the price.
+            PriceScaleMode::Logarithmic if max - min <= 1e-9 => 0.01,
+            _ => auto_scale_span(min, max),
+        };
+        let PriceScaleMargins { top, bottom } = self.options.scale_margins;
+        let (top, bottom) = (top.clamp(0.0, 1.0), bottom.clamp(0.0, 1.0));
+        let (top, bottom) = if top + bottom < 1.0 {
+            (top, bottom)
+        } else {
+            (0.0, 0.0)
+        };
+        // The data fills the rest of the pane, so the whole range is that share's inverse.
+        let total = span / (1.0 - top - bottom);
+        self.range = PriceRange::new(min - total * bottom, max + total * top);
     }
 
     /// Shows `min..max` and switches to manual.
     ///
     /// The bounds are in the units of the transform the last fit returned
-    /// ([`ChartState::fit_price_scale`](crate::model::ChartState::fit_price_scale)).
+    /// ([`ChartState::fit_price_scale`](crate::studies::ChartState::fit_price_scale)).
     pub fn set_range(&mut self, min: f64, max: f64) {
+        if let Some(ratio) = &mut self.bar_ratio {
+            let span = self.range.max - self.range.min;
+            if span > 0.0 && span.is_finite() && (max - min).is_finite() && max > min {
+                *ratio *= (max - min) / span;
+            } else {
+                self.bar_ratio = None;
+            }
+        }
         self.range = PriceRange::new(min, max);
         self.manual = true;
     }
@@ -294,14 +408,14 @@ impl PriceScale {
     /// `anchor` is in the units of the transform the last fit returned.
     ///
     /// One call changes the span by at most 20 times either way. Zooming in stops at a
-    /// span of 1e-6 of the larger bound's magnitude (1e-6 when both bounds are 0), and
-    /// a result that is not finite leaves the range unchanged.
+    /// millionth of the price level: 1e-6 log units on a logarithmic scale, 1e-4 percentage
+    /// or index points in the relative modes, and for prices 1e-6 of the larger magnitude of
+    /// the data at the last fit or of the range. A result that is not finite leaves the range
+    /// unchanged.
     pub fn zoom(&mut self, factor: f64, anchor: f64) {
         let PriceRange { min, max } = self.range;
         let span = auto_scale_span(min, max);
-        // 1e-6 of the level: far above f64 rounding (~1e-16), at or below common tick sizes.
-        let level = min.abs().max(max.abs());
-        let floor = if level > 0.0 { level * 1e-6 } else { 1e-6 };
+        let floor = self.min_span();
         // Never widen a range that is already narrower than the floor.
         let new_span = (span * factor)
             .clamp(span * 0.05, span * 20.0)
@@ -314,9 +428,29 @@ impl PriceScale {
         }
     }
 
+    /// The narrowest span zooming reaches, in scale units: a millionth of the price level,
+    /// far above f64 rounding (~1e-16) and at or below common tick sizes. The level is the
+    /// price on a logarithmic scale and the base in the relative modes, which do not shrink
+    /// with a view that crosses 0; for prices it is the larger magnitude of the data at the last
+    /// fit and of the range (1e-6 when both are 0).
+    pub(crate) fn min_span(&self) -> f64 {
+        match self.transform.mode {
+            PriceScaleMode::Logarithmic => 1e-6,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100 => 1e-4,
+            PriceScaleMode::Normal => {
+                let level = self
+                    .level
+                    .max(self.range.min.abs())
+                    .max(self.range.max.abs());
+                if level > 0.0 { level * 1e-6 } else { 1e-6 }
+            }
+        }
+    }
+
     /// Returns to auto-scaling (double click on the axis).
     pub fn reset(&mut self) {
         self.manual = false;
+        self.bar_ratio = None;
     }
 
     /// Mapping for one series for one frame, given the pane's vertical extent in points.
@@ -328,6 +462,8 @@ impl PriceScale {
             bottom,
             self.options.invert_scale,
         )
+        .with_price_precision(self.price_precision)
+        .with_tick_marks(self.options.tick_marks)
     }
 }
 
@@ -342,6 +478,8 @@ pub struct PriceMap {
     top: f32,
     bottom: f32,
     inverted: bool,
+    price_precision: Option<u8>,
+    tick_marks: PriceMarkGeneratorConfig,
 }
 
 impl PriceMap {
@@ -360,6 +498,44 @@ impl PriceMap {
             top,
             bottom,
             inverted,
+            price_precision: None,
+            tick_marks: PriceMarkGeneratorConfig::default(),
+        }
+    }
+
+    /// Uses the same scale, orientation and formatting in a different vertical plot area.
+    pub fn with_bounds(mut self, top: f32, bottom: f32) -> Self {
+        self.top = top;
+        self.bottom = bottom;
+        self
+    }
+
+    /// Sets the price precision for this frame.
+    pub fn with_price_precision(mut self, decimals: Option<u8>) -> Self {
+        self.price_precision = decimals;
+        self
+    }
+
+    /// Sets how [`marks`](Self::marks) spaces the tick marks.
+    pub fn with_tick_marks(mut self, config: PriceMarkGeneratorConfig) -> Self {
+        self.tick_marks = config;
+        self
+    }
+
+    /// Tick marks for the visible range, spaced by the scale's
+    /// [`tick_marks`](PriceScaleOptions::tick_marks) settings.
+    pub fn marks(&self) -> Vec<PriceMark> {
+        PriceMarkGenerator::with_config(self.tick_marks).generate_marks(self)
+    }
+
+    /// Supplied price decimals, or `None` to derive them from the tick step.
+    /// Percentage and indexed axes keep their own precision.
+    pub fn price_precision(&self) -> Option<usize> {
+        match self.transform.mode {
+            PriceScaleMode::Normal | PriceScaleMode::Logarithmic => {
+                self.price_precision.map(usize::from)
+            }
+            _ => None,
         }
     }
 
@@ -397,7 +573,7 @@ impl PriceMap {
     #[inline]
     pub(crate) fn scale_to_y(&self, value: f64) -> f32 {
         let span = self.range.max - self.range.min;
-        if span.abs() < f64::EPSILON {
+        if span == 0.0 {
             return (self.top + self.bottom) / 2.0;
         }
         // Bounded so that a non-positive price on a log scale stays a finite coordinate off the pane.
@@ -441,6 +617,7 @@ mod tests {
         let cases = [
             (Normal, 0.0, (100.0, 200.0), false, 150.0, 50.0),
             (Normal, 0.0, (100.0, 200.0), false, 120.0, 80.0),
+            (Normal, 0.0, (1e-18, 6e-18), false, 2e-18, 80.0),
             // ln 100 is the mean of ln 10 and ln 1,000.
             (Logarithmic, 0.0, (ln(10.0), ln(1000.0)), false, 100.0, 50.0),
             // 55 is +10% of 50, the top of -10%..+10%.
@@ -472,6 +649,30 @@ mod tests {
         }
     }
 
+    /// Margins are shares of the pane height: data from 100 to 170 with 20% above and 10% below
+    /// fills 70% of the pane, so the range is 100 wide and runs from 90 to 190. Margins that
+    /// leave no room for the data are ignored.
+    #[test]
+    fn autoscale_margins_are_shares_of_the_pane() {
+        for (top, bottom, expected) in [
+            (0.2, 0.1, (90.0, 190.0)),
+            (0.0, 0.0, (100.0, 170.0)),
+            (0.6, 0.4, (100.0, 170.0)),
+            (f64::NAN, 0.1, (100.0, 170.0)),
+        ] {
+            let mut scale = PriceScale::new(PriceScaleOptions {
+                scale_margins: PriceScaleMargins { top, bottom },
+                ..Default::default()
+            });
+            scale.autoscale(100.0, 170.0);
+            let PriceRange { min, max } = scale.range();
+            assert!(
+                (min - expected.0).abs() < 1e-9 && (max - expected.1).abs() < 1e-9,
+                "{top} {bottom}: {min}..{max}"
+            );
+        }
+    }
+
     /// Manual zoom must narrow ordinary intraday ranges, stop at a span tied to the
     /// price level, and never overflow to infinite or NaN bounds when zooming out.
     #[test]
@@ -496,20 +697,40 @@ mod tests {
             );
         }
 
-        let mut s = scale_with(90.0, 110.0);
-        for _ in 0..200 {
-            s.zoom((-1.0f64).exp(), 100.0);
-        }
-        // 1e-6 of a price of 100.
-        assert!(s.range().max - s.range().min >= 1e-4, "{:?}", s.range());
+        // Zoomed all the way in, the span is a millionth of the price level: of the visible data
+        // (at most 110, or 0.5 across zero), of the base (100) in percentage and index points,
+        // and of the price (1e-6 log units) on a logarithmic scale, also around ln 1 = 0.
+        use PriceScaleMode::*;
+        let ln = f64::ln;
+        // (mode, data in scale units, anchor, expected span)
+        for (mode, (lo, hi), anchor, floor) in [
+            (Normal, (90.0, 110.0), 100.0, 1.1e-4),
+            (Normal, (-0.5, 0.5), 0.0, 5e-7),
+            (Percentage, (-5.0, 5.0), 0.0, 1e-4),
+            (IndexedTo100, (95.0, 105.0), 100.0, 1e-4),
+            (Logarithmic, (ln(0.95), ln(1.05)), 0.0, 1e-6),
+        ] {
+            let mut s = PriceScale::new(PriceScaleOptions::default());
+            s.rebase(PriceTransform { mode, base: 50.0 });
+            s.autoscale(lo, hi);
+            for _ in 0..200 {
+                s.zoom((-1.0f64).exp(), anchor);
+            }
+            let span = s.range().max - s.range().min;
+            assert!(
+                (span - floor).abs() < floor * 1e-6,
+                "{mode:?} ({lo}, {hi}): {:?}",
+                s.range()
+            );
 
-        for _ in 0..1000 {
-            s.zoom(1.0f64.exp(), 100.0);
+            for _ in 0..1000 {
+                s.zoom(1.0f64.exp(), anchor);
+            }
+            let r = s.range();
+            assert!(
+                r.min.is_finite() && r.max.is_finite() && r.min < r.max,
+                "{mode:?}: {r:?}"
+            );
         }
-        let r = s.range();
-        assert!(
-            r.min.is_finite() && r.max.is_finite() && r.min < r.max,
-            "{r:?}"
-        );
     }
 }

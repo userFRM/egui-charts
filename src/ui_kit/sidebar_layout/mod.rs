@@ -1,7 +1,7 @@
 //! Sidebar + content two-column layout using `egui_extras::StripBuilder`.
 //!
-//! Provides a proportional two-column layout with a fixed-width sidebar,
-//! a 1px vertical separator, and a remainder-width content area.
+//! Use [`SidebarLayout`] for a fixed-width navigation column beside flexible
+//! content, separated by a rule. Sizes use egui logical points.
 //!
 //! # Example
 //! ```
@@ -15,6 +15,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
@@ -29,6 +30,7 @@ pub struct SidebarLayout {
 }
 
 impl SidebarLayout {
+    /// Create a layout with a sidebar width in egui logical points.
     pub fn new(sidebar_width: f32) -> Self {
         Self { sidebar_width }
     }
@@ -100,6 +102,7 @@ pub struct SidebarTab<'a> {
 }
 
 impl<'a> SidebarTab<'a> {
+    /// Create a sidebar tab with a label and selection state.
     pub fn new(label: &'a str, is_active: bool) -> Self {
         Self {
             label,
@@ -108,6 +111,7 @@ impl<'a> SidebarTab<'a> {
         }
     }
 
+    /// Set the tab's optional icon.
     pub fn icon(mut self, icon: &'a crate::icons::Icon) -> Self {
         self.icon = Some(icon);
         self
@@ -119,9 +123,10 @@ impl<'a> SidebarTab<'a> {
         let width = ui.available_width();
         let height = DESIGN_TOKENS.sizing.button_lg;
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        response.widget_info(|| {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), self.is_active, self.label)
-        });
+        let translated_label = l10n::text(ui.ctx(), self.label);
+        response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &translated_label));
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(self.is_active));
 
         let is_hovered = response.hovered();
 
@@ -156,11 +161,11 @@ impl<'a> SidebarTab<'a> {
         ui.painter().text(
             Pos2::new(icon_x + icon_size + theme.spacing.sm, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            self.label,
+            l10n::text(ui.ctx(), self.label),
             egui::FontId::proportional(theme.text.body),
             text_color,
         );
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, 0.0);
 
         response.clicked()
     }

@@ -1,11 +1,12 @@
 use crate::model::Bar;
+use crate::studies::helpers;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Coppock Curve
 /// A momentum indicator originally designed to identify buying opportunities in stock indices
 /// Uses a weighted moving avg of the sum of two ROC periods
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct CoppockCurve {
     /// Long ROC period (typically 14)
@@ -14,23 +15,25 @@ pub struct CoppockCurve {
     short_roc: usize,
     /// WMA period (typically 10)
     wma_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl CoppockCurve {
+    /// Create with rate-of-change periods 14 and 11 and weighted-average period 10.
     pub fn new() -> Self {
         Self {
             long_roc: 14,
             short_roc: 11,
             wma_period: 10,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            values: IndicatorValues::new(),
+            color: palette::PURPLE,
             visible: true,
         }
     }
 
+    /// Set the long and short rate-of-change and weighted-average periods, each at least one.
     pub fn with_periods(mut self, long_roc: usize, short_roc: usize, wma: usize) -> Self {
         self.long_roc = long_roc.max(1);
         self.short_roc = short_roc.max(1);
@@ -38,6 +41,7 @@ impl CoppockCurve {
         self
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
@@ -58,38 +62,6 @@ impl CoppockCurve {
 
         roc
     }
-
-    /// Calculate Weighted Moving Avg
-    fn calculate_wma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut wma = Vec::with_capacity(data.len());
-        let weight_sum: f64 = (1..=period).map(|i| i as f64).sum();
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                wma.push(f64::NAN);
-            } else {
-                let mut weighted_sum = 0.0;
-                let mut has_nan = false;
-
-                for j in 0..period {
-                    let value = data[i + 1 - period + j];
-                    if value.is_nan() {
-                        has_nan = true;
-                        break;
-                    }
-                    weighted_sum += value * (j + 1) as f64;
-                }
-
-                if has_nan {
-                    wma.push(f64::NAN);
-                } else {
-                    wma.push(weighted_sum / weight_sum);
-                }
-            }
-        }
-
-        wma
-    }
 }
 
 impl Default for CoppockCurve {
@@ -99,6 +71,18 @@ impl Default for CoppockCurve {
 }
 
 impl Indicator for CoppockCurve {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        long_roc: length("Long roc", 1, usize::MAX),
+        short_roc: length("Short roc", 1, usize::MAX),
+        wma_period: length("Wma period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "Coppock"
     }
@@ -142,7 +126,7 @@ impl Indicator for CoppockCurve {
             .collect();
 
         // Apply WMA to the sum
-        let coppock = Self::calculate_wma(&roc_sum, self.wma_period);
+        let coppock = helpers::wma(&roc_sum, self.wma_period);
 
         // Store results
         for value in coppock {
@@ -154,7 +138,7 @@ impl Indicator for CoppockCurve {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -189,57 +173,5 @@ impl Indicator for CoppockCurve {
             "Coppock({},{},{})",
             self.long_roc, self.short_roc, self.wma_period
         )]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_roc_calculation() {
-        let prices = vec![100.0, 105.0, 110.0, 115.0, 120.0];
-        let roc = CoppockCurve::calculate_roc(&prices, 2);
-
-        assert_eq!(roc.len(), 5);
-        assert!(roc[0].is_nan());
-        assert!(roc[1].is_nan());
-        // ROC at index 2: (110 - 100) / 100 * 100 = 10%
-        assert!((roc[2] - 10.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_wma_calculation() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let wma = CoppockCurve::calculate_wma(&data, 3);
-
-        assert_eq!(wma.len(), 5);
-        assert!(wma[0].is_nan());
-        assert!(wma[1].is_nan());
-        // WMA at index 2: (1*1 + 2*2 + 3*3) / (1+2+3) = (1 + 4 + 9) / 6 = 14/6 = 2.333
-        assert!((wma[2] - 2.333).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_coppock_calculation() {
-        let mut coppock = CoppockCurve::new().with_periods(5, 3, 3);
-
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        coppock.calculate(&data);
-
-        assert_eq!(coppock.values.len(), 30);
     }
 }

@@ -1,36 +1,38 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Williams Accumulation/Distribution
 /// Developed by Larry Williams
 /// Measures buying and selling pressure
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct WilliamsAD {
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl WilliamsAD {
+    /// Create with the default plot colors.
     pub fn new() -> Self {
         Self {
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.bullish, // Teal
+            values: IndicatorValues::new(),
+            color: palette::UP, // Teal
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
     }
 
     /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < 2 {
             for _ in 0..data.len() {
@@ -73,6 +75,10 @@ impl Default for WilliamsAD {
 }
 
 impl Indicator for WilliamsAD {
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn name(&self) -> &str {
         "WAD"
     }
@@ -89,7 +95,7 @@ impl Indicator for WilliamsAD {
         );
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -137,6 +143,8 @@ mod tests {
             low,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
     }
 

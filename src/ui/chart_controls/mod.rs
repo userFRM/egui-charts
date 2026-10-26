@@ -1,15 +1,8 @@
-//! Chart control components.
+//! Pane maximize, restore and close buttons.
 //!
-//! Provides:
-//! - Floating zoom/scale controls at bottom-right of chart
-//! - Pane controls (maximize, minimize, close) at top-right of each pane
+//! Use [`PaneControls`] when composing pane headers outside the chart widget, and
+//! apply the returned [`PaneControlAction`] to the relevant pane.
 
-mod actions;
-mod config;
-mod control_bar;
 mod pane_controls;
 
-pub use actions::ChartControlAction;
-pub use config::ChartControlBarConfig;
-pub use control_bar::{ChartControlBar, ChartControlBarState};
 pub use pane_controls::{PaneControlAction, PaneControls, PaneControlsConfig, PaneId};

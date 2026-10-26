@@ -1,39 +1,41 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// McGinley Dynamic
 /// Adaptive moving avg designed to track price better than traditional MAs
 /// Self-adjusts based on price volatility
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
 
 impl McGinleyDynamic {
+    /// Create with a lookback of `period` bars, clamped to at least 1.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.pink, // Pink
+            values: IndicatorValues::new(),
+            color: palette::PINK, // Pink
             visible: true,
         }
     }
 
+    /// Set the plot color.
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> Vec<IndicatorValue> {
-        let mut values = Vec::new();
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
             return values;
@@ -73,6 +75,16 @@ impl Default for McGinleyDynamic {
 }
 
 impl Indicator for McGinleyDynamic {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "MD"
     }
@@ -85,7 +97,7 @@ impl Indicator for McGinleyDynamic {
         self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -133,6 +145,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -147,8 +161,10 @@ mod tests {
         assert_eq!(md.values.len(), 20);
 
         // MD should track price but smoother
-        if let IndicatorValue::Single(v) = md.values.last().unwrap() {
-            assert!(*v > 100.0 && *v < 120.0);
-        }
+        let rows = md.values.to_rows();
+        let IndicatorValue::Single(v) = rows.last().unwrap() else {
+            panic!("no value: {:?}", md.values.to_rows().last().unwrap());
+        };
+        assert!(*v > 100.0 && *v < 120.0);
     }
 }

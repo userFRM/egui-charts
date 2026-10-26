@@ -13,3 +13,10 @@ pub use selection_render::{
     render_series_selection_on_points,
 };
 pub use settings::SeriesSettings;
+
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+mod trade_delta;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use trade_delta::{TradeDeltaStyle, render_trade_delta};

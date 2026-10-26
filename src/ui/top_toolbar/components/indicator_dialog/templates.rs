@@ -3,10 +3,11 @@
 //! Provides the template panel within the indicator dialog for saving,
 //! loading, and managing indicator parameter templates.
 
-use crate::ext::UiExt;
-use crate::styles::typography;
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::IndicatorTemplate;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{EmptyState, LoadingIndicator};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
@@ -16,23 +17,39 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Ui, Vec2};
 
 /// Actions emitted by the indicator template panel
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum IndicatorTemplateAction {
     /// No action taken
     None,
     /// Save current indicator parameters as a new template
-    Save { name: String, description: String },
+    Save {
+        /// Display name.
+        name: String,
+        /// Description displayed to the user.
+        description: String,
+    },
     /// Load a template's parameters into the current indicator
-    Load { template_id: String },
+    Load {
+        /// Host identifier of the template.
+        template_id: String,
+    },
     /// Delete a template
-    Delete { template_id: String },
+    Delete {
+        /// Host identifier of the template.
+        template_id: String,
+    },
     /// Rename a template
     Rename {
+        /// Host identifier of the template.
         template_id: String,
+        /// Replacement display name.
         new_name: String,
     },
     /// Toggle shared/personal visibility
     ToggleShared {
+        /// Host identifier of the template.
         template_id: String,
+        /// Requested sharing state; the host manages permissions.
         is_shared: bool,
     },
 }
@@ -48,7 +65,7 @@ pub struct IndicatorTemplateState {
     pub templates: Vec<IndicatorTemplate>,
     /// Currently selected template (for preview/actions)
     pub selected_template: Option<String>,
-    /// Whether the template list is loading from the API
+    /// Whether the host is loading the template list.
     pub is_loading: bool,
     /// Whether the save form is visible
     pub show_save_form: bool,
@@ -75,7 +92,7 @@ impl IndicatorTemplateState {
         self.pending_delete = None;
     }
 
-    /// Set templates from API response
+    /// Replace the template list supplied by the host and clear the loading state.
     pub fn set_templates(&mut self, templates: Vec<IndicatorTemplate>) {
         self.templates = templates;
         self.is_loading = false;
@@ -132,13 +149,13 @@ impl<'a> IndicatorTemplatePanel<'a> {
     fn draw_header(&self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Templates")
-                    .size(DESIGN_TOKENS.typography.body)
+                RichText::new(l10n::text(ui.ctx(), "Templates"))
+                    .size(ui.active_theme().text.body)
                     .strong(),
             );
             ui.label(
                 RichText::new(format!("({})", self.indicator_type))
-                    .size(DESIGN_TOKENS.typography.small)
+                    .size(ui.active_theme().text.small)
                     .color(ui.visuals().weak_text_color()),
             );
         });
@@ -166,13 +183,16 @@ impl<'a> IndicatorTemplatePanel<'a> {
             };
 
             if ui
-                .selectable_label(!self.state.show_shared, personal_label)
+                .selectable_label(
+                    !self.state.show_shared,
+                    l10n::text(ui.ctx(), personal_label),
+                )
                 .clicked()
             {
                 self.state.show_shared = false;
             }
             if ui
-                .selectable_label(self.state.show_shared, shared_label)
+                .selectable_label(self.state.show_shared, l10n::text(ui.ctx(), shared_label))
                 .clicked()
             {
                 self.state.show_shared = true;
@@ -193,10 +213,14 @@ impl<'a> IndicatorTemplatePanel<'a> {
         let mut action = current_action;
 
         if !self.state.show_save_form {
-            if ui.button("Save Current as Template...").clicked() {
+            if ui
+                .button(l10n::text(ui.ctx(), "Save Current as Template..."))
+                .clicked()
+            {
                 self.state.show_save_form = true;
                 self.state.save_name.clear();
                 self.state.save_description.clear();
+                ui.data_mut(|d| d.insert_temp(ui.scope_id().with("focus_template_name"), true));
             }
             return action;
         }
@@ -209,23 +233,29 @@ impl<'a> IndicatorTemplatePanel<'a> {
         let mut action = IndicatorTemplateAction::None;
 
         ui.label(
-            RichText::new("Save Template")
-                .size(DESIGN_TOKENS.typography.body)
+            RichText::new(l10n::text(ui.ctx(), "Save Template"))
+                .size(ui.active_theme().text.body)
                 .strong(),
         );
         ui.space_sm();
 
-        ui.label("Name:");
-        let name_response = ui.text_edit_singleline(&mut self.state.save_name);
+        let label = ui.label(l10n::text(ui.ctx(), "Name:"));
+        let name_response = ui
+            .text_edit_singleline(&mut self.state.save_name)
+            .labelled_by(label.id);
 
         // Auto-focus the name field when save form opens
-        if !name_response.has_focus() {
+        if ui
+            .data_mut(|d| d.remove_temp::<bool>(ui.scope_id().with("focus_template_name")))
+            .unwrap_or(false)
+        {
             name_response.request_focus();
         }
 
         ui.space_sm();
-        ui.label("Description (optional):");
-        ui.text_edit_singleline(&mut self.state.save_description);
+        let label = ui.label(l10n::text(ui.ctx(), "Description (optional):"));
+        ui.text_edit_singleline(&mut self.state.save_description)
+            .labelled_by(label.id);
 
         ui.space_lg();
 
@@ -233,7 +263,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(can_save, egui::Button::new("Save"))
+                .add_enabled(can_save, egui::Button::new(l10n::text(ui.ctx(), "Save")))
                 .clicked()
             {
                 action = IndicatorTemplateAction::Save {
@@ -243,13 +273,16 @@ impl<'a> IndicatorTemplatePanel<'a> {
                 self.state.reset_save_form();
             }
 
-            if ui.button("Cancel").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "Cancel")).clicked() {
                 self.state.reset_save_form();
             }
         });
 
         // Enter key to confirm
-        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_save {
+        if (name_response.has_focus() || ui.memory(|m| m.had_focus_last_frame(name_response.id)))
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && can_save
+        {
             action = IndicatorTemplateAction::Save {
                 name: self.state.save_name.trim().to_string(),
                 description: self.state.save_description.trim().to_string(),
@@ -320,14 +353,29 @@ impl<'a> IndicatorTemplatePanel<'a> {
         template: &IndicatorTemplate,
     ) -> Option<IndicatorTemplateAction> {
         let item_height = DESIGN_TOKENS.sizing.button_lg;
-        let desired_size = Vec2::new(ui.available_width() - DESIGN_TOKENS.spacing.lg, item_height);
+        let desired_size = Vec2::new(
+            ui.available_width() - ui.active_theme().spacing.lg,
+            item_height,
+        );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         let is_selected = self
             .state
             .selected_template
             .as_ref()
             .is_some_and(|id| id == &template.id);
+        let translated_label = l10n::text(ui.ctx(), &template.name);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::ListBoxOption,
+                response.enabled(),
+                &translated_label,
+            )
+        });
+
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_selected(is_selected));
 
         // Background
         self.draw_item_bg(ui, rect, &response, is_selected);
@@ -347,7 +395,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
                 ui.visuals().widgets.hovered.bg_fill
             };
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg);
+                .rect_filled(rect, ui.active_theme().radius.md, bg);
         }
     }
 
@@ -358,7 +406,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         template: &IndicatorTemplate,
         is_selected: bool,
     ) {
-        let text_x = rect.min.x + DESIGN_TOKENS.spacing.lg;
+        let text_x = rect.min.x + ui.active_theme().spacing.lg;
         let visuals = ui.visuals();
         let (text, weak) = if is_selected {
             let on_accent = visuals.selection.stroke.color;
@@ -369,10 +417,10 @@ impl<'a> IndicatorTemplatePanel<'a> {
 
         // Template name
         ui.painter().text(
-            Pos2::new(text_x, rect.min.y + DESIGN_TOKENS.spacing.xl),
+            Pos2::new(text_x, rect.min.y + ui.active_theme().spacing.xl),
             egui::Align2::LEFT_CENTER,
-            &template.name,
-            egui::FontId::proportional(typography::MD),
+            l10n::text(ui.ctx(), &template.name),
+            egui::FontId::proportional(ui.active_theme().text.body),
             text,
         );
 
@@ -387,8 +435,8 @@ impl<'a> IndicatorTemplatePanel<'a> {
         ui.painter().text(
             Pos2::new(text_x, rect.min.y + DESIGN_TOKENS.sizing.button_sm),
             egui::Align2::LEFT_CENTER,
-            &suffix,
-            egui::FontId::proportional(typography::XS),
+            l10n::text(ui.ctx(), &suffix),
+            egui::FontId::proportional(ui.active_theme().text.tiny),
             weak,
         );
     }
@@ -412,7 +460,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
         // Context menu (right-click on desktop)
         let mut action = None;
         response.context_menu(|ui| {
-            if ui.button("Load").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "Load")).clicked() {
                 action = Some(IndicatorTemplateAction::Load {
                     template_id: template.id.clone(),
                 });
@@ -424,7 +472,7 @@ impl<'a> IndicatorTemplatePanel<'a> {
             } else {
                 "Share with Team"
             };
-            if ui.button(share_label).clicked() {
+            if ui.button(l10n::text(ui.ctx(), share_label)).clicked() {
                 action = Some(IndicatorTemplateAction::ToggleShared {
                     template_id: template.id.clone(),
                     is_shared: !template.is_shared,
@@ -436,25 +484,77 @@ impl<'a> IndicatorTemplatePanel<'a> {
 
             // Delete with confirmation
             if self.state.pending_delete.as_ref() == Some(&template.id) {
-                ui.colored_label(Color32::from_rgb(239, 83, 80), "Confirm delete?");
+                ui.colored_label(
+                    Color32::from_rgb(239, 83, 80),
+                    l10n::text(ui.ctx(), "Confirm delete?"),
+                );
                 ui.horizontal(|ui| {
-                    if ui.button("Yes").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Yes")).clicked() {
                         action = Some(IndicatorTemplateAction::Delete {
                             template_id: template.id.clone(),
                         });
                         self.state.pending_delete = None;
                         ui.close();
                     }
-                    if ui.button("No").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "No")).clicked() {
                         self.state.pending_delete = None;
                         ui.close();
                     }
                 });
-            } else if ui.button("Delete").clicked() {
+            } else if ui.button(l10n::text(ui.ctx(), "Delete")).clicked() {
                 self.state.pending_delete = Some(template.id.clone());
             }
         });
 
         action
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_fields_release_focus_and_keyboard_cancel_does_not_save() {
+        let ctx = egui::Context::default();
+        let mut state = IndicatorTemplateState {
+            show_save_form: true,
+            save_name: "Example".into(),
+            ..Default::default()
+        };
+        let mut frame = |key: Option<egui::Key>| {
+            let mut action = IndicatorTemplateAction::None;
+            ctx.run_ui(
+                egui::RawInput {
+                    events: key
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ui| {
+                    action = IndicatorTemplatePanel::new(&mut state, "Example").draw_save_form(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+            (action, ctx.memory(|m| m.focused()))
+        };
+        frame(None);
+        let name = frame(Some(egui::Key::Tab)).1;
+        let description = frame(Some(egui::Key::Tab)).1;
+        assert_ne!(name, description);
+        frame(Some(egui::Key::Tab));
+        frame(Some(egui::Key::Tab));
+        assert!(matches!(
+            frame(Some(egui::Key::Enter)).0,
+            IndicatorTemplateAction::None
+        ));
+        assert!(!state.show_save_form);
     }
 }

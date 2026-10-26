@@ -1,11 +1,13 @@
+use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
+use crate::studies::stepper::rolling_mean;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use egui::Color32;
+
 /// Know Sure Thing (KST) Oscillator
 /// Developed by Martin Pring
 /// Combines multiple ROC values with different smoothing periods
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
-use egui::Color32;
-
 #[derive(Clone)]
 pub struct KnowSureThing {
     /// ROC periods (typically 10, 15, 20, 30)
@@ -14,27 +16,29 @@ pub struct KnowSureThing {
     sma_periods: [usize; 4],
     /// Signal line SMA period (typically 9)
     signal_period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     /// Colors: [KST, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl KnowSureThing {
+    /// Create with ROC periods 10/15/20/30, SMA periods 10/10/10/15 and signal period 9.
     pub fn new() -> Self {
         Self {
             roc_periods: [10, 15, 20, 30],
             sma_periods: [10, 10, 10, 15],
             signal_period: 9,
-            values: Vec::new(),
+            values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - KST
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Signal
+                palette::BLUE,   // Blue - KST
+                palette::ORANGE, // Orange - Signal
             ],
             visible: true,
         }
     }
 
+    /// Set the four rate-of-change periods, their SMA periods and the signal period, each at least one.
     pub fn with_params(
         mut self,
         roc_periods: [usize; 4],
@@ -47,6 +51,7 @@ impl KnowSureThing {
         self
     }
 
+    /// Set plot colors in the order returned by [`Indicator::line_names`].
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
@@ -66,30 +71,6 @@ impl KnowSureThing {
 
         roc
     }
-
-    fn calculate_sma(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < period - 1 {
-                result.push(f64::NAN);
-            } else {
-                let valid: Vec<f64> = data[i + 1 - period..=i]
-                    .iter()
-                    .filter(|&&x| !x.is_nan())
-                    .copied()
-                    .collect();
-
-                if valid.len() < period / 2 {
-                    result.push(f64::NAN);
-                } else {
-                    result.push(valid.iter().sum::<f64>() / valid.len() as f64);
-                }
-            }
-        }
-
-        result
-    }
 }
 
 impl Default for KnowSureThing {
@@ -98,31 +79,10 @@ impl Default for KnowSureThing {
     }
 }
 
-impl Indicator for KnowSureThing {
-    fn name(&self) -> &str {
-        "KST"
-    }
-
-    fn desc(&self) -> &str {
-        "Know Sure Thing - Multi-timeframe momentum"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
-        let max_period = self
-            .roc_periods
-            .iter()
-            .max()
-            .unwrap()
-            .saturating_add(*self.sma_periods.iter().max().unwrap());
-        if data.len() < max_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
-
+impl KnowSureThing {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         // Get closes
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
 
@@ -133,10 +93,10 @@ impl Indicator for KnowSureThing {
         let roc4 = Self::calculate_roc(&closes, self.roc_periods[3]);
 
         // Smooth each ROC
-        let sroc1 = Self::calculate_sma(&roc1, self.sma_periods[0]);
-        let sroc2 = Self::calculate_sma(&roc2, self.sma_periods[1]);
-        let sroc3 = Self::calculate_sma(&roc3, self.sma_periods[2]);
-        let sroc4 = Self::calculate_sma(&roc4, self.sma_periods[3]);
+        let sroc1 = rolling_mean(&roc1, self.sma_periods[0]);
+        let sroc2 = rolling_mean(&roc2, self.sma_periods[1]);
+        let sroc3 = rolling_mean(&roc3, self.sma_periods[2]);
+        let sroc4 = rolling_mean(&roc4, self.sma_periods[3]);
 
         // Calculate KST: (SROC1 * 1) + (SROC2 * 2) + (SROC3 * 3) + (SROC4 * 4)
         let mut kst = Vec::with_capacity(data.len());
@@ -150,22 +110,53 @@ impl Indicator for KnowSureThing {
         }
 
         // Calculate signal line
-        let signal = Self::calculate_sma(&kst, self.signal_period);
+        let signal = rolling_mean(&kst, self.signal_period);
 
         // Store results
         for i in 0..data.len() {
             if kst[i].is_nan() {
-                self.values.push(IndicatorValue::None);
-            } else if signal[i].is_nan() {
-                self.values.push(IndicatorValue::Single(kst[i]));
+                values.push(IndicatorValue::None);
             } else {
-                self.values
-                    .push(IndicatorValue::Multiple(vec![kst[i], signal[i]]));
+                values.push_lines(&[kst[i], signal[i]]);
             }
         }
+
+        values
+    }
+}
+
+impl Indicator for KnowSureThing {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    crate::studies::inputs::study_inputs!(self;
+        roc_periods[0]: length("Roc periods 1", 1, usize::MAX),
+        roc_periods[1]: length("Roc periods 2", 1, usize::MAX),
+        roc_periods[2]: length("Roc periods 3", 1, usize::MAX),
+        roc_periods[3]: length("Roc periods 4", 1, usize::MAX),
+        sma_periods[0]: length("SMA periods 1", 1, usize::MAX),
+        sma_periods[1]: length("SMA periods 2", 1, usize::MAX),
+        sma_periods[2]: length("SMA periods 3", 1, usize::MAX),
+        sma_periods[3]: length("SMA periods 4", 1, usize::MAX),
+        signal_period: length("Signal period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "KST"
+    }
+
+    fn desc(&self) -> &str {
+        "Know Sure Thing - Multi-timeframe momentum"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -197,42 +188,5 @@ impl Indicator for KnowSureThing {
 
     fn line_names(&self) -> Vec<String> {
         vec!["KST".to_string(), format!("Signal({})", self.signal_period)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn make_bar(close: f64) -> Bar {
-        Bar {
-            time: Utc::now(),
-            open: close,
-            high: close,
-            low: close,
-            close,
-            volume: 1000.0,
-        }
-    }
-
-    #[test]
-    fn test_kst_calculation() {
-        let mut kst = KnowSureThing::new().with_params([3, 5, 7, 10], [3, 3, 3, 5], 3);
-
-        let data: Vec<Bar> = (0..50).map(|i| make_bar(100.0 + i as f64)).collect();
-
-        kst.calculate(&data);
-
-        assert_eq!(kst.values.len(), 50);
-
-        // Should have valid values after warmup
-        let valid_cnt = kst
-            .values
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
     }
 }

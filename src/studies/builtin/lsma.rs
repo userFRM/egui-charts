@@ -21,8 +21,8 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Least Squares Moving Average (Linear Regression Line) indicator.
@@ -33,7 +33,7 @@ use egui::Color32;
 pub struct LSMA {
     period: usize,
     offset: i32, // Future projection offset (can be negative for past)
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     color: Color32,
     visible: bool,
 }
@@ -47,8 +47,8 @@ impl LSMA {
         Self {
             period: period.max(1),
             offset: 0,
-            values: Vec::new(),
-            color: DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber
+            values: IndicatorValues::new(),
+            color: palette::GOLD, // Amber
             visible: true,
         }
     }
@@ -111,6 +111,17 @@ impl Default for LSMA {
 }
 
 impl Indicator for LSMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        offset: integer("Offset", i32::MIN, i32::MAX)
+    ; {});
+
     fn name(&self) -> &str {
         "LSMA"
     }
@@ -137,7 +148,7 @@ impl Indicator for LSMA {
         }
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -189,6 +200,8 @@ mod tests {
             low: close,
             close,
             volume: 1000.0,
+            colors: None,
+            payload: None,
         }
     }
 
@@ -232,12 +245,13 @@ mod tests {
         lsma.calculate(&data);
 
         assert_eq!(lsma.values.len(), 4);
-        assert!(matches!(lsma.values[0], IndicatorValue::None));
-        assert!(matches!(lsma.values[1], IndicatorValue::None));
+        assert!(matches!(lsma.values.to_rows()[0], IndicatorValue::None));
+        assert!(matches!(lsma.values.to_rows()[1], IndicatorValue::None));
 
         // Third value should be close to 102.0 (uptrend)
-        if let IndicatorValue::Single(v) = lsma.values[2] {
-            assert!((v - 102.0).abs() < 0.01);
-        }
+        let IndicatorValue::Single(v) = lsma.values.to_rows()[2] else {
+            panic!("no value: {:?}", lsma.values.to_rows()[2]);
+        };
+        assert!((v - 102.0).abs() < 0.01);
     }
 }

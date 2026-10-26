@@ -2,8 +2,8 @@
 //!
 //! Includes: font icon, image placeholder, tweet placeholder, and idea placeholder.
 
-use crate::chart::rendering::finite_clip;
 use crate::drawings::domain::Drawing;
+use crate::painting::dashed_line::finite_clip;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
@@ -382,8 +382,11 @@ impl Drawing {
         // Default icon if none specified
         let icon = self.text.as_deref().unwrap_or("*");
 
-        // Icon size based on stroke_width or default
-        let icon_size = (self.stroke_width * 8.0).clamp(24.0, 72.0);
+        let icon_size = self.font_size;
+        let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(icon_size));
+        if crate::drawings::glyphs::paint(painter, icon, rect, color) {
+            return;
+        }
 
         // Optional background circle
         let has_bg = self.stroke_width > 2.0;

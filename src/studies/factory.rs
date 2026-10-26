@@ -1,9 +1,12 @@
 //! Indicator factory for dynamic indicator creation by name.
 //!
 //! The [`IndicatorFactory`] provides a registry of constructor functions
-//! keyed by indicator name strings. Every built-in indicator is
-//! pre-registered under its canonical [`Indicator::name`] key, and users can
-//! add their own at runtime.
+//! keyed by indicator name strings. The built-in catalogue is
+//! registered under its canonical [`Indicator::name`] key and a category,
+//! and users can add their own at runtime. It is the catalogue of studies: a
+//! picker lists [`list`](IndicatorFactory::list), describes each entry with
+//! [`Indicator::desc`] and [`category`](IndicatorFactory::category), and
+//! creates it with [`create`](IndicatorFactory::create).
 //!
 //! # Example
 //!
@@ -19,13 +22,14 @@
 //! factory.register("MySMA", || Box::new(egui_charts::studies::SMA::new(42)));
 //! ```
 
+use crate::data::OrderFlowKind;
 use crate::studies::*;
 use std::collections::HashMap;
 
 /// Type alias for indicator constructor closures stored in the factory.
 type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 
-/// Register every listed built-in indicator type with the factory.
+/// Register every listed built-in indicator type with the factory, under its category.
 ///
 /// Each indicator is constructed through its [`Default`] implementation --
 /// the single canonical source of its conventional parameters -- and keyed by
@@ -34,28 +38,35 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
-    ($factory:expr, $($ty:ty),+ $(,)?) => {
-        $(
+    ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
+        $($(
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
-            $factory.register(key, || Box::new(<$ty as Default>::default()));
-        )+
+            $factory.constructors.insert(
+                key,
+                ($category, Box::new(|| Box::new(<$ty as Default>::default()))),
+            );
+        )+)+
     };
 }
 
 /// A factory that creates [`Indicator`] instances by name.
 ///
-/// On construction, every built-in indicator is registered under its canonical
+/// On construction, catalogue studies are registered under their canonical
 /// [`Indicator::name`] (e.g. `"SMA"`, `"RSI"`, `"MACD"`, `"SuperTrend"`) using
-/// its conventional default parameters. Additional indicators can be registered
-/// at runtime with [`register`](Self::register).
+/// its conventional default parameters. Each name selects a distinct calculation
+/// or source range. Additional indicators can be registered at runtime with
+/// [`register`](Self::register).
 pub struct IndicatorFactory {
-    constructors: HashMap<String, IndicatorConstructor>,
+    constructors: HashMap<String, (&'static str, IndicatorConstructor)>,
 }
 
 impl IndicatorFactory {
-    /// Create a new factory pre-loaded with every built-in indicator.
+    /// The category of every indicator added with [`register`](Self::register).
+    pub const CUSTOM: &'static str = "Custom";
+
+    /// Create a factory with the built-in catalogue enabled by the current features.
     pub fn new() -> Self {
         let mut factory = Self {
             constructors: HashMap::new(),
@@ -67,154 +78,238 @@ impl IndicatorFactory {
 
     /// Register every built-in indicator under its canonical name.
     ///
-    /// The list below is the single registration site for built-ins: adding a
-    /// new indicator type here makes it constructible by name with zero further
-    /// wiring. Each entry is instantiated via its [`Default`] implementation.
+    /// Types use their defaults; automatic drawings select a construction kind and
+    /// stream studies select aggregation parameters. Names come from each study.
     fn register_builtin(&mut self) {
         register_builtins!(
             self,
-            // Moving averages
-            SMA,
-            EMA,
-            WMA,
-            DEMA,
-            TEMA,
-            HMA,
-            ALMA,
-            VWMA,
-            LSMA,
-            SWMA,
-            KAMA,
-            SmoothedMA,
-            GuppyMA,
-            McGinleyDynamic,
-            VIDYA,
-            ZLEMA,
-            HammingMA,
-            MultipleMA,
-            MAChannel,
-            EMACross,
-            MACross,
-            // Momentum / oscillators
-            RSI,
-            MACD,
-            VolumeWeightedMACD,
-            Stochastic,
-            StochasticRSI,
-            WilliamsR,
-            CCI,
-            Momentum,
-            RateOfChange,
-            Aroon,
-            AwesomeOscillator,
-            UltimateOscillator,
-            ConnorsRSI,
-            CoppockCurve,
-            TRIX,
-            ElderRay,
-            FisherTransform,
-            EhlersFisher,
-            ForceIndex,
-            MassIndex,
-            DetrendedPriceOscillator,
-            KDJ,
-            PrettyGoodOscillator,
-            ChandeMomentumOscillator,
-            TrueStrengthIndex,
-            StochasticMomentumIndex,
-            SchaffTrendCycle,
-            RelativeVigorIndex,
-            DoubleStochastic,
-            CenterOfGravity,
-            KnowSureThing,
-            RainbowOscillator,
-            UltimateMomentum,
-            PriceOscillator,
-            PercentageVolumeOscillator,
-            VolumeOscillator,
-            BalanceOfPower,
-            EaseOfMovement,
-            // Trend
-            ADX,
-            SuperTrend,
-            IchimokuCloud,
-            ParabolicSAR,
-            DirectionalMovement,
-            VortexIndicator,
-            SqueezeMomentum,
-            TrendIntensityIndex,
-            TrendDetectionIndex,
-            Qstick,
-            ChoppinessIndex,
-            ElderImpulseSystem,
-            // Volatility
-            BollingerBands,
-            BollingerBandsWidth,
-            ATR,
-            TrueRange,
-            KeltnerChannels,
-            DonchianChannels,
-            StandardDeviation,
-            HistoricalVolatility,
-            ChaikinVolatility,
-            ChandelierExit,
-            AccelerationBands,
-            Envelopes,
-            PercentB,
-            CloseToCloseVol,
-            OhlcVolatility,
-            VolatilityIndex,
-            ZeroTrendVol,
-            CommoditySelectionIndex,
-            // Volume
-            OnBalanceVolume,
-            VolumeWeightedAvgPrice,
-            AnchoredVWAP,
-            MoneyFlowIndex,
-            AccumulationDistribution,
-            ChaikinMoneyFlow,
-            VolumeRateOfChange,
-            KlingerOscillator,
-            CVD,
-            VolProfileVisible,
-            VolProfileFixed,
-            NetVolume,
-            VolumePriceTrend,
-            PriceVolumeTrendStudy,
-            NegativeVolumeIndex,
-            PositiveVolumeIndex,
-            WilliamsAD,
-            MarketFacilitationIndex,
-            // Support / resistance
-            PivotPoints,
-            ZigZag,
-            PriceChannel,
-            // Statistics
-            CorrelationCoefficient,
-            CorrelationLogReturns,
-            LinearRegression,
-            LinearRegressionSlope,
-            StandardError,
-            StandardErrorBands,
-            RankCorrelationIndex,
-            MajorityRule,
-            AccumulationSwingIndex,
-            // Price calculations
-            TypicalPrice,
-            MedianPrice,
-            WeightedClose,
-            HL2,
-            HLC3,
-            OHLC4,
-            // Breadth & spread
-            AdvanceDeclineLine,
-            Week52HighLow,
-            SpreadStudy,
-            RatioStudy,
+            "Moving averages" => [
+                SMA,
+                EMA,
+                WMA,
+                DEMA,
+                TEMA,
+                HMA,
+                ALMA,
+                VWMA,
+                LSMA,
+                SWMA,
+                KAMA,
+                SmoothedMA,
+                GuppyMA,
+                McGinleyDynamic,
+                VIDYA,
+                ZLEMA,
+                HammingMA,
+                MultipleMA,
+                MAChannel,
+                EMACross,
+                MACross,
+                MixedMACross,
+                TripleMA,
+                MARibbon,
+            ],
+            "Momentum" => [
+                RSI,
+                MACD,
+                VolumeWeightedMACD,
+                Stochastic,
+                StochasticRSI,
+                WilliamsR,
+                CCI,
+                Momentum,
+                RateOfChange,
+                Aroon,
+                AwesomeOscillator,
+                RsiDivergence,
+                UltimateOscillator,
+                ConnorsRSI,
+                CoppockCurve,
+                TRIX,
+                ElderRay,
+                FisherTransform,
+                ForceIndex,
+                MassIndex,
+                DetrendedPriceOscillator,
+                KDJ,
+                PrettyGoodOscillator,
+                ChandeMomentumOscillator,
+                TrueStrengthIndex,
+                StochasticMomentumIndex,
+                SchaffTrendCycle,
+                RelativeVigorIndex,
+                DoubleStochastic,
+                CenterOfGravity,
+                KnowSureThing,
+                RainbowOscillator,
+                UltimateMomentum,
+                PriceOscillator,
+                PercentageVolumeOscillator,
+                VolumeOscillator,
+                BalanceOfPower,
+                EaseOfMovement,
+                AcceleratorOscillator,
+                AroonOscillator,
+                BullBearPower,
+                AdvanceDeclineRatioBars,
+                PriceMomentumOscillator,
+                PringsSpecialK,
+                SMIErgodicIndicator,
+                SMIErgodicOscillator,
+                WoodiesCCI,
+            ],
+            "Trend" => [
+                ADX,
+                SuperTrend,
+                IchimokuCloud,
+                ParabolicSAR,
+                DirectionalMovement,
+                VortexIndicator,
+                SqueezeMomentum,
+                TrendIntensityIndex,
+                TrendDetectionIndex,
+                Qstick,
+                ChoppinessIndex,
+                ElderImpulseSystem,
+                WilliamsAlligator,
+                ChopZone,
+                VolatilityStop,
+                ChandeKrollStop,
+            ],
+            "Volatility" => [
+                BollingerBands,
+                BollingerBandsWidth,
+                ATR,
+                TrueRange,
+                KeltnerChannels,
+                DonchianChannels,
+                StandardDeviation,
+                HistoricalVolatility,
+                ChaikinVolatility,
+                ChandelierExit,
+                AccelerationBands,
+                Envelopes,
+                PercentB,
+                OhlcVolatility,
+                ParkinsonVol,
+                ZeroTrendVol,
+                CommoditySelectionIndex,
+                AverageDailyRange,
+                BBTrend,
+                UlcerIndex,
+                RelativeVolatilityIndex,
+                Median,
+            ],
+            "Volume" => [
+                Volume,
+                UpDownVolume,
+                OnBalanceVolume,
+                VolumeWeightedAvgPrice,
+                AnchoredVWAP,
+                VwapAutoAnchored,
+                TimeWeightedAvgPrice,
+                MoneyFlowIndex,
+                AccumulationDistribution,
+                ChaikinMoneyFlow,
+                VolumeRateOfChange,
+                KlingerOscillator,
+                VolProfileVisible,
+                VolProfileFixed,
+                VolProfileSession,
+                VolProfilePeriodic,
+                VolProfileAnchored,
+                VolProfileAutoAnchored,
+                TimePriceOpportunity,
+                NetVolume,
+                VolumePriceTrend,
+                PriceVolumeTrendStudy,
+                NegativeVolumeIndex,
+                PositiveVolumeIndex,
+                WilliamsAD,
+                MarketFacilitationIndex,
+                ChaikinOscillator,
+                Volume24h,
+                RelativeVolumeAtTime,
+            ],
+            "Support and resistance" => [
+                PivotPoints,
+                PivotPointsHighLow,
+                WilliamsFractals,
+                ZigZag,
+            ],
+            "Statistics" => [
+                LinearRegression,
+                LinearRegressionChannel,
+                LinearRegressionSlope,
+                StandardError,
+                StandardErrorBands,
+                RankCorrelationIndex,
+                RciRibbon,
+                MajorityRule,
+                AccumulationSwingIndex,
+                Seasonality,
+                Performance,
+            ],
+            "Price" => [
+                HigherIntervalCandles,
+                BollingerBars,
+                TypicalPrice,
+                MedianPrice,
+                WeightedClose,
+                OHLC4,
+                VisibleAveragePrice,
+            ],
+            "Market structure" => [
+                Week52HighLow,
+                Week52HighLowLevels,
+                TradingSessions,
+                Gaps,
+            ],
+            "Market breadth" => [
+                AdvanceDeclineRatio,
+                AdvanceDeclineLine,
+                CumulativeVolumeIndex,
+            ],
+            "Patterns" => [
+                CandlestickPatterns,
+            ],
         );
+        for kind in [
+            OrderFlowKind::Spread,
+            OrderFlowKind::BookSize {
+                levels: 10,
+                distance: 0.0,
+            },
+            OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: 60,
+                instant: 3,
+            },
+            OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+        ] {
+            let name = OrderFlowStudy::new(kind).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Order flow",
+                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                ),
+            );
+        }
+        #[cfg(feature = "drawings")]
+        for kind in AutoDrawingKind::ALL {
+            let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
+            self.constructors.insert(
+                name,
+                (
+                    "Support and resistance",
+                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10))),
+                ),
+            );
+        }
     }
 
-    /// Register a named indicator constructor.
+    /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
     ///
     /// If a constructor with the same name already exists it is replaced.
     ///
@@ -225,12 +320,20 @@ impl IndicatorFactory {
     where
         F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
     {
-        self.constructors.insert(name.into(), Box::new(constructor));
+        self.constructors
+            .insert(name.into(), (Self::CUSTOM, Box::new(constructor)));
     }
 
     /// Create an indicator by its registered name, or `None` if not found.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
-        self.constructors.get(name).map(|f| f())
+        self.constructors.get(name).map(|(_, f)| f())
+    }
+
+    /// The category of the indicator registered under `name`, such as `"Momentum"` or
+    /// `"Volume"` for a built-in and [`CUSTOM`](Self::CUSTOM) for one added with
+    /// [`register`](Self::register), or `None` if not found.
+    pub fn category(&self, name: &str) -> Option<&'static str> {
+        self.constructors.get(name).map(|(category, _)| *category)
     }
 
     /// Return a list of all registered indicator names (unordered).
@@ -270,6 +373,9 @@ impl Default for IndicatorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::OrderFlowKind;
+    use crate::model::{Bar, TimezoneId};
+    use chrono::{Duration, TimeZone, Utc};
 
     #[test]
     fn test_factory() {
@@ -286,6 +392,447 @@ mod tests {
 
         let list = factory.list();
         assert!(!list.is_empty());
+    }
+
+    /// Calendar lookbacks use the last close on or before the target date, not bar counts.
+    #[test]
+    fn performance_uses_calendar_dates_and_missing_history() {
+        let bars: Vec<_> = [
+            (2023, 9, 29, 80.0),
+            (2023, 12, 29, 100.0),
+            (2024, 2, 28, 120.0),
+            (2024, 2, 29, 125.0),
+            (2024, 3, 22, 150.0),
+            (2024, 3, 31, 180.0),
+        ]
+        .map(|(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .to_vec();
+        let mut study = IndicatorFactory::new()
+            .create("Performance")
+            .expect("Performance study");
+        study.calculate(&bars);
+        // March 24 -> March 22: 180/150-1 = 20%; February 29: 44%;
+        // December 31 -> December 29: 80%; September 30 -> September 29: 125%.
+        for (line, expected) in [
+            Some(20.0),
+            Some(44.0),
+            Some(80.0),
+            Some(125.0),
+            Some(80.0),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let got = study.values().value(line, bars.len() - 1);
+            match expected {
+                Some(expected) => assert!(
+                    (got.unwrap() - expected).abs() < 1e-10,
+                    "line {line}: {got:?}"
+                ),
+                None => assert_eq!(got, None, "line {line}"),
+            }
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::widget::{Chart, test_frames::shapes};
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+            let id = chart.add_indicator(study);
+            let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+            for expected in ["Change", "1W", "+44.00%", "N/A"] {
+                assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing table cell {expected}");
+            }
+            chart.indicator_mut(id).unwrap().set_visible(false);
+            let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+            assert!(!painted.iter().any(
+                |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "Change")
+            ));
+        }
+    }
+
+    /// The visible mean uses exactly the supplied bars and changes with the viewport.
+    #[test]
+    fn visible_average_follows_the_visible_range() {
+        let bars: Vec<_> = [2.0, 4.0, 12.0, 20.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(Utc.timestamp_opt(i as i64, 0).unwrap(), c, c, c, c, 1.0))
+            .collect();
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Visible Average Price")
+                .expect("Visible Average Price study"),
+        );
+        for (range, expected) in [(0..2, Some(3.0)), (1..4, Some(12.0)), (4..99, None)] {
+            study.set_visible_range(range.clone());
+            study.calculate(&bars);
+            for i in 0..bars.len() {
+                assert_eq!(study.values().value(0, i), expected);
+            }
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::widget::{Chart, test_frames::frame};
+            let bars: Vec<_> = (0..100)
+                .map(|i| {
+                    let c = i as f64;
+                    Bar::new(Utc.timestamp_opt(i, 0).unwrap(), c, c, c, c, 1.0)
+                })
+                .collect();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+            use crate::studies::{InputValue, StudySource};
+            let source = chart.add_indicator(Box::new(SMA::new(1)));
+            let average = chart.add_indicator(Box::new(study));
+            chart
+                .set_indicator_source(
+                    average,
+                    StudySource::Study {
+                        id: source.0,
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            let consumer = chart.add_indicator(Box::new(SMA::new(1)));
+            chart
+                .set_indicator_source(
+                    consumer,
+                    StudySource::Study {
+                        id: average.0,
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            assert!(
+                chart
+                    .indicators()
+                    .find(|(id, _)| *id == average)
+                    .unwrap()
+                    .1
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == "source"
+                        && matches!(input.value, InputValue::Source(_)))
+            );
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.set_visible_bars(20);
+            for (time, start) in [(1.0, 10), (2.0, 50)] {
+                chart.set_start_idx(start);
+                frame(&ctx, &mut chart, time, Vec::new());
+                let (start, end) = chart.state().visible_range();
+                let expected = (start + end - 1) as f64 / 2.0;
+                for id in [average, consumer] {
+                    let study = chart
+                        .indicators()
+                        .find(|(candidate, _)| *candidate == id)
+                        .unwrap()
+                        .1;
+                    assert!((study.values().value(0, start).unwrap() - expected).abs() < 1e-10);
+                }
+            }
+        }
+    }
+
+    /// Candle direction, doji ties across parent bars and missing intrabar history stay distinct.
+    #[test]
+    fn up_down_volume_uses_host_intrabar_directions() {
+        use crate::model::{BarClock, Timeframe};
+        use crate::studies::{StudyData, StudyDataRequest};
+        let requested_interval = |study: &dyn Indicator| {
+            study
+                .data_requests()
+                .first()
+                .and_then(|request| request.timeframe)
+        };
+        let update = |study: &mut dyn Indicator, data: &[Bar], timeframe, bars: &[Bar]| {
+            study.update_data(
+                data,
+                0,
+                &[StudyData {
+                    request: StudyDataRequest {
+                        metric: None,
+                        symbol: String::new(),
+                        timeframe: Some(timeframe),
+                    },
+                    bars,
+                    clock: BarClock::new(timeframe),
+                    instrument: None,
+                    timeframe,
+                }],
+            );
+        };
+        let mut study = ConfiguredStudy::new(
+            IndicatorFactory::new()
+                .create("Up/Down Volume")
+                .expect("Up/Down Volume study"),
+        );
+        study.set_timeframe(Timeframe::Day1);
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min5));
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        assert_eq!(requested_interval(&study), Some(Timeframe::Min1));
+        study.set_bar_clock(&BarClock::new(Timeframe::Ms100));
+        assert_eq!(requested_interval(&study), None);
+        study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+        let bars: Vec<_> = [0, 5, 10, 15]
+            .into_iter()
+            .map(|m| {
+                Bar::new(
+                    Utc.timestamp_opt(m * 60, 0).unwrap(),
+                    10.0,
+                    10.0,
+                    10.0,
+                    10.0,
+                    999.0,
+                )
+            })
+            .collect();
+        let intrabars: Vec<_> = [
+            (0, 10.0, 11.0, 10.0),
+            (1, 11.0, 10.0, 20.0),
+            (2, 10.0, 10.0, 30.0),
+            (5, 9.0, 9.0, 40.0),
+            (6, 9.0, 9.0, 50.0),
+            (15, 12.0, 13.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(m, o, c, v)| {
+            Bar::new(
+                Utc.timestamp_opt(m * 60, 0).unwrap(),
+                o,
+                o.max(c),
+                o.min(c),
+                c,
+                v,
+            )
+        })
+        .collect();
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
+        // First parent: up=10+30, down=-20, delta=20. Next: -40+50=10.
+        for (i, want) in [
+            [Some(40.0), Some(-20.0), Some(20.0)],
+            [Some(50.0), Some(-40.0), Some(10.0)],
+            [None; 3],
+            [Some(0.0); 3],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (line, expected) in want.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, i),
+                    expected,
+                    "bar {i}, line {line}"
+                );
+            }
+        }
+        // A stale interval is unavailable; malformed snapshots leave the accepted values intact.
+        update(&mut study, &bars, Timeframe::Min5, &intrabars);
+        assert_eq!(study.values().value(0, 0), None);
+        update(&mut study, &bars, Timeframe::Min1, &intrabars);
+        for invalid in [
+            {
+                let mut invalid = intrabars.clone();
+                invalid[1].time = invalid[0].time;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].volume = -1.0;
+                invalid
+            },
+            {
+                let mut invalid = intrabars.clone();
+                invalid[0].open = f64::NAN;
+                invalid
+            },
+        ] {
+            update(&mut study, &bars, Timeframe::Min1, &invalid);
+            assert_eq!(study.values().value(2, 0), Some(20.0));
+        }
+        let mut corrected = intrabars;
+        corrected[0].volume = 15.0;
+        update(&mut study, &bars, Timeframe::Min1, &corrected);
+        assert_eq!(study.values().value(2, 0), Some(25.0));
+        update(&mut study, &bars, Timeframe::Min1, &[]);
+        assert_eq!(study.values().value(0, 0), None);
+        // Custom intervals must nest their intrabars without rounding long bars to dates.
+        for (seconds, lower) in [(90, Timeframe::Sec1), (90_000, Timeframe::Hour1)] {
+            let timeframe = Timeframe::Custom(std::num::NonZeroU64::new(seconds).unwrap());
+            study.set_timeframe(timeframe);
+            assert_eq!(requested_interval(&study), Some(lower));
+            let bar = |second| {
+                Bar::new(
+                    Utc.timestamp_opt(second, 0).unwrap(),
+                    1.0,
+                    2.0,
+                    1.0,
+                    2.0,
+                    1.0,
+                )
+            };
+            let seconds = seconds as i64;
+            update(
+                &mut study,
+                &[bar(0), bar(seconds)],
+                lower,
+                &[0, seconds - lower.duration_ms() / 1000, seconds].map(bar),
+            );
+            assert_eq!(study.values().value(0, 0), Some(2.0));
+            assert_eq!(study.values().value(0, 1), Some(1.0));
+        }
+        #[cfg(feature = "widget")]
+        {
+            use crate::model::{BarData, Instrument};
+            use crate::widget::{Chart, test_frames::frame};
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min5);
+            chart.set_symbol("OLD");
+            chart.set_instrument(Some(Instrument::new("OLD")));
+            chart.add_indicator(Box::new(UpDownVolume::new()));
+            chart.set_symbol("NEW");
+            chart.set_instrument(Some(Instrument::new("NEW")));
+            let request = chart.study_data_requests().pop().unwrap();
+            assert_eq!(request.symbol, "NEW");
+            chart.set_study_data(request, vec![bars[0].clone()], Some(Instrument::new("NEW")));
+            frame(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 0),
+                Some(999.0)
+            );
+        }
+    }
+
+    /// Latest table metrics include the developing month; projections use earlier years only.
+    #[test]
+    fn seasonality_heatmap_and_remaining_month_use_calendar_changes() {
+        let bars: Vec<_> = [
+            (2022, 12, 28, 100.0),
+            (2023, 1, 28, 110.0),
+            (2023, 2, 28, 99.0),
+            (2023, 12, 28, 200.0),
+            (2024, 1, 15, 210.0),
+        ]
+        .into_iter()
+        .map(|(y, m, d, c)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap(),
+                c,
+                c,
+                c,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        let mut study = ConfiguredStudy::new(Box::new(Seasonality::new()));
+        study.set_bar_clock(&crate::model::BarClock::new(crate::model::Timeframe::Day1));
+        study.calculate(&bars);
+        let table = study.table().expect("Seasonality heatmap");
+        let percent = |label: &str, month| {
+            let row = table
+                .rows
+                .iter()
+                .find(|row| row.first() == Some(&StudyCell::Text(label.into())))
+                .unwrap();
+            let StudyCell::Percent(value) = row[month] else {
+                panic!("percentage cell")
+            };
+            value
+        };
+        for (label, month, expected) in [
+            ("2023", 1, 10.0),
+            ("2023", 2, -10.0),
+            ("2024", 1, 5.0),
+            ("Average", 1, 7.5),
+            ("Standard deviation", 1, 2.5),
+            ("Positive", 1, 100.0),
+        ] {
+            assert!(
+                (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                "{label}"
+            );
+        }
+        assert_eq!(percent("2022", 12), None);
+        assert_eq!(percent("2024", 2), None);
+        let zone = study
+            .projections()
+            .last()
+            .expect("remaining month projection");
+        assert_eq!(zone.bars.start, 4.0);
+        // The last two bars are 18 days apart. February 1 is 17/18 of a slot after January 15.
+        assert!((zone.bars.end - (4.0 + 17.0 / 18.0)).abs() < 1e-10);
+        assert!((zone.top - 220.0).abs() < 1e-9);
+        assert_eq!(zone.bottom, 200.0);
+        #[cfg(feature = "widget")]
+        {
+            use crate::chart::{coords::ChartMapping, indicators::hit_test_indicator};
+            use crate::model::BarData;
+            use crate::studies::ChartState;
+            use egui::{Rect, pos2, vec2};
+
+            let mut bars = bars;
+            bars.extend(
+                (16..=31).map(|day| {
+                    Bar::whitespace(Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0).unwrap())
+                }),
+            );
+            study.calculate(&bars);
+            let mut state = ChartState::new(BarData::from_bars(bars));
+            state.time_scale_mut().set_width(80.0);
+            state.time_scale_mut().set_bar_spacing(8.0);
+            state.time_scale_mut().set_right_offset(0.0);
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(80.0, 200.0));
+            for overlay in [true, false] {
+                study.set_overlay(overlay);
+                state.fit_price_scale([&study as &dyn Indicator]);
+                let price = state.price_scale().map(Default::default(), 0.0, 200.0);
+                if overlay {
+                    assert!(price.range().min <= 200.0 && price.range().max >= 220.0);
+                } else {
+                    use crate::widget::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+                    let mut pane =
+                        IndicatorPane::with_config(IndicatorPaneConfig::from_study(&study));
+                    egui::Context::default()
+                        .run_ui(Default::default(), |ui| {
+                            let interaction = pane
+                                .show_aligned_interactive(
+                                    ui,
+                                    &study,
+                                    &[],
+                                    12..21,
+                                    IndicatorCoordParams::new(8.0, 0.0, 20, 12),
+                                )
+                                .unwrap();
+                            assert!(interaction.y_min <= 200.0 && interaction.y_max >= 220.0);
+                        })
+                        .drop_without_applying_deltas();
+                    continue;
+                }
+                let coords = ChartMapping::new(rect, 8.0, 12, 20, 0.0, price);
+                assert!(
+                    hit_test_indicator(
+                        pos2(coords.idx_to_x(16), price.price_to_y(210.0)),
+                        &study,
+                        0,
+                        12..21,
+                        &coords,
+                        |value| price.price_to_y(value),
+                    )
+                    .is_some(),
+                    "the remaining-month band must be selectable in whitespace"
+                );
+            }
+        }
     }
 
     #[test]
@@ -318,6 +865,119 @@ mod tests {
         }
     }
 
+    /// Confirming the settings dialog without an edit hands each plot's colour back through
+    /// `set_colors`, which must leave every drawn colour as it was.
+    #[test]
+    fn unchanged_settings_keep_every_colour() {
+        use crate::studies::ConfiguredStudy;
+
+        let bars: Vec<Bar> = (0..300)
+            .map(|i| {
+                let c = 100.0 + 10.0 * (i as f64 / 9.0).sin();
+                let time = Utc.timestamp_opt(i * 3600, 0).unwrap();
+                Bar::new(time, c - 0.5, c + 1.0, c - 1.0, c, 1000.0 + i as f64)
+            })
+            .collect();
+        let colours = |study: &ConfiguredStudy| -> Vec<_> {
+            (0..study.line_count())
+                .flat_map(|line| {
+                    let style = study.plot_style(line).color;
+                    (0..bars.len()).map(move |bar| study.plot_color(line, bar).unwrap_or(style))
+                })
+                .collect()
+        };
+        for name in IndicatorFactory::new().list() {
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(&name).unwrap());
+            study.calculate(&bars);
+            let before = colours(&study);
+            study.apply_settings(&[], study.settings()).unwrap();
+            study.calculate(&bars);
+            assert_eq!(colours(&study), before, "{name}");
+        }
+    }
+
+    /// Each registered name is a study of its own: on one series, no two names give the same
+    /// values on every bar, even with their lines in another order. Fixed profiles use a saved end.
+    #[test]
+    fn no_two_names_compute_the_same_study() {
+        use crate::model::Bar;
+        use chrono::{TimeZone, Utc};
+
+        // Two bars per session over more than 52 weeks distinguish session and calendar studies;
+        // 800 bars warm up the longest study, and a step every 160 bars opens a price gap.
+        let bars: Vec<Bar> = (0..800)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0
+                    + (x * 0.13).sin() * 8.0
+                    + (x * 0.029).cos() * 5.0
+                    + (i / 160) as f64 * 6.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                Bar {
+                    time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
+                    open,
+                    high: close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
+                }
+            })
+            .collect();
+        let factory = IndicatorFactory::new();
+        let mut names = factory.list();
+        names.sort();
+        let mut seen = HashMap::new();
+        let mut duplicates = Vec::new();
+        for name in names {
+            let mut study = factory.create(&name).unwrap();
+            if study.order_flow_input().is_some() {
+                continue;
+            }
+            // External series have no values until the host supplies their distinct inputs.
+            if !study.data_requests().is_empty() {
+                continue;
+            }
+            // Fixed and anchored profiles include all history until a range is chosen.
+            if name == "Vol Profile FR" {
+                study
+                    .set_input(
+                        "end_time",
+                        InputValue::Number(bars[599].time.timestamp_millis() as f64),
+                    )
+                    .unwrap();
+            }
+            study.calculate(&bars);
+            // Studies that draw only shapes differ by their zones or profile.
+            let shapes = vec![
+                format!("{:?}", study.zones()),
+                study.tpo().is_some().to_string(),
+                format!("{:?}", study.volume_profiles(200..400)),
+            ];
+            #[cfg(feature = "drawings")]
+            let shapes = shapes
+                .into_iter()
+                .chain(std::iter::once(format!("{:?}", study.drawings())))
+                .collect();
+            let lines: Vec<Vec<String>> = std::iter::once(shapes)
+                .chain(study.values().to_rows().iter().map(|v| {
+                    let mut xs = match v {
+                        IndicatorValue::Single(x) => vec![*x],
+                        IndicatorValue::Multiple(xs) => xs.clone(),
+                        IndicatorValue::None => Vec::new(),
+                    };
+                    xs.sort_by(f64::total_cmp);
+                    xs.iter().map(|x| format!("{x:.9e}")).collect()
+                }))
+                .collect();
+            if let Some(first) = seen.insert(lines, name.clone()) {
+                duplicates.push(format!("{first} and {name}"));
+            }
+        }
+        assert!(duplicates.is_empty(), "same values: {duplicates:?}");
+    }
+
     /// Every built-in, with its `k`-th length parameter set to `l(k)` and each
     /// float parameter of conventional value `v` set to `x(v)`.
     fn builtins_with(
@@ -346,6 +1006,9 @@ mod tests {
             Box::new(MAChannel::new(l(0), x(1.0))),
             Box::new(EMACross::new(l(0), l(1))),
             Box::new(MACross::new(l(0), l(1))),
+            Box::new(MixedMACross::new(l(0), l(1))),
+            Box::new(TripleMA::new(l(0), l(1), l(2))),
+            Box::new(MARibbon::new()),
             Box::new(RSI::new(l(0))),
             Box::new(MACD::new(l(0), l(1), l(2))),
             Box::new(VolumeWeightedMACD::new(l(0), l(1), l(2))),
@@ -388,6 +1051,11 @@ mod tests {
             Box::new(VolumeOscillator::new(l(0), l(1))),
             Box::new(BalanceOfPower::new(l(0))),
             Box::new(EaseOfMovement::new(l(0)).with_divisor(x(1e4))),
+            Box::new(PriceMomentumOscillator::new(l(0), l(1), l(2))),
+            Box::new(PringsSpecialK::new(l(0), l(1))),
+            Box::new(SMIErgodicIndicator::new(l(0), l(1), l(2))),
+            Box::new(SMIErgodicOscillator::new(l(0), l(1), l(2))),
+            Box::new(WoodiesCCI::new(l(0), l(1))),
             Box::new(ADX::new(l(0))),
             Box::new(SuperTrend::new(l(0), x(3.0))),
             Box::new(IchimokuCloud::new(l(0), l(1), l(2))),
@@ -404,6 +1072,10 @@ mod tests {
             Box::new(Qstick::new(l(0))),
             Box::new(ChoppinessIndex::new(l(0))),
             Box::new(ElderImpulseSystem::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsAlligator::new(l(0), l(1), l(2))),
+            Box::new(ChopZone::new()),
+            Box::new(VolatilityStop::new(l(0), x(2.0))),
+            Box::new(ChandeKrollStop::new(l(0), x(1.0), l(1))),
             Box::new(BollingerBands::new(l(0), x(2.0))),
             Box::new(BollingerBandsWidth::new(l(0), x(2.0))),
             Box::new(ATR::new(l(0))),
@@ -419,17 +1091,23 @@ mod tests {
             Box::new(PercentB::new(l(0), x(2.0))),
             Box::new(CloseToCloseVol::new(l(0))),
             Box::new(OhlcVolatility::new(l(0))),
-            Box::new(VolatilityIndex::new(l(0))),
+            Box::new(ParkinsonVol::new(l(0))),
             Box::new(ZeroTrendVol::new(l(0))),
+            Box::new(RelativeVolatilityIndex::new(l(0))),
             Box::new(
                 CommoditySelectionIndex::new(l(0))
                     .with_point_value(x(1.0))
                     .with_margin(x(1.0))
                     .with_commission(x(1.0)),
             ),
+            Box::new(Median::new(l(0), l(1), x(2.0))),
+            Box::new(Volume::new(l(0))),
+            Box::new(UpDownVolume::new()),
             Box::new(OnBalanceVolume::new()),
             Box::new(VolumeWeightedAvgPrice::new().with_std_dev_bands([x(1.0), x(2.0)])),
             Box::new(AnchoredVWAP::new(0)),
+            Box::new(VwapAutoAnchored::new().with_length(l(0))),
+            Box::new(TimeWeightedAvgPrice::new()),
             Box::new(MoneyFlowIndex::new(l(0))),
             Box::new(AccumulationDistribution::new()),
             Box::new(ChaikinMoneyFlow::new(l(0))),
@@ -438,6 +1116,24 @@ mod tests {
             Box::new(CVD::new()),
             Box::new(VolProfileVisible::new(l(0))),
             Box::new(VolProfileFixed::new(l(0))),
+            Box::new(VolProfileSession::new(l(0))),
+            Box::new(VolProfilePeriodic::new(l(0))),
+            Box::new(VolProfileAnchored::new(l(0))),
+            Box::new(VolProfileAutoAnchored::new(l(0))),
+            Box::new(TimePriceOpportunity::default()),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::Spread)),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::BookSize {
+                levels: l(0),
+                distance: x(0.0),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                volume: false,
+                seconds: l(0),
+                instant: l(1),
+            })),
+            Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
+                seconds: l(0),
+            })),
             Box::new(NetVolume::new()),
             Box::new(VolumePriceTrend::new()),
             Box::new(PriceVolumeTrendStudy::new(l(0))),
@@ -445,29 +1141,202 @@ mod tests {
             Box::new(PositiveVolumeIndex::new()),
             Box::new(WilliamsAD::new()),
             Box::new(MarketFacilitationIndex::new().with_divisor(x(1.0))),
-            Box::new(PivotPoints::new(l(0))),
+            Box::new(PivotPoints::new().with_pivots_back(l(0))),
+            Box::new(Volume24h::new()),
+            Box::new(RelativeVolumeAtTime::new(l(0))),
             Box::new(ZigZag::new(x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::ParallelChannel,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciRetracement,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(
+                AutoDrawingKind::FibonacciExtension,
+                x(5.0),
+                l(0),
+            )),
+            #[cfg(feature = "drawings")]
+            Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
+            Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
+            Box::new(WilliamsFractals::new(l(0))),
+            Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
+            Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(PriceChannel::new(l(0))),
-            Box::new(CorrelationCoefficient::new(l(0))),
-            Box::new(CorrelationLogReturns::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
+            Box::new(LinearRegressionChannel::new(l(0), x(2.0))),
             Box::new(LinearRegressionSlope::new(l(0))),
             Box::new(StandardError::new(l(0))),
             Box::new(StandardErrorBands::new(l(0), x(2.0))),
             Box::new(RankCorrelationIndex::new(l(0))),
+            Box::new(RciRibbon::new(l(0), l(1), l(2))),
             Box::new(MajorityRule::new(l(0))),
             Box::new(AccumulationSwingIndex::new(x(0.5))),
+            Box::new(Seasonality::new()),
+            Box::new(Performance::new()),
+            Box::new(HigherIntervalCandles::default()),
+            Box::new(BollingerBars::new()),
             Box::new(TypicalPrice::new()),
             Box::new(MedianPrice::new()),
             Box::new(WeightedClose::new()),
             Box::new(HL2::new()),
             Box::new(HLC3::new()),
             Box::new(OHLC4::new()),
-            Box::new(AdvanceDeclineLine::new()),
-            Box::new(Week52HighLow::new(l(0))),
-            Box::new(SpreadStudy::new()),
-            Box::new(RatioStudy::new()),
+            Box::new(VisibleAveragePrice::new()),
+            Box::new(Week52HighLow::new()),
+            Box::new(Week52HighLowLevels::new()),
+            Box::new(AcceleratorOscillator::new()),
+            Box::new(AroonOscillator::new(l(0))),
+            Box::new(AverageDailyRange::new(l(0))),
+            Box::new(BBTrend::new(l(0), l(1), x(2.0))),
+            Box::new(ChaikinOscillator::new(l(0), l(1))),
+            Box::new(BullBearPower::new(l(0))),
+            Box::new(AdvanceDeclineRatioBars::new(l(0))),
+            Box::new(AdvanceDeclineRatio::default()),
+            Box::new(AdvanceDeclineLine::default()),
+            Box::new(CumulativeVolumeIndex::default()),
+            Box::new(UlcerIndex::new(l(0))),
+            Box::new(DetrendedPriceOscillator::new(l(0)).with_centered(true)),
+            Box::new(TradingSessions::new()),
+            Box::new(CandlestickPatterns::default()),
         ]
+    }
+
+    /// xorshift64*, so the event sequence is the same on every platform and run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        /// Uniform in [0, 1).
+        fn unit(&mut self) -> f64 {
+            (self.next() >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    fn bar(rng: &mut Rng, time: chrono::DateTime<Utc>, prev_close: f64) -> Bar {
+        let close = prev_close + rng.unit() - 0.5;
+        let mut bar = Bar {
+            time,
+            open: prev_close,
+            high: prev_close.max(close) + rng.unit() * 0.2,
+            low: prev_close.min(close) - rng.unit() * 0.2,
+            close,
+            volume: 100.0 + rng.unit() * 900.0,
+            colors: None,
+            payload: None,
+        };
+        if rng.unit() < 0.01 {
+            bar.close = f64::NAN;
+        }
+        if rng.unit() < 0.01 {
+            bar.high = f64::INFINITY;
+        }
+        if rng.unit() < 0.01 {
+            bar.volume = f64::NAN;
+        }
+        bar
+    }
+
+    /// Each value's variant and bits, so -0.0 differs from 0.0 and NaN equals itself.
+    fn bits(values: &[IndicatorValue]) -> Vec<(u8, Vec<u64>)> {
+        values
+            .iter()
+            .map(|value| match value {
+                IndicatorValue::None => (0, Vec::new()),
+                IndicatorValue::Single(x) => (1, vec![x.to_bits()]),
+                IndicatorValue::Multiple(xs) => (2, xs.iter().map(|x| x.to_bits()).collect()),
+            })
+            .collect()
+    }
+
+    /// `update(data, from)` leaves the values of a fresh `calculate(data)`, bit for bit, for every
+    /// built-in after each change a chart passes on: a new bar, a new close of the last bar, a
+    /// correction up to five bars back, a removed last bar, bars loaded in front, a daily series
+    /// turning intraday, and bars with a non-finite price or volume. A checkpoint not restored on
+    /// a last-bar update, a correction resumed instead of restarted, a window read one bar short
+    /// or a warm-up threshold or VWAP's daily rule not rechecked fails it.
+    #[test]
+    fn every_update_equals_a_fresh_calculate() {
+        // In UTC no VWAP value depends on its daily rule; in Tokyo with weekly periods the
+        // daily and intraday trading days group the bars differently.
+        let tokyo_week = || -> Box<dyn Indicator> {
+            Box::new(
+                VolumeWeightedAvgPrice::new()
+                    .with_anchor(VwapAnchor::Week)
+                    .with_time_zone(TimezoneId::fixed_offset(9 * 3600).unwrap()),
+            )
+        };
+        let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
+        studies.push(tokyo_week());
+        let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
+        twins.push(tokyo_week());
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let mut data = Vec::<Bar>::new();
+        for event in 0..200 {
+            let u = if event < 80 { 0.7 } else { rng.unit() };
+            let len = data.len();
+            let from = if u < 0.65 && len > 0 {
+                data[len - 1].close = data[len - 1].open + rng.unit() - 0.5;
+                len - 1
+            } else if (0.85..0.93).contains(&u) && len >= 7 {
+                let at = len - 2 - (rng.next() % 5) as usize;
+                data[at] = bar(&mut rng, data[at].time, data[at].open);
+                at
+            } else if (0.93..0.965).contains(&u) && len > 0 {
+                data.pop();
+                len - 1
+            } else if u >= 0.965 && len > 0 {
+                for _ in 0..1 + rng.next() % 3 {
+                    let b = bar(&mut rng, data[0].time - Duration::days(1), data[0].open);
+                    data.insert(0, b);
+                }
+                0
+            } else {
+                let time =
+                    data.last()
+                        .map_or(Utc.with_ymd_and_hms(2023, 9, 15, 23, 0, 0).unwrap(), |b| {
+                            b.time
+                                + if len < 60 {
+                                    Duration::days(1)
+                                } else {
+                                    Duration::minutes(1)
+                                }
+                        });
+                let close =
+                    data.last().map_or(
+                        100.0,
+                        |b| if b.close.is_finite() { b.close } else { b.open },
+                    );
+                data.push(bar(&mut rng, time, close));
+                len
+            };
+            for (study, twin) in studies.iter_mut().zip(&twins) {
+                study.update(&data, from);
+                let mut fresh = twin.clone_box();
+                fresh.calculate(&data);
+                assert_eq!(
+                    bits(&study.values().to_rows()),
+                    bits(&fresh.values().to_rows()),
+                    "{} event {event}",
+                    study.name()
+                );
+            }
+        }
     }
 
     /// No built-in may panic, hang or allocate without bound, whatever its
@@ -489,6 +1358,8 @@ mod tests {
                 low: c - 1.0,
                 close: c,
                 volume: 1000.0 + i as f64,
+                colors: None,
+                payload: None,
             }
         };
         let normal: Vec<Bar> = (0..200).map(bar).collect();
@@ -544,14 +1415,19 @@ mod tests {
         ];
 
         let factory = IndicatorFactory::new();
-        let mut covered: Vec<String> = builtins_with(|_| 1, |v| v)
+        let covered: Vec<String> = builtins_with(|_| 1, |v| v)
             .iter()
             .map(|s| s.name().to_string())
             .collect();
-        let mut registered = factory.list();
-        covered.sort();
-        registered.sort();
-        assert_eq!(covered, registered, "the table must cover every built-in");
+        let missing: Vec<String> = factory
+            .list()
+            .into_iter()
+            .filter(|name| !covered.contains(name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the table must cover every built-in: {missing:?}"
+        );
 
         // Every length equal, then each length alone huge, then each alone longer than the rest
         // (a swapped fast/slow pair, for example).
@@ -564,6 +1440,13 @@ mod tests {
             lengths.extend([huge, longer]);
         }
 
+        // Every value has one entry per declared line and every line a name; a study of
+        // several lines never emits `Single`.
+        let fits = |v: &IndicatorValue, lines: usize| match v {
+            IndicatorValue::Single(_) => lines == 1,
+            IndicatorValue::Multiple(xs) => xs.len() == lines,
+            IndicatorValue::None => true,
+        };
         let mut failures = Vec::new();
         for n in lengths {
             for mut study in builtins_with(|k| n[k], |v| v) {
@@ -581,7 +1464,23 @@ mod tests {
                             study.name(),
                             bars.len()
                         )),
-                        Ok(_) => {}
+                        Ok(_) => {
+                            let lines = study.line_count();
+                            if study.line_names().len() != lines {
+                                failures.push(format!(
+                                    "{}: {lines} lines with names {:?}",
+                                    study.name(),
+                                    study.line_names()
+                                ));
+                            } else if let Some(v) =
+                                study.values().to_rows().iter().find(|v| !fits(v, lines))
+                            {
+                                failures.push(format!(
+                                    "{}{n:?} on {label}: {v:?} for {lines} lines",
+                                    study.name()
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -595,7 +1494,8 @@ mod tests {
                 one.calculate(&normal);
             }))
             .is_ok()
-                && format!("{:?}", zero.values()) != format!("{:?}", one.values())
+                && format!("{:?}", zero.values().to_rows())
+                    != format!("{:?}", one.values().to_rows())
             {
                 failures.push(format!("{}(0) differs from {}(1)", zero.name(), one.name()));
             }
@@ -620,7 +1520,9 @@ mod tests {
             ("+inf", run(|_| f64::INFINITY), &run(|_| f64::MAX)),
         ] {
             for (study, clamped) in hostile.iter().zip(clamped) {
-                if format!("{:?}", study.values()) != format!("{:?}", clamped.values()) {
+                if format!("{:?}", study.values().to_rows())
+                    != format!("{:?}", clamped.values().to_rows())
+                {
                     failures.push(format!(
                         "{} with float parameters {label} not clamped",
                         study.name()
@@ -628,27 +1530,31 @@ mod tests {
                 }
             }
         }
+        // Counted per bar: SuperTrend and PSAR split one series over two lines by trend,
+        // and the trend may differ at 0.0.
         let finite = |v: &IndicatorValue| match v {
-            IndicatorValue::Single(x) => vec![x.is_finite()],
-            IndicatorValue::Multiple(xs) => xs.iter().map(|x| x.is_finite()).collect(),
-            IndicatorValue::None => Vec::new(),
+            IndicatorValue::Single(x) => usize::from(x.is_finite()),
+            IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),
+            IndicatorValue::None => 0,
         };
         // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
-        for (study, conventional) in bottom
-            .iter()
-            .zip(&conventional)
-            .filter(|(study, _)| study.name() != "ZigZag")
-        {
+        for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
+            !matches!(
+                study.name(),
+                "ZigZag"
+                    | "Auto Trend Line"
+                    | "Auto Parallel Channel"
+                    | "Auto Fibonacci Retracement"
+                    | "Auto Fibonacci Extension"
+                    | "Auto Pitchfork"
+            )
+        }) {
             let lost = study
                 .values()
+                .to_rows()
                 .iter()
-                .zip(conventional.values())
-                .any(|(b, c)| {
-                    let (b, c) = (finite(b), finite(c));
-                    c.iter()
-                        .enumerate()
-                        .any(|(k, c)| *c && !b.get(k).copied().unwrap_or(false))
-                });
+                .zip(conventional.values().to_rows())
+                .any(|(b, c)| finite(b) < finite(&c));
             if lost {
                 failures.push(format!(
                     "{} with float parameters at 0.0 loses values",
@@ -657,41 +1563,116 @@ mod tests {
             }
         }
 
-        // One non-finite bar must not blank the rest of the series: wherever the series without
-        // it has a finite last value, the series with it has one too, whether the bar has NaN
-        // prices, an infinite high, a NaN volume or a NaN open. 600 bars keep every window at
-        // the last bar clear of bar 100.
-        let long: Vec<Bar> = (0..600).map(bar).collect();
-        let mut without = long.clone();
-        without.remove(100);
-        let mut nan = long.clone();
-        (nan[100].high, nan[100].low, nan[100].close) = (f64::NAN, f64::NAN, f64::NAN);
-        let mut infinite = long.clone();
-        infinite[100].high = f64::INFINITY;
-        let mut no_volume = long.clone();
-        no_volume[100].volume = f64::NAN;
-        let mut no_open = long.clone();
-        no_open[100].open = f64::NAN;
-        let last = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
-            catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
-            study.values().last().map(finite)
+        // The `Indicator` policy: after one non-finite bar every later value equals the value
+        // for the series without that bar, within 1e-9 relative, whichever field is bad and
+        // wherever the bar sits (inside a warm-up window or after it). The series has the close
+        // off the middle of the range, gaps between bars and a varying volume, which the range-midpoint series
+        // above hides from studies that weigh the close position or the volume. Lengths differ
+        // per slot so that fast, slow and signal lengths are not equal. 600 bars keep every
+        // window at the last bar clear of the bad bar.
+        let real = |i: i64| {
+            let x = i as f64;
+            let c = 100.0
+                + (x * 0.17).sin() * 6.0
+                + (x * 0.031).cos() * 9.0
+                + x * 0.02
+                + ((i * i * 31 + 7 * i) % 17) as f64 * 0.8;
+            let o = c - (x * 0.7).sin() * 1.3;
+            Bar {
+                time: Utc.timestamp_opt(i * 60, 0).unwrap(),
+                open: o,
+                high: c.max(o) + 1.0 + (x * 0.3).sin().abs(),
+                low: c.min(o) - 1.0 - (x * 0.5).cos().abs(),
+                close: c,
+                volume: 1000.0 + ((i * 37) % 211) as f64 * 9.0,
+                colors: None,
+                payload: None,
+            }
         };
-        for mut study in builtins_with(|_| 14, |v| v) {
-            let Some(clean) = last(&mut study, &without) else {
+        let long: Vec<Bar> = (0..600).map(real).collect();
+        type Edit = fn(&mut Bar);
+        let edits: [(&str, Edit); 10] = [
+            ("NaN prices", |b| {
+                (b.high, b.low, b.close) = (f64::NAN, f64::NAN, f64::NAN)
+            }),
+            ("NaN high", |b| b.high = f64::NAN),
+            ("NaN low", |b| b.low = f64::NAN),
+            ("NaN close", |b| b.close = f64::NAN),
+            ("infinite high", |b| b.high = f64::INFINITY),
+            ("negative infinite low", |b| b.low = f64::NEG_INFINITY),
+            ("infinite close", |b| b.close = f64::INFINITY),
+            ("NaN volume", |b| b.volume = f64::NAN),
+            ("infinite volume", |b| b.volume = f64::INFINITY),
+            ("NaN open", |b| b.open = f64::NAN),
+        ];
+        let values = |study: &mut Box<dyn Indicator>, bars: &[Bar]| {
+            catch_unwind(AssertUnwindSafe(|| study.calculate(bars))).ok()?;
+            Some(study.values().to_rows())
+        };
+        let parts = |v: &IndicatorValue| match v {
+            IndicatorValue::Single(x) => vec![*x],
+            IndicatorValue::Multiple(xs) => xs.clone(),
+            IndicatorValue::None => Vec::new(),
+        };
+        let blank = |v: &IndicatorValue| parts(v).iter().all(|x| !x.is_finite());
+        // A finite component must match the reference. A window study may leave the windows
+        // holding the bad bar without a value (`near`, no study looks back further than 250
+        // bars), but later every component the reference has must be there.
+        let agrees = |hostile: &IndicatorValue, reference: &IndicatorValue, near: bool| {
+            let (hostile, reference) = (parts(hostile), parts(reference));
+            let right = |h: f64, r: f64| h.is_finite() && (h - r).abs() <= 1e-9 * r.abs().max(1.0);
+            hostile
+                .iter()
+                .enumerate()
+                .all(|(k, &h)| !h.is_finite() || reference.get(k).is_some_and(|&r| right(h, r)))
+                && reference.iter().enumerate().all(|(k, &r)| {
+                    !r.is_finite() || near || hostile.get(k).is_some_and(|&h| right(h, r))
+                })
+        };
+        for mut study in builtins_with(|k| 12 + 3 * k, |v| v) {
+            let Some(full) = values(&mut study, &long) else {
                 continue;
             };
-            let carries = [&nan, &infinite, &no_volume, &no_open].iter().any(|bars| {
-                let hostile = last(&mut study, bars).unwrap_or_default();
-                clean
-                    .iter()
-                    .enumerate()
-                    .any(|(k, c)| *c && !hostile.get(k).copied().unwrap_or(false))
-            });
-            if carries {
-                failures.push(format!(
-                    "{} carries one non-finite bar to the end of the series",
-                    study.name()
-                ));
+            for at in [5, 100] {
+                let mut without = long.clone();
+                without.remove(at);
+                let Some(clean) = values(&mut study, &without) else {
+                    continue;
+                };
+                for (label, edit) in edits {
+                    let mut bars = long.clone();
+                    edit(&mut bars[at]);
+                    let hostile = values(&mut study, &bars).unwrap_or_default();
+                    // A study that reads the bad field skips the bar and matches the series
+                    // without it; one that does not read it sees an ordinary bar and matches
+                    // the full series.
+                    let first_wrong = |reference: &[IndicatorValue], shift: usize| {
+                        (at + 1..bars.len()).find(|&i| {
+                            !hostile
+                                .get(i)
+                                .is_some_and(|h| agrees(h, &reference[i - shift], i <= at + 250))
+                        })
+                    };
+                    let (skipped, seen) = (first_wrong(&clean, 1), first_wrong(&full, 0));
+                    if let (Some(i), Some(_)) = (skipped, seen) {
+                        failures.push(format!(
+                            "{} differs from the series without a bar with {label} at {at} \
+                             at bar {i}: {:?} against {:?}",
+                            study.name(),
+                            hostile.get(i),
+                            clean[i - 1]
+                        ));
+                    } else if skipped.is_none()
+                        && seen.is_some()
+                        && !hostile.get(at).is_some_and(blank)
+                    {
+                        failures.push(format!(
+                            "{} gives {:?} on its bad bar with {label} at {at}",
+                            study.name(),
+                            hostile.get(at)
+                        ));
+                    }
+                }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

@@ -2,11 +2,13 @@
 //!
 //! The fundamental data unit for financial charting.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use egui::Color32;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 #[cfg(feature = "widget")]
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Percent change from `reference` to `value`, divided by the magnitude of the
 /// reference so it has the sign of the change for a negative reference too (spreads,
@@ -16,9 +18,17 @@ pub(crate) fn percent_change(reference: f64, value: f64) -> f64 {
     if pct.is_finite() { pct } else { 0.0 }
 }
 
+/// The last bar of `bars` with a value, skipping whitespace bars.
+pub(crate) fn last_with_value(bars: &[Bar]) -> Option<&Bar> {
+    bars.iter().rev().find(|bar| !bar.is_whitespace())
+}
+
 /// Represents a single OHLCV (Open, High, Low, Close, Volume) bar
 ///
-/// Each bar represents a discrete time period of trading activity.
+/// Each bar represents a discrete time period of trading activity. A bar can also carry
+/// [`colors`](Self::colors) of its own and a host [`payload`](Self::payload), stand for a single
+/// value ([`from_value`](Self::from_value)), or hold a slot of the time axis without a value
+/// ([`whitespace`](Self::whitespace)).
 ///
 /// # Example
 ///
@@ -39,18 +49,78 @@ pub(crate) fn percent_change(reference: f64, value: f64) -> f64 {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bar {
-    /// Timestamp of the bar
+    /// Timestamp of the bar. Read from JSON as an RFC 3339 time, or as a date alone
+    /// (`"2024-03-15"`), which is midnight UTC of that day, the open of its day bar.
+    #[serde(deserialize_with = "time_or_date")]
     pub time: DateTime<Utc>,
     /// Opening price
+    #[serde(default = "no_value", deserialize_with = "value_or_null")]
     pub open: f64,
     /// Highest price during the period
+    #[serde(default = "no_value", deserialize_with = "value_or_null")]
     pub high: f64,
     /// Lowest price during the period
+    #[serde(default = "no_value", deserialize_with = "value_or_null")]
     pub low: f64,
     /// Closing price
+    #[serde(default = "no_value", deserialize_with = "value_or_null")]
     pub close: f64,
     /// Trading volume
+    #[serde(default = "no_value", deserialize_with = "value_or_null")]
     pub volume: f64,
+    /// Colours of this bar that replace the series' colours, `None` for the series' colours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Box<BarColors>>,
+    /// Data of the host's own attached to this bar. The chart does not read it; it comes back
+    /// with the bar in the chart's pointer and data events and in its bar lookups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Arc<serde_json::Value>>,
+}
+
+/// Colours of one bar that replace the colours of its series for that bar, in
+/// [`Bar::colors`]. A colour left `None` keeps the series' colour, and each chart type reads the
+/// colours that apply to it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BarColors {
+    /// The body of a candle; an OHLC bar, a column or a line's marker; or the line from this bar
+    /// to the next on line, step line, area and HLC area charts.
+    pub color: Option<Color32>,
+    /// The border of a candle's body.
+    pub border: Option<Color32>,
+    /// The wick of a candle.
+    pub wick: Option<Color32>,
+    /// A baseline's line above its base value, from this bar to the next.
+    pub top_line: Option<Color32>,
+    /// A baseline's fill above its base value, from this bar to the next.
+    pub top_fill: Option<Color32>,
+    /// A baseline's line below its base value, from this bar to the next.
+    pub bottom_line: Option<Color32>,
+    /// A baseline's fill below its base value, from this bar to the next.
+    pub bottom_fill: Option<Color32>,
+}
+
+/// A value missing from a JSON bar, which leaves the bar without it.
+fn no_value() -> f64 {
+    f64::NAN
+}
+
+/// A number, or `null`, which JSON writes for a value that is not a number, such as the values
+/// of a whitespace bar.
+fn value_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+}
+
+/// An RFC 3339 time, or a date alone for midnight UTC of that day.
+fn time_or_date<'de, D: Deserializer<'de>>(deserializer: D) -> Result<DateTime<Utc>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    text.parse::<DateTime<Utc>>()
+        .or_else(|error| {
+            NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                .map(|date| date.and_time(NaiveTime::MIN).and_utc())
+                .map_err(|_| error)
+        })
+        .map_err(serde::de::Error::custom)
 }
 
 impl Bar {
@@ -70,7 +140,30 @@ impl Bar {
             low,
             close,
             volume,
+            colors: None,
+            payload: None,
         }
+    }
+
+    /// A bar of a single value, such as a point of a line, area, baseline or column series: its
+    /// open, high, low and close are `value`, its volume zero.
+    pub fn from_value(time: DateTime<Utc>, value: f64) -> Self {
+        Self::new(time, value, value, value, value, 0.0)
+    }
+
+    /// A bar without a value: it holds its slot on the time axis, so a gap such as a halted
+    /// session stays visible and a time of another series has a slot, but nothing is drawn there
+    /// and studies take it as a bar without a value. Its open, high, low, close and volume are NaN.
+    pub fn whitespace(time: DateTime<Utc>) -> Self {
+        Self::new(time, f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN)
+    }
+
+    /// Whether this is a [`whitespace`](Self::whitespace) bar: open, high, low, close and volume
+    /// are all NaN.
+    pub fn is_whitespace(&self) -> bool {
+        [self.open, self.high, self.low, self.close, self.volume]
+            .into_iter()
+            .all(f64::is_nan)
     }
 
     // ============= Direction Methods =============
@@ -208,7 +301,7 @@ impl Bar {
 ///
 /// It captures the index of the span's first bar, its length, the timestamps
 /// of its first and last bars, the first close, every value of the last bar,
-/// and the series' [`ChartState::revision`](crate::model::ChartState::revision),
+/// and the series' [`ChartState::revision`](crate::studies::ChartState::revision),
 /// which changes when any bar before the series' last one changes. So it
 /// changes when bars are appended or removed, the endpoints move, the forming
 /// last bar updates, or a bar inside the span is corrected.
@@ -438,14 +531,28 @@ mod tests {
     #[cfg(feature = "widget")]
     #[test]
     fn span_cache_recomputes_when_bars_change() {
-        use crate::model::{BarData, ChartState};
+        use crate::model::BarData;
+        use crate::studies::ChartState;
         let mut cache = SpanCache::new(4);
         let total_volume = |bars: &[Bar]| bars.iter().map(|bar| bar.volume).sum::<f64>();
         let mut get = |state: &ChartState, first: usize| {
             let bars = &state.data().bars[first..];
             *cache.get((), first, bars, state.revision(), total_volume)
         };
-        let mut bars = crate::drawings::rendering::sample_bars();
+        let mut bars: Vec<_> = [100., 200., 150., 300., 250., 400., 50.]
+            .into_iter()
+            .enumerate()
+            .map(|(i, volume)| {
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    10.,
+                    12.,
+                    9.,
+                    11.,
+                    volume,
+                )
+            })
+            .collect();
         let mut state = ChartState::new(BarData::from_bars(bars.clone()));
         let streaming = state.revision();
         assert_eq!(get(&state, 1), 1350.0);

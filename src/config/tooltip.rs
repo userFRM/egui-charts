@@ -5,17 +5,11 @@
 //! - **Tracking**: Fixed horizontal bar at the top of the chart showing OHLC data
 //! - **Magnifier**: Circular zoom lens for detailed data inspection on dense charts
 
-/// Tooltip Configuration for data tooltips.
-///
-/// Provides three tooltip variants:
-/// - Floating: Classic tooltip that follows cursor position
-/// - Tracking: Fixed horizontal bar showing OHLC data at top of chart
-/// - Magnifier: Circular zoom lens for detailed data inspection.
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Tooltip display mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TooltipMode {
     /// Floating tooltip that follows cursor position
     /// Shows OHLC, volume, and change info in a popup near the mouse
@@ -44,7 +38,8 @@ impl std::fmt::Display for TooltipMode {
 }
 
 /// Tooltip configuration options
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct TooltipOptions {
     /// Whether the hover readout is drawn at all.
     ///
@@ -52,6 +47,9 @@ pub struct TooltipOptions {
     /// OHLC/value readout, matching charting UIs that let users toggle the
     /// data tooltip independently of the crosshair.
     pub enabled: bool,
+
+    /// Show values only while the primary pointer is held. Touch waits for a long press.
+    pub on_long_press: bool,
 
     /// Tooltip display mode
     pub mode: TooltipMode,
@@ -109,6 +107,7 @@ impl Default for TooltipOptions {
     fn default() -> Self {
         Self {
             enabled: true,
+            on_long_press: false,
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,

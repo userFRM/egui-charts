@@ -3,12 +3,14 @@
 //! A compact popup menu for quick chart configuration changes (chart type,
 //! grid visibility, scale mode, and label options).
 
-use super::{config::ChartSettings, types::ScaleMode};
+use super::config::ChartSettings;
 use crate::config::ChartConfig;
-use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::model::ChartType;
-use crate::styles::typography;
+use crate::scales::PriceScaleMode;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 
 // ============================================================================
@@ -47,7 +49,7 @@ impl SettingsMenu {
 
     /// Apply current settings to a ChartConfig
     pub fn apply_to_config(&self, mut config: ChartConfig) -> ChartConfig {
-        config.show_grid = self.settings.show_horizontal_grid;
+        config.show_grid = self.settings.show_horizontal_grid || self.settings.show_vertical_grid;
         config.show_horizontal_grid = self.settings.show_horizontal_grid;
         config.show_vertical_grid = self.settings.show_vertical_grid;
         config.show_right_axis = self.settings.show_right_axis;
@@ -58,6 +60,7 @@ impl SettingsMenu {
         config.show_indicator_labels = self.settings.show_indicator_labels;
         config.show_indicator_last_val = self.settings.show_indicator_last_val;
         config.show_countdown = self.settings.show_countdown;
+        config.lock_price_to_bar_ratio = self.settings.lock_scale;
         config
     }
 
@@ -78,6 +81,11 @@ impl SettingsMenu {
         let btn_id = ui.scope_id().with("settings_btn");
 
         let response = ui.interact(btn_rect, btn_id, egui::Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Chart settings");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &translated_label)
+        });
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         let visuals = ui.style().interact(&response);
         let bg_color = if response.hovered() {
@@ -87,12 +95,12 @@ impl SettingsMenu {
         };
 
         ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(btn_rect, ui.active_theme().radius.md, bg_color);
         ui.painter().text(
             btn_rect.center(),
             Align2::CENTER_CENTER,
-            "S",
-            egui::FontId::proportional(typography::TITLE),
+            l10n::text(ui.ctx(), "S"),
+            egui::FontId::proportional(ui.active_theme().text.dialog_title),
             visuals.text_color(),
         );
 
@@ -137,7 +145,10 @@ impl SettingsMenu {
         self.draw_labels_section(ui);
 
         ui.separator();
-        if ui.button("Scales Properties...").clicked() {
+        if ui
+            .button(l10n::text(ui.ctx(), "Scales Properties..."))
+            .clicked()
+        {
             self.is_open = false;
         }
     }
@@ -153,7 +164,10 @@ impl SettingsMenu {
             ChartType::Area,
         ] {
             if ui
-                .selectable_label(self.settings.chart_type == *chart_type, chart_type.as_str())
+                .selectable_label(
+                    self.settings.chart_type == *chart_type,
+                    l10n::text(ui.ctx(), chart_type.as_str()),
+                )
                 .clicked()
             {
                 self.settings.chart_type = *chart_type;
@@ -165,8 +179,14 @@ impl SettingsMenu {
     fn draw_appearance_section(&mut self, ui: &mut egui::Ui) {
         ui.strong_label("Appearance");
         ui.separator();
-        ui.checkbox(&mut self.settings.show_horizontal_grid, "Horizontal Grid");
-        ui.checkbox(&mut self.settings.show_vertical_grid, "Vertical Grid");
+        ui.checkbox(
+            &mut self.settings.show_horizontal_grid,
+            l10n::text(ui.ctx(), "Horizontal Grid"),
+        );
+        ui.checkbox(
+            &mut self.settings.show_vertical_grid,
+            l10n::text(ui.ctx(), "Vertical Grid"),
+        );
         ui.separator();
     }
 
@@ -174,44 +194,56 @@ impl SettingsMenu {
         ui.strong_label("Scale");
         ui.separator();
 
-        if ui.button("Reset Scale").clicked() {
+        if ui.button(l10n::text(ui.ctx(), "Reset Scale")).clicked() {
             self.is_open = false;
         }
 
-        ui.checkbox(&mut self.settings.show_left_axis, "Left Axis");
-        ui.checkbox(&mut self.settings.show_right_axis, "Right Axis");
+        ui.checkbox(
+            &mut self.settings.show_left_axis,
+            l10n::text(ui.ctx(), "Left Axis"),
+        );
+        ui.checkbox(
+            &mut self.settings.show_right_axis,
+            l10n::text(ui.ctx(), "Right Axis"),
+        );
 
         if ui
-            .selectable_label(self.settings.scale_mode == ScaleMode::Auto, "Auto Scale")
+            .selectable_label(
+                self.settings.scale_mode == PriceScaleMode::Normal,
+                l10n::text(ui.ctx(), "Auto Scale"),
+            )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Auto;
+            self.settings.scale_mode = PriceScaleMode::Normal;
         }
 
-        ui.checkbox(&mut self.settings.lock_scale, "Lock Scale");
+        ui.checkbox(
+            &mut self.settings.lock_scale,
+            l10n::text(ui.ctx(), "Lock price to bar ratio"),
+        );
         ui.checkbox(
             &mut self.settings.scale_price_chart_only,
-            "Scale Price Chart Only",
+            l10n::text(ui.ctx(), "Scale Price Chart Only"),
         );
         ui.separator();
 
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Percentage,
-                "Percentage",
+                self.settings.scale_mode == PriceScaleMode::Percentage,
+                l10n::text(ui.ctx(), "Percentage"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Percentage;
+            self.settings.scale_mode = PriceScaleMode::Percentage;
         }
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Logarithmic,
-                "Log Scale",
+                self.settings.scale_mode == PriceScaleMode::Logarithmic,
+                l10n::text(ui.ctx(), "Log Scale"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Logarithmic;
+            self.settings.scale_mode = PriceScaleMode::Logarithmic;
         }
         ui.separator();
     }
@@ -220,25 +252,37 @@ impl SettingsMenu {
         ui.strong_label("Labels");
         ui.separator();
 
-        ui.checkbox(&mut self.settings.show_symbol_labels, "Symbol Labels");
-        ui.checkbox(&mut self.settings.show_symbol_last_val, "Symbol Last Value");
+        ui.checkbox(
+            &mut self.settings.show_symbol_labels,
+            l10n::text(ui.ctx(), "Symbol Labels"),
+        );
+        ui.checkbox(
+            &mut self.settings.show_symbol_last_val,
+            l10n::text(ui.ctx(), "Symbol Last Value"),
+        );
         ui.checkbox(
             &mut self.settings.show_symbol_prev_close,
-            "Symbol Prev. Close Value",
+            l10n::text(ui.ctx(), "Symbol Prev. Close Value"),
         );
         ui.separator();
 
-        ui.checkbox(&mut self.settings.show_indicator_labels, "Indicator Labels");
+        ui.checkbox(
+            &mut self.settings.show_indicator_labels,
+            l10n::text(ui.ctx(), "Indicator Labels"),
+        );
         ui.checkbox(
             &mut self.settings.show_indicator_last_val,
-            "Indicator Last Value",
+            l10n::text(ui.ctx(), "Indicator Last Value"),
         );
         ui.separator();
 
-        ui.checkbox(&mut self.settings.show_countdown, "Countdown");
+        ui.checkbox(
+            &mut self.settings.show_countdown,
+            l10n::text(ui.ctx(), "Countdown"),
+        );
         ui.checkbox(
             &mut self.settings.no_overlapping_labels,
-            "No Overlapping Labels",
+            l10n::text(ui.ctx(), "No Overlapping Labels"),
         );
     }
 

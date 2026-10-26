@@ -1,59 +1,64 @@
 //! Crosshair options for the chart cursor overlay.
 //!
-//! Controls the crosshair mode (Normal vs Magnet-snap), visual style
-//! (Full / Dot / Arrow), line style (Solid / Dashed / Dotted), and colors.
+//! Controls the crosshair mode (free, or snapping to values), visual style
+//! (Full / Dot / Arrow / Hidden), the style of each line, and colors.
 
-/// Crosshair Options.
-///
-/// Controls crosshair behavior and appearance.
+use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use egui::Color32;
 
 /// Crosshair mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CrosshairMode {
-    /// Normal crosshair (follows mouse exactly)
+    /// Normal crosshair (snaps x to the bar center and follows the pointer value)
     #[default]
     Normal,
-    /// Magnet crosshair (snaps to nearest OHLC data point)
+    /// Magnet crosshair (snaps to the nearest visible OHLC or study value)
     Magnet,
+    /// Magnet crosshair that snaps the price pane to the bar's close only. Volume and study
+    /// panes snap to their values as with `Magnet`.
+    MagnetClose,
+}
+
+impl CrosshairMode {
+    /// Whether the crosshair snaps to values instead of following the pointer.
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, Self::Magnet | Self::MagnetClose)
+    }
 }
 
 /// Crosshair visual style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CrosshairStyle {
     /// Full crosshair with vertical and horizontal lines (default)
     #[default]
     Full,
     /// Only a dot at the intersection point
     Dot,
-    /// No crosshair, just standard arrow cursor
+    /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,
-}
-
-/// Line style for crosshair rendering (Solid, Dashed, Dotted)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CrosshairLineStyle {
-    /// Solid line
-    Solid,
-    /// Dashed line (default)
-    #[default]
-    Dashed,
-    /// Dotted line
-    Dotted,
+    /// A fading pointer trail for presentations, with axis readouts.
+    Demonstration,
+    /// No crosshair lines or axis labels. Legends, the data window and tooltips still follow
+    /// the pointer.
+    Hidden,
 }
 
 /// Crosshair options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,
 
-    /// Crosshair visual style (Full/Dot/Arrow)
+    /// Crosshair visual style (Full/Dot/Arrow/Hidden)
     pub style: CrosshairStyle,
 
-    /// Line style for crosshair (Solid/Dashed/Dotted)
-    pub line_style: CrosshairLineStyle,
+    /// Vertical line style
+    pub vert_line_style: LineStyle,
+
+    /// Horizontal line style
+    pub horz_line_style: LineStyle,
 
     /// Show vertical line
     pub vert_line_visible: bool,
@@ -76,8 +81,13 @@ pub struct CrosshairOptions {
     /// Show labels
     pub label_visible: bool,
 
-    /// Label background color (`Color32::PLACEHOLDER`: active theme)
-    pub label_background_color: Color32,
+    /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
+    /// active theme)
+    pub vert_label_background_color: Color32,
+
+    /// Background of the horizontal line's label on the price axis (`Color32::PLACEHOLDER`:
+    /// active theme)
+    pub horz_label_background_color: Color32,
 
     /// Label text color (`Color32::PLACEHOLDER`: active theme)
     pub label_text_color: Color32,
@@ -88,7 +98,8 @@ impl Default for CrosshairOptions {
         Self {
             mode: CrosshairMode::Normal,
             style: CrosshairStyle::Full,
-            line_style: CrosshairLineStyle::Dashed,
+            vert_line_style: LineStyle::Dotted,
+            horz_line_style: LineStyle::Dotted,
             vert_line_visible: true,
             horz_line_visible: true,
             vert_line_color: Color32::PLACEHOLDER,
@@ -96,7 +107,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
-            label_background_color: Color32::PLACEHOLDER,
+            vert_label_background_color: Color32::PLACEHOLDER,
+            horz_label_background_color: Color32::PLACEHOLDER,
             label_text_color: Color32::PLACEHOLDER,
         }
     }
@@ -116,7 +128,14 @@ impl CrosshairOptions {
         Self {
             vert_line_color: or(self.vert_line_color, chart.crosshair_line),
             horz_line_color: or(self.horz_line_color, chart.crosshair_line),
-            label_background_color: or(self.label_background_color, chart.crosshair_label_bg),
+            vert_label_background_color: or(
+                self.vert_label_background_color,
+                chart.crosshair_label_bg,
+            ),
+            horz_label_background_color: or(
+                self.horz_label_background_color,
+                chart.crosshair_label_bg,
+            ),
             label_text_color: or(self.label_text_color, chart.crosshair_label_text),
             ..*self
         }

@@ -2,9 +2,11 @@
 //!
 //! Shared utilities for price-to-pixel conversion and drawing primitives.
 
+use crate::model::Bar;
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
+use std::ops::Range;
 
 /// Pre-computed pixel Y coordinates for a single OHLC bar.
 ///
@@ -123,6 +125,26 @@ pub fn draw_o_symbol(painter: &Painter, center: Pos2, radius: f32, color: Color3
         radius,
         Stroke::new(DESIGN_TOKENS.stroke.thick, color),
     ));
+}
+
+/// The ranges of the consecutive bars of `data` that have a value, between its whitespace bars.
+pub fn valued_runs(data: &[Bar]) -> impl Iterator<Item = Range<usize>> + '_ {
+    data.chunk_by(|a, b| a.is_whitespace() == b.is_whitespace())
+        .scan(0, |start, run| {
+            *start += run.len();
+            Some(*start - run.len()..*start)
+        })
+        .filter(|run| !data[run.start].is_whitespace())
+}
+
+/// Close of the last bar with a value before `idx` in `full`; a bar without one before it
+/// compares with its own open.
+pub fn prev_close(full: &[Bar], idx: usize) -> f64 {
+    full[..idx]
+        .iter()
+        .rev()
+        .find(|bar| !bar.is_whitespace())
+        .map_or(full[idx].open, |bar| bar.close)
 }
 
 /// Select bullish or bearish color based on bar direction

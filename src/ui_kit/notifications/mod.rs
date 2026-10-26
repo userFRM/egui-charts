@@ -1,36 +1,12 @@
-//! Notification System
+//! Toast notifications with optional automatic dismissal.
 //!
-//! Non-blocking toast notifications that appear and auto-dismiss.
-//!
-//! # Usage
-//!
-//! Each chart instance owns its own [`Toasts`] queue, so notifications never
-//! leak across independent widgets sharing one process.
-//!
-//! ```
-//! use egui_charts::ui_kit::notifications::{NotificationPanel, NotificationPosition, Toasts};
-//!
-//! // In your state
-//! struct MyState {
-//!     toasts: Toasts,
-//! }
-//! # let mut state = MyState { toasts: Toasts::new() };
-//!
-//! // Add a toast
-//! state.toasts.success("Operation completed!");
-//!
-//! // Show notifications each frame
-//! # egui::__run_test_ctx(|ctx| {
-//! NotificationPanel::new()
-//!     .position(NotificationPosition::TopRight)
-//!     .show_with_toasts(ctx, &mut state.toasts);
-//! # });
-//! ```
+//! Keep a [`Toasts`] queue in host state, add messages as events occur and call
+//! [`NotificationPanel::show_with_toasts`] each frame to display them.
 
 mod panel;
 mod toast;
 mod toasts;
 
 pub use panel::{NotificationPanel, NotificationPanelConfig, NotificationPosition};
-pub use toast::{Toast, ToastKind};
+pub use toast::{Toast, ToastKind, TradingToast};
 pub use toasts::Toasts;

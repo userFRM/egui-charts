@@ -1,8 +1,11 @@
 //! Placing orders with the host's broker.
 
 use super::Events;
-use crate::data::{FeedStatus, MaybeSend, Reply};
-use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position};
+use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
+use crate::model::{
+    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, Position,
+    TradingRules,
+};
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
 /// positions: it shows what the broker pushes and places the orders the user confirms. Paper
@@ -23,8 +26,7 @@ use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position};
 /// use chrono::Utc;
 /// use egui_charts::data::{FeedError, Reply};
 /// use egui_charts::model::{
-///     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus,
-///     OrderType, Position,
+///     Account, Capabilities, Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Position,
 /// };
 /// use egui_charts::services::{AccountEvent, Broker, Events};
 /// use std::sync::Mutex;
@@ -88,6 +90,8 @@ use crate::model::{Account, Execution, Order, OrderId, OrderRequest, Position};
 pub trait Broker: MaybeSend + 'static {
     /// Pushes the account (balance, currency, capabilities) first, then the working orders and
     /// open positions, then orders, positions, executions and connection status as they change.
+    /// A broker that keeps history pushes it after the open state: the finished orders, the
+    /// balance changes and the journal, oldest first, which the account panel lists.
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
@@ -106,6 +110,24 @@ pub trait Broker: MaybeSend + 'static {
     /// [`OrderStatus::Cancelled`](crate::model::OrderStatus::Cancelled) update may arrive before
     /// or after that answer.
     fn cancel(&self, id: OrderId, reply: Reply<()>);
+
+    /// Replaces the working order `id` with `order`, which differs in its prices or brackets,
+    /// after the user dragged one of its lines or removed a bracket, and confirmed. Called only
+    /// for an account whose [`Capabilities::modify`](crate::model::Capabilities::modify) is set. Answer
+    /// once the broker accepted the change; push the changed order as an [`AccountEvent::Order`].
+    /// By default every change is refused as [`FeedError::NotSupported`].
+    fn modify(&self, id: OrderId, order: OrderRequest, reply: Reply<()>) {
+        let _ = (id, order);
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Answers how `symbol` trades: its quantity step, minimum and maximum quantity, point value
+    /// and times in force. By default the answer is [`FeedError::NotSupported`], and the order
+    /// ticket assumes [`TradingRules::new`].
+    fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
+        let _ = symbol;
+        reply.send(Err(FeedError::NotSupported));
+    }
 }
 
 /// A change to the account a [`Broker`] reports.
@@ -118,8 +140,12 @@ pub enum AccountEvent {
     Order(Order),
     /// Adds the position in its symbol, or replaces it; a quantity of 0 removes it.
     Position(Position),
-    /// One fill.
+    /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
     /// The connection to the broker.
     Status(FeedStatus),
+    /// A change of the cash balance, for the balance history.
+    Balance(BalanceChange),
+    /// A line of the trading journal.
+    Journal(JournalEntry),
 }

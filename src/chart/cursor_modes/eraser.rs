@@ -36,15 +36,14 @@ impl Default for EraserConfig {
     }
 }
 
-/// Runtime state for the eraser cursor mode.
+/// Runtime state for the eraser cursor mode, which
+/// [`DrawingManager::eraser_mode`](crate::drawings::DrawingManager::eraser_mode) switches on.
 ///
-/// When active, hovering over a drawing highlights it with a colored outline.
+/// Hovering over a drawing highlights it with a colored outline.
 /// Clicking deletes the hovered drawing. The eraser does not affect non-drawing
 /// chart elements (series, indicators, overlays).
 #[derive(Clone, Debug, Default)]
 pub struct EraserMode {
-    /// Whether eraser mode is active
-    pub active: bool,
     /// Drawing ID currently hovered (for highlight preview)
     pub hover_drawing: Option<usize>,
     /// Configuration
@@ -56,24 +55,9 @@ impl EraserMode {
         Self::default()
     }
 
-    /// Enable/disable eraser mode
-    pub fn set_active(&mut self, active: bool) {
-        self.active = active;
-        if !active {
-            self.hover_drawing = None;
-        }
-    }
-
     /// Set the currently hovered drawing (for highlight)
     pub fn set_hover(&mut self, drawing_id: Option<usize>) {
-        if self.active {
-            self.hover_drawing = drawing_id;
-        }
-    }
-
-    /// Check if a specific drawing should be highlighted
-    pub fn should_highlight(&self, drawing_id: usize) -> bool {
-        self.active && self.hover_drawing == Some(drawing_id)
+        self.hover_drawing = drawing_id;
     }
 
     /// Get the highlight color

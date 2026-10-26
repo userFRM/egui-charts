@@ -1,12 +1,14 @@
 //! Style tab - color, line width, line style.
 
+use crate::localization as l10n;
+use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
 
-use crate::ext::UiExt;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::dialogs::drawing_properties::actions::{DrawingLineStyle, DrawingProps};
+use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::buttons::ButtonSize;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 
 /// Line widths offered as swatches; the stepper next to them takes any width.
@@ -21,35 +23,39 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            ui.label("Color");
+            ui.label(l10n::text(ui.ctx(), "Color"));
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
                 props.color = color;
             }
             ui.end_row();
 
-            ui.label("Line width");
+            ui.label(l10n::text(ui.ctx(), "Line width"));
             line_width_row(ui, &mut props.line_width);
             ui.end_row();
 
-            ui.label("Line style");
-            ui.combo_select(
-                "line_style",
-                &mut props.line_style,
-                DrawingLineStyle::all(),
-                |v| v.label().to_string(),
-            );
+            let label = ui.label(l10n::text(ui.ctx(), "Line style"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "line_style",
+                    &mut props.line_style,
+                    LineStyle::all().iter().copied(),
+                    |v| v.name().to_string(),
+                );
+            });
             ui.end_row();
 
-            ui.label("Fill");
-            ui.checkbox(&mut props.fill_enabled, "Enable fill");
+            let label = ui.label(l10n::text(ui.ctx(), "Fill"));
+            ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
+                .labelled_by(label.id);
             ui.end_row();
 
             if props.fill_enabled {
-                ui.label("Fill color");
+                ui.label(l10n::text(ui.ctx(), "Fill color"));
                 let fill = props
                     .fill_color
                     .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
+                props.fill_color = Some(fill);
                 if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill") {
                     // Palette swatches are opaque: keep the fill's opacity unless it was edited.
                     let [r, g, b, a] = picked.to_srgba_unmultiplied();
@@ -59,16 +65,12 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            ui.label("Extend");
+            ui.label(l10n::text(ui.ctx(), "Extend"));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut props.extend_left, "Left");
+                ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                 ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
-                ui.checkbox(&mut props.extend_right, "Right");
+                ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
             });
-            ui.end_row();
-
-            ui.label("Labels");
-            ui.checkbox(&mut props.show_price, "Show price");
             ui.end_row();
         });
     }
@@ -81,18 +83,14 @@ fn color_swatch(
     color: Color32,
     id: &str,
 ) -> Option<Color32> {
-    if !state.is_open {
-        // The custom editor starts from the current colour, not the state's transparent default.
-        state.custom_color = color;
-    }
     state.sel_color = color;
-    ColorPicker::new(state, id).show(ui)
+    ColorPicker::new(state, id).show(ui).inner
 }
 
 /// Swatches that draw each preset width, then a stepper for any width from 1 to 10 px.
 fn line_width_row(ui: &mut Ui, width: &mut f32) {
     let theme = ui.active_theme();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing.xs;
         for preset in LINE_WIDTHS {
             let size = Vec2::splat(ButtonSize::MD.pixels());
@@ -101,17 +99,17 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 *width = preset;
             }
             let selected = *width == preset;
+            let translated_label = l10n::format_text(
+                ui.ctx(),
+                "{preset} px",
+                &[("preset", format!("{}", preset))],
+            );
             response.widget_info(|| {
-                WidgetInfo::selected(
-                    Role::Button,
-                    ui.is_enabled(),
-                    selected,
-                    format!("{preset} px"),
-                )
+                WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, &translated_label)
             });
 
             let visuals = ui.visuals();
-            let radius = DESIGN_TOKENS.rounding.md;
+            let radius = ui.active_theme().radius.md;
             if selected {
                 ui.painter()
                     .rect_filled(rect, radius, visuals.selection.bg_fill);
@@ -125,7 +123,7 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 Stroke::new(DESIGN_TOKENS.stroke.hairline, theme.ui.border_control),
                 StrokeKind::Inside,
             );
-            crate::styles::focus::draw_focus_ring(ui, &response);
+            crate::styles::focus::draw_focus_ring(ui, &response, radius);
             let line = if selected {
                 visuals.selection.stroke.color
             } else {
@@ -144,7 +142,8 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 .speed(0.5)
                 .max_decimals(1)
                 .custom_formatter(|v, _| v.to_string())
-                .suffix(" px"),
-        );
+                .suffix(l10n::text(ui.ctx(), " px")),
+        )
+        .accessible_name(l10n::text(ui.ctx(), "Line width"));
     });
 }

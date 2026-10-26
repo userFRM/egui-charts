@@ -1,12 +1,13 @@
 //! LabelContent - Simple text content with optional icon
 
+use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Response, RichText, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
 use crate::styles::icons;
 
 use super::content::{ContentContext, ListItemContent};
-use crate::tokens::DESIGN_TOKENS;
 
 /// Simple text content with optional icon
 ///
@@ -82,13 +83,12 @@ impl<'a> ListItemContent for LabelContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let egui_visuals = ui.style().visuals.clone();
 
-        // Use ListVisuals methods for color computation (rerun-inspired)
         let mut list_visuals = context.visuals.clone();
         list_visuals.strong = self.strong;
 
         // Determine text color using ListVisuals
         let text_color = if self.subdued {
-            egui_visuals.widgets.noninteractive.fg_stroke.color
+            egui_visuals.weak_text_color()
         } else {
             list_visuals.text_color(&egui_visuals)
         };
@@ -98,15 +98,34 @@ impl<'a> ListItemContent for LabelContent<'a> {
 
         // Calculate layout
         let icon_width = if self.icon.is_some() {
-            self.icon_size + DESIGN_TOKENS.spacing.sm
+            self.icon_size + ui.active_theme().spacing.sm
         } else {
             0.0
         };
 
         let content_rect = context.rect;
+        let is_menu = ui.stack().contained_in(egui::UiKind::Menu);
+        let translated_label = l10n::text(ui.ctx(), &self.text);
         context.response.widget_info(|| {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), context.selected, &self.text)
+            WidgetInfo::labeled(
+                if is_menu {
+                    Role::MenuItem
+                } else if context.response.sense.senses_click() {
+                    Role::ListBoxOption
+                } else {
+                    Role::ListItem
+                },
+                context.response.enabled(),
+                &translated_label,
+            )
         });
+
+        if !is_menu && context.response.sense.senses_click() {
+            ui.ctx()
+                .accesskit_node_builder(context.response.id, |node| {
+                    node.set_selected(context.selected)
+                });
+        }
 
         if ui.is_rect_visible(content_rect) {
             // Draw icon if present
@@ -123,7 +142,7 @@ impl<'a> ListItemContent for LabelContent<'a> {
             // Draw text
             let text_pos = egui::pos2(content_rect.min.x + icon_width, content_rect.center().y);
 
-            let mut rich_text = RichText::new(&self.text).color(text_color);
+            let mut rich_text = RichText::new(l10n::text(ui.ctx(), &self.text)).color(text_color);
             if self.italics {
                 rich_text = rich_text.italics();
             }

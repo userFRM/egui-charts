@@ -4,7 +4,7 @@
 
 use super::{ButtonSize, ButtonVariant, finish};
 use crate::icons::Icon;
-use crate::tokens::DESIGN_TOKENS;
+use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Ui, Vec2};
 
 /// Icon button with theme-aware styling
@@ -35,7 +35,7 @@ pub struct IconButton<'a> {
     icon: &'a Icon,
     size: ButtonSize,
     tooltip: Option<String>,
-    selected: bool,
+    selected: Option<bool>,
     enabled: bool,
     icon_scale: Option<f32>,
 }
@@ -47,7 +47,7 @@ impl<'a> IconButton<'a> {
             icon,
             size: ButtonSize::MD,
             tooltip: None,
-            selected: false,
+            selected: None,
             enabled: true,
             icon_scale: None,
         }
@@ -70,7 +70,7 @@ impl<'a> IconButton<'a> {
     /// Set whether the button is in selected/active state
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
+        self.selected = Some(selected);
         self
     }
 
@@ -105,28 +105,26 @@ impl<'a> IconButton<'a> {
 
         let button_size = Vec2::splat(self.size.pixels());
         let (rect, response) = ui.allocate_exact_size(button_size, Sense::click());
-        crate::styles::focus::draw_focus_ring(ui, &response);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
 
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
             let pressed = response.is_pointer_button_down_on();
-            let variant = if self.selected {
+            let variant = if self.selected == Some(true) {
                 ButtonVariant::Primary
             } else {
                 ButtonVariant::Ghost
             };
             ui.painter().rect_filled(
                 rect,
-                DESIGN_TOKENS.rounding.button,
+                ui.active_theme().radius.sm,
                 variant.bg_color(ui, hovered, pressed),
             );
 
-            let icon_color = if self.selected {
+            let icon_color = if self.selected == Some(true) {
                 variant.fg_color(ui)
-            } else if hovered || pressed {
-                ui.visuals().widgets.hovered.fg_stroke.color
             } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
+                ui.style().interact(&response).fg_stroke.color
             };
             let icon_size = Vec2::splat(self.size.icon_pixels(self.icon_scale));
             self.icon

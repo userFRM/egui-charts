@@ -1,43 +1,56 @@
 //! The root [`DesignTokens`] struct and its spacing scale.
 
 use super::semantic::SemanticTokens;
-use super::sizing::{
-    LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens, TypographyTokens,
-};
+use super::sizing::{LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens};
 
-/// The root design tokens structure -- single source of truth for all styling primitives.
+/// Shared spacing, dimensions and color defaults for chart controls.
 ///
 /// Access the global instance via [`DESIGN_TOKENS`](super::DESIGN_TOKENS).
-/// Contains spacing, sizing, rounding, typography, stroke widths, shadow
-/// parameters, and semantic color tokens organized by domain (UI, chart,
-/// indicators, drawings, etc.).
+/// Contains default spacing, sizing, rounding, stroke widths, shadow parameters
+/// and semantic color tokens. UI colors and text, spacing and radius scales come
+/// from the applied [`Theme`](crate::theme::Theme).
 #[derive(Clone, Debug)]
 pub struct DesignTokens {
+    /// Spacing defaults.
     pub spacing: SpacingTokens,
+    /// Sizing defaults.
     pub sizing: SizingTokens,
+    /// Rounding defaults.
     pub rounding: RoundingTokens,
-    pub typography: TypographyTokens,
+    /// Stroke defaults.
     pub stroke: StrokeTokens,
+    /// Shadow defaults.
     pub shadow: ShadowTokens,
+    /// Layout defaults.
     pub layout: LayoutTokens,
+    /// Semantic defaults.
     pub semantic: SemanticTokens,
 }
 
 /// Spacing tokens defining consistent gaps, padding, and margins.
 ///
-/// Values follow a graduated scale: `xs` (2px) through `xxxl` (32px).
-/// Use semantic aliases like `panel_gap`, `button_padding`, etc. for
-/// domain-specific spacing.
+/// Values are in egui logical points. Use `panel_gap` and `section_lg`
+/// for panel and section spacing, or the graduated sizes for control layout.
 #[derive(Clone, Debug)]
 pub struct SpacingTokens {
+    /// Extra small, in egui logical points.
     pub xs: f32,
+    /// Small, in egui logical points.
     pub sm: f32,
+    /// Medium, in egui logical points.
     pub md: f32,
+    /// Large, in egui logical points.
     pub lg: f32,
+    /// Extra large, in egui logical points.
     pub xl: f32,
+    /// Double extra large, in egui logical points.
     pub xxl: f32,
+    /// Triple extra large, in egui logical points.
     pub xxxl: f32,
+    /// Hairline, in egui logical points.
     pub hairline: f32,
+    /// Section large, in egui logical points.
     pub section_lg: f32,
+    /// Panel gap, in egui logical points.
     pub panel_gap: f32,
 }

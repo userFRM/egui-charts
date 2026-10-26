@@ -4,7 +4,7 @@
 //! Each cursor type provides different visual feedback and behavior.
 //!
 //! ## Cursor Types
-//! - **Cross**: Full crosshair with vertical + horizontal lines (default)
+//! - **Cross**: Full crosshair with vertical + horizontal lines
 //! - **Dot**: Simple dot at cursor position
 //! - **Arrow**: Standard pointer, no crosshair overlay
 //! - **Eraser**: Click to delete drawings
@@ -22,6 +22,8 @@ pub use eraser::EraserMode;
 pub struct CursorModeState {
     /// Eraser mode: click on drawings to delete them.
     pub eraser: EraserMode,
+    trail: Vec<(egui::Pos2, f32)>,
+    last_pointer: Option<egui::Pos2>,
 }
 
 impl CursorModeState {
@@ -31,17 +33,91 @@ impl CursorModeState {
     }
 
     /// Advance all cursor mode animations by `dt` seconds (call once per frame).
-    pub fn update(&mut self, _dt: f32) {
-        // No animated modes remaining
+    pub fn update(&mut self, dt: f32) {
+        for (_, age) in &mut self.trail {
+            *age += dt.max(0.0);
+        }
+        self.trail.retain(|(_, age)| *age < 0.5);
     }
 
     /// Render all active cursor mode visual effects.
-    pub fn render(&self, _ui: &mut egui::Ui, _rect: egui::Rect) {
-        // No visual effects remaining
+    pub fn render(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+        use crate::theme::ThemeExt;
+        let painter = ui.painter().with_clip_rect(rect);
+        for pair in self.trail.windows(2) {
+            painter.line_segment(
+                [pair[0].0, pair[1].0],
+                egui::Stroke::new(
+                    6.0,
+                    ui.active_theme()
+                        .ui
+                        .accent
+                        .gamma_multiply((1.0 - pair[0].1 / 0.5) * 0.65),
+                ),
+            );
+        }
+        for (pos, age) in &self.trail {
+            painter.circle_filled(
+                *pos,
+                5.0,
+                ui.active_theme()
+                    .ui
+                    .accent
+                    .gamma_multiply((1.0 - age / 0.5) * 0.65),
+            );
+        }
+        if !self.trail.is_empty() {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    pub(crate) fn move_pointer(&mut self, pos: Option<egui::Pos2>) {
+        if let Some(pos) = pos {
+            if self
+                .last_pointer
+                .is_none_or(|last| last.distance(pos) > 1.0)
+            {
+                if self.trail.len() == 64 {
+                    self.trail.remove(0);
+                }
+                self.trail.push((pos, 0.0));
+                self.last_pointer = Some(pos);
+            }
+        } else {
+            self.trail.clear();
+            self.last_pointer = None;
+        }
     }
 
     /// Reset all cursor mode states.
     pub fn clear_all(&mut self) {
         self.eraser.clear();
+        self.trail.clear();
+        self.last_pointer = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stationary pointer must not restart a trail after its last point expires.
+    #[test]
+    fn demonstration_trail_expires_without_restarting() {
+        let mut modes = CursorModeState::new();
+        for (dt, x, expected) in [
+            (0.0, 10.0, 1),
+            (0.1, 20.0, 2),
+            (0.4, 20.0, 1),
+            (0.2, 20.0, 0),
+            (0.1, 20.0, 0),
+            (0.1, 30.0, 1),
+        ] {
+            modes.update(dt);
+            modes.move_pointer(Some(egui::pos2(x, 10.0)));
+            assert_eq!(modes.trail.len(), expected, "at {x} after {dt}");
+        }
+        modes.clear_all();
+        assert!(modes.trail.is_empty());
     }
 }

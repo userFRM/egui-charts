@@ -22,16 +22,17 @@
 //! aroon.calculate(&bars);
 //! ```
 
+use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValue};
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Aroon indicator
 #[derive(Clone)]
 pub struct Aroon {
     period: usize,
-    values: Vec<IndicatorValue>,
+    values: IndicatorValues,
     up_color: Color32,
     down_color: Color32,
     visible: bool,
@@ -45,9 +46,9 @@ impl Aroon {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            values: Vec::new(),
-            up_color: DESIGN_TOKENS.semantic.extended.success,
-            down_color: DESIGN_TOKENS.semantic.extended.error,
+            values: IndicatorValues::new(),
+            up_color: palette::GREEN,
+            down_color: palette::RED,
             visible: true,
         }
     }
@@ -72,25 +73,17 @@ impl Default for Aroon {
     }
 }
 
-impl Indicator for Aroon {
-    fn name(&self) -> &str {
-        "Aroon"
-    }
-
-    fn desc(&self) -> &str {
-        "Aroon - Trend identification indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-
+impl Aroon {
+    /// The values over `data`, every bar of which has finite inputs.
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
         if data.is_empty() {
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -120,12 +113,35 @@ impl Indicator for Aroon {
             let aroon_up = ((self.period - days_since_high) as f64 / self.period as f64) * 100.0;
             let aroon_down = ((self.period - days_since_low) as f64 / self.period as f64) * 100.0;
 
-            self.values
-                .push(IndicatorValue::Multiple(vec![aroon_up, aroon_down]));
+            values.push_lines(&[aroon_up, aroon_down]);
         }
+
+        values
+    }
+}
+
+impl Indicator for Aroon {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Aroon"
     }
 
-    fn values(&self) -> &[IndicatorValue] {
+    fn desc(&self) -> &str {
+        "Aroon - Trend identification indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.values = over_finite_bars(
+            data,
+            |b| b.high.is_finite() && b.low.is_finite(),
+            |data| self.compute(data),
+        );
+    }
+
+    fn values(&self) -> &IndicatorValues {
         &self.values
     }
 
@@ -146,7 +162,7 @@ impl Indicator for Aroon {
         false // Aroon is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // Aroon Up and Aroon Down
     }
 

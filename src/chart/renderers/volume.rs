@@ -1,23 +1,25 @@
 use super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
-use egui::{Color32, Pos2, Rect, Vec2};
+use crate::theme::ThemeExt;
+use egui::{Pos2, Rect, Vec2};
 
-/// Renders a volume bar (semi-transparent with ~26% opacity)
+/// Renders a volume bar with the active theme's volume colour and opacity.
 pub fn render_volume_bar(
     context: &RenderContext,
     candle: &Bar,
     max_volume: f64,
-    colors: &StyleColors,
+    _colors: &StyleColors,
     params: &BarRenderParams,
 ) {
-    let base_color = colors.bar_color(candle.is_bullish());
-    // Use ~26% opacity for volume histogram bars
-    let color = Color32::from_rgba_unmultiplied(
-        base_color.r(),
-        base_color.g(),
-        base_color.b(),
-        66, // ~26% of 255
-    );
+    if candle.is_whitespace() {
+        return;
+    }
+    let theme = context.painter.ctx().active_theme();
+    let color = if candle.is_bullish() {
+        theme.chart.volume_up()
+    } else {
+        theme.chart.volume_down()
+    };
 
     let bar_height = (candle.volume / max_volume) as f32 * context.rect.height();
     let bar_bottom = context.rect.max.y;
