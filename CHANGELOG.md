@@ -295,6 +295,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Time coordinates subtract absolute indices before applying fractional offsets and retain double precision through host conversions and zoom anchoring. Small pans on million-bar histories move smoothly at high zoom; existing `f32` inverse methods remain available alongside precise inverses. ([#916](https://github.com/userFRM/egui-charts/issues/916))
+
+- A zero right margin keeps the newest candle and its streaming updates in the visible data and price fit, including when the right edge is fixed. Logical ranges include their rightmost bar slot when converted to end-exclusive slices. ([#910](https://github.com/userFRM/egui-charts/issues/910))
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 

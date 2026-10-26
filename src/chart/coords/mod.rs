@@ -71,9 +71,11 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right = self.base_idx as f32 + self.right_offset - bar_idx as f32;
-        let relative_x = self.rect.width() - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        self.rect.min.x + relative_x
+        let delta_from_right =
+            (self.base_idx as f64 - bar_idx as f64) + f64::from(self.right_offset);
+        (f64::from(self.rect.min.x) + f64::from(self.rect.width())
+            - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
+            - 1.0) as f32
     }
 
     /// Convert X screen coordinate to bar index (inverse of idx_to_x).
@@ -85,10 +87,7 @@ impl ChartMapping {
         if self.bar_spacing.abs() < f32::EPSILON {
             return self.base_idx;
         }
-        let relative_x = x - self.rect.min.x;
-        let delta_from_right = (self.rect.width() - relative_x - 1.0) / self.bar_spacing - 0.5;
-        let bar_idx = self.base_idx as f32 + self.right_offset - delta_from_right;
-        bar_idx.round() as usize
+        self.x_to_idx_f64(x).round() as usize
     }
 
     /// Convert X screen coordinate to fractional bar index.
@@ -99,12 +98,20 @@ impl ChartMapping {
     /// anchor index is returned rather than producing an infinite/NaN index.
     #[inline]
     pub fn x_to_idx_f32(&self, x: f32) -> f32 {
+        self.x_to_idx_f64(x) as f32
+    }
+
+    /// Convert X to a fractional bar index, retaining sub-bar precision on large histories.
+    /// A degenerate spacing returns the anchor, as in [`Self::x_to_idx_f32`].
+    #[inline]
+    pub fn x_to_idx_f64(&self, x: f32) -> f64 {
         if self.bar_spacing.abs() < f32::EPSILON {
-            return self.base_idx as f32 + self.right_offset;
+            return self.base_idx as f64 + f64::from(self.right_offset);
         }
-        let relative_x = x - self.rect.min.x;
-        let delta_from_right = (self.rect.width() - relative_x - 1.0) / self.bar_spacing - 0.5;
-        self.base_idx as f32 + self.right_offset - delta_from_right
+        let relative_x = f64::from(x) - f64::from(self.rect.min.x);
+        let delta_from_right =
+            (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
+        self.base_idx as f64 + (f64::from(self.right_offset) - delta_from_right)
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -119,7 +126,7 @@ impl ChartMapping {
     /// Returns `None` when there is no data, or when the cursor falls before the
     /// first bar or after the last bar (the right-side empty scroll margin), so
     /// callers never index past the slice or read a stale neighbour. Resolution
-    /// uses [`Self::x_to_idx_f32`], the exact inverse of [`Self::idx_to_x`], so
+    /// uses [`Self::x_to_idx_f64`], the exact inverse of [`Self::idx_to_x`], so
     /// the bar at its own centre x resolves to itself and the readout describes
     /// the same bar the crosshair snaps to.
     #[inline]
@@ -127,7 +134,7 @@ impl ChartMapping {
         if visible_len == 0 || self.bar_spacing.abs() < f32::EPSILON {
             return None;
         }
-        let global_idx = self.x_to_idx_f32(x).round() as isize;
+        let global_idx = self.x_to_idx_f64(x).round() as isize;
 
         let first = self.start_idx as isize;
         let last = (self.start_idx + visible_len - 1) as isize;
@@ -244,6 +251,15 @@ mod tests {
             let recovered = mapping.x_to_idx(x);
             assert_eq!(recovered, idx, "idx {idx} -> x {x} -> idx {recovered}");
         }
+        let large = ChartMapping {
+            base_idx: 999_999,
+            bar_spacing: 200.0,
+            right_offset: -0.005,
+            ..mapping
+        };
+        assert_eq!(large.idx_to_x(999_999), 800.0);
+        assert_eq!(large.x_to_idx(800.0), 999_999);
+        assert_eq!(large.x_to_idx(901.0), 1_000_000);
     }
 
     #[test]

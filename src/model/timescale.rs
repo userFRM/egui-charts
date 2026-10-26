@@ -25,10 +25,10 @@ impl LogicalRange {
         Self { left, right }
     }
 
-    /// Convert to strict integer range for data access
+    /// Convert to an end-exclusive integer range, including partially visible edge slots.
     pub fn to_strict_range(&self) -> (usize, usize) {
         let start = self.left.floor().max(0.0) as usize;
-        let end = self.right.ceil().max(0.0) as usize;
+        let end = (f64::from(self.right).ceil() + 1.0).max(0.0) as usize;
         (start, end)
     }
 
@@ -236,10 +236,7 @@ impl TimeScale {
     /// IMPORTANT: rect_width must be the actual width of the rect being drawn in,
     /// NOT self.width (which may differ from the chart area's rect).
     pub fn idx_to_coord(&self, index: usize, rect_min_x: f32, rect_width: f32) -> f32 {
-        let base_idx = self.base_idx();
-        let delta_from_right = base_idx as f32 + self.right_offset - index as f32;
-        let relative_x = rect_width - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        rect_min_x + relative_x
+        self.idx_to_coord_precise(index as f64, rect_min_x, rect_width)
     }
 
     /// Convert fractional bar index to x coord (preserves sub-bar precision)
@@ -247,11 +244,17 @@ impl TimeScale {
     ///
     /// IMPORTANT: rect_width must be the actual width of the rect being drawn in,
     /// NOT self.width (which may differ from the chart area's rect).
-    pub fn idx_to_coord_precise(&self, index: f32, rect_min_x: f32, rect_width: f32) -> f32 {
-        let base_idx = self.base_idx() as f32;
-        let delta_from_right = base_idx + self.right_offset - index;
-        let relative_x = rect_width - (delta_from_right + 0.5) * self.bar_spacing - 1.0;
-        rect_min_x + relative_x
+    pub fn idx_to_coord_precise(
+        &self,
+        index: impl Into<f64>,
+        rect_min_x: f32,
+        rect_width: f32,
+    ) -> f32 {
+        let delta_from_right =
+            (self.base_idx() as f64 - index.into()) + f64::from(self.right_offset);
+        (f64::from(rect_min_x) + f64::from(rect_width)
+            - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
+            - 1.0) as f32
     }
 
     /// Convert x coord to logical index
@@ -259,10 +262,16 @@ impl TimeScale {
     /// IMPORTANT: rect_width must be the actual width of the rect being used,
     /// NOT self.width (which may differ from the chart area's rect).
     pub fn coord_to_idx(&self, x: f32, rect_min_x: f32, rect_width: f32) -> f32 {
-        let base_idx = self.base_idx() as f32;
-        let relative_x = x - rect_min_x;
-        let delta_from_right = (rect_width - relative_x - 1.0) / self.bar_spacing - 0.5;
-        base_idx + self.right_offset - delta_from_right
+        self.coord_to_idx_precise(x, rect_min_x, rect_width) as f32
+    }
+
+    /// Convert x to a fractional logical index without narrowing a large history to `f32`.
+    /// `rect_width` is the actual width of the chart rect, as in [`Self::coord_to_idx`].
+    pub fn coord_to_idx_precise(&self, x: f32, rect_min_x: f32, rect_width: f32) -> f64 {
+        let relative_x = f64::from(x) - f64::from(rect_min_x);
+        let delta_from_right =
+            (f64::from(rect_width) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
+        self.base_idx() as f64 + (f64::from(self.right_offset) - delta_from_right)
     }
 
     /// Scroll by number of bars (negative = left, positive = right)
@@ -280,12 +289,9 @@ impl TimeScale {
     /// Zoom at a specific point
     ///
     /// IMPORTANT: rect_width must be the actual width of the chart rect being zoomed.
-    pub fn zoom(&mut self, delta: f32, anchor_x: f32, rect_min_x: f32, rect_width: f32) {
+    pub fn zoom(&mut self, delta: f32, anchor_x: f32, _rect_min_x: f32, rect_width: f32) {
         let old_spacing = self.bar_spacing;
-        let _old_right_offset = self.right_offset;
-
-        // Get the bar index at anchor point BEFORE zoom
-        let anchor_bar_idx = self.coord_to_idx(rect_min_x + anchor_x, rect_min_x, rect_width);
+        let anchor_distance = f64::from(rect_width) - f64::from(anchor_x) - 1.0;
 
         // Calculate new bar spacing
         let zoom_scale = delta;
@@ -293,16 +299,10 @@ impl TimeScale {
 
         self.bar_spacing = self.clamp_spacing(new_spacing);
 
-        // DIRECT CALCULATION: Calculate right_offset needed to keep anchor_bar_idx at anchor_x
-        // Formula derived from idx_to_coord_precise:
-        //   x = rect_min_x + rect_width - (base_idx + right_offset - bar_idx + 0.5) * bar_spacing - 1
-        // Solving for right_offset:
-        //   right_offset = bar_idx - base_idx + (rect_width - (x - rect_min_x) - 1) / bar_spacing - 0.5
-        let base_idx = self.base_idx() as f32;
-        let relative_anchor = anchor_x; // anchor_x is already relative to rect_min_x
-        let delta_from_right = (rect_width - relative_anchor - 1.0) / self.bar_spacing - 0.5;
-        let calculated_offset = anchor_bar_idx - base_idx + delta_from_right;
-        self.right_offset = calculated_offset;
+        // The absolute bar index cancels: only the change in distance from the right matters.
+        self.right_offset = (f64::from(self.right_offset)
+            + anchor_distance / f64::from(self.bar_spacing)
+            - anchor_distance / f64::from(old_spacing)) as f32;
 
         // Debug logging - check for width mismatch
         if (rect_width - self.width).abs() > 0.1 {
@@ -452,6 +452,24 @@ impl Default for TimeScale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// At 200 points per bar a one-point pan is 0.005 bars, even with a million-bar anchor.
+    #[test]
+    fn large_history_keeps_small_pans_and_zoom_anchors() {
+        let mut scale = TimeScale::new();
+        scale.set_bar_cnt(1_000_000);
+        scale.set_width(800.0);
+        scale.set_bar_spacing(200.0);
+        scale.set_right_offset(0.0);
+        assert_eq!(scale.idx_to_coord(999_999, 0.0, 800.0), 699.0);
+        scale.scroll_pixels(1.0);
+        assert_eq!(scale.idx_to_coord(999_999, 0.0, 800.0), 700.0);
+        let anchor = scale.idx_to_coord(999_997, 0.0, 800.0);
+        for delta in [1.0, -1.0, 2.0] {
+            scale.zoom(delta, anchor, 0.0, 800.0);
+            assert!((scale.idx_to_coord(999_997, 0.0, 800.0) - anchor).abs() < 1e-3);
+        }
+    }
 
     /// Returning to the live edge, by following it or by jumping back, restores
     /// the configured offset: 20 bars, or 60 px, which is 10 bars at a spacing

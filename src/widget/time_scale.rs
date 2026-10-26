@@ -121,7 +121,7 @@ impl Chart {
         (index.is_finite() && plot.width() > 0.0).then(|| {
             self.state
                 .time_scale()
-                .idx_to_coord_precise(index as f32, plot.left(), plot.width())
+                .idx_to_coord_precise(index, plot.left(), plot.width())
         })
     }
 
@@ -134,7 +134,7 @@ impl Chart {
         (x.is_finite() && plot.width() > 0.0).then(|| {
             self.state
                 .time_scale()
-                .coord_to_idx(x, plot.left(), plot.width()) as f64
+                .coord_to_idx_precise(x, plot.left(), plot.width())
         })
     }
 
@@ -235,6 +235,72 @@ mod tests {
         let range = chart.visible_logical_range().unwrap();
         assert_close(range.left.into(), left.into(), what);
         assert_close(range.right.into(), right.into(), what);
+    }
+
+    #[test]
+    fn zero_margin_keeps_the_latest_bar_and_its_live_updates_visible() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[95.0], &[105.0]);
+        let first = chart.bars(SeriesId::MAIN)[0].time;
+        chart.set_data(
+            SeriesId::MAIN,
+            (0..1000)
+                .map(|index| {
+                    Bar::new(
+                        first + Duration::minutes(index),
+                        95.0,
+                        105.0,
+                        95.0,
+                        105.0,
+                        100.0,
+                    )
+                })
+                .collect(),
+        );
+        let mut options = chart.chart_options().clone();
+        options.time_scale.right_offset = 0.0;
+        options.time_scale.fix_right_edge = true;
+        chart.set_chart_options(options);
+        for time in [0.0, 0.1, 0.2] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        let last = chart.bars(SeriesId::MAIN).len() - 1;
+        let plot = chart.get_rendered_price_rect();
+        assert!((plot.left()..plot.right()).contains(&chart.index_to_x(last as f64).unwrap()));
+        assert_eq!(chart.state().visible_range().1, last + 1);
+        let mut update = chart.bars(SeriesId::MAIN)[last].clone();
+        update.close = 110.0;
+        update.high = 110.0;
+        chart.update(SeriesId::MAIN, update);
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(chart.state().visible_data().last().unwrap().close, 110.0);
+        assert!(
+            chart
+                .series_price_map(SeriesId::MAIN)
+                .unwrap()
+                .range()
+                .contains(110.0)
+        );
+    }
+
+    #[test]
+    fn host_coordinates_retain_fractions_on_large_histories() {
+        let bars = (0..1_000_000)
+            .map(|i| {
+                Bar::from_value(
+                    chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    10.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        frame(&egui::Context::default(), &mut chart, 0.0, vec![]);
+        chart.state.time_scale_mut().set_bar_spacing(200.0);
+        chart.state.time_scale_mut().set_right_offset(0.0);
+        let x = chart.index_to_x(999_999.0).unwrap();
+        let fractional = chart.index_to_x(999_999.005).unwrap();
+        assert!((fractional - x - 1.0).abs() < 1e-4);
+        assert!((chart.x_to_index(fractional).unwrap() - 999_999.005).abs() < 1e-6);
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical
