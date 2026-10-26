@@ -813,7 +813,7 @@ impl ChartBuilder {
         self
     }
 
-    /// Enable or disable the "Go to Realtime" button
+    /// Enable or disable the scroll-to-latest button.
     ///
     /// Default: true (visible)
     #[must_use]
@@ -822,27 +822,27 @@ impl ChartBuilder {
         self
     }
 
-    /// Set the position of the "Go to Realtime" button
+    /// Set the position of the scroll-to-latest button.
     ///
-    /// Default: TopCenter
+    /// Default: BottomRight
     #[must_use]
     pub fn with_realtime_button_pos(mut self, position: RealtimeButtonPos) -> Self {
         self.config.realtime_button_pos = position;
         self
     }
 
-    /// Set custom text for the "Go to Realtime" button
+    /// Set custom text for the scroll-to-latest button. Set its size to fit the text.
     ///
-    /// Default: "Go to Realtime"
+    /// Default: a double right chevron
     #[must_use]
     pub fn with_realtime_button_text(mut self, text: impl Into<String>) -> Self {
         self.config.realtime_button_text = Some(text.into());
         self
     }
 
-    /// Set the size of the "Go to Realtime" button (width, height)
+    /// Set the size of the scroll-to-latest button (width, height) in points.
     ///
-    /// Default: (110.0, 28.0)
+    /// Default: (28.0, 28.0)
     #[must_use]
     pub fn with_realtime_button_size(mut self, width: f32, height: f32) -> Self {
         self.config.realtime_button_size = (width, height);

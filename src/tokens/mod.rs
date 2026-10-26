@@ -267,7 +267,7 @@ pub static DESIGN_TOKENS: DesignTokens = DesignTokens {
         charts_ext: ChartsExtSizingTokens {
             volume_bubbles_max_diameter: 40.0,
             heatmap_strip_height: 24.0,
-            realtime_button_width: 110.0,
+            realtime_button_width: 28.0,
         },
         technical_labels: TechnicalLabelsSizingTokens {
             gann_label_width: 28.0,

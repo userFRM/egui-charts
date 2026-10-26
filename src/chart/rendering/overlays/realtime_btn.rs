@@ -4,7 +4,7 @@ use crate::config::{ChartConfig, RealtimeButtonPos};
 use crate::localization as l10n;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
-use egui::{Color32, FontId, Painter, Pos2, Rect, Response, Stroke, Ui, Vec2};
+use egui::{Color32, FontId, Pos2, Rect, Response, Stroke, Ui, Vec2};
 
 pub(crate) fn realtime_button_rect(
     pane: Rect,
@@ -37,33 +37,7 @@ pub(crate) fn realtime_button(
         chart_id.with("jump_to_latest"),
         egui::Sense::click_and_drag(),
     );
-    paint_button(
-        ui.painter(),
-        rect,
-        config.realtime_button_color,
-        config.realtime_button_hover_color,
-        config.realtime_button_text_color,
-        config.realtime_button_text.as_deref(),
-        response.hovered() || response.is_pointer_button_down_on(),
-    );
-    crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
-    let label = l10n::text(ui.ctx(), "Scroll to the most recent bar");
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-    response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(label)
-}
-
-fn paint_button(
-    painter: &Painter,
-    rect: Rect,
-    btn_color: Color32,
-    hover_color: Color32,
-    text_color: Color32,
-    btn_text: Option<&str>,
-    is_hovered: bool,
-) {
-    let theme = painter.ctx().active_theme();
+    let theme = ui.active_theme();
     let resolve = |color, fallback| {
         if color == Color32::PLACEHOLDER {
             fallback
@@ -71,13 +45,13 @@ fn paint_button(
             color
         }
     };
-    let bg = if is_hovered {
-        resolve(hover_color, theme.ui.btn_bg_hover)
+    let bg = if response.hovered() || response.is_pointer_button_down_on() {
+        resolve(config.realtime_button_hover_color, theme.ui.btn_bg_hover)
     } else {
-        resolve(btn_color, theme.ui.panel_bg)
+        resolve(config.realtime_button_color, theme.ui.panel_bg)
     };
-    let ink = resolve(text_color, theme.ui.text);
-    let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    let ink = resolve(config.realtime_button_text_color, theme.ui.text);
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect(
         rect,
         4.0,
@@ -85,7 +59,7 @@ fn paint_button(
         Stroke::new(1.0, theme.ui.border),
         egui::StrokeKind::Inside,
     );
-    if let Some(text) = btn_text {
+    if let Some(text) = config.realtime_button_text.as_deref() {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -106,6 +80,12 @@ fn paint_button(
             ));
         }
     }
+    crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
+    let label = l10n::text(ui.ctx(), "Scroll to the most recent bar");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(label)
 }
 
 fn calculate_button_position(
@@ -174,6 +154,13 @@ mod tests {
                 })
             };
             assert!(button(shapes(&ctx, &mut chart, 0.1, vec![]), fill).is_none());
+            // Future whitespace can also leave the latest bar outside the pane.
+            chart.scroll_to_position(
+                2.0 * chart.get_rendered_price_rect().width() / spacing,
+                false,
+            );
+            assert!(button(shapes(&ctx, &mut chart, 0.15, vec![]), fill).is_some());
+            assert!(chart.state().visible_data().is_empty());
             // Even a small scroll back from the configured margin offers the control.
             chart.scroll_to_position(live - 1.0, false);
             assert!(button(shapes(&ctx, &mut chart, 0.2, vec![]), fill).is_some());

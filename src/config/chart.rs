@@ -12,6 +12,7 @@
 use crate::model::{LineStyle, PriceSource};
 use crate::scales::PriceScaleMode;
 use crate::theme::Theme;
+use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Background style for the chart.
@@ -320,7 +321,7 @@ pub struct ChartConfig {
     pub show_high_low: bool,
     /// Whether to show countdown to next candle
     pub show_countdown: bool,
-    /// Whether to show "Go to Realtime" button when scrolled away from live edge
+    /// Whether to show the scroll-to-latest button when scrolled away from the live edge.
     pub show_realtime_btn: bool,
     /// Position of the realtime button; bottom-right by default.
     pub realtime_button_pos: RealtimeButtonPos,
@@ -463,7 +464,10 @@ impl Default for ChartConfig {
             show_realtime_btn: true,
             realtime_button_pos: RealtimeButtonPos::BottomRight,
             realtime_button_text: None,
-            realtime_button_size: (28.0, 28.0),
+            realtime_button_size: (
+                DESIGN_TOKENS.sizing.charts_ext.realtime_button_width,
+                DESIGN_TOKENS.sizing.button_md,
+            ),
             realtime_button_color: Color32::PLACEHOLDER,
             realtime_button_hover_color: Color32::PLACEHOLDER,
             realtime_button_text_color: Color32::PLACEHOLDER,
