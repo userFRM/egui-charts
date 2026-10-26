@@ -169,7 +169,7 @@ impl Chart {
         chart_width: f32,
         chart_rect_min_x: f32,
     ) {
-        if !response.hovered() || !self.chart_options.handle_scale.pinch {
+        if !response.hovered() {
             return;
         }
 
@@ -196,7 +196,7 @@ impl Chart {
 
         if let Some((zoom_delta, translation_delta, hover_pos)) = zoom_info {
             // Handle pinch zoom
-            if (zoom_delta - 1.0).abs() > 0.001 {
+            if self.chart_options.handle_scale.pinch && (zoom_delta - 1.0).abs() > 0.001 {
                 // Convert zoom_delta to our zoom scale format
                 // zoom_delta > 1.0 means fingers spreading (zoom in)
                 // zoom_delta < 1.0 means fingers pinching (zoom out)
@@ -228,11 +228,23 @@ impl Chart {
             }
 
             // Handle two-finger pan (translation during pinch)
-            if translation_delta.x.abs() > 0.5 {
+            if self.chart_options.handle_scroll.horz_touch_drag && translation_delta.x.abs() > 0.5 {
                 self.pending_scroll_time = None;
                 self.state
                     .time_scale_mut()
                     .scroll_pixels(translation_delta.x);
+            }
+            if self.chart_options.handle_scroll.vert_touch_drag
+                && self.state.price_scale().is_manual()
+                && translation_delta.y.abs() > 0.5
+            {
+                let y = hover_pos.map_or(0.0, |pos| pos.y);
+                let map = self.last_price_map;
+                let shift = map.y_to_scale(y - translation_delta.y) - map.y_to_scale(y);
+                let range = self.state.price_scale().range();
+                self.state
+                    .price_scale_mut()
+                    .set_range(range.min + shift, range.max + shift);
             }
         }
     }
@@ -255,45 +267,54 @@ impl Chart {
     ) {
         // CRITICAL: Skip panning if box zoom is active (right-click drag)
         let box_zoom_active = self.box_zoom.active;
+        let (is_touch, multi_touch) = ui.input(|i| {
+            (
+                i.any_touches()
+                    || i.events
+                        .iter()
+                        .any(|event| matches!(event, Event::Touch { .. })),
+                i.multi_touch().is_some(),
+            )
+        });
 
-        if !response.dragged()
-            || !self.chart_options.handle_scroll.pressed_mouse_move
-            || has_active_drawing_tool
-            || box_zoom_active
-        {
+        if !response.dragged() || multi_touch || has_active_drawing_tool || box_zoom_active {
             // Drag ended - handle kinetic scrolling
-            if !has_active_drawing_tool
+            if response.drag_stopped()
+                && !has_active_drawing_tool
+                && !multi_touch
+                && is_touch
+                && self.chart_options.handle_scroll.horz_touch_drag
                 && self.chart_options.kinetic_scroll.enabled
                 && self.scroll_start_pos.is_some()
             {
-                let is_trackpad_gesture =
-                    ui.input(|i| i.multi_touch().is_some() || i.any_touches());
+                let move_distance = self
+                    .kinetic_scroll
+                    .last_pos
+                    .and_then(|last| self.scroll_start_pos.map(|start| (last.x - start.x).abs()))
+                    .unwrap_or(0.0);
 
-                if is_trackpad_gesture {
-                    let move_distance = self
-                        .kinetic_scroll
-                        .last_pos
-                        .and_then(|last| {
-                            self.scroll_start_pos.map(|start| (last.x - start.x).abs())
-                        })
-                        .unwrap_or(0.0);
+                let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
+                let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
 
-                    let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-                    let max_v_px_s = self.chart_options.kinetic_scroll.max_scroll_speed * 60.0;
-
-                    if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
-                        && self.kinetic_scroll.velocity.abs() >= min_v_px_s
-                    {
-                        self.kinetic_scroll.is_active = true;
-                        self.kinetic_scroll.velocity =
-                            self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
-                        self.kinetic_scroll.anim_last_time = Some(Instant::now());
-                    }
+                if move_distance >= self.chart_options.kinetic_scroll.scroll_min_move
+                    && self.kinetic_scroll.velocity.abs() >= min_v_px_s
+                {
+                    self.kinetic_scroll.is_active = true;
+                    self.kinetic_scroll.velocity =
+                        self.kinetic_scroll.velocity.clamp(-max_v_px_s, max_v_px_s);
+                    self.kinetic_scroll.anim_last_time = Some(Instant::now());
                 }
             }
 
-            self.scroll_start_pos = None;
-            self.scroll_start_offset = None;
+            if multi_touch {
+                self.kinetic_scroll.is_active = false;
+                // Rebase the pointer drag while contacts own translation, including finger lifts.
+                self.scroll_start_pos = response.interact_pointer_pos();
+                self.scroll_start_offset = Some(self.state.time_scale().right_offset());
+            } else {
+                self.scroll_start_pos = None;
+                self.scroll_start_offset = None;
+            }
             self.kinetic_scroll.last_pos = None;
             self.kinetic_scroll.last_time = None;
             return;
@@ -312,46 +333,72 @@ impl Chart {
             self.scroll_start_offset,
             response.interact_pointer_pos(),
         ) {
-            if price_axis_rect.contains(start_pos)
-                && self
+            if price_axis_rect.contains(start_pos) {
+                if self
                     .chart_options
                     .handle_scale
                     .axis_pressed_mouse_move
                     .price
-            {
-                // Zoom by this frame's movement around the point where the drag began.
-                let anchor_y = ui
-                    .input(|i| i.pointer.press_origin())
-                    .unwrap_or(start_pos)
-                    .y;
-                self.price_axis_drag = Some((anchor_y, response.drag_delta().y));
-            } else if time_axis_rect.contains(start_pos)
-                && self.chart_options.handle_scale.axis_pressed_mouse_move.time
-            {
-                let dx = curr_pos.x - start_pos.x;
-                if dx.abs() > 0.1 {
-                    let zoom_point_x = curr_pos.x - chart_rect_min_x;
-                    let zoom_scale = (dx / 100.0).signum() * (dx / 100.0).abs().min(1.0);
-                    let chart_width = time_axis_rect.width();
-                    self.state.time_scale_mut().zoom(
-                        zoom_scale,
-                        zoom_point_x,
-                        chart_rect_min_x,
-                        chart_width,
-                    );
-                    self.scroll_start_pos = Some(curr_pos);
+                {
+                    // Zoom by this frame's movement around the point where the drag began.
+                    let anchor_y = ui
+                        .input(|i| i.pointer.press_origin())
+                        .unwrap_or(start_pos)
+                        .y;
+                    self.price_axis_drag = Some((anchor_y, response.drag_delta().y));
+                }
+            } else if time_axis_rect.contains(start_pos) {
+                if self.chart_options.handle_scale.axis_pressed_mouse_move.time {
+                    let dx = curr_pos.x - start_pos.x;
+                    if dx.abs() > 0.1 {
+                        let zoom_point_x = curr_pos.x - chart_rect_min_x;
+                        let zoom_scale = (dx / 100.0).signum() * (dx / 100.0).abs().min(1.0);
+                        let chart_width = time_axis_rect.width();
+                        self.state.time_scale_mut().zoom(
+                            zoom_scale,
+                            zoom_point_x,
+                            chart_rect_min_x,
+                            chart_width,
+                        );
+                        self.scroll_start_pos = Some(curr_pos);
+                    }
                 }
             } else {
-                let drag_delta_x = curr_pos.x - start_pos.x;
-                let bar_spacing = self.state.time_scale().bar_spacing();
-                let drag_in_bars = drag_delta_x / bar_spacing;
-                let new_offset = start_offset - drag_in_bars;
+                let scroll = self.chart_options.handle_scroll;
+                let horizontal = if is_touch {
+                    scroll.horz_touch_drag
+                } else {
+                    scroll.pressed_mouse_move
+                };
+                let vertical = if is_touch {
+                    scroll.vert_touch_drag
+                } else {
+                    scroll.pressed_mouse_move
+                };
+                if horizontal {
+                    let drag_delta_x = curr_pos.x - start_pos.x;
+                    let bar_spacing = self.state.time_scale().bar_spacing();
+                    let drag_in_bars = drag_delta_x / bar_spacing;
+                    let new_offset = start_offset - drag_in_bars;
+                    self.state.time_scale_mut().set_right_offset(new_offset);
 
-                self.state.time_scale_mut().set_right_offset(new_offset);
+                    if self.chart_options.kinetic_scroll.enabled {
+                        let now = Instant::now();
+                        if let (Some(last_pos), Some(last_time)) =
+                            (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
+                        {
+                            let dt = now.duration_since(last_time).as_secs_f32();
+                            if dt > 0.0 {
+                                self.kinetic_scroll.velocity = (curr_pos.x - last_pos.x) / dt;
+                            }
+                        }
+                        self.kinetic_scroll.last_pos = Some(curr_pos);
+                        self.kinetic_scroll.last_time = Some(now);
+                    }
+                }
 
-                // With auto-scale off the prices follow the pointer too. The range is still in
-                // the units of the last frame's map, which places the pointer's previous position.
-                if self.state.price_scale().is_manual() {
+                // Manual prices follow only the movement enabled for this input device.
+                if vertical && self.state.price_scale().is_manual() {
                     let map = self.last_price_map;
                     let dy = response.drag_delta().y;
                     let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);
@@ -360,22 +407,6 @@ impl Chart {
                         .price_scale_mut()
                         .set_range(range.min + shift, range.max + shift);
                 }
-            }
-
-            // Track velocity for kinetic scrolling
-            if self.chart_options.kinetic_scroll.enabled {
-                let now = Instant::now();
-                if let (Some(last_pos), Some(last_time)) =
-                    (self.kinetic_scroll.last_pos, self.kinetic_scroll.last_time)
-                {
-                    let dt = now.duration_since(last_time).as_secs_f32();
-                    if dt > 0.0 {
-                        let dx = curr_pos.x - last_pos.x;
-                        self.kinetic_scroll.velocity = dx / dt;
-                    }
-                }
-                self.kinetic_scroll.last_pos = Some(curr_pos);
-                self.kinetic_scroll.last_time = Some(now);
             }
         }
     }
@@ -794,7 +825,7 @@ mod tests {
     }
 
     /// Drags down by 100 points in `steps` frames from the point `start` picks given the price pane.
-    fn drag_down(chart: &mut Chart, start: fn(Rect) -> Pos2, steps: usize) {
+    fn drag_down(chart: &mut Chart, start: fn(Rect) -> Pos2, steps: usize, touch: bool) {
         let ctx = egui::Context::default();
         frame(&ctx, chart, 0.0, Vec::new());
         let start = start(chart.last_rendered_price_rect);
@@ -810,13 +841,32 @@ mod tests {
             frame(&ctx, chart, t, events);
         };
         step(chart, vec![Event::PointerMoved(start)]);
-        step(chart, vec![button(start, true)]);
+        let contact = |phase, pos| Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(1),
+            phase,
+            pos,
+            force: None,
+        };
+        let mut events = vec![button(start, true)];
+        if touch {
+            events.push(contact(egui::TouchPhase::Start, start));
+        }
+        step(chart, events);
         let mut pos = start;
         for _ in 0..steps {
             pos.y += 100.0 / steps as f32;
-            step(chart, vec![Event::PointerMoved(pos)]);
+            let mut events = vec![Event::PointerMoved(pos)];
+            if touch {
+                events.push(contact(egui::TouchPhase::Move, pos));
+            }
+            step(chart, events);
         }
-        step(chart, vec![button(pos, false)]);
+        let mut events = vec![button(pos, false)];
+        if touch {
+            events.push(contact(egui::TouchPhase::End, pos));
+        }
+        step(chart, events);
     }
 
     /// Drags the price axis down by 100 points in `steps` frames and returns the resulting range.
@@ -832,6 +882,7 @@ mod tests {
                 |rect| Pos2::new(rect.right() + 10.0, rect.center().y)
             },
             steps,
+            false,
         );
         let range = chart.state.price_scale().range();
         (range.min, range.max)
@@ -956,20 +1007,36 @@ mod tests {
     #[test]
     fn chart_drag_pans_a_manual_price_range() {
         for (invert_scale, sign) in [(false, 1.0), (true, -1.0)] {
-            let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-            chart.apply_series_settings(&SeriesSettings {
-                invert_scale,
-                ..SeriesSettings::default()
-            });
-            chart.state.price_scale_mut().set_range(90.0, 110.0);
-            drag_down(&mut chart, |rect| rect.center(), 10);
-            let shift = sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64;
-            let range = chart.state.price_scale().range();
-            assert!(
-                (range.min - (90.0 + shift)).abs() < 1e-4
-                    && (range.max - (110.0 + shift)).abs() < 1e-4,
-                "inverted {invert_scale}: {range:?}, expected a shift of {shift}"
-            );
+            for (touch, mouse, vertical) in [
+                (false, true, false),
+                (false, false, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.apply_series_settings(&SeriesSettings {
+                    invert_scale,
+                    ..SeriesSettings::default()
+                });
+                chart.chart_options.handle_scroll.pressed_mouse_move = mouse;
+                chart.chart_options.handle_scroll.vert_touch_drag = vertical;
+                chart.chart_options.handle_scroll.horz_touch_drag = false;
+                chart.chart_options.kinetic_scroll.enabled = false;
+                chart.state.price_scale_mut().set_range(90.0, 110.0);
+                drag_down(&mut chart, |rect| rect.center(), 10, touch);
+                let enabled = if touch { vertical } else { mouse };
+                let shift = if enabled {
+                    sign * 20.0 * 100.0 / chart.last_rendered_price_rect.height() as f64
+                } else {
+                    0.0
+                };
+                let range = chart.state.price_scale().range();
+                assert!(
+                    (range.min - (90.0 + shift)).abs() < 1e-4
+                        && (range.max - (110.0 + shift)).abs() < 1e-4,
+                    "inverted {invert_scale}, touch={touch}, mouse={mouse}, vertical={vertical}: {range:?}, expected a shift of {shift}"
+                );
+            }
         }
     }
 
@@ -978,39 +1045,240 @@ mod tests {
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn chart_drag_keeps_the_grabbed_bar_under_the_pointer() {
         for steps in [1, 10] {
-            for distance in [-60.0, 60.0] {
+            for (touch, mouse, horizontal) in [
+                (false, true, false),
+                (false, false, true),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                for distance in [-60.0, 60.0] {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    chart.chart_options.handle_scroll.pressed_mouse_move = mouse;
+                    chart.chart_options.handle_scroll.horz_touch_drag = horizontal;
+                    chart.chart_options.handle_scroll.vert_touch_drag = false;
+                    chart.chart_options.kinetic_scroll.enabled = false;
+                    let contact = |phase, pos| Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(1),
+                        phase,
+                        pos,
+                        force: None,
+                    };
+                    let start = chart.last_rendered_price_rect.center();
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                    let mut events = vec![button(start, true)];
+                    if touch {
+                        events.push(contact(egui::TouchPhase::Start, start));
+                    }
+                    frame(&ctx, &mut chart, 0.04, events);
+                    let mut end = start;
+                    for i in 1..=steps {
+                        end.x = start.x + distance * i as f32 / steps as f32;
+                        let mut events = vec![Event::PointerMoved(end)];
+                        if touch {
+                            events.push(contact(egui::TouchPhase::Move, end));
+                        }
+                        frame(&ctx, &mut chart, 0.04 + i as f64 * 0.02, events);
+                    }
+                    let mut events = vec![button(end, false)];
+                    if touch {
+                        events.push(contact(egui::TouchPhase::End, end));
+                    }
+                    frame(&ctx, &mut chart, 0.5, events);
+                    // Moving 60 pixels at six pixels per bar moves the right offset by ten bars.
+                    let enabled = if touch { horizontal } else { mouse };
+                    let expected = offset - if enabled { distance / spacing } else { 0.0 };
+                    let (after_spacing, after_offset) = chart.get_time_scale_state();
+                    assert_eq!(after_spacing, spacing);
+                    assert!(
+                        (after_offset - expected).abs() < 1e-4,
+                        "touch={touch}, mouse={mouse}, horizontal={horizontal}, {steps} steps, {distance} pixels: {after_offset}, expected {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Two contacts translate each enabled axis once, independently of pinch scaling.
+    #[test]
+    fn two_finger_translation_respects_touch_permissions() {
+        for pinch in [false, true] {
+            for (horizontal, vertical) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.chart_options.handle_scroll.horz_touch_drag = horizontal;
+                chart.chart_options.handle_scroll.vert_touch_drag = vertical;
+                chart.chart_options.handle_scale.pinch = pinch;
+                chart.chart_options.kinetic_scroll.enabled = false;
+                chart.state.price_scale_mut().set_range(90.0, 110.0);
                 frame(&ctx, &mut chart, 0.0, vec![]);
-                let start = chart.last_rendered_price_rect.center();
+                let rect = chart.last_rendered_price_rect;
+                let start = rect.center();
                 let (spacing, offset) = chart.get_time_scale_state();
-                let button = |pos, pressed| Event::PointerButton {
+                let contact = |id, phase, pos| Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(id),
+                    phase,
                     pos,
-                    button: PointerButton::Primary,
-                    pressed,
-                    modifiers: Modifiers::NONE,
+                    force: None,
                 };
-                frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
-                frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
-                let mut end = start;
-                for i in 1..=steps {
-                    end.x = start.x + distance * i as f32 / steps as f32;
+                frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.02,
+                    vec![
+                        Event::PointerMoved(start),
+                        Event::PointerButton {
+                            pos: start,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                        contact(1, egui::TouchPhase::Start, start),
+                        contact(2, egui::TouchPhase::Start, start + egui::vec2(100.0, 0.0)),
+                    ],
+                );
+                for step in 1..=2 {
+                    let pos = start + egui::vec2(30.0, 30.0) * step as f32;
                     frame(
                         &ctx,
                         &mut chart,
-                        0.04 + i as f64 * 0.02,
-                        vec![Event::PointerMoved(end)],
+                        0.02 + step as f64 * 0.02,
+                        vec![
+                            Event::PointerMoved(pos),
+                            contact(1, egui::TouchPhase::Move, pos),
+                            contact(2, egui::TouchPhase::Move, pos + egui::vec2(100.0, 0.0)),
+                        ],
                     );
                 }
-                frame(&ctx, &mut chart, 0.5, vec![button(end, false)]);
-                // Moving 60 pixels at six pixels per bar moves the right offset by ten bars.
-                let expected = offset - distance / spacing;
-                let (after_spacing, after_offset) = chart.get_time_scale_state();
-                assert_eq!(after_spacing, spacing);
-                assert!(
-                    (after_offset - expected).abs() < 1e-4,
-                    "{steps} steps, {distance} pixels: {after_offset}, expected {expected}"
+                let pos = start + egui::vec2(60.0, 60.0);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.08,
+                    vec![contact(
+                        2,
+                        egui::TouchPhase::End,
+                        pos + egui::vec2(100.0, 0.0),
+                    )],
                 );
+                let pos = start + egui::vec2(90.0, 90.0);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.10,
+                    vec![
+                        Event::PointerMoved(pos),
+                        contact(1, egui::TouchPhase::Move, pos),
+                    ],
+                );
+                let expected_offset = offset - if horizontal { 90.0 / spacing } else { 0.0 };
+                let shift = if vertical {
+                    20.0 * 90.0 / rect.height() as f64
+                } else {
+                    0.0
+                };
+                let range = chart.state.price_scale().range();
+                assert!(
+                    (chart.state.time_scale().right_offset() - expected_offset).abs() < 1e-4,
+                    "pinch={pinch}, horizontal={horizontal}, vertical={vertical}"
+                );
+                assert!(
+                    (range.min - 90.0 - shift).abs() < 1e-4
+                        && (range.max - 110.0 - shift).abs() < 1e-4,
+                    "pinch={pinch}, horizontal={horizontal}, vertical={vertical}: {range:?}"
+                );
+                assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+            }
+        }
+    }
+
+    /// Axis drag scaling uses its own permission even when plot dragging is disabled.
+    #[test]
+    fn axis_drag_permissions_are_independent_of_plot_drag() {
+        for price in [false, true] {
+            for plot in [false, true] {
+                for axis in [true, false] {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                    chart.chart_options.handle_scroll.pressed_mouse_move = plot;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .price = axis;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .time = axis;
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    let rect = chart.last_rendered_price_rect;
+                    let start = if price {
+                        Pos2::new(rect.right() + 10.0, rect.center().y)
+                    } else {
+                        Pos2::new(
+                            rect.center().x,
+                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                        )
+                    };
+                    let end = start
+                        + if price {
+                            egui::vec2(0.0, 100.0)
+                        } else {
+                            egui::vec2(100.0, 0.0)
+                        };
+                    let before = chart.state.price_scale().range();
+                    let before = before.max - before.min;
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
+                    frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
+                    frame(&ctx, &mut chart, 0.06, vec![Event::PointerMoved(end)]);
+                    frame(&ctx, &mut chart, 0.08, vec![button(end, false)]);
+                    let expected_span = if price && axis {
+                        before * (100.0 / rect.height() as f64).exp()
+                    } else {
+                        before
+                    };
+                    let expected_spacing = if !price && axis {
+                        spacing * 1.1
+                    } else {
+                        spacing
+                    };
+                    assert!(
+                        ((chart.state.price_scale().range().max
+                            - chart.state.price_scale().range().min)
+                            - expected_span)
+                            .abs()
+                            < 1e-5,
+                        "price={price}, plot={plot}, axis={axis}"
+                    );
+                    assert!(
+                        (chart.state.time_scale().bar_spacing() - expected_spacing).abs() < 1e-5,
+                        "price={price}, plot={plot}, axis={axis}"
+                    );
+                    if !axis {
+                        assert_eq!(chart.state.time_scale().right_offset(), offset);
+                    }
+                }
             }
         }
     }
