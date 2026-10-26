@@ -4004,6 +4004,10 @@ mod tests {
             let mut edge = view.clone();
             edge.visible = 1..7;
             assert_eq!(edge.point_groups(4).collect::<Vec<_>>(), [0..4, 4..8]);
+            for visible in [1..1, 65_536..65_536, 65_537..65_538] {
+                edge.visible = visible;
+                assert_eq!(edge.point_groups(4).next(), None);
+            }
         }
         let color = chart.config().bullish_color;
         let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {

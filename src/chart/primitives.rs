@@ -102,7 +102,11 @@ impl PrimitiveView<'_> {
     pub fn point_groups(&self, factor: usize) -> impl Iterator<Item = Range<usize>> {
         let factor = factor.max(1);
         let end = self.visible.end.min(self.bars.len());
-        let start = (self.visible.start / factor * factor).min(end);
+        let start = if self.visible.start >= end {
+            end
+        } else {
+            self.visible.start / factor * factor
+        };
         (start..end)
             .step_by(factor)
             .map(move |start| start..start.saturating_add(factor).min(self.bars.len()))
