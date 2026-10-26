@@ -20,9 +20,9 @@ use crate::model::{
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
 /// fills and history use the source bar's time. Market orders fill at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
-/// a triggered stop-limit works on as a
-/// limit order. An order's take profit and stop loss become exit orders once it fills, and when
-/// one exit fills the other is cancelled. Each symbol has one net position with its average
+/// a triggered stop-limit works on as a limit order. An order's take profit and stop loss become
+/// exit orders once it fills, and when one exit fills the other is cancelled. Each symbol has
+/// one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
@@ -138,19 +138,21 @@ impl PaperAccount {
 
     /// Uses `time` for orders, executions, balance changes and journal entries during replay.
     /// Set it to the revealed source bar's time before feeding its price. `None` restores the
-    /// live UTC clock, as does [`reset`](Self::reset).
+    /// live UTC clock.
     pub fn set_replay_time(&self, time: Option<DateTime<Utc>>) {
         self.lock().replay_time = time;
     }
 
-    /// Returns the account to its starting balance without orders, positions or history. The
-    /// terminal shows the fresh account once it connects again, such as through
+    /// Returns the account to its starting balance without orders, positions or history,
+    /// retaining the host's prices and replay clock. The terminal shows the fresh account once
+    /// it connects again, such as through
     /// [`Trading::set_service`](crate::ui::trading::Trading::set_service).
     pub fn reset(&self) {
         let mut state = self.lock();
         let last = std::mem::take(&mut state.last);
         *state = State {
             balance: self.initial,
+            replay_time: state.replay_time,
             last,
             ..State::default()
         };
@@ -780,10 +782,37 @@ mod tests {
                 5
             );
             paper.reset();
-            assert!(paper.lock().replay_time.is_none());
             let events = snapshot(&paper);
             assert_eq!(events.len(), 1);
             assert!(matches!(&events[0], AccountEvent::Account(a) if a.balance == 10_000.0));
+            for replay in [true, false] {
+                if !replay {
+                    paper.set_replay_time(None);
+                }
+                let before = Utc::now();
+                place(
+                    &paper,
+                    OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+                )
+                .unwrap();
+                let events = snapshot(&paper);
+                let fill = events
+                    .iter()
+                    .rev()
+                    .find_map(|event| match event {
+                        AccountEvent::Execution(fill) => Some(fill),
+                        _ => None,
+                    })
+                    .unwrap();
+                if replay {
+                    assert_eq!(fill.time, time, "reset must keep the host's replay clock");
+                } else {
+                    assert!(
+                        fill.time >= before,
+                        "leaving replay restores the live clock"
+                    );
+                }
+            }
         }
     }
 
