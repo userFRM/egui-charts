@@ -39,6 +39,7 @@ impl ObjectTreePanel {
                 chart.clear_selection();
                 if sources.iter().any(|s| s.id == *id && s.is_drawing()) {
                     chart.drawings_mut().select(*id);
+                    chart.reveal_drawing(*id);
                 } else {
                     chart.drawings_mut().deselect();
                 }
@@ -157,62 +158,14 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
-                if !sources.iter().any(|s| s.id == *id && s.is_drawing()) {
+                if !sources.iter().any(|s| s.id == *id && s.is_drawing())
+                    || !chart.drawings().drawings.iter().any(|d| d.id == *id)
+                {
                     return false;
                 }
-                let Some(drawing) = chart.drawings().drawings.iter().find(|d| d.id == *id) else {
-                    return false;
-                };
-                let points: Vec<_> = drawing
-                    .chart_points
-                    .iter()
-                    .filter(|p| p.bar_idx.is_finite() && p.price.is_finite())
-                    .collect();
-                if points.is_empty() {
-                    return true;
-                }
-                let min_bar = points
-                    .iter()
-                    .map(|p| p.bar_idx)
-                    .fold(f32::INFINITY, f32::min);
-                let max_bar = points
-                    .iter()
-                    .map(|p| p.bar_idx)
-                    .fold(f32::NEG_INFINITY, f32::max);
-                let mut transform = chart.get_chart_mapping().price.transform();
-                if matches!(
-                    transform.mode,
-                    crate::scales::PriceScaleMode::Percentage
-                        | crate::scales::PriceScaleMode::IndexedTo100
-                ) {
-                    let start = (min_bar - ((max_bar - min_bar) * 0.1).max(2.0))
-                        .floor()
-                        .max(0.0) as usize;
-                    if let Some(bar) = chart.state().shown().get(start) {
-                        transform.base = bar.close;
-                    }
-                }
-                let min_price = points
-                    .iter()
-                    .map(|p| transform.to_scale(p.price))
-                    .fold(f64::INFINITY, f64::min);
-                let max_price = points
-                    .iter()
-                    .map(|p| transform.to_scale(p.price))
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let padding = ((max_bar - min_bar) * 0.1).max(2.0);
-                chart.set_start_idx((min_bar - padding).floor().max(0.0) as usize);
-                chart.set_visible_bars(
-                    ((max_bar - min_bar + 2.0 * padding).ceil() as usize).saturating_add(1),
-                );
-                if min_price.is_finite() && max_price.is_finite() {
-                    let pad = ((max_price - min_price) * 0.1).max(min_price.abs().max(1.0) * 0.001);
-                    let low = min_price - pad;
-                    let high = max_price + pad;
-                    if low.is_finite() && high.is_finite() {
-                        chart.price_scale_mut().set_range(low, high);
-                    }
-                }
+                chart.clear_selection();
+                chart.drawings_mut().select(*id);
+                chart.reveal_drawing(*id);
             }
             ObjectTreeAction::RemoveAllDrawings => chart.drawings_mut().clear_all(),
             ObjectTreeAction::RemoveAllIndicators => {
@@ -272,5 +225,73 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
         }
     } else if source.is_drawing() {
         chart.drawings_mut().duplicate_drawing(source.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::model::LogicalRange;
+    use crate::widget::test_frames::{chart, frame};
+
+    #[test]
+    fn tree_selection_reveals_drawings_without_refitting_scales() {
+        for tool in [
+            DrawingToolType::AnchoredVWAP,
+            DrawingToolType::AnchoredVolumeProfile,
+        ] {
+            for zoom in [false, true] {
+                for manual in [false, true] {
+                    // A 100-point manual span pans by 25 to reveal 80 or 220 with 5 points of margin.
+                    for (index, price, low, high) in [
+                        (10.0, 150.0, 100.0, 200.0),
+                        (70.0, 150.0, 100.0, 200.0),
+                        (110.0, 150.0, 100.0, 200.0),
+                        (70.0, 80.0, 75.0, 175.0),
+                        (70.0, 220.0, 125.0, 225.0),
+                    ] {
+                        let ctx = egui::Context::default();
+                        let mut chart = chart(&[100.0], &[200.0]);
+                        frame(&ctx, &mut chart, 0.0, vec![]);
+                        chart.set_visible_logical_range(LogicalRange::new(50.0, 89.0));
+                        if manual {
+                            chart.price_scale_mut().set_range(100.0, 200.0);
+                        }
+                        let mut drawing = Drawing::new(1, tool);
+                        drawing.chart_points = vec![ChartPoint::new(index, price)];
+                        drawing.completed = true;
+                        chart.drawings_mut().add_synced_drawing(drawing);
+                        let id = chart.drawings().drawings[0].id;
+                        let sources = [SourceItem::drawing(id, tool, egui::Color32::RED)];
+                        let mut tree = ObjectTreePanel::new();
+                        let action = if zoom {
+                            ObjectTreeAction::ZoomTo(id)
+                        } else {
+                            ObjectTreeAction::Select(id)
+                        };
+                        let spacing = chart.get_time_scale_state().0;
+                        assert!(tree.apply_to_chart(&mut chart, &action, &sources));
+                        assert_eq!(chart.drawings().selected_ids().collect::<Vec<_>>(), [id]);
+                        assert_eq!(chart.get_time_scale_state().0, spacing);
+                        assert_eq!(chart.state().price_scale().is_manual(), manual);
+                        let range = chart.visible_logical_range().unwrap();
+                        assert!(
+                            range.left <= index && index <= range.right,
+                            "{action:?}: {range:?}, index {index}"
+                        );
+                        if index == 70.0 {
+                            assert_eq!(range, LogicalRange::new(50.0, 89.0));
+                        }
+                        if manual {
+                            assert_eq!(
+                                chart.state().price_scale().range(),
+                                crate::scales::PriceRange::new(low, high)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -38,6 +38,7 @@ struct Action {
     options: Option<ChartOptions>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
+    series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     panes: Option<super::pane_layout::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
@@ -200,6 +201,7 @@ impl Chart {
                 options: Some(self.chart_options.clone()),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
+                series_scales: self.series_scales.clone(),
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
@@ -267,6 +269,13 @@ impl Chart {
                 action.scale = None;
             }
         }
+        action.series_scales.retain(|id, scale| {
+            self.series_scales.get(id).is_some_and(|current| {
+                scale.options() != current.options()
+                    || scale.is_manual() != current.is_manual()
+                    || (scale.is_manual() && scale.range() != current.range())
+            })
+        });
         if let Some(panes) = &action.panes
             && panes.maximized == self.pane_layout.maximized
             && panes.main == self.pane_layout.main
@@ -306,6 +315,7 @@ impl Chart {
             && action.price_targets_visible.is_none()
             && action.options.is_none()
             && action.scale.is_none()
+            && action.series_scales.is_empty()
             && action.panes.is_none()
             && action.chart_type.is_none()
             && action.interval.is_none()
@@ -445,6 +455,11 @@ impl Chart {
         }
         if let Some(scale) = &mut action.scale {
             std::mem::swap(self.state.price_scale_mut(), scale);
+        }
+        for (id, scale) in &mut action.series_scales {
+            if let Some(current) = self.series_scales.get_mut(id) {
+                std::mem::swap(current, scale);
+            }
         }
         self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
