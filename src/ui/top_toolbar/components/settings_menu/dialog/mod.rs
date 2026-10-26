@@ -312,7 +312,7 @@ impl SettingsDialog {
                         .auto_shrink([false, false])
                         .max_height(ui.available_height())
                         .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                            ui.spacing_mut().item_spacing = Vec2::splat(theme.spacing.lg);
                             match self.active_tab {
                                 SettingsTab::Symbol => self.draw_symbol_tab(ui, theme),
                                 SettingsTab::StatusLine => self.draw_status_line_tab(ui, theme),
@@ -921,7 +921,11 @@ mod tests {
 
     #[test]
     fn changing_settings_tabs_stays_centered_and_fits_the_window() {
-        for theme in [Theme::light(), Theme::dark()] {
+        let mut scaled = Theme::light();
+        scaled.text.small = 17.0;
+        scaled.spacing.lg = 12.0;
+        scaled.spacing.xxxl = 32.0;
+        for theme in [Theme::light(), Theme::dark(), scaled] {
             for size in [Vec2::new(1440.0, 900.0), Vec2::new(600.0, 400.0)] {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
@@ -931,8 +935,8 @@ mod tests {
                 let mut tops = Vec::new();
                 for tab in SettingsTab::all() {
                     dialog.active_tab = *tab;
-                    for _ in 0..3 {
-                        ctx.run_ui(
+                    for pass in 0..3 {
+                        let output = ctx.run_ui(
                             egui::RawInput {
                                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                                 ..Default::default()
@@ -940,8 +944,17 @@ mod tests {
                             |ui| {
                                 dialog.show(ui.ctx(), &theme);
                             },
-                        )
-                        .drop_without_applying_deltas();
+                        );
+                        let heading = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "CANDLE COLORS" => {
+                                Some(text.galley.job.sections[0].format.font_id.size)
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        if *tab == SettingsTab::Symbol && pass == 2 {
+                            assert_eq!(heading, Some(theme.text.small));
+                        }
                     }
                     let rect = ctx
                         .memory(|memory| memory.area_rect(egui::Id::unique("chart_settings")))

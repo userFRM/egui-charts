@@ -709,7 +709,10 @@ impl DrawingToolbar {
 
     /// Draw color picker popup
     fn draw_color_picker_popup(&mut self, ui: &mut Ui, sidebar_rect: Rect) -> Option<[u8; 4]> {
-        let popup_pos = self.color_picker_position(sidebar_rect);
+        let popup_pos = Pos2::new(
+            sidebar_rect.right() + ui.active_theme().spacing.sm,
+            sidebar_rect.center().y - DESIGN_TOKENS.sizing.dialog.color_picker_height / 2.0,
+        );
         let current_color = self.state.drawing_color;
 
         let (area_res, sel_color) = self.render_color_picker_area(ui, popup_pos, current_color);
@@ -717,15 +720,6 @@ impl DrawingToolbar {
         self.handle_color_picker_close(ui, &area_res, sidebar_rect, sel_color.is_some());
 
         sel_color
-    }
-
-    /// Calculate popup position for color picker
-    fn color_picker_position(&self, sidebar_rect: Rect) -> Pos2 {
-        let popup_height = DESIGN_TOKENS.sizing.dialog.color_picker_height;
-        Pos2::new(
-            sidebar_rect.right() + crate::theme::Theme::default().spacing.sm,
-            sidebar_rect.center().y - popup_height / 2.0,
-        )
     }
 
     /// Render the color picker area and return selected color if any

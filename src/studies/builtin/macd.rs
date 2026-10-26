@@ -24,9 +24,9 @@
 //!
 //! # Default colours
 //!
-//! - MACD line: blue (`indicators.macd_line`)
-//! - Signal line: orange (`indicators.macd_signal`)
-//! - Histogram: green (`extended.success`)
+//! - MACD line: blue ([`palette::BLUE`](crate::studies::palette::BLUE))
+//! - Signal line: orange ([`palette::ORANGE`](crate::studies::palette::ORANGE))
+//! - Histogram: green ([`palette::GREEN`](crate::studies::palette::GREEN))
 //!
 //! # Example
 //!

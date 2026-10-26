@@ -26,7 +26,8 @@
 //!
 //! # Default colours
 //!
-//! Upper/middle/lower sourced from `indicators.bb_upper`, `bb_middle`, `bb_lower`.
+//! Upper and lower bands use [`palette::ACCENT`](crate::studies::palette::ACCENT);
+//! the middle band uses [`palette::BB_MIDDLE`](crate::studies::palette::BB_MIDDLE).
 //!
 //! # Example
 //!

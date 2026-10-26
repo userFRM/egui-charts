@@ -121,29 +121,13 @@ pub struct TpoSemanticTokens {
     pub period_12: Color32,
 }
 
-/// Technical indicator colors (moving averages, Bollinger Bands, RSI, MACD, VWAP).
+/// Legacy moving average colours still used by drawing defaults. Studies use `studies::palette`.
 #[derive(Clone, Debug)]
 pub struct IndicatorSemanticTokens {
     /// Generic moving average line color.
     pub ma: Color32,
     /// Exponential moving average line color.
     pub ema: Color32,
-    /// Simple moving average line color.
-    pub sma: Color32,
-    /// Bollinger Band upper line color.
-    pub bb_upper: Color32,
-    /// Bollinger Band middle (basis) line color.
-    pub bb_middle: Color32,
-    /// Bollinger Band lower line color.
-    pub bb_lower: Color32,
-    /// RSI line color.
-    pub rsi: Color32,
-    /// MACD main line color.
-    pub macd_line: Color32,
-    /// MACD signal line color.
-    pub macd_signal: Color32,
-    /// VWAP line color.
-    pub vwap: Color32,
 }
 
 /// Drawing label and Fibonacci level colors.
@@ -165,58 +149,20 @@ pub struct DrawingSemanticTokens {
 /// a single flat namespace.
 #[derive(Clone, Debug)]
 pub struct ExtendedSemanticTokens {
-    /// Active/pressed state background.
-    pub bg_active: Color32,
-    /// Secondary text color.
-    pub text_secondary: Color32,
-    /// Muted/dimmed text color.
-    pub text_muted: Color32,
     /// Accent/brand color.
     pub accent: Color32,
-    /// Accent color on hover.
-    pub accent_hover: Color32,
-    /// Accent color when active/pressed.
-    pub accent_active: Color32,
     /// Success status color.
     pub success: Color32,
-    /// Success color (lighter variant).
-    pub success_light: Color32,
-    /// Success color (darker variant).
-    pub success_dark: Color32,
-    /// Success color (darkest variant).
-    pub success_darker: Color32,
     /// Error status color.
     pub error: Color32,
-    /// Error color (darker variant).
-    pub error_dark: Color32,
-    /// Error color (darkest variant).
-    pub error_darker: Color32,
-    /// Warning status color.
-    pub warning: Color32,
     /// Caution status color (softer warning).
     pub caution: Color32,
     /// Info status color.
     pub info: Color32,
-    /// Info color (lighter variant).
-    pub info_light: Color32,
     /// Disabled/inactive state color.
     pub disabled: Color32,
     /// Material Design purple.
     pub purple: Color32,
-    /// Material Design deep purple.
-    pub deep_purple: Color32,
-    /// Material Design cyan.
-    pub cyan: Color32,
-    /// Material Design teal.
-    pub teal: Color32,
-    /// Material Design indigo.
-    pub indigo: Color32,
-    /// Material Design pink.
-    pub pink: Color32,
-    /// Material Design brown.
-    pub brown: Color32,
-    /// Material Design deep orange.
-    pub deep_orange: Color32,
     /// Gray color.
     pub gray: Color32,
     /// Light gray color.

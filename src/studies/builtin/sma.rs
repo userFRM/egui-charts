@@ -19,7 +19,7 @@
 //!
 //! # Default colour
 //!
-//! Orange (from the design-token `indicators.ma`).
+//! Orange from [`palette::ORANGE`](crate::studies::palette::ORANGE).
 //!
 //! # Example
 //!

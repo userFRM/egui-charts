@@ -27,7 +27,7 @@
 //!
 //! # Default colour
 //!
-//! Blue (from the design-token `indicators.ema`).
+//! Blue from [`palette::BLUE`](crate::studies::palette::BLUE).
 //!
 //! # Example
 //!

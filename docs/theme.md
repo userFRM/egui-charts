@@ -27,6 +27,15 @@ Chart theme propagation and chart configuration overrides are handled by the cha
 
 Read `Theme` directly in place of the removed `theme::components` module and its `DialogStyle`, `SettingsDialogStyle` and `ContextMenuStyle` exports. For example, use `theme.ui.text`, `theme.ui.border_control`, `theme.radius.md` and egui's widget visuals instead of copied component style fields.
 
+Pass `ui` instead of `ui.visuals()` to `StyledPanelFrame::{left, right_widget_bar, right_content, top, bottom, chart}`. The constructors read the applied spacing and radii so the separate `outer_frame` and `inner_frame` methods use the same scales as `show`.
+
 Replace `DESIGN_TOKENS.typography` and `TypographyTokens` with `theme.text`. Replace UI reads of `DESIGN_TOKENS.semantic` with `theme.ui` or `theme.chart`. The unused button, alert, modal and command palette colour groups and their structs have been removed. `UiSemanticTokens` retains only `text_muted_dark` and `border_dark`, which existing engine consumers still require; UI chrome does not read them.
+
+The unused colour token fields below have been removed. Study defaults now come from `studies::palette`; runtime UI colours come from `theme.ui`.
+
+| Token group | Removed fields |
+| --- | --- |
+| `DESIGN_TOKENS.semantic.indicators` | `sma`, `bb_upper`, `bb_middle`, `bb_lower`, `rsi`, `macd_line`, `macd_signal`, `vwap` |
+| `DESIGN_TOKENS.semantic.extended` | `bg_active`, `text_secondary`, `text_muted`, `accent_hover`, `accent_active`, `success_light`, `success_dark`, `success_darker`, `error_dark`, `error_darker`, `warning`, `info_light`, `deep_purple`, `cyan`, `teal`, `indigo`, `pink`, `brown`, `deep_orange` |
 
 When constructing `TextSizes` explicitly, add `micro`, `marker` and `dialog_title`, or use `..Default::default()`. Theme serialisation remains compatible with missing fields. The constants in `styles::typography` and the token spacing/radius defaults remain available for engine code and existing hosts; runtime UI rendering reads the applied scales.

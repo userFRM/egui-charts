@@ -144,7 +144,7 @@ impl SettingsDialog {
 
                     ui.add_space(ui.active_theme().spacing.lg);
 
-                    // Line theme with dashes preview
+                    // Line style with dashes preview
                     styled_dropdown(
                         ui,
                         "crosshair_style",
@@ -488,7 +488,7 @@ impl SettingsDialog {
                     "Buy/sell buttons",
                     theme.ui.text,
                 );
-                ui.add_space(24.0);
+                ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "INDICATORS", theme);
                 styled_checkbox(
                     ui,
@@ -542,7 +542,7 @@ impl SettingsDialog {
                         },
                     );
                 });
-                ui.add_space(24.0);
+                ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "PRICE LABELS & LINES", theme);
                 styled_checkbox(
                     ui,
@@ -568,7 +568,7 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_prev_close,
                     );
                 });
-                ui.add_space(24.0);
+                ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "SCALE MODES", theme);
                 if styled_checkbox(
                     ui,
@@ -685,7 +685,7 @@ impl SettingsDialog {
         });
         ui.add_space(ui.active_theme().spacing.sm);
 
-        ui.add_space(24.0);
+        ui.add_space(theme.spacing.xxxl);
         self.draw_section_header(ui, "APPEARANCE", theme);
         let trading = &mut self.settings.trading;
         styled_checkbox(ui, &mut trading.bid_ask_labels, "Bid and ask labels", text);
@@ -774,7 +774,7 @@ impl SettingsDialog {
     pub(super) fn draw_section_header(&self, ui: &mut Ui, title: &str, theme: &Theme) {
         ui.label(
             RichText::new(l10n::text(ui.ctx(), title))
-                .size(11.0)
+                .size(theme.text.small)
                 .strong()
                 .color(theme.ui.text_secondary),
         );
