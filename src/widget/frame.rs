@@ -4291,7 +4291,15 @@ mod tests {
                 &["label price", "tick price", "O label price"],
             ),
             (
-                |chart| chart.set_volume_formatter(Some(Arc::new(Host))),
+                |chart| {
+                    chart.add_indicator(Box::new(
+                        crate::studies::CustomIndicator::new("Volume units", |bars| {
+                            vec![crate::studies::IndicatorValue::Single(99.0); bars.len()]
+                        })
+                        .with_value_format(crate::studies::StudyFormat::Volume),
+                    ));
+                    chart.set_volume_formatter(Some(Arc::new(Host)));
+                },
                 &["label price"],
             ),
             (
@@ -4336,6 +4344,21 @@ mod tests {
                         |shape| matches!(shape, Shape::Text(shape) if shape.galley.text() == *text)
                     ),
                     "{text}"
+                );
+            }
+            if chart.volume_formatter.is_some() {
+                let labels = painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape,
+                            Shape::Text(text) if text.galley.text() == "label price"
+                                && text.pos.x < chart.last_rendered_price_rect.center().x
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    labels, 2,
+                    "the volume row and overlay legend use the host formatter"
                 );
             }
             if expected.contains(&"O label price") {

@@ -2578,14 +2578,14 @@ impl DemoApp {
                 }
                 for (_, row) in &pointer.studies {
                     ui.colored_label(
-                        row.color,
+                        row.color.to_opaque(),
                         format!("{} {}", row.label(), row.formatted_value()),
                     );
                 }
             });
             for (_, row) in &pointer.studies {
                 ui.colored_label(
-                    row.color,
+                    row.color.to_opaque(),
                     format!("{} {}", row.label(), row.formatted_value()),
                 );
             }

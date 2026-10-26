@@ -490,7 +490,11 @@ impl<'a> Legend<'a> {
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
-                            study.value_format().format(value, precision)
+                            if study.value_format() == crate::studies::StudyFormat::Price {
+                                study.value_format().format(value, precision)
+                            } else {
+                                study.format_value(value)
+                            }
                         } else {
                             "∅".to_owned()
                         };
