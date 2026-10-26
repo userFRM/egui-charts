@@ -305,6 +305,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The scroll-to-latest button is a theme-aware 28-point double chevron at the bottom right of the main pane, clear of the legend and navigation, with matching paint and hit rectangles, a pointer cursor and “Scroll to the most recent bar” tooltip. Clicking or using the return shortcut animates to the configured right margin without changing zoom. The button is hidden at the live edge and available in history or future whitespace. Custom position, size, text and colours remain supported; `realtime_button_text: None` selects the icon and `Color32::PLACEHOLDER` colours follow the active theme. ([#930](https://github.com/userFRM/egui-charts/issues/930))
+
 - Selecting a drawing in the object tree reveals offscreen anchors by panning while keeping zoom and the price scale's auto/manual state. Double-click and Zoom to object use the same navigation instead of fitting a manual range to one drawing. `Chart::reset_chart_view` restores configured bar spacing and right margin, scrolls to the latest bar, cancels pending view motion and returns every price scale in every pane to auto-scaling. Chart-menu, keyboard, navigation-button and demo resets use this method. ([#935](https://github.com/userFRM/egui-charts/issues/935))
 
 - The study rotation regression checks that every study gets a refresh with both fast and slow recomputes, without assuming an exact count tied to the runner's speed. ([#927](https://github.com/userFRM/egui-charts/issues/927))

@@ -343,10 +343,7 @@ impl super::Chart {
                     .time_scale_mut()
                     .zoom(delta, anchor, rect.left(), rect.width());
             }
-            A::ScrollToRealTime => {
-                self.pending_scroll_time = None;
-                self.state.time_scale_mut().scroll_to_realtime();
-            }
+            A::ScrollToRealTime => self.scroll_to_real_time(true),
             A::FitContent => {
                 self.pending_scroll_time = None;
                 self.state.time_scale_mut().fit_content();
@@ -435,53 +432,64 @@ mod tests {
     fn reset_chart_restores_time_and_every_price_scale() {
         use crate::model::SeriesScale;
         use crate::widget::test_frames::frame;
-        for action in [
-            Some(KeyboardAction::ResetChart),
-            Some(KeyboardAction::ResetZoom),
-            None,
+        for (spacing, margin, pixels, expected_offset) in [
+            (6.0, 2.5, None, 2.5),
+            (9.0, 4.0, None, 4.0),
+            (8.0, 2.5, Some(64.0), 8.0),
         ] {
-            let ctx = Context::default();
-            let mut chart = chart(&[100.0], &[200.0]);
-            let id = chart.add_series(crate::widget::SeriesOptions {
-                scale: SeriesScale::Left,
-                ..Default::default()
-            });
-            let pane = chart.add_pane();
-            chart.set_preserve_empty_pane(pane, true);
-            frame(&ctx, &mut chart, 0.0, vec![]);
-            chart.state.time_scale_mut().set_bar_spacing(20.0);
-            chart.state.time_scale_mut().set_right_offset(-30.0);
-            chart.price_scale_mut().set_range(150.0, 150.4);
-            chart
-                .series_price_scale_mut(id)
-                .unwrap()
-                .set_range(2.0, 3.0);
-            chart
-                .pane_layout
-                .panes
-                .last_mut()
-                .unwrap()
-                .scale
-                .set_range(40.0, 50.0);
-            chart.set_visible_bars(5);
-            chart.scroll_to_position(-50.0, true);
-            chart.scroll_to_time(chart.state.shown()[10].time);
-            if let Some(action) = action {
-                chart.apply_keyboard_action(action, chart.get_rendered_price_rect());
-            } else {
-                chart.reset_chart_view();
-            }
-            frame(&ctx, &mut chart, 0.1, vec![]);
-            assert_eq!(chart.get_time_scale_state(), (6.0, 2.5));
-            assert!(!chart.state.price_scale().is_manual());
-            assert!(!chart.series_price_scale(id).unwrap().is_manual());
-            assert!(
+            for action in [
+                Some(KeyboardAction::ResetChart),
+                Some(KeyboardAction::ResetZoom),
+                None,
+            ] {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[200.0]);
+                let mut options = chart.chart_options().clone();
+                options.time_scale.bar_spacing = spacing;
+                options.time_scale.right_offset = margin;
+                options.time_scale.right_offset_pixels = pixels;
+                chart = chart.with_chart_options(options);
+                let id = chart.add_series(crate::widget::SeriesOptions {
+                    scale: SeriesScale::Left,
+                    ..Default::default()
+                });
+                let pane = chart.add_pane();
+                chart.set_preserve_empty_pane(pane, true);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.state.time_scale_mut().set_bar_spacing(20.0);
+                chart.state.time_scale_mut().set_right_offset(-30.0);
+                chart.price_scale_mut().set_range(150.0, 150.4);
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(2.0, 3.0);
                 chart
                     .pane_layout
                     .panes
-                    .iter()
-                    .all(|pane| !pane.scale.is_manual())
-            );
+                    .last_mut()
+                    .unwrap()
+                    .scale
+                    .set_range(40.0, 50.0);
+                chart.set_visible_bars(5);
+                chart.scroll_to_position(-50.0, true);
+                chart.scroll_to_time(chart.state.shown()[10].time);
+                if let Some(action) = action {
+                    chart.apply_keyboard_action(action, chart.get_rendered_price_rect());
+                } else {
+                    chart.reset_chart_view();
+                }
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                assert_eq!(chart.get_time_scale_state(), (spacing, expected_offset));
+                assert!(!chart.state.price_scale().is_manual());
+                assert!(!chart.series_price_scale(id).unwrap().is_manual());
+                assert!(
+                    chart
+                        .pane_layout
+                        .panes
+                        .iter()
+                        .all(|pane| !pane.scale.is_manual())
+                );
+            }
         }
     }
 
