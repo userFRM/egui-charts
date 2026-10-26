@@ -4056,9 +4056,7 @@ mod tests {
                         .chart
                         .indicators()
                         .find(|(_, study)| study.name() == "RSI")
-                        .unwrap_or_else(|| {
-                            panic!("palette adds RSI: same_frame={same_frame}, toolbar={toolbar}")
-                        })
+                        .expect("palette adds RSI")
                         .0;
                     let volume_id = app
                         .chart

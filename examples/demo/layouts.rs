@@ -80,6 +80,7 @@ impl DemoApp {
             self.activate_chart_slot(0);
         }
         self.top_toolbar.chart_grid_selector.set_layout(mode);
+        self.refresh_strategy_signals();
     }
 
     fn copy_chart(

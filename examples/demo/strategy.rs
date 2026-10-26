@@ -10,7 +10,7 @@ use egui_charts::ui::strategy_report::StrategyReportAction;
 use std::sync::Arc;
 
 /// Buys two units every 40 bars, holds for 20 and pays one currency unit per fill.
-/// Fills and equity marks use source opens; only complete round trips are run.
+/// Fills use opens; equity uses completed closes at their source bar timestamps.
 fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> StrategyReport {
     let mut report =
         StrategyReport::new("20-bar holds (synthetic data)", symbol, timeframe, 10_000.0);
@@ -18,7 +18,10 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
         ("Quantity".into(), "2 units".into()),
         ("Holding / cycle".into(), "20 / 40 bars".into()),
         ("Commission".into(), "1 account unit per fill".into()),
-        ("Equity sampling".into(), "Source opens, after fills".into()),
+        (
+            "Equity sampling".into(),
+            "Source closes, after fills".into(),
+        ),
     ];
     for start in (0..bars.len()).step_by(40) {
         let Some(exit) = bars.get(start + 20) else {
@@ -51,7 +54,7 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
                     + if bar.time >= exit.time {
                         exit.profit
                     } else if bar.time >= trade.entry_time {
-                        (bar.open - trade.entry_price) * trade.quantity - 1.0
+                        (bar.close - trade.entry_price) * trade.quantity - 1.0
                     } else {
                         0.0
                     }
@@ -237,7 +240,7 @@ mod tests {
                     price,
                     price + 1.0,
                     price - 1.0,
-                    price,
+                    price + 0.5,
                     100.0,
                 )
             })
@@ -247,21 +250,22 @@ mod tests {
     #[test]
     fn sample_equity_marks_fees_fills_and_flat_periods() {
         // A 20-point rise at quantity 2 earns 40 less 2 fees; a 5-point fall loses 12.
+        // Each held close is 0.5 above its open, adding 1 to equity before exit.
         for (slope, profit, marks) in [
             (
                 1.0,
                 114.0,
                 [
-                    9999.0, 10001.0, 10037.0, 10038.0, 10038.0, 10037.0, 10075.0, 10076.0, 10076.0,
-                    10075.0, 10113.0, 10114.0, 10114.0,
+                    10000.0, 10002.0, 10038.0, 10038.0, 10038.0, 10038.0, 10076.0, 10076.0,
+                    10076.0, 10076.0, 10114.0, 10114.0, 10114.0,
                 ],
             ),
             (
                 -0.25,
                 -36.0,
                 [
-                    9999.0, 9998.5, 9989.5, 9988.0, 9988.0, 9987.0, 9977.5, 9976.0, 9976.0, 9975.0,
-                    9965.5, 9964.0, 9964.0,
+                    10000.0, 9999.5, 9990.5, 9988.0, 9988.0, 9988.0, 9978.5, 9976.0, 9976.0,
+                    9976.0, 9966.5, 9964.0, 9964.0,
                 ],
             ),
         ] {
@@ -426,7 +430,26 @@ mod tests {
                 );
                 app.execute_search_command(&ctx, "backtest");
                 assert!(app.strategy_trade.is_none());
+                app.execute_search_command(&ctx, "samples");
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                app.chart.fit_content();
+                app.extra_charts[0].chart.fit_content();
+                for _ in 0..3 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
                 let output = frame(&mut app, vec![]);
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|s| {
+                            matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Exit 3")
+                        })
+                        .count(),
+                    2,
+                    "new chart slots retain report fills"
+                );
+                text_at(&output, "Host tick");
                 let clear = text_at(&output, "Clear report");
                 output.drop_without_applying_deltas();
                 click(&mut app, clear);
@@ -434,6 +457,7 @@ mod tests {
                 let output = frame(&mut app, vec![]);
                 assert!(!output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
                     if matches!(t.galley.text(), "Entry 1" | "Exit 1" | "Clear report" | "Export trades CSV"))));
+                text_at(&output, "Host tick");
                 output.drop_without_applying_deltas();
                 std::fs::remove_file(std::env::temp_dir().join("strategy-trades.csv")).unwrap();
             }
