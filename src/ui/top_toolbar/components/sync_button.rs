@@ -4,6 +4,7 @@
 //! Only visible when in multi-chart layout mode.
 
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -90,12 +91,13 @@ impl SyncButton {
 
         let desired_size = Vec2::splat(DESIGN_TOKENS.sizing.button_md);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Chart Sync Options");
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
                 response.enabled(),
                 any_sync_enabled,
-                "Chart Sync Options",
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
@@ -131,7 +133,7 @@ impl SyncButton {
             .as_image_tinted(Vec2::splat(DESIGN_TOKENS.sizing.icon_sm), icon_color)
             .paint_at(ui, icon_rect);
 
-        response.on_hover_text("Chart Sync Options")
+        response.on_hover_text(l10n::text(ui.ctx(), "Chart Sync Options"))
     }
 
     fn dropdown_rect(&self, btn_rect: Rect) -> Rect {
@@ -198,12 +200,13 @@ impl SyncButton {
             );
 
             let item_response = ui.allocate_rect(item_rect, Sense::click());
+            let translated_label = l10n::text(ui.ctx(), label);
             item_response.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::Role::CheckBox,
                     item_response.enabled(),
                     enabled,
-                    label,
+                    &translated_label,
                 )
             });
             crate::styles::focus::draw_focus_ring(ui, &item_response, DESIGN_TOKENS.rounding.sm);
@@ -230,7 +233,7 @@ impl SyncButton {
                 ui.painter().text(
                     checkbox_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    "\u{2713}",
+                    l10n::text(ui.ctx(), "\u{2713}"),
                     egui::FontId::proportional(checkbox_size * 0.8),
                     check_color,
                 );
@@ -253,7 +256,7 @@ impl SyncButton {
                     item_rect.center().y,
                 ),
                 egui::Align2::LEFT_CENTER,
-                label,
+                l10n::text(ui.ctx(), label),
                 egui::FontId::proportional(typography::SM),
                 text_color,
             );

@@ -2,6 +2,7 @@
 
 use crate::chart::series::SeriesSettings;
 use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, LinePlotStyle, LineStyle, PriceBasedSource,
     PriceSource,
@@ -18,14 +19,14 @@ impl SymbolTab {
         ui.space_md();
 
         ui.label(
-            RichText::new(settings.chart_type.name())
+            RichText::new(l10n::text(ui.ctx(), settings.chart_type.name()))
                 .size(11.0)
                 .strong(),
         );
         ui.space_sm();
         FormGrid::new("symbol_style_grid").show(ui, |ui| {
             if !settings.chart_type.uses_ohlc() {
-                let label = ui.label("Price source");
+                let label = ui.label(l10n::text(ui.ctx(), "Price source"));
                 ui.label_inputs_by(label.id, |ui| {
                     Self::price_source_dropdown(ui, &mut settings.price_source);
                 });
@@ -38,11 +39,11 @@ impl SymbolTab {
                 ChartType::StepLine => Self::line_style(ui, &mut styles.step_line, "line_style"),
                 ChartType::LineWithMarkers => {
                     Self::line_style(ui, &mut styles.line_with_markers, "line_style");
-                    let label = ui.label("Marker radius");
+                    let label = ui.label(l10n::text(ui.ctx(), "Marker radius"));
                     ui.add(
                         egui::DragValue::new(&mut styles.marker_radius)
                             .range(0.0..=20.0)
-                            .suffix(" pt"),
+                            .suffix(l10n::text(ui.ctx(), " pt")),
                     )
                     .labelled_by(label.id);
                     ui.end_row();
@@ -53,11 +54,11 @@ impl SymbolTab {
                     Self::fill_row(ui, "Bottom fill", &mut styles.area.bottom_fill);
                 }
                 ChartType::Baseline => {
-                    ui.label("Above base");
+                    ui.label(l10n::text(ui.ctx(), "Above base"));
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.above, "above_style");
                     Self::fill_row(ui, "Above fill", &mut styles.baseline.above_fill);
-                    ui.label("Below base");
+                    ui.label(l10n::text(ui.ctx(), "Below base"));
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
@@ -77,7 +78,7 @@ impl SymbolTab {
                     &mut params.renko_brick_size,
                 );
                 Self::transform_source(ui, &mut params.renko_source);
-                let label = ui.label("Wicks");
+                let label = ui.label(l10n::text(ui.ctx(), "Wicks"));
                 ui.checkbox(&mut params.renko_wicks, "")
                     .labelled_by(label.id);
                 ui.end_row();
@@ -91,28 +92,28 @@ impl SymbolTab {
             }
             ChartType::PointAndFigure => {
                 Self::box_size(ui, &mut params.pnf_size_method, &mut params.pnf_box_size);
-                let label = ui.label("Reversal boxes");
+                let label = ui.label(l10n::text(ui.ctx(), "Reversal boxes"));
                 ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
                     .labelled_by(label.id);
                 ui.end_row();
             }
             ChartType::LineBreak => {
-                let label = ui.label("Number of lines");
+                let label = ui.label(l10n::text(ui.ctx(), "Number of lines"));
                 ui.add(egui::DragValue::new(&mut params.line_break_count).range(1..=10))
                     .labelled_by(label.id);
                 ui.end_row();
                 Self::transform_source(ui, &mut params.line_break_source);
             }
             ChartType::TimePriceOpportunity => {
-                let label = ui.label("Period");
+                let label = ui.label(l10n::text(ui.ctx(), "Period"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_period_minutes)
                         .range(1..=1440)
-                        .suffix(" min"),
+                        .suffix(l10n::text(ui.ctx(), " min")),
                 )
                 .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label("Ticks per row");
+                let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_row_ticks)
                         .range(0..=100_000)
@@ -126,7 +127,7 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label("Value area");
+                let label = ui.label(l10n::text(ui.ctx(), "Value area"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_value_area)
                         .range(1.0..=100.0)
@@ -134,13 +135,13 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label("Split extended hours");
+                let label = ui.label(l10n::text(ui.ctx(), "Split extended hours"));
                 ui.checkbox(&mut params.tpo_split_sessions, "")
                     .labelled_by(label.id);
                 ui.end_row();
             }
             ChartType::Baseline => {
-                let label = ui.label("Base level");
+                let label = ui.label(l10n::text(ui.ctx(), "Base level"));
                 let mut price = matches!(params.baseline, BaselineLevel::Price(_));
                 let was_price = price;
                 ui.label_inputs_by(label.id, |ui| {
@@ -156,7 +157,7 @@ impl SymbolTab {
                     };
                 }
                 ui.end_row();
-                let label = ui.label("Base value");
+                let label = ui.label(l10n::text(ui.ctx(), "Base value"));
                 ui.label_inputs_by(label.id, |ui| match &mut params.baseline {
                     BaselineLevel::Price(value) => {
                         ui.add(egui::DragValue::new(value).speed(0.1));
@@ -172,7 +173,7 @@ impl SymbolTab {
     }
 
     fn transform_source(ui: &mut Ui, source: &mut PriceBasedSource) {
-        let label = ui.label("Price source");
+        let label = ui.label(l10n::text(ui.ctx(), "Price source"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select(
                 "transform_source",
@@ -194,7 +195,7 @@ impl SymbolTab {
             BoxSizeMethod::Percentage(_) => 2,
         };
         let previous = choice;
-        let label = ui.label("Size method");
+        let label = ui.label(l10n::text(ui.ctx(), "Size method"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select("size_method", &mut choice, [0, 1, 2], |c| {
                 match c {
@@ -218,7 +219,7 @@ impl SymbolTab {
         ui.end_row();
         match method {
             BoxSizeMethod::Fixed => {
-                let label = ui.label("Size");
+                let label = ui.label(l10n::text(ui.ctx(), "Size"));
                 ui.add(
                     egui::DragValue::new(size)
                         .range(f64::MIN_POSITIVE..=f64::MAX)
@@ -228,11 +229,11 @@ impl SymbolTab {
                 ui.end_row();
             }
             BoxSizeMethod::Atr { period, multiplier } => {
-                let label = ui.label("ATR period");
+                let label = ui.label(l10n::text(ui.ctx(), "ATR period"));
                 ui.add(egui::DragValue::new(period).range(1..=10000))
                     .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label("ATR multiplier");
+                let label = ui.label(l10n::text(ui.ctx(), "ATR multiplier"));
                 ui.add(
                     egui::DragValue::new(multiplier)
                         .range(0.01..=1000.0)
@@ -242,7 +243,7 @@ impl SymbolTab {
                 ui.end_row();
             }
             BoxSizeMethod::Percentage(percent) => {
-                let label = ui.label("Percentage");
+                let label = ui.label(l10n::text(ui.ctx(), "Percentage"));
                 ui.add(
                     egui::DragValue::new(percent)
                         .range(0.001..=100.0)
@@ -263,16 +264,16 @@ impl SymbolTab {
 
     fn line_style(ui: &mut Ui, style: &mut LinePlotStyle, id: &str) {
         Self::fill_row(ui, "Line colour", &mut style.color);
-        let label = ui.label("Line width");
+        let label = ui.label(l10n::text(ui.ctx(), "Line width"));
         ui.add(
             egui::DragValue::new(&mut style.width)
                 .range(0.0..=10.0)
                 .speed(0.1)
-                .suffix(" pt"),
+                .suffix(l10n::text(ui.ctx(), " pt")),
         )
         .labelled_by(label.id);
         ui.end_row();
-        let label = ui.label("Line style");
+        let label = ui.label(l10n::text(ui.ctx(), "Line style"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select(
                 id,
@@ -285,13 +286,13 @@ impl SymbolTab {
     }
 
     fn fill_row(ui: &mut Ui, label: &str, color: &mut Color32) {
-        ui.label(label);
+        ui.label(l10n::text(ui.ctx(), label));
         Self::color_picker(ui, color);
         ui.end_row();
     }
 
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        ui.label("Body");
+        ui.label(l10n::text(ui.ctx(), "Body"));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::color_picker(ui, &mut settings.bullish_color);
@@ -315,7 +316,7 @@ impl SymbolTab {
                 &mut settings.bearish_wick_color,
             ),
         ] {
-            ui.label(label);
+            ui.label(l10n::text(ui.ctx(), label));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 Self::optional_color_picker(ui, up, settings.bullish_color);
@@ -325,7 +326,10 @@ impl SymbolTab {
                     (down, settings.bearish_color, "Custom down"),
                 ] {
                     let mut custom = color.is_some();
-                    if ui.checkbox(&mut custom, label).changed() {
+                    if ui
+                        .checkbox(&mut custom, l10n::text(ui.ctx(), label))
+                        .changed()
+                    {
                         *color = custom.then_some(color.unwrap_or(default));
                     }
                 }

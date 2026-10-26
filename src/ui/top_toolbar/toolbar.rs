@@ -6,6 +6,7 @@
 //! action, in a horizontally scrolling strip after the fixed main menu.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::ListItem;
@@ -530,8 +531,13 @@ impl TopToolbar {
                     response.id.with("save_menu"),
                     egui::Sense::click(),
                 );
+                let translated_label = l10n::text(ui.ctx(), "Layout options");
                 arrow.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, arrow.enabled(), "Layout options")
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        arrow.enabled(),
+                        &translated_label,
+                    )
                 });
                 crate::styles::focus::draw_focus_ring(ui, &arrow, self.config.rounding);
                 egui::Popup::menu(&arrow)
@@ -561,7 +567,7 @@ impl TopToolbar {
                         ui.set_width(240.0);
                         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
                         ui.label(
-                            egui::RichText::new("SNAPSHOT")
+                            egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
                                 .size(11.0)
                                 .color(ui.active_theme().ui.text_secondary),
                         );
@@ -585,11 +591,14 @@ impl TopToolbar {
                 ui.add_enabled(enabled, |ui: &mut Ui| {
                     ToolbarIconButton::new(icon, label, &self.config).show(ui)
                 })
-                .on_disabled_hover_text(if control == S::Undo {
-                    "Nothing to undo"
-                } else {
-                    "Nothing to redo"
-                })
+                .on_disabled_hover_text(l10n::text(
+                    ui.ctx(),
+                    if control == S::Undo {
+                        "Nothing to undo"
+                    } else {
+                        "Nothing to redo"
+                    },
+                ))
             }
             S::Indicators | S::Alert | S::Replay => {
                 IconTextButton::new(icon, label, &self.config).show(ui)

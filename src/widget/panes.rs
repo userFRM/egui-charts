@@ -9,6 +9,7 @@ use crate::chart::indicators::{
 };
 use crate::chart::selection::ChartElementId;
 use crate::chart::series::calculate_dot_interval;
+use crate::localization as l10n;
 use crate::studies::{CustomIndicator, Indicator};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui};
@@ -636,20 +637,27 @@ impl Chart {
                     );
                     let toggle = ui
                         .interact(header, ui.scope_id().with((key, "toggle")), Sense::click())
-                        .on_hover_text(if collapsed {
-                            "Expand pane"
-                        } else {
-                            "Collapse pane"
-                        });
-                    toggle.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::Role::Button,
-                            toggle.enabled(),
+                        .on_hover_text(l10n::text(
+                            ui.ctx(),
                             if collapsed {
                                 "Expand pane"
                             } else {
                                 "Collapse pane"
                             },
+                        ));
+                    let translated_label = l10n::text(
+                        ui.ctx(),
+                        if collapsed {
+                            "Expand pane"
+                        } else {
+                            "Collapse pane"
+                        },
+                    );
+                    toggle.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            toggle.enabled(),
+                            &translated_label,
                         )
                     });
                     ui.ctx()

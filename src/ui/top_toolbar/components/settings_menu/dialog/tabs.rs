@@ -3,6 +3,7 @@
 //! This module contains all the tab-specific UI rendering code,
 //! keeping the main dialog module focused on core structure.
 
+use crate::localization as l10n;
 use egui::{Color32, FontId, RichText, Ui};
 
 use super::SettingsDialog;
@@ -40,7 +41,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.chart_basic_styles.background_type,
                                     *bt,
-                                    bt.name(),
+                                    l10n::text(ui.ctx(), bt.name()),
                                 );
                             }
                         },
@@ -100,7 +101,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.grid_lines.mode,
                                     *mode,
-                                    mode.name(),
+                                    l10n::text(ui.ctx(), mode.name()),
                                 );
                             }
                         },
@@ -156,7 +157,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.crosshair.line_style,
                                     *ls,
-                                    line_style_preview(*ls),
+                                    l10n::text(ui.ctx(), line_style_preview(*ls)),
                                 );
                             }
                         },
@@ -170,7 +171,7 @@ impl SettingsDialog {
                         egui::DragValue::new(&mut lw)
                             .range(1.0..=4.0)
                             .speed(0.5)
-                            .suffix(" px"),
+                            .suffix(l10n::text(ui.ctx(), " px")),
                     );
                     dialog.settings.crosshair.line_width = lw;
                 });
@@ -196,7 +197,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.watermark.mode,
                                     *wm,
-                                    wm.name(),
+                                    l10n::text(ui.ctx(), wm.name()),
                                 );
                             }
                         },
@@ -293,7 +294,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.btns.navigation,
                                     *vis,
-                                    vis.name(),
+                                    l10n::text(ui.ctx(), vis.name()),
                                 );
                             }
                         },
@@ -381,7 +382,11 @@ impl SettingsDialog {
                         dialog.settings.precision.name(),
                         |ui| {
                             for pm in PrecisionMode::all() {
-                                ui.selectable_value(&mut dialog.settings.precision, *pm, pm.name());
+                                ui.selectable_value(
+                                    &mut dialog.settings.precision,
+                                    *pm,
+                                    l10n::text(ui.ctx(), pm.name()),
+                                );
                             }
                         },
                     );
@@ -405,7 +410,7 @@ impl SettingsDialog {
                                 ui.selectable_value(
                                     &mut dialog.settings.timezone,
                                     tz.clone(),
-                                    tz.as_str(),
+                                    l10n::text(ui.ctx(), tz.as_str()),
                                 );
                             }
                         },
@@ -444,12 +449,12 @@ impl SettingsDialog {
                             ui.selectable_value(
                                 &mut self.settings.status_line.title_as_description,
                                 true,
-                                "Description",
+                                l10n::text(ui.ctx(), "Description"),
                             );
                             ui.selectable_value(
                                 &mut self.settings.status_line.title_as_description,
                                 false,
-                                "Ticker",
+                                l10n::text(ui.ctx(), "Ticker"),
                             );
                         },
                     );
@@ -528,12 +533,12 @@ impl SettingsDialog {
                             ui.selectable_value(
                                 &mut dialog.settings.scales_and_lines.price_scale_left,
                                 false,
-                                "Right",
+                                l10n::text(ui.ctx(), "Right"),
                             );
                             ui.selectable_value(
                                 &mut dialog.settings.scales_and_lines.price_scale_left,
                                 true,
-                                "Left",
+                                l10n::text(ui.ctx(), "Left"),
                             );
                         },
                     );
@@ -645,7 +650,10 @@ impl SettingsDialog {
                     ui.add_enabled_ui(play, |ui| {
                         styled_dropdown(ui, "execution_sound", 140.0, text, &selected, |ui| {
                             for name in sounds {
-                                if ui.selectable_label(selected == *name, name).clicked() {
+                                if ui
+                                    .selectable_label(selected == *name, l10n::text(ui.ctx(), name))
+                                    .clicked()
+                                {
                                     sound.clone_from(name);
                                 }
                             }
@@ -656,7 +664,11 @@ impl SettingsDialog {
         );
         ui.horizontal(|ui| {
             ui.set_min_height(42.0);
-            ui.label(RichText::new("Notifications").size(14.0).color(text));
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), "Notifications"))
+                    .size(14.0)
+                    .color(text),
+            );
             ui.add_space((TRADING_LABEL_WIDTH - ui.min_rect().width()).max(0.0));
             let level = &mut trading.notifications;
             styled_dropdown(
@@ -667,7 +679,7 @@ impl SettingsDialog {
                 level.label(),
                 |ui| {
                     for option in TradingNotifications::ALL {
-                        ui.selectable_value(level, option, option.label());
+                        ui.selectable_value(level, option, l10n::text(ui.ctx(), option.label()));
                     }
                 },
             );
@@ -767,7 +779,7 @@ impl SettingsDialog {
         style: &SettingsDialogStyle,
     ) {
         ui.label(
-            RichText::new(title)
+            RichText::new(l10n::text(ui.ctx(), title))
                 .size(11.0)
                 .strong()
                 .color(style.section_header_text),
@@ -805,7 +817,7 @@ impl SettingsDialog {
         .map(|label| {
             ui.painter()
                 .layout_no_wrap(
-                    (*label).into(),
+                    l10n::text(ui.ctx(), *label),
                     FontId::proportional(typography::LG),
                     style.label_text,
                 )
@@ -823,7 +835,7 @@ impl SettingsDialog {
                     ui.set_max_width(label_width);
                     ui.add(
                         egui::Label::new(
-                            RichText::new(label)
+                            RichText::new(l10n::text(ui.ctx(), label))
                                 .size(typography::LG)
                                 .color(style.label_text),
                         )
@@ -857,7 +869,7 @@ fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, 
     };
     styled_dropdown(ui, id, 180.0, color, name(mode), |ui| {
         for option in [(true, true), (true, false), (false, true), (false, false)] {
-            ui.selectable_value(&mut mode, option, name(option));
+            ui.selectable_value(&mut mode, option, l10n::text(ui.ctx(), name(option)));
         }
     });
     (*label, *line) = mode;
@@ -875,7 +887,7 @@ fn styled_dropdown<R>(
         .icon(crate::ui_kit::buttons::combo_chevron)
         .width(width)
         .selected_text(
-            RichText::new(selected)
+            RichText::new(l10n::text(ui.ctx(), selected))
                 .size(typography::LG)
                 .color(text_color),
         )
@@ -900,7 +912,12 @@ fn trading_option(
     ui.horizontal(|ui| {
         ui.set_min_height(42.0);
         ui.add_space(indent);
-        ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color));
+        ui.checkbox(
+            checked,
+            RichText::new(l10n::text(ui.ctx(), label))
+                .size(14.0)
+                .color(text_color),
+        );
         ui.add_space((TRADING_LABEL_WIDTH - ui.min_rect().width()).max(0.0));
         add_controls(ui);
     });
@@ -912,7 +929,7 @@ fn pnl_unit_dropdown(ui: &mut Ui, id: &str, shown: bool, unit: &mut PnlUnit, tex
     ui.add_enabled_ui(shown, |ui| {
         styled_dropdown(ui, id, 140.0, text_color, unit.label(), |ui| {
             for option in PnlUnit::ALL {
-                ui.selectable_value(unit, option, option.label());
+                ui.selectable_value(unit, option, l10n::text(ui.ctx(), option.label()));
             }
         });
     });
@@ -925,8 +942,13 @@ fn styled_checkbox(ui: &mut Ui, checked: &mut bool, label: &str, text_color: Col
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_min_height(42.0);
-                ui.checkbox(checked, RichText::new(label).size(14.0).color(text_color))
-                    .changed()
+                ui.checkbox(
+                    checked,
+                    RichText::new(l10n::text(ui.ctx(), label))
+                        .size(14.0)
+                        .color(text_color),
+                )
+                .changed()
             },
         )
         .inner;

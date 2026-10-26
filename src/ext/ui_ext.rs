@@ -17,6 +17,7 @@
 //! - **Theming**: current_theme, is_dark_mode, is_light_mode
 //! - **Utility**: is_touch_mode, min_touch_target
 
+use crate::localization as l10n;
 use egui::{Color32, Rect, Response, RichText, Sense, TextEdit, Ui, Vec2, Widget};
 
 #[cfg(feature = "icons")]
@@ -389,27 +390,27 @@ impl UiExt for Ui {
 
     fn error_label(&mut self, text: impl Into<String>) -> Response {
         let color = self.active_theme().ui.error;
-        self.colored_label(color, text.into())
+        self.colored_label(color, l10n::text(self.ctx(), Into::<String>::into(text)))
     }
 
     fn warning_label(&mut self, text: impl Into<String>) -> Response {
         let color = self.active_theme().ui.warning;
-        self.colored_label(color, text.into())
+        self.colored_label(color, l10n::text(self.ctx(), Into::<String>::into(text)))
     }
 
     fn success_label(&mut self, text: impl Into<String>) -> Response {
         let color = self.active_theme().ui.success;
-        self.colored_label(color, text.into())
+        self.colored_label(color, l10n::text(self.ctx(), Into::<String>::into(text)))
     }
 
     fn info_label(&mut self, text: impl Into<String>) -> Response {
         let color = self.active_theme().ui.info;
-        self.colored_label(color, text.into())
+        self.colored_label(color, l10n::text(self.ctx(), Into::<String>::into(text)))
     }
 
     fn muted_label(&mut self, text: impl Into<String>) -> Response {
         let color = self.style().visuals.widgets.noninteractive.fg_stroke.color;
-        self.colored_label(color, text.into())
+        self.colored_label(color, l10n::text(self.ctx(), Into::<String>::into(text)))
     }
 
     fn subdued_label(&mut self, text: impl Into<String>) -> Response {
@@ -417,15 +418,19 @@ impl UiExt for Ui {
     }
 
     fn hint_label(&mut self, text: impl Into<String>) -> Response {
-        self.label(RichText::new(text.into()).small().weak())
+        self.label(
+            RichText::new(l10n::text(self.ctx(), Into::<String>::into(text)))
+                .small()
+                .weak(),
+        )
     }
 
     fn strong_label(&mut self, text: impl Into<String>) -> Response {
-        self.label(RichText::new(text.into()).strong())
+        self.label(RichText::new(l10n::text(self.ctx(), Into::<String>::into(text))).strong())
     }
 
     fn monospace_label(&mut self, text: impl Into<String>) -> Response {
-        self.label(RichText::new(text.into()).monospace())
+        self.label(RichText::new(l10n::text(self.ctx(), Into::<String>::into(text))).monospace())
     }
 
     fn code_label(&mut self, text: impl Into<String>) -> Response {
@@ -434,7 +439,7 @@ impl UiExt for Ui {
 
     #[cfg(feature = "icons")]
     fn label_with_icon(&mut self, icon: &Icon, text: impl Into<String>) -> Response {
-        let text = text.into();
+        let text = l10n::text(self.ctx(), Into::<String>::into(text));
         let icon_size = icons::SMALL;
 
         self.horizontal(|ui| {
@@ -446,7 +451,7 @@ impl UiExt for Ui {
     }
 
     fn clickable_label(&mut self, text: impl Into<String>) -> Response {
-        let text = text.into();
+        let text = l10n::text(self.ctx(), Into::<String>::into(text));
         let color = self.visuals().hyperlink_color;
         self.add(egui::Label::new(RichText::new(text).color(color)).sense(Sense::click()))
     }
@@ -503,11 +508,11 @@ impl UiExt for Ui {
     #[cfg(feature = "icons")]
     fn icon_button_with_tooltip(&mut self, icon: &Icon, tooltip: impl Into<String>) -> Response {
         let response = self.icon_button(icon);
-        response.on_hover_text(tooltip.into())
+        response.on_hover_text(l10n::text(self.ctx(), Into::<String>::into(tooltip)))
     }
 
     fn toggle_button(&mut self, selected: &mut bool, text: impl Into<String>) -> Response {
-        let text = text.into();
+        let text = l10n::text(self.ctx(), Into::<String>::into(text));
         let visuals = &self.style().visuals;
 
         let (bg, fg) = if *selected {
@@ -541,7 +546,7 @@ impl UiExt for Ui {
         icon: &Icon,
         text: impl Into<String>,
     ) -> Response {
-        let text = text.into();
+        let text = l10n::text(self.ctx(), Into::<String>::into(text));
         let icon_size = icons::SMALL;
         let total_width = self.available_width();
 
@@ -608,7 +613,8 @@ impl UiExt for Ui {
         text: impl Into<String>,
     ) -> Response {
         let selected = *current == value;
-        let response = self.selectable_label(selected, text.into());
+        let response =
+            self.selectable_label(selected, l10n::text(self.ctx(), Into::<String>::into(text)));
         if response.clicked() {
             *current = value;
         }
@@ -622,7 +628,7 @@ impl UiExt for Ui {
         text: impl Into<String>,
     ) -> Response {
         let selected = *current == value;
-        let response = self.radio(selected, text.into());
+        let response = self.radio(selected, l10n::text(self.ctx(), Into::<String>::into(text)));
         if response.clicked() {
             *current = value;
         }
@@ -636,14 +642,14 @@ impl UiExt for Ui {
         options: impl IntoIterator<Item = T>,
         display: impl Fn(&T) -> String,
     ) -> bool {
-        let selected_text = display(value);
+        let selected_text = l10n::text(self.ctx(), display(value));
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
             .icon(crate::ui_kit::buttons::combo_chevron)
             .selected_text(selected_text)
             .show_ui(self, |ui| {
                 for option in options {
-                    let label = display(&option);
+                    let label = l10n::text(ui.ctx(), display(&option));
                     if ui.selectable_value(value, option, label).changed() {
                         changed = true;
                     }
@@ -660,7 +666,7 @@ impl UiExt for Ui {
         display: impl Fn(&T) -> String,
         width: f32,
     ) -> bool {
-        let selected_text = display(value);
+        let selected_text = l10n::text(self.ctx(), display(value));
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
             .icon(crate::ui_kit::buttons::combo_chevron)
@@ -668,7 +674,7 @@ impl UiExt for Ui {
             .width(width)
             .show_ui(self, |ui| {
                 for option in options {
-                    let label = display(&option);
+                    let label = l10n::text(ui.ctx(), display(&option));
                     if ui.selectable_value(value, option, label).changed() {
                         changed = true;
                     }
@@ -686,11 +692,11 @@ impl UiExt for Ui {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
             .icon(crate::ui_kit::buttons::combo_chevron)
-            .selected_text(value.as_str())
+            .selected_text(l10n::text(self.ctx(), value.as_str()))
             .show_ui(self, |ui| {
                 for &option in options {
                     if ui
-                        .selectable_value(value, option.to_string(), option)
+                        .selectable_value(value, option.to_string(), l10n::text(ui.ctx(), option))
                         .changed()
                     {
                         changed = true;
@@ -710,12 +716,12 @@ impl UiExt for Ui {
         let mut changed = false;
         egui::ComboBox::from_id_salt(id_salt)
             .icon(crate::ui_kit::buttons::combo_chevron)
-            .selected_text(value.as_str())
+            .selected_text(l10n::text(self.ctx(), value.as_str()))
             .width(width)
             .show_ui(self, |ui| {
                 for &option in options {
                     if ui
-                        .selectable_value(value, option.to_string(), option)
+                        .selectable_value(value, option.to_string(), l10n::text(ui.ctx(), option))
                         .changed()
                     {
                         changed = true;
@@ -738,7 +744,7 @@ impl UiExt for Ui {
     }
 
     fn section_header(&mut self, text: impl Into<String>) {
-        let text = text.into();
+        let text = l10n::text(self.ctx(), Into::<String>::into(text));
         self.add_space(DESIGN_TOKENS.spacing.lg);
         self.label(
             RichText::new(text)
@@ -752,7 +758,7 @@ impl UiExt for Ui {
         use crate::styles::typography;
         let color = self.visuals().widgets.noninteractive.fg_stroke.color;
         self.label(
-            RichText::new(text.into())
+            RichText::new(l10n::text(self.ctx(), Into::<String>::into(text)))
                 .size(typography::TINY)
                 .strong()
                 .color(color),
@@ -760,7 +766,9 @@ impl UiExt for Ui {
     }
 
     fn subsection(&mut self, text: impl Into<String>, add_contents: impl FnOnce(&mut Ui)) {
-        egui::CollapsingHeader::new(text.into())
+        let text = text.into();
+        egui::CollapsingHeader::new(l10n::text(self.ctx(), &text))
+            .id_salt(&text)
             .default_open(true)
             .show(self, |ui| {
                 add_contents(ui);
@@ -895,10 +903,12 @@ impl UiExt for Ui {
     }
 
     fn search_input(&mut self, query: &mut String) -> Response {
+        let placeholder = l10n::text(self.ctx(), "Search...");
         let response = TextEdit::singleline(query)
-            .hint_text("Search...")
+            .hint_text(&placeholder)
             .desired_width(f32::INFINITY)
-            .ui(self);
+            .ui(self)
+            .accessible_name(placeholder);
 
         // Clear button when not empty
         if !query.is_empty()
@@ -943,7 +953,7 @@ impl UiExt for Ui {
 
     fn property_row(&mut self, label: impl Into<String>, add_value: impl FnOnce(&mut Ui)) {
         self.horizontal(|ui| {
-            ui.label(label.into());
+            ui.label(l10n::text(ui.ctx(), Into::<String>::into(label)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 add_value(ui);
             });

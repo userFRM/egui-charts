@@ -5,6 +5,7 @@
 use super::{ReplayAction, ReplayColors, ReplayConfig, ReplaySpeed, ReplayState};
 use crate::ext::UiExt;
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -124,7 +125,7 @@ impl<'a> ReplayControls<'a> {
             } else {
                 // Show hint when not in replay mode
                 ui.label(
-                    RichText::new("Click Replay to enter replay mode")
+                    RichText::new(l10n::text(ui.ctx(), "Click Replay to enter replay mode"))
                         .color(colors(self.config, ui).disabled_color),
                 );
             }
@@ -288,11 +289,14 @@ impl<'a> ReplayControls<'a> {
         }
 
         // Show tooltip with position info
-        response.on_hover_text(format!(
-            "Bar {} / {} ({:.1}%)",
-            state.curr_bar + 1,
-            state.total_bars,
-            progress * 100.0
+        response.on_hover_text(l10n::format_text(
+            ui.ctx(),
+            "Bar {0} / {1} ({2}%)",
+            &[
+                ("0", format!("{}", state.curr_bar + 1)),
+                ("1", format!("{}", state.total_bars)),
+                ("2", format!("{:.1}", progress * 100.0)),
+            ],
         ));
 
         action
@@ -319,13 +323,15 @@ impl<'a> ReplayControls<'a> {
         let combo_id = ui.scope_id().with("speed_combo");
 
         egui::ComboBox::from_id_salt(combo_id)
-            .selected_text(RichText::new(&speed_label).color(colors.speed_color))
+            .selected_text(
+                RichText::new(l10n::text(ui.ctx(), &speed_label)).color(colors.speed_color),
+            )
             .width(layout.speed_dropdown_width)
             .show_ui(ui, |ui| {
                 for preset in ReplaySpeed::presets() {
                     let label = preset.label();
                     if ui
-                        .selectable_label(*preset == state.speed, &label)
+                        .selectable_label(*preset == state.speed, l10n::text(ui.ctx(), &label))
                         .clicked()
                     {
                         action = ReplayAction::SetSpeed(preset.multiplier());
@@ -361,7 +367,13 @@ impl<'a> ReplayControls<'a> {
             // Current date/time
             if let Some(date) = state.curr_date {
                 ui.add_space(layout.btn_spacing);
-                ui.label(RichText::new(date.format("%Y-%m-%d %H:%M").to_string()).small());
+                ui.label(
+                    RichText::new(l10n::text(
+                        ui.ctx(),
+                        date.format("%Y-%m-%d %H:%M").to_string(),
+                    ))
+                    .small(),
+                );
             }
 
             // Symbol
@@ -425,7 +437,7 @@ impl<'a> CompactReplayControls<'a> {
 
             // Speed label
             ui.label(
-                RichText::new(state.speed.label())
+                RichText::new(l10n::text(ui.ctx(), state.speed.label()))
                     .small()
                     .color(colors.speed_color),
             );

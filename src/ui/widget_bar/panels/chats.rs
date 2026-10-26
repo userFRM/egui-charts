@@ -1,5 +1,6 @@
 //! The host's chat rooms: read a room and post to it.
 
+use crate::localization as l10n;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -118,7 +119,7 @@ impl ChatsPanel {
         };
         dropdown(ui, "chat_room", &room, |ui| {
             for (index, name) in self.rooms.iter().enumerate() {
-                ui.selectable_value(&mut self.room, index, name);
+                ui.selectable_value(&mut self.room, index, l10n::text(ui.ctx(), name));
             }
         });
         let room = self.rooms[self.room].clone();
@@ -170,14 +171,20 @@ impl ChatsPanel {
                                 ui.set_width(ui.available_width());
                                 ui.set_min_height(26.0);
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&message.author).strong());
                                     ui.label(
-                                        RichText::new(message.time.format("%H:%M").to_string())
-                                            .size(theme.text.small)
-                                            .color(theme.ui.text_secondary),
+                                        RichText::new(l10n::text(ui.ctx(), &message.author))
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(l10n::text(
+                                            ui.ctx(),
+                                            message.time.format("%H:%M").to_string(),
+                                        ))
+                                        .size(theme.text.small)
+                                        .color(theme.ui.text_secondary),
                                     );
                                 });
-                                ui.label(&message.text);
+                                ui.label(l10n::text(ui.ctx(), &message.text));
                             });
                     });
                     ui.add_space(theme.spacing.sm);

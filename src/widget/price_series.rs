@@ -4,6 +4,7 @@ use super::{Chart, ChartElementId, PaneId, SeriesId};
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::data::FeedState;
+use crate::localization as l10n;
 use crate::model::{
     AreaStyle, Bar, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles, LinePlotStyle,
     LineStyle, Marker, MarkerOptions, MarkerPos, MarkerZOrder, PriceLine, PriceLineSource,
@@ -1129,7 +1130,7 @@ impl Chart {
                 ui.scope_id().with(("series_axis", key)),
                 egui::Sense::drag(),
             )
-            .on_hover_text(&item.options.name);
+            .on_hover_text(l10n::text(ui.ctx(), &item.options.name));
         }
         measured
     }

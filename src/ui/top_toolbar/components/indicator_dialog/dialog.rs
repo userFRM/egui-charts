@@ -9,6 +9,7 @@ use super::{
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, MetricSeries};
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
@@ -264,7 +265,11 @@ impl IndicatorDialog {
         theme: &Theme,
     ) -> IndicatorDialogAction {
         if let Some(error) = &self.metric_error {
-            ui.label(format!("Metrics: {error}"));
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "Metrics: {error}",
+                &[("error", format!("{}", error))],
+            ));
         }
 
         let search = ui
@@ -300,11 +305,14 @@ impl IndicatorDialog {
                 for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
                     ui.add_space(16.0);
                     ui.label(
-                        RichText::new(if item == IndicatorCategory::Favorites {
-                            "PERSONAL"
-                        } else {
-                            "BUILT-IN"
-                        })
+                        RichText::new(l10n::text(
+                            ui.ctx(),
+                            if item == IndicatorCategory::Favorites {
+                                "PERSONAL"
+                            } else {
+                                "BUILT-IN"
+                            },
+                        ))
                         .size(11.0)
                         .color(theme.ui.text_secondary),
                     );
@@ -362,10 +370,10 @@ impl IndicatorDialog {
     }
 
     /// Whether `ind` belongs to the active tab and category and matches the search.
-    fn matches(&self, ind: &IndicatorInfo) -> bool {
+    fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
             .iter()
-            .any(|text| self.search.matches(text));
+            .any(|text| self.search.matches(text) || self.search.matches(&l10n::text(ctx, text)));
         if !searched {
             return false;
         }
@@ -391,7 +399,7 @@ impl IndicatorDialog {
         let filtered: Vec<IndicatorInfo> = self
             .indicators
             .iter()
-            .filter(|ind| self.matches(ind))
+            .filter(|ind| self.matches(ui.ctx(), ind))
             .cloned()
             .collect();
         if filtered.is_empty() {
@@ -455,8 +463,9 @@ impl IndicatorDialog {
             .sel_indicator
             .as_ref()
             .is_some_and(|s| s.id == indicator.id);
+        let translated_label = l10n::text(ui.ctx(), &indicator.name);
         response.widget_info(|| {
-            WidgetInfo::labeled(Role::ListBoxOption, response.enabled(), &indicator.name)
+            WidgetInfo::labeled(Role::ListBoxOption, response.enabled(), &translated_label)
         });
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(is_sel));
@@ -513,8 +522,14 @@ impl IndicatorDialog {
         } else {
             "Add to favorites"
         };
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         star_res.widget_info(|| {
-            WidgetInfo::selected(Role::Button, star_res.enabled(), is_favorite, tooltip)
+            WidgetInfo::selected(
+                Role::Button,
+                star_res.enabled(),
+                is_favorite,
+                &translated_label,
+            )
         });
 
         let (icon, tint) = if is_favorite {
@@ -528,14 +543,17 @@ impl IndicatorDialog {
         icon.as_image_tinted(size, tint)
             .paint_at(ui, Rect::from_center_size(star_rect.center(), size));
         draw_focus_ring(ui, &star_res, 0.0);
-        star_res.on_hover_text(tooltip)
+        star_res.on_hover_text(l10n::text(ui.ctx(), tooltip))
     }
 
     /// The name centred on the row and cut off before `right`.
     fn draw_item_text(ui: &Ui, rect: Rect, right: f32, indicator: &IndicatorInfo, text: Color32) {
         let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
-        let mut job =
-            LayoutJob::simple_singleline(indicator.name.clone(), FontId::proportional(14.0), text);
+        let mut job = LayoutJob::simple_singleline(
+            l10n::text(ui.ctx(), indicator.name.clone()),
+            FontId::proportional(14.0),
+            text,
+        );
         job.wrap = TextWrapping::truncate_at_width(right - x);
         let name = ui.painter().layout_job(job);
         let top = rect.center().y - name.size().y / 2.0;
@@ -561,7 +579,7 @@ impl IndicatorDialog {
                 continue;
             }
             let galley = painter.layout_no_wrap(
-                label.to_owned(),
+                l10n::text(ui.ctx(), label),
                 FontId::proportional(theme.text.small),
                 color,
             );
@@ -658,7 +676,7 @@ impl IndicatorDialog {
     ) -> Option<IndicatorDialogAction> {
         let indicator = self.sel_indicator.as_ref()?;
         ui.label(
-            RichText::new(&indicator.name)
+            RichText::new(l10n::text(ui.ctx(), &indicator.name))
                 .size(theme.text.title)
                 .strong(),
         );
@@ -739,7 +757,7 @@ impl IndicatorDialog {
             }
             _ => {
                 ui.label(
-                    RichText::new("Added with its default settings.")
+                    RichText::new(l10n::text(ui.ctx(), "Added with its default settings."))
                         .size(theme.text.small)
                         .color(config.muted_color),
                 );
@@ -753,7 +771,7 @@ impl IndicatorDialog {
         value: &mut usize,
         range: std::ops::RangeInclusive<usize>,
     ) {
-        ui.label(label);
+        ui.label(l10n::text(ui.ctx(), label));
         ui.add(egui::DragValue::new(value).range(range));
         ui.end_row();
     }
@@ -765,7 +783,7 @@ impl IndicatorDialog {
         range: std::ops::RangeInclusive<f64>,
         speed: f64,
     ) {
-        ui.label(label);
+        ui.label(l10n::text(ui.ctx(), label));
         ui.add(egui::DragValue::new(value).range(range).speed(speed));
         ui.end_row();
     }
@@ -954,10 +972,11 @@ mod tests {
         let mut restored = IndicatorDialog::new();
         restored.set_preferences(serde_json::from_str(&saved).unwrap());
         restored.sel_category = IndicatorCategory::Favorites;
+        let ctx = egui::Context::default();
         let listed: Vec<_> = restored
             .indicators
             .iter()
-            .filter(|i| restored.matches(i))
+            .filter(|i| restored.matches(&ctx, i))
             .collect();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "BB");
@@ -984,6 +1003,22 @@ mod tests {
             factory.register("Host SMA", || Box::new(SMA::new(42)));
             factory
         };
+        let mut searched = IndicatorDialog::new().with_factory(factory());
+        let study = searched
+            .indicators
+            .iter()
+            .find(|ind| ind.id == "Host SMA")
+            .unwrap()
+            .clone();
+        let name = study.name.clone();
+        let ctx = egui::Context::default();
+        l10n::set_translator(&ctx, move |english| {
+            (english == name).then(|| "Moyenne locale".into())
+        });
+        for query in ["Moyenne", "Host SMA"] {
+            *searched.search.query_mut() = query.into();
+            assert!(searched.matches(&ctx, &study), "{query}");
+        }
         for (tab, category, all) in cases {
             let mut dialog = IndicatorDialog::new().with_factory(factory());
             dialog.active_tab = tab;
@@ -991,7 +1026,7 @@ mod tests {
             let mut listed: Vec<String> = dialog
                 .indicators
                 .iter()
-                .filter(|i| dialog.matches(i))
+                .filter(|i| dialog.matches(&ctx, i))
                 .map(|i| i.id.clone())
                 .collect();
             listed.sort();

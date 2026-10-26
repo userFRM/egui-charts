@@ -1,6 +1,7 @@
 //! The order ticket: a panel beside the chart with an Order tab, one order sized by the symbol's
 //! trading rules with optional exits, and a DOM tab, the depth ladder.
 
+use crate::localization as l10n;
 use egui::{
     Align, Align2, Color32, FontId, Layout, Rect, Response, RichText, Role, Sense, Stroke,
     StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2,
@@ -570,23 +571,28 @@ impl OrderTicket {
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
     ) {
-        ui.checkbox(one_click, "One-click trading").on_hover_text(
-            "Buy and Sell, and the depth ladder, place orders at once, without confirmation",
-        );
+        ui.checkbox(one_click, l10n::text(ui.ctx(), "One-click trading"))
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                "Buy and Sell, and the depth ladder, place orders at once, without confirmation",
+            ));
         ui.separator();
-        ui.weak("Presets");
+        ui.weak(l10n::text(ui.ctx(), "Presets"));
         if presets.is_empty() {
-            ui.weak("No presets saved");
+            ui.weak(l10n::text(ui.ctx(), "No presets saved"));
         }
         let mut remove = None;
         for (index, preset) in presets.iter().enumerate() {
             ui.horizontal(|ui| {
-                if ui.selectable_label(false, &preset.name).clicked() {
+                if ui
+                    .selectable_label(false, l10n::text(ui.ctx(), &preset.name))
+                    .clicked()
+                {
                     self.apply(preset);
                 }
                 if ui
                     .small_button("✕")
-                    .on_hover_text("Delete preset")
+                    .on_hover_text(l10n::text(ui.ctx(), "Delete preset"))
                     .clicked()
                 {
                     remove = Some(index);
@@ -599,12 +605,15 @@ impl OrderTicket {
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.preset_name)
-                    .hint_text("Preset name")
+                    .hint_text(l10n::text(ui.ctx(), "Preset name"))
                     .desired_width(120.0),
             );
             let name = self.preset_name.trim();
             if ui
-                .add_enabled(!name.is_empty(), egui::Button::new("Save"))
+                .add_enabled(
+                    !name.is_empty(),
+                    egui::Button::new(l10n::text(ui.ctx(), "Save")),
+                )
                 .clicked()
             {
                 let preset = self.preset(name.to_owned(), market);
@@ -750,11 +759,19 @@ impl OrderTicket {
             );
             let old = ticket.sizing;
             egui::Popup::menu(&response).show(|ui| {
-                ui.selectable_value(&mut ticket.sizing, Sizing::Units, "Units");
+                ui.selectable_value(
+                    &mut ticket.sizing,
+                    Sizing::Units,
+                    l10n::text(ui.ctx(), "Units"),
+                );
                 ui.selectable_value(
                     &mut ticket.sizing,
                     Sizing::Value,
-                    format!("Amount, {currency}"),
+                    l10n::format_text(
+                        ui.ctx(),
+                        "Amount, {currency}",
+                        &[("currency", currency.to_string())],
+                    ),
                 );
             });
             if ticket.sizing != old {
@@ -871,10 +888,11 @@ impl OrderTicket {
                 ui.make_persistent_id("order_ticket_margin_help"),
                 Sense::hover(),
             )
-            .on_hover_text(
+            .on_hover_text(l10n::text(
+                ui.ctx(),
                 "Estimated margin: trade value divided by leverage, compared with account balance. \
                  This does not include margin already used by other positions or working orders.",
-            );
+            ));
             let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
             ui.painter().rect_filled(bar, 2.0, theme.ui.border);
             let used = if available > 0.0 {
@@ -974,9 +992,11 @@ impl OrderTicket {
         }
         if let (Some(bid), Some(ask)) = (market.bid, market.ask) {
             let spread = grouped(ask - bid, market.decimals, false);
-            let galley =
-                ui.painter()
-                    .layout_no_wrap(spread, FontId::proportional(11.0), theme.ui.text);
+            let galley = ui.painter().layout_no_wrap(
+                l10n::text(ui.ctx(), spread),
+                FontId::proportional(11.0),
+                theme.ui.text,
+            );
             let chip = Rect::from_center_size(
                 pos2(rect.center().x, rect.top() + 20.0),
                 galley.size() + vec2(10.0, 4.0),
@@ -1065,7 +1085,7 @@ impl OrderTicket {
             self.exits_open = !self.exits_open;
         }
         let galley = ui.painter().layout_no_wrap(
-            "Exits".to_owned(),
+            l10n::text(ui.ctx(), "Exits"),
             FontId::proportional(15.0),
             theme.ui.text,
         );
@@ -1122,7 +1142,11 @@ impl OrderTicket {
                 );
                 egui::Popup::menu(&response).show(|ui| {
                     for option in BracketMode::ALL {
-                        ui.selectable_value(&mut mode, option, option.name(market.currency));
+                        ui.selectable_value(
+                            &mut mode,
+                            option,
+                            l10n::text(ui.ctx(), option.name(market.currency)),
+                        );
                     }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1178,7 +1202,11 @@ impl OrderTicket {
         let theme = ui.active_theme();
         let request = self.request(market);
         if let Err(reason) = &request {
-            ui.label(RichText::new(reason).color(theme.ui.error).size(12.0));
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), reason))
+                    .color(theme.ui.error)
+                    .size(12.0),
+            );
         }
         let (rect, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
@@ -1190,9 +1218,13 @@ impl OrderTicket {
                 decimals(market.rules.quantity_step),
             )
         });
-        response.widget_info(|| {
-            WidgetInfo::labeled(Role::Button, request.is_ok(), format!("{name} {detail}"))
-        });
+        let translated_label = format!(
+            "{} {}",
+            l10n::text(ui.ctx(), name),
+            l10n::text(ui.ctx(), &detail)
+        );
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, request.is_ok(), &translated_label));
         let mut fill = side_fill(&theme, self.side);
         if request.is_err() {
             fill = fill.gamma_multiply(0.5);
@@ -1342,13 +1374,17 @@ pub(super) fn time_in_force_menu(
     widgets.inactive.bg_stroke = Stroke::new(1.0, theme.ui.border_control);
     egui::ComboBox::from_id_salt(id)
         .width(ui.available_width())
-        .selected_text(time_in_force_name(*value))
+        .selected_text(l10n::text(ui.ctx(), time_in_force_name(*value)))
         .icon(|ui, rect, visuals, open| {
             chevron(ui, rect.center(), visuals.fg_stroke.color, open);
         })
         .show_ui(ui, |ui| {
             for option in &rules.time_in_force {
-                ui.selectable_value(value, *option, time_in_force_name(*option));
+                ui.selectable_value(
+                    value,
+                    *option,
+                    l10n::text(ui.ctx(), time_in_force_name(*option)),
+                );
             }
         });
 }
@@ -1362,33 +1398,51 @@ fn hit(
     selected: Option<bool>,
 ) -> Response {
     let response = ui.interact(rect, ui.make_persistent_id(id), Sense::click());
+    let translated_label = l10n::text(ui.ctx(), label);
     response.widget_info(|| match selected {
-        Some(selected) => WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, label),
-        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), label),
+        Some(selected) => {
+            WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, &translated_label)
+        }
+        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label),
     });
     response
 }
 
 pub(super) fn text(ui: &Ui, at: egui::Pos2, align: Align2, text: &str, size: f32, color: Color32) {
-    ui.painter()
-        .text(at, align, text, FontId::proportional(size), color);
+    ui.painter().text(
+        at,
+        align,
+        l10n::text(ui.ctx(), text),
+        FontId::proportional(size),
+        color,
+    );
 }
 
 pub(super) fn muted(ui: &mut Ui, text: &str) {
     let color = ui.active_theme().ui.text_muted;
-    ui.label(RichText::new(text).color(color).size(13.0));
+    ui.label(
+        RichText::new(l10n::text(ui.ctx(), text))
+            .color(color)
+            .size(13.0),
+    );
 }
 
 fn title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).strong().size(15.0));
+    ui.label(
+        RichText::new(l10n::text(ui.ctx(), text))
+            .strong()
+            .size(15.0),
+    );
 }
 
 /// A label with a small chevron that opens a menu.
 fn dropdown(ui: &mut Ui, label: String) -> Response {
     let color = ui.active_theme().ui.text_muted;
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label, FontId::proportional(13.0), color);
+    let galley = ui.painter().layout_no_wrap(
+        l10n::text(ui.ctx(), label),
+        FontId::proportional(13.0),
+        color,
+    );
     let size = vec2(galley.size().x + 16.0, galley.size().y.max(18.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, ui.is_enabled(), galley.text()));
@@ -1471,7 +1525,8 @@ pub(super) fn number(
 fn swap(ui: &mut Ui, tooltip: &str) -> bool {
     let theme = ui.active_theme();
     let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), tooltip));
+    let translated_label = l10n::text(ui.ctx(), tooltip);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
     let color = if response.hovered() {
         theme.ui.text
     } else {
@@ -1494,7 +1549,9 @@ fn swap(ui: &mut Ui, tooltip: &str) -> bool {
         ],
         stroke,
     );
-    response.on_hover_text(tooltip).clicked()
+    response
+        .on_hover_text(l10n::text(ui.ctx(), tooltip))
+        .clicked()
 }
 
 /// An on and off switch.
@@ -1505,7 +1562,10 @@ fn toggle(ui: &mut Ui, on: &mut bool, label: &str) {
         *on = !*on;
         response.mark_changed();
     }
-    response.widget_info(|| WidgetInfo::selected(Role::Switch, ui.is_enabled(), *on, label));
+    let translated_label = l10n::text(ui.ctx(), label);
+    response.widget_info(|| {
+        WidgetInfo::selected(Role::Switch, ui.is_enabled(), *on, &translated_label)
+    });
     let t = ui.ctx().animate_bool_responsive(response.id, *on);
     let track = if *on {
         theme.ui.text
@@ -1535,7 +1595,7 @@ fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Color32) -> Re
     let mut right = rect.right_center();
     if !unit.is_empty() {
         let galley = ui.painter().layout_no_wrap(
-            unit.to_owned(),
+            l10n::text(ui.ctx(), unit),
             FontId::proportional(11.0),
             theme.ui.text_muted,
         );
@@ -1547,9 +1607,11 @@ fn info(ui: &mut Ui, label: &str, value: &str, unit: &str, color: Color32) -> Re
         );
         right.x -= 4.0;
     }
-    let galley = ui
-        .painter()
-        .layout_no_wrap(value.to_owned(), FontId::proportional(13.0), color);
+    let galley = ui.painter().layout_no_wrap(
+        l10n::text(ui.ctx(), value),
+        FontId::proportional(13.0),
+        color,
+    );
     let at = right - vec2(galley.size().x, galley.size().y / 2.0);
     ui.painter().galley(at, galley, color);
     rect

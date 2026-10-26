@@ -1,5 +1,6 @@
 //! ButtonContent - Clickable button content for list items
 
+use crate::localization as l10n;
 use egui::{Color32, Response, Role, Ui, Vec2, WidgetInfo};
 
 use crate::icons::Icon;
@@ -193,11 +194,12 @@ impl<'a> ButtonContent<'a> {
 impl<'a> ListItemContent for ButtonContent<'a> {
     fn ui(self, ui: &mut Ui, context: &ContentContext<'_>) -> Response {
         let response = context.response;
+        let translated_label = l10n::text(ui.ctx(), self.label.as_deref().unwrap_or_default());
         response.widget_info(|| {
             WidgetInfo::labeled(
                 Role::Button,
                 !self.disabled && ui.is_enabled(),
-                self.label.as_deref().unwrap_or_default(),
+                &translated_label,
             )
         });
 
@@ -232,7 +234,7 @@ impl<'a> ListItemContent for ButtonContent<'a> {
                 ui.painter().text(
                     text_pos,
                     egui::Align2::LEFT_CENTER,
-                    label,
+                    l10n::text(ui.ctx(), label),
                     egui::TextStyle::Body.resolve(ui.style()),
                     text_color,
                 );

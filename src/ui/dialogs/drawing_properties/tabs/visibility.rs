@@ -1,5 +1,6 @@
 //! Visibility tab - timeframe visibility settings.
 
+use crate::localization as l10n;
 use egui::Ui;
 
 use crate::ext::UiExt;
@@ -19,11 +20,14 @@ impl VisibilityTab {
     pub fn show(ui: &mut Ui, props: &mut DrawingProps) {
         ui.space_md();
 
-        ui.checkbox(&mut props.visible_all_timeframes, "Show on all timeframes");
+        ui.checkbox(
+            &mut props.visible_all_timeframes,
+            l10n::text(ui.ctx(), "Show on all timeframes"),
+        );
 
         if !props.visible_all_timeframes {
             ui.space_lg();
-            ui.label("Timeframes");
+            ui.label(l10n::text(ui.ctx(), "Timeframes"));
             ui.space_sm();
 
             FormGrid::new("timeframes_grid")
@@ -32,7 +36,10 @@ impl VisibilityTab {
                 .show(ui, |ui| {
                     for (i, tf) in TIMEFRAMES.iter().enumerate() {
                         let mut is_visible = props.visible_timeframes.contains(&tf.to_string());
-                        if ui.checkbox(&mut is_visible, *tf).changed() {
+                        if ui
+                            .checkbox(&mut is_visible, l10n::text(ui.ctx(), *tf))
+                            .changed()
+                        {
                             if is_visible {
                                 if !props.visible_timeframes.contains(&tf.to_string()) {
                                     props.visible_timeframes.push(tf.to_string());

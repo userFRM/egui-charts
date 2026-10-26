@@ -33,6 +33,7 @@
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
 use crate::chart::rendering::draw_dashed_line;
+use crate::localization as l10n;
 use crate::model::Bar;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::Indicator;
@@ -564,11 +565,13 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
+        let translated_label =
+            l10n::format_text(ui.ctx(), "{0} pane", &[("0", indicator.name().to_string())]);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::Role::GraphicsObject,
                 response.enabled(),
-                format!("{} pane", indicator.name()),
+                &translated_label,
             )
         });
 

@@ -2,6 +2,7 @@
 //!
 //! A color swatch picker with grayscale row, main colors row, and color variations.
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Id, Pos2, Role, Sense, Stroke, Ui, Vec2, WidgetInfo, epaint::StrokeKind};
@@ -240,8 +241,9 @@ impl<'a> ColorPicker<'a> {
                 .max(DESIGN_TOKENS.sizing.button_md),
         );
         let (btn_rect, mut btn_res) = ui.allocate_exact_size(btn_size, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), hex(self.state.sel_color));
         btn_res.widget_info(|| {
-            WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), hex(self.state.sel_color))
+            WidgetInfo::labeled(Role::ColorWell, ui.is_enabled(), &translated_label)
         });
 
         // Draw dark background then blend color on top
@@ -382,7 +384,7 @@ impl<'a> ColorPicker<'a> {
                                 color_changed = Some(custom);
                             }
                             ui.add_space(DESIGN_TOKENS.spacing.sm);
-                            if ui.small_button("Apply").clicked() {
+                            if ui.small_button(l10n::text(ui.ctx(), "Apply")).clicked() {
                                 color_changed = Some(self.state.custom_color);
                                 self.state.is_open = false;
                             }
@@ -465,12 +467,13 @@ impl<'a> ColorPicker<'a> {
                     );
                 }
                 crate::styles::focus::draw_focus_ring(ui, &response, rounding);
+                let translated_label = l10n::text(ui.ctx(), hex(*color));
                 response.widget_info(|| {
                     WidgetInfo::selected(
                         Role::ColorWell,
                         ui.is_enabled(),
                         *color == self.state.sel_color,
-                        hex(*color),
+                        &translated_label,
                     )
                 });
 
@@ -492,8 +495,9 @@ impl<'a> ColorPicker<'a> {
             Vec2::new(ui.available_width(), DESIGN_TOKENS.sizing.button_md),
             Sense::click(),
         );
+        let translated_label = l10n::text(ui.ctx(), "Custom colour");
         response
-            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Custom colour"));
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
 
         let border_color = if response.hovered() || self.state.custom_mode {
             visuals.widgets.hovered.fg_stroke.color
@@ -519,28 +523,28 @@ impl<'a> ColorPicker<'a> {
         let label = painter.text(
             egui::pos2(rect.left() + DESIGN_TOKENS.spacing.lg, y),
             egui::Align2::LEFT_CENTER,
-            "Hex",
+            l10n::text(ui.ctx(), "Hex"),
             font.clone(),
             label_color,
         );
         painter.text(
             egui::pos2(label.right() + gap, y),
             egui::Align2::LEFT_CENTER,
-            hex(self.state.sel_color),
+            l10n::text(ui.ctx(), hex(self.state.sel_color)),
             font.clone(),
             value_color,
         );
         let value = painter.text(
             egui::pos2(rect.right() - DESIGN_TOKENS.spacing.lg, y),
             egui::Align2::RIGHT_CENTER,
-            opacity,
+            l10n::text(ui.ctx(), opacity),
             font.clone(),
             value_color,
         );
         painter.text(
             egui::pos2(value.left() - gap, y),
             egui::Align2::RIGHT_CENTER,
-            "Opacity",
+            l10n::text(ui.ctx(), "Opacity"),
             font,
             label_color,
         );

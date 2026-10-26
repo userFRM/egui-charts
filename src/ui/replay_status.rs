@@ -4,6 +4,7 @@
 //! Development mode indicator.
 
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::ui::model::ReplayProgress;
@@ -97,7 +98,7 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                         theme.ui.warning,
                     ));
                     ui.label(
-                        RichText::new("Replay")
+                        RichText::new(l10n::text(ui.ctx(), "Replay"))
                             .color(theme.ui.warning)
                             .strong()
                             .size(size),
@@ -112,13 +113,21 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                         );
 
                         // Speed
-                        ui.label(RichText::new(format!("{speed}x")).color(muted).size(size));
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), format!("{speed}x")))
+                                .color(muted)
+                                .size(size),
+                        );
 
                         // Ticks
                         ui.label(
-                            RichText::new(format!("{}K ticks", ticks_processed / 1000))
-                                .color(muted)
-                                .size(size),
+                            RichText::new(l10n::format_text(
+                                ui.ctx(),
+                                "{0}K ticks",
+                                &[("0", format!("{}", ticks_processed / 1000))],
+                            ))
+                            .color(muted)
+                            .size(size),
                         );
                     }
                 })
@@ -136,7 +145,11 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                         icons::MEDIA_PAUSE
                             .as_image_tinted(Vec2::splat(icon_sizes::STATUS_INDICATOR), muted),
                     );
-                    ui.label(RichText::new("Paused").color(muted).size(size));
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), "Paused"))
+                            .color(muted)
+                            .size(size),
+                    );
 
                     if self.show_details {
                         ui.label(
@@ -160,13 +173,21 @@ impl<'a> Widget for ReplayStatusIndicator<'a> {
                         Vec2::splat(icon_sizes::STATUS_INDICATOR),
                         theme.ui.success,
                     ));
-                    ui.label(RichText::new("Complete").color(theme.ui.success).size(size));
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), "Complete"))
+                            .color(theme.ui.success)
+                            .size(size),
+                    );
 
                     if self.show_details {
                         ui.label(
-                            RichText::new(format!("{}K ticks", total_ticks / 1000))
-                                .color(muted)
-                                .size(size),
+                            RichText::new(l10n::format_text(
+                                ui.ctx(),
+                                "{0}K ticks",
+                                &[("0", format!("{}", total_ticks / 1000))],
+                            ))
+                            .color(muted)
+                            .size(size),
                         );
                     }
                 })

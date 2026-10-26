@@ -2,6 +2,7 @@
 
 use crate::chart::series::SeriesSettings;
 use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::scales::PriceScaleMode;
 use crate::ui_kit::FormGrid;
 use egui::Ui;
@@ -14,12 +15,12 @@ impl ScalesTab {
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
 
-        ui.label("Price scale");
+        ui.label(l10n::text(ui.ctx(), "Price scale"));
         ui.space_sm();
 
         FormGrid::new("scales_price_grid").show(ui, |ui| {
             // Scale mode
-            let label = ui.label("Scale mode");
+            let label = ui.label(l10n::text(ui.ctx(), "Scale mode"));
             ui.label_inputs_by(label.id, |ui| {
                 ui.combo_select(
                     "scale_mode",
@@ -36,7 +37,7 @@ impl ScalesTab {
             ui.end_row();
 
             // Invert scale
-            let label = ui.label("Invert scale");
+            let label = ui.label(l10n::text(ui.ctx(), "Invert scale"));
             ui.checkbox(&mut settings.invert_scale, "")
                 .labelled_by(label.id);
             ui.end_row();
@@ -46,18 +47,18 @@ impl ScalesTab {
         ui.separator();
         ui.space_xl();
 
-        ui.label("Lines");
+        ui.label(l10n::text(ui.ctx(), "Lines"));
         ui.space_sm();
 
         FormGrid::new("scales_lines_grid").show(ui, |ui| {
             // Show price line
-            let label = ui.label("Show last price line");
+            let label = ui.label(l10n::text(ui.ctx(), "Show last price line"));
             ui.checkbox(&mut settings.show_price_line, "")
                 .labelled_by(label.id);
             ui.end_row();
 
             // Show previous close line
-            let label = ui.label("Show previous close line");
+            let label = ui.label(l10n::text(ui.ctx(), "Show previous close line"));
             ui.checkbox(&mut settings.show_prev_close_line, "")
                 .labelled_by(label.id);
             ui.end_row();

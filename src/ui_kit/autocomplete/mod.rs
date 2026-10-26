@@ -22,6 +22,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::command_palette::fuzzy_match;
 use egui::{
@@ -138,7 +139,7 @@ impl<'a> AutocompleteEdit<'a> {
             });
 
         if let Some(ref placeholder) = self.placeholder {
-            text_edit = text_edit.hint_text(placeholder);
+            text_edit = text_edit.hint_text(l10n::text(ui.ctx(), placeholder));
         }
 
         let mut response = ui.add(text_edit);
@@ -237,12 +238,13 @@ impl<'a> AutocompleteEdit<'a> {
                                 filtered.iter().zip(rows).enumerate()
                             {
                                 let is_selected = idx == selected_idx;
+                                let translated_label = l10n::text(ui.ctx(), suggestion);
                                 item_response.widget_info(|| {
                                     WidgetInfo::selected(
                                         Role::Button,
                                         true,
                                         is_selected,
-                                        suggestion,
+                                        &translated_label,
                                     )
                                 });
                                 crate::styles::focus::draw_focus_ring(
@@ -264,7 +266,7 @@ impl<'a> AutocompleteEdit<'a> {
                                     painter.text(
                                         egui::pos2(text_x, rect.center().y),
                                         egui::Align2::LEFT_CENTER,
-                                        suggestion,
+                                        l10n::text(ui.ctx(), suggestion),
                                         TextStyle::Body.resolve(ui.style()),
                                         visuals.widgets.hovered.fg_stroke.color,
                                     );

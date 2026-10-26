@@ -7,6 +7,7 @@
 //! The kit `Modal`, `ConfirmDialog` and `PromptDialog` use the same frame, header and footer
 //! over a scrim.
 
+use crate::localization as l10n;
 use egui::{
     Align, Align2, Context, Frame, Layout, RichText, Style, Ui, UiBuilder, UiStackInfo, Vec2,
 };
@@ -110,8 +111,9 @@ impl DialogFrame {
         let input_blocked = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let auto_height = self.auto_height;
         window.show(ctx, |ui| {
+            let translated_label = l10n::text(ui.ctx(), &self.id);
             ui.response().widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Dialog, ui.is_enabled(), &self.id)
+                egui::WidgetInfo::labeled(egui::Role::Dialog, ui.is_enabled(), &translated_label)
             });
             ui.data_mut(|d| {
                 d.insert_temp(ui.layer_id().id.with("dialog_input_blocked"), input_blocked)
@@ -172,7 +174,11 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
     let row = Vec2::new(ui.available_width(), ButtonSize::MD.pixels());
     let close = ui
         .allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(title).strong().size(14.0));
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), title))
+                    .strong()
+                    .size(14.0),
+            );
             closable
                 && ui
                     .with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -276,7 +282,11 @@ impl DialogFooter {
                     .chain(self.secondary_label.iter())
                     .map(|label| {
                         (ui.painter()
-                            .layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                            .layout_no_wrap(
+                                l10n::text(ui.ctx(), label.clone()),
+                                font.clone(),
+                                egui::Color32::PLACEHOLDER,
+                            )
                             .size()
                             .x
                             + 2.0 * DESIGN_TOKENS.spacing.xl)

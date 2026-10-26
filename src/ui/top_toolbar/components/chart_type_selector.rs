@@ -4,6 +4,7 @@
 //! Uses [`crate::model::ChartType`] for the data definition.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::model::ChartType;
 use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
@@ -225,12 +226,13 @@ impl ListItemContent for ChartTypeRow<'_> {
         } else {
             theme.ui.text
         };
+        let translated_label = l10n::text(ui.ctx(), self.chart_type.name());
         context.response.widget_info(|| {
             WidgetInfo::selected(
                 Role::MenuItemRadio,
                 context.response.enabled(),
                 context.selected,
-                self.chart_type.name(),
+                &translated_label,
             )
         });
 
@@ -246,7 +248,7 @@ impl ListItemContent for ChartTypeRow<'_> {
         ui.painter().text(
             pos2(icon_rect.max.x + theme.spacing.lg, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            self.chart_type.name(),
+            l10n::text(ui.ctx(), self.chart_type.name()),
             egui::FontId::proportional(14.0),
             color,
         );

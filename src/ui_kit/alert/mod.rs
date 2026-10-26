@@ -23,6 +23,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::{Color32, Response, RichText, Ui, Vec2};
 
 use crate::icons::{Icon, icons};
@@ -165,11 +166,13 @@ impl Alert {
                     // Title, then the message, muted so the title stands out
                     let mut message_color = theme.ui.text;
                     if let Some(title) = &self.title {
-                        ui.label(RichText::new(title).strong());
+                        ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
                         ui.add_space(DESIGN_TOKENS.spacing.xs);
                         message_color = theme.ui.text_secondary;
                     }
-                    ui.label(RichText::new(&self.message).color(message_color));
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), &self.message)).color(message_color),
+                    );
                 });
 
                 // Dismiss button

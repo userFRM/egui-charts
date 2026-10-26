@@ -1,6 +1,7 @@
 //! Host-fed time and sales: the latest trades with aggressor colours, size filters and sound
 //! alert intents. The host feeds trades from its stream and plays any sound.
 
+use crate::localization as l10n;
 use std::collections::VecDeque;
 
 use chrono_tz::Tz;
@@ -122,13 +123,13 @@ impl TimeAndSalesPanel {
                 for (index, filter) in self.filters.iter_mut().enumerate() {
                     ui.push_id(index, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label("Size ≥");
+                            ui.label(l10n::text(ui.ctx(), "Size ≥"));
                             ui.add(
                                 egui::DragValue::new(&mut filter.min_size)
                                     .range(0.0..=f64::MAX)
                                     .speed(1.0),
                             );
-                            ui.checkbox(&mut filter.sound, "Sound");
+                            ui.checkbox(&mut filter.sound, l10n::text(ui.ctx(), "Sound"));
                             if IconButton::new(&icons::TRASH)
                                 .tooltip("Remove filter")
                                 .show(ui)
@@ -180,7 +181,7 @@ impl TimeAndSalesPanel {
                 } else {
                     Align2::RIGHT_CENTER
                 },
-                label,
+                l10n::text(ui.ctx(), label),
                 small.clone(),
                 theme.ui.text_secondary,
             );
@@ -243,9 +244,13 @@ impl TimeAndSalesPanel {
                             },
                         ))
                         .add(
-                            Label::new(RichText::new(text).font(font.clone()).color(color))
-                                .truncate()
-                                .selectable(false),
+                            Label::new(
+                                RichText::new(l10n::text(ui.ctx(), text))
+                                    .font(font.clone())
+                                    .color(color),
+                            )
+                            .truncate()
+                            .selectable(false),
                         );
                     }
                 }

@@ -1,6 +1,7 @@
 //! Series settings dialog with sidebar navigation.
 
 use crate::chart::series::{SeriesId, SeriesSettings};
+use crate::localization as l10n;
 use egui::{Context, Ui, Vec2};
 
 use super::actions::SeriesSettingsAction;
@@ -151,7 +152,10 @@ impl SeriesSettingsDialog {
         let (ok, cancel) = DialogFooter::new("Ok")
             .secondary("Cancel")
             .show_with_left(ui, |ui| {
-                if ui.button("Reset to defaults").clicked() {
+                if ui
+                    .button(l10n::text(ui.ctx(), "Reset to defaults"))
+                    .clicked()
+                {
                     let theme = ui.active_theme();
                     self.settings = SeriesSettings {
                         chart_type: self.settings.chart_type,

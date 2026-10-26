@@ -1,6 +1,7 @@
 //! Range Switcher Widget
 //!
 //! Provides quick date range selection buttons: 1D, 5D, 1M, 6M, YTD, 1Y, 5Y, All
+use crate::localization as l10n;
 use crate::styles::typography;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -368,8 +369,14 @@ impl RangeSwitcher {
 
         // Allocate space and get response
         let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+        let translated_label = l10n::text(ui.ctx(), label);
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, response.enabled(), is_sel, label)
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                response.enabled(),
+                is_sel,
+                &translated_label,
+            )
         });
         crate::styles::focus::draw_focus_ring(ui, &response, self.config.border_radius);
 
@@ -400,7 +407,7 @@ impl RangeSwitcher {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            label,
+            l10n::text(ui.ctx(), label),
             font_id,
             text_color,
         );

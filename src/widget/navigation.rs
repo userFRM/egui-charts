@@ -2,6 +2,7 @@
 
 use super::Chart;
 use crate::config::NavigationButtons;
+use crate::localization as l10n;
 use crate::scales::PriceScaleMode;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -193,7 +194,7 @@ impl Chart {
                 ui.painter().text(
                     response.rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    text[index],
+                    l10n::text(ui.ctx(), text[index]),
                     egui::FontId::proportional(crate::styles::typography::SM),
                     visuals.text_color(),
                 );
@@ -208,14 +209,15 @@ impl Chart {
             }
             #[cfg(not(feature = "icons"))]
             paint_text();
+            let translated_label = l10n::text(ui.ctx(), LABELS[index]);
             response.widget_info(|| {
                 if index < 5 {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, LABELS[index])
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                 } else {
-                    egui::WidgetInfo::selected(egui::Role::Button, true, active, LABELS[index])
+                    egui::WidgetInfo::selected(egui::Role::Button, true, active, &translated_label)
                 }
             });
-            response.on_hover_text(LABELS[index]);
+            response.on_hover_text(l10n::text(ui.ctx(), LABELS[index]));
         }
     }
 }

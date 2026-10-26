@@ -1,5 +1,6 @@
 //! The broker picker: the dialog in which the user chooses the broker to trade with.
 
+use crate::localization as l10n;
 use egui::{
     Align, Align2, Color32, Context, FontId, Layout, Rect, RichText, Sense, Stroke, Ui, vec2,
 };
@@ -156,13 +157,13 @@ impl BrokerPicker {
                     if self.searching {
                         let search = ui.add(
                             egui::TextEdit::singleline(&mut self.query)
-                                .hint_text("Search")
+                                .hint_text(l10n::text(ui.ctx(), "Search"))
                                 .desired_width((ui.available_width() - 88.0).max(40.0)),
                         );
                         search.request_focus();
                     } else {
                         ui.label(semibold(
-                            "Trade with your broker",
+                            &l10n::text(ui.ctx(), "Trade with your broker"),
                             if ui.available_width() < 360.0 {
                                 16.0
                             } else {
@@ -203,8 +204,11 @@ impl BrokerPicker {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(40.0);
                                 ui.label(
-                                    RichText::new("No brokers match your search")
-                                        .color(theme.ui.text_secondary),
+                                    RichText::new(l10n::text(
+                                        ui.ctx(),
+                                        "No brokers match your search",
+                                    ))
+                                    .color(theme.ui.text_secondary),
                                 );
                             });
                         }
@@ -228,7 +232,7 @@ impl BrokerPicker {
                         .add(
                             egui::Button::new((
                                 icons::SQUARE_PLUS.as_image_square(20.0),
-                                RichText::new("Need a broker?")
+                                RichText::new(l10n::text(ui.ctx(), "Need a broker?"))
                                     .size(theme.text.body + 2.0)
                                     .color(theme.ui.text),
                             ))
@@ -282,7 +286,7 @@ impl BrokerPicker {
                     let connect = ui.add_sized(
                         vec2(ui.available_width(), 40.0),
                         egui::Button::new(semibold(
-                            "Connect",
+                            &l10n::text(ui.ctx(), "Connect"),
                             theme.text.body,
                             theme.ui.panel_bg_floating,
                         ))
@@ -296,7 +300,7 @@ impl BrokerPicker {
                     if !tile.description.is_empty() {
                         ui.add_space(12.0);
                         ui.label(
-                            RichText::new(&tile.description)
+                            RichText::new(l10n::text(ui.ctx(), &tile.description))
                                 .size(theme.text.body)
                                 .color(theme.ui.text_secondary),
                         );
@@ -306,7 +310,7 @@ impl BrokerPicker {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Account connection")
+                        RichText::new(l10n::text(ui.ctx(), "Account connection"))
                             .size(theme.text.small)
                             .color(theme.ui.text_muted),
                     );
@@ -323,15 +327,19 @@ impl BrokerPicker {
 fn tile(ui: &mut Ui, tile: &mut BrokerTile) -> bool {
     let theme = ui.active_theme();
     let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tile.name));
+    let translated_label = l10n::text(ui.ctx(), &tile.name);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
     let star = Rect::from_center_size(rect.right_top() + vec2(-18.0, 18.0), vec2(20.0, 20.0));
     let star_response = ui
         .interact(star, response.id.with("favorite"), Sense::click())
-        .on_hover_text(if tile.favorite {
-            "Remove from favourites"
-        } else {
-            "Add to favourites"
-        });
+        .on_hover_text(l10n::text(
+            ui.ctx(),
+            if tile.favorite {
+                "Remove from favourites"
+            } else {
+                "Add to favourites"
+            },
+        ));
     if star_response.clicked() {
         tile.favorite = !tile.favorite;
     }
@@ -350,7 +358,7 @@ fn tile(ui: &mut Ui, tile: &mut BrokerTile) -> bool {
     );
     if tile.featured {
         let badge = painter.layout_no_wrap(
-            "FEATURED".to_owned(),
+            l10n::text(ui.ctx(), "FEATURED"),
             FontId::proportional(theme.text.tiny),
             theme.ui.panel_bg_floating,
         );
@@ -376,13 +384,13 @@ fn tile(ui: &mut Ui, tile: &mut BrokerTile) -> bool {
     painter.text(
         egui::pos2(rect.center().x, icon.bottom() + 18.0),
         Align2::CENTER_CENTER,
-        &tile.name,
+        l10n::text(ui.ctx(), &tile.name),
         FontId::proportional(theme.text.body + 2.0),
         theme.ui.text,
     );
     if let Some(subtitle) = &tile.subtitle {
         let galley = painter.layout(
-            subtitle.clone(),
+            l10n::text(ui.ctx(), subtitle.clone()),
             FontId::proportional(theme.text.small),
             theme.ui.text_secondary,
             rect.width() - 24.0,
@@ -443,7 +451,7 @@ fn paint_icon(ui: &Ui, tile: &BrokerTile, rect: Rect) {
         ui.painter().text(
             rect.center(),
             Align2::CENTER_CENTER,
-            initial,
+            l10n::text(ui.ctx(), initial),
             FontId::proportional(rect.height() * 0.5),
             theme.ui.panel_bg_floating,
         );

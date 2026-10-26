@@ -1,5 +1,6 @@
 //! Typed alert editing. Hosts supply output identifiers, watchlists and optional preset storage.
 
+use crate::localization as l10n;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -175,8 +176,10 @@ impl AlertDialog {
             .width(self.config.width + 32.0)
             .height(self.config.height + 130.0)
             .show(ctx, &mut open, |ui| {
-                ui.response()
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, title));
+                let translated_label = l10n::text(ui.ctx(), title);
+                ui.response().widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, &translated_label)
+                });
                 ui.ctx()
                     .accesskit_node_builder(ui.response().id, |node| node.set_modal());
                 if dialog_header(ui, title) {
@@ -237,7 +240,7 @@ impl AlertDialog {
         let label_width = ui
             .painter()
             .layout_no_wrap(
-                "Expiry (optional)".into(),
+                l10n::text(ui.ctx(), "Expiry (optional)"),
                 egui::TextStyle::Body.resolve(ui.style()),
                 ui.visuals().text_color(),
             )
@@ -246,19 +249,20 @@ impl AlertDialog {
         ui.spacing_mut().text_edit_width =
             (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
         FormGrid::new("alert_details").show(ui, |ui| {
-            ui.label("Name");
+            ui.label(l10n::text(ui.ctx(), "Name"));
             ui.text_edit_singleline(&mut self.alert.name)
-                .accessible_name("Name");
+                .accessible_name(l10n::text(ui.ctx(), "Name"));
             ui.end_row();
-            ui.label("Symbol");
+            ui.label(l10n::text(ui.ctx(), "Symbol"));
             ui.text_edit_singleline(&mut self.alert.symbol)
-                .accessible_name("Symbol");
+                .accessible_name(l10n::text(ui.ctx(), "Symbol"));
             ui.end_row();
-            ui.label("Watchlist");
+            ui.label(l10n::text(ui.ctx(), "Watchlist"));
             egui::ComboBox::from_id_salt("alert_watchlist")
                 .width(ui.spacing().text_edit_width)
                 .truncate()
-                .selected_text(
+                .selected_text(l10n::text(
+                    ui.ctx(),
                     self.alert
                         .watchlist
                         .as_ref()
@@ -269,19 +273,27 @@ impl AlertDialog {
                                 .map(|(_, name)| name.as_str())
                         })
                         .unwrap_or(self.alert.watchlist.as_deref().unwrap_or("One symbol")),
-                )
+                ))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.alert.watchlist, None, "One symbol");
+                    ui.selectable_value(
+                        &mut self.alert.watchlist,
+                        None,
+                        l10n::text(ui.ctx(), "One symbol"),
+                    );
                     for (id, name) in &self.watchlists {
-                        ui.selectable_value(&mut self.alert.watchlist, Some(id.clone()), name);
+                        ui.selectable_value(
+                            &mut self.alert.watchlist,
+                            Some(id.clone()),
+                            l10n::text(ui.ctx(), name),
+                        );
                     }
                 })
                 .response
-                .accessible_name("Watchlist");
+                .accessible_name(l10n::text(ui.ctx(), "Watchlist"));
             ui.end_row();
-            ui.label("Frequency");
+            ui.label(l10n::text(ui.ctx(), "Frequency"));
             egui::ComboBox::from_id_salt("alert_frequency")
-                .selected_text(self.alert.frequency.to_string())
+                .selected_text(l10n::text(ui.ctx(), self.alert.frequency.to_string()))
                 .show_ui(ui, |ui| {
                     for (value, label) in [
                         (AlertFrequency::Once, "Only once"),
@@ -289,23 +301,30 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBar, "Once per bar"),
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                     ] {
-                        ui.selectable_value(&mut self.alert.frequency, value, label);
+                        ui.selectable_value(
+                            &mut self.alert.frequency,
+                            value,
+                            l10n::text(ui.ctx(), label),
+                        );
                     }
                 })
                 .response
-                .accessible_name("Frequency");
+                .accessible_name(l10n::text(ui.ctx(), "Frequency"));
             ui.end_row();
-            ui.label("Expiry (optional)");
+            ui.label(l10n::text(ui.ctx(), "Expiry (optional)"));
             ui.text_edit_singleline(&mut self.expires)
-                .accessible_name("Expiry (optional)");
+                .accessible_name(l10n::text(ui.ctx(), "Expiry (optional)"));
             ui.end_row();
-            ui.label("Message");
+            ui.label(l10n::text(ui.ctx(), "Message"));
             ui.text_edit_multiline(&mut self.alert.message)
-                .accessible_name("Message");
+                .accessible_name(l10n::text(ui.ctx(), "Message"));
             ui.end_row();
         });
         ui.separator();
-        ui.label("All conditions must hold on the same bar");
+        ui.label(l10n::text(
+            ui.ctx(),
+            "All conditions must hold on the same bar",
+        ));
         ui.push_id("first", |ui| {
             rule_form(
                 ui,
@@ -319,7 +338,10 @@ impl AlertDialog {
             ui.push_id(index, |ui| {
                 ui.separator();
                 rule_form(ui, &mut rule.source, &mut rule.condition, &self.sources);
-                if ui.button("Remove condition").clicked() {
+                if ui
+                    .button(l10n::text(ui.ctx(), "Remove condition"))
+                    .clicked()
+                {
                     remove = Some(index);
                 }
             });
@@ -327,7 +349,7 @@ impl AlertDialog {
         if let Some(index) = remove {
             self.alert.additional_conditions.remove(index);
         }
-        if ui.button("Add condition").clicked() {
+        if ui.button(l10n::text(ui.ctx(), "Add condition")).clicked() {
             self.alert.additional_conditions.push(AlertRule {
                 source: self.alert.source.clone(),
                 condition: self.alert.condition.clone(),
@@ -336,16 +358,16 @@ impl AlertDialog {
         if self.storage.is_some() {
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                ui.label("Preset");
+                ui.label(l10n::text(ui.ctx(), "Preset"));
                 ui.text_edit_singleline(&mut self.preset_name)
-                    .accessible_name("Preset");
+                    .accessible_name(l10n::text(ui.ctx(), "Preset"));
                 if ui
                     .add_enabled(
                         self.loaded
                             && !self.pending
                             && self.alert.is_valid()
                             && !self.preset_name.trim().is_empty(),
-                        egui::Button::new("Save preset"),
+                        egui::Button::new(l10n::text(ui.ctx(), "Save preset")),
                     )
                     .clicked()
                 {
@@ -360,16 +382,19 @@ impl AlertDialog {
             });
             let mut apply = None;
             egui::ComboBox::from_id_salt("alert_presets")
-                .selected_text("Apply preset")
+                .selected_text(l10n::text(ui.ctx(), "Apply preset"))
                 .show_ui(ui, |ui| {
                     for (name, alert) in &self.presets {
-                        if ui.selectable_label(false, name).clicked() {
+                        if ui
+                            .selectable_label(false, l10n::text(ui.ctx(), name))
+                            .clicked()
+                        {
                             apply = Some(alert.clone());
                         }
                     }
                 })
                 .response
-                .accessible_name("Apply preset");
+                .accessible_name(l10n::text(ui.ctx(), "Apply preset"));
             if let Some(mut preset) = apply {
                 preset.id.clone_from(&self.alert.id);
                 preset.status = self.alert.status;
@@ -399,20 +424,23 @@ fn source_picker(
     egui::ComboBox::from_id_salt(id)
         .width(ui.available_width().min(200.0))
         .truncate()
-        .selected_text(label)
+        .selected_text(l10n::text(ui.ctx(), label))
         .show_ui(ui, |ui| {
-            ui.selectable_value(source, AlertSource::Price, "Price");
-            ui.selectable_value(source, AlertSource::Volume, "Volume");
+            ui.selectable_value(source, AlertSource::Price, l10n::text(ui.ctx(), "Price"));
+            ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
             for (value, name) in sources {
-                ui.selectable_value(source, value.clone(), name);
+                ui.selectable_value(source, value.clone(), l10n::text(ui.ctx(), name));
             }
         })
         .response
-        .accessible_name(if id == "other" {
-            "Comparison source"
-        } else {
-            "Source"
-        });
+        .accessible_name(l10n::text(
+            ui.ctx(),
+            if id == "other" {
+                "Comparison source"
+            } else {
+                "Source"
+            },
+        ));
 }
 
 fn rule_form(
@@ -481,10 +509,14 @@ fn rule_form(
         .map(|(_, name)| *name)
         .unwrap_or("Condition");
     egui::ComboBox::from_id_salt("condition")
-        .selected_text(selected)
+        .selected_text(l10n::text(ui.ctx(), selected))
         .show_ui(ui, |ui| {
             for (value, label) in choices {
-                if ui.selectable_label(label == selected, label).clicked() && label != selected {
+                if ui
+                    .selectable_label(label == selected, l10n::text(ui.ctx(), label))
+                    .clicked()
+                    && label != selected
+                {
                     if matches!(value, AlertCondition::VolumeAboveAverage { .. }) {
                         *source = AlertSource::Volume;
                     }
@@ -493,45 +525,47 @@ fn rule_form(
             }
         })
         .response
-        .accessible_name("Condition");
+        .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
         AlertCondition::Crossing(v)
         | AlertCondition::CrossingUp(v)
         | AlertCondition::CrossingDown(v)
         | AlertCondition::Above(v)
         | AlertCondition::Below(v) => {
-            ui.label("Level");
+            ui.label(l10n::text(ui.ctx(), "Level"));
             ui.add(egui::DragValue::new(v).speed(0.01))
-                .accessible_name("Level");
+                .accessible_name(l10n::text(ui.ctx(), "Level"));
         }
         AlertCondition::EnteringChannel { lower, upper }
         | AlertCondition::ExitingChannel { lower, upper } => {
-            ui.label("Lower / upper");
-            ui.add(egui::DragValue::new(lower)).accessible_name("Lower");
-            ui.add(egui::DragValue::new(upper)).accessible_name("Upper");
+            ui.label(l10n::text(ui.ctx(), "Lower / upper"));
+            ui.add(egui::DragValue::new(lower))
+                .accessible_name(l10n::text(ui.ctx(), "Lower"));
+            ui.add(egui::DragValue::new(upper))
+                .accessible_name(l10n::text(ui.ctx(), "Upper"));
         }
         AlertCondition::MovingBy { value, bars }
         | AlertCondition::MovingByPercent {
             percent: value,
             bars,
         } => {
-            ui.label("Change / bars");
+            ui.label(l10n::text(ui.ctx(), "Change / bars"));
             ui.add(egui::DragValue::new(value))
-                .accessible_name("Change");
+                .accessible_name(l10n::text(ui.ctx(), "Change"));
             ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
-                .accessible_name("Bars");
+                .accessible_name(l10n::text(ui.ctx(), "Bars"));
         }
         AlertCondition::VolumeAboveAverage { multiplier, bars } => {
-            ui.label("Multiplier / preceding bars");
+            ui.label(l10n::text(ui.ctx(), "Multiplier / preceding bars"));
             ui.add(egui::DragValue::new(multiplier).speed(0.1))
-                .accessible_name("Multiplier");
+                .accessible_name(l10n::text(ui.ctx(), "Multiplier"));
             ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
-                .accessible_name("Bars");
+                .accessible_name(l10n::text(ui.ctx(), "Bars"));
         }
         AlertCondition::Compare { other, comparison } => {
             source_picker(ui, "other", other, sources);
             egui::ComboBox::from_id_salt("comparison")
-                .selected_text(comparison.to_string())
+                .selected_text(l10n::text(ui.ctx(), comparison.to_string()))
                 .show_ui(ui, |ui| {
                     for value in [
                         AlertComparison::Crossing,
@@ -540,11 +574,15 @@ fn rule_form(
                         AlertComparison::Above,
                         AlertComparison::Below,
                     ] {
-                        ui.selectable_value(comparison, value, value.to_string());
+                        ui.selectable_value(
+                            comparison,
+                            value,
+                            l10n::text(ui.ctx(), value.to_string()),
+                        );
                     }
                 })
                 .response
-                .accessible_name("Comparison");
+                .accessible_name(l10n::text(ui.ctx(), "Comparison"));
         }
     });
 }

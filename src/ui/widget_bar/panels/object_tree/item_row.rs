@@ -2,6 +2,7 @@
 //!
 //! Renders individual items (drawings, indicators) in the tree.
 
+use crate::localization as l10n;
 use egui::{Rect, Sense, Stroke, Ui, vec2};
 
 use crate::icons::{Icon, icons as embedded_icons};
@@ -36,12 +37,9 @@ pub fn render_item_row(
         Sense::click_and_drag(),
     );
 
+    let translated_label = l10n::text(ui.ctx(), item.full_display_name());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::TreeItem,
-            response.enabled(),
-            item.full_display_name(),
-        )
+        egui::WidgetInfo::labeled(egui::Role::TreeItem, response.enabled(), &translated_label)
     });
     ui.ctx()
         .accesskit_node_builder(response.id, |node| node.set_selected(state.is_selected(id)));
@@ -64,7 +62,7 @@ pub fn render_item_row(
         });
     }
 
-    response.on_hover_text(item.full_display_name());
+    response.on_hover_text(l10n::text(ui.ctx(), item.full_display_name()));
 
     // Handle expand/collapse for items with properties
     if item.source_type == SourceType::Drawing && state.is_item_expanded(id) {
@@ -236,7 +234,7 @@ fn render_row_content(
             DESIGN_TOKENS.semantic.extended.gray
         };
         let mut job = egui::text::LayoutJob::simple(
-            item.full_display_name(),
+            l10n::text(ui.ctx(), item.full_display_name()),
             egui::FontId::proportional(typography::SM_MD),
             name_color,
             (rect.right() - DESIGN_TOKENS.spacing.sm - 40.0 - x).max(0.0),
@@ -254,11 +252,12 @@ fn render_row_content(
     if config.show_expand_chevron && item.source_type == SourceType::Drawing {
         let chevron_rect = Rect::from_center_size(egui::pos2(x + 6.0, center_y), vec2(14.0, 14.0));
         let chevron_response = ui.allocate_rect(chevron_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Drawing properties");
         chevron_response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::Role::Button,
                 chevron_response.enabled(),
-                "Drawing properties",
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &chevron_response, 0.0);
@@ -280,12 +279,13 @@ fn render_row_content(
         &embedded_icons::EYE_HIDE
     };
     let vis_response = ui.allocate_rect(vis_rect, Sense::click());
+    let translated_label = l10n::text(ui.ctx(), if item.visible { "Hide" } else { "Show" });
     vis_response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::Role::Button,
             vis_response.enabled(),
             item.visible,
-            if item.visible { "Hide" } else { "Show" },
+            &translated_label,
         )
     });
     crate::styles::focus::draw_focus_ring(ui, &vis_response, 0.0);
@@ -304,7 +304,10 @@ fn render_row_content(
     if vis_response.clicked() {
         *action = ObjectTreeAction::ToggleVisibility(item.id);
     }
-    vis_response.on_hover_text(if item.visible { "Hide" } else { "Show" });
+    vis_response.on_hover_text(l10n::text(
+        ui.ctx(),
+        if item.visible { "Hide" } else { "Show" },
+    ));
     x += 20.0;
 
     // Lock toggle (drawings only)
@@ -316,12 +319,13 @@ fn render_row_content(
             &embedded_icons::UNLOCK
         };
         let lock_response = ui.allocate_rect(lock_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), if item.locked { "Unlock" } else { "Lock" });
         lock_response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
                 lock_response.enabled(),
                 item.locked,
-                if item.locked { "Unlock" } else { "Lock" },
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &lock_response, 0.0);
@@ -340,7 +344,10 @@ fn render_row_content(
         if lock_response.clicked() {
             *action = ObjectTreeAction::ToggleLock(item.id);
         }
-        lock_response.on_hover_text(if item.locked { "Unlock" } else { "Lock" });
+        lock_response.on_hover_text(l10n::text(
+            ui.ctx(),
+            if item.locked { "Unlock" } else { "Lock" },
+        ));
     }
 
     // Right-side buttons, registered in visual order for keyboard navigation.
@@ -355,8 +362,13 @@ fn render_row_content(
     let settings_rect =
         Rect::from_center_size(egui::pos2(right_x - 28.0, center_y), vec2(16.0, 16.0));
     let settings_response = ui.allocate_rect(settings_rect, Sense::click());
+    let translated_label = l10n::text(ui.ctx(), "Settings");
     settings_response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, settings_response.enabled(), "Settings")
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            settings_response.enabled(),
+            &translated_label,
+        )
     });
     embedded_icons::SETTINGS
         .as_image_tinted(vec2(16.0, 16.0), button_color)
@@ -369,15 +381,20 @@ fn render_row_content(
             ObjectTreeAction::OpenProperties(item.id)
         };
     }
-    settings_response.on_hover_text("Settings");
+    settings_response.on_hover_text(l10n::text(ui.ctx(), "Settings"));
 
     // Delete button
     if item.source_type != SourceType::DataSource {
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
         let del_response = ui.allocate_rect(del_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Remove");
         del_response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, del_response.enabled(), "Remove")
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                del_response.enabled(),
+                &translated_label,
+            )
         });
         embedded_icons::TRASH
             .as_image_tinted(vec2(16.0, 16.0), button_color)
@@ -390,7 +407,7 @@ fn render_row_content(
                 ObjectTreeAction::Delete(item.id)
             };
         }
-        del_response.on_hover_text("Remove");
+        del_response.on_hover_text(l10n::text(ui.ctx(), "Remove"));
     }
 }
 
@@ -417,12 +434,16 @@ fn render_properties(
 
             // Line width
             ui.hint_label("Width");
-            ui.label(format!("{}px", props.line_width));
+            ui.label(l10n::format_text(
+                ui.ctx(),
+                "{0}px",
+                &[("0", format!("{}", props.line_width))],
+            ));
             ui.end_row();
 
             // Line style
             ui.hint_label("Style");
-            ui.label(props.line_style.as_str());
+            ui.label(l10n::text(ui.ctx(), props.line_style.as_str()));
             ui.end_row();
 
             // Transparency

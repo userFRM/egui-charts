@@ -1,5 +1,6 @@
 //! A grouped treemap of values and changes supplied by the host.
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, PanelHeader};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
@@ -55,8 +56,13 @@ impl MarketHeatmapPanel {
                         .with(("market_heatmap", &entry.symbol, &entry.group)),
                     Sense::click(),
                 );
+                let translated_label = l10n::text(ui.ctx(), &entry.symbol);
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &entry.symbol)
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        ui.is_enabled(),
+                        &translated_label,
+                    )
                 });
                 let base = theme.ui.panel_bg_secondary;
                 let direction = if entry.change_percent >= 0.0 {
@@ -90,14 +96,14 @@ impl MarketHeatmapPanel {
                     painter.text(
                         tile.center() - Vec2::new(0.0, 8.0),
                         Align2::CENTER_CENTER,
-                        &entry.symbol,
+                        l10n::text(ui.ctx(), &entry.symbol),
                         FontId::proportional(14.0),
                         text,
                     );
                     painter.text(
                         tile.center() + Vec2::new(0.0, 10.0),
                         Align2::CENTER_CENTER,
-                        &change,
+                        l10n::text(ui.ctx(), &change),
                         FontId::proportional(11.0),
                         text,
                     );
@@ -113,9 +119,15 @@ impl MarketHeatmapPanel {
                 if response.clicked() {
                     selected = Some(entry.symbol.clone());
                 }
-                response.on_hover_text(format!(
-                    "{}\n{}\nValue: {}\nChange: {change}",
-                    entry.symbol, entry.group, entry.value
+                response.on_hover_text(l10n::format_text(
+                    ui.ctx(),
+                    "{0}\n{1}\nValue: {2}\nChange: {change}",
+                    &[
+                        ("0", entry.symbol.to_string()),
+                        ("1", entry.group.to_string()),
+                        ("2", format!("{}", entry.value)),
+                        ("change", change.to_string()),
+                    ],
                 ));
             }
             ui.painter().rect_stroke(
@@ -126,7 +138,7 @@ impl MarketHeatmapPanel {
             );
             let painter = ui.painter().with_clip_rect(group.rect);
             let label = painter.layout_no_wrap(
-                group.name.to_owned(),
+                l10n::text(ui.ctx(), group.name),
                 FontId::proportional(11.0),
                 theme.ui.text,
             );

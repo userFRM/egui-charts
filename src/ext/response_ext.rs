@@ -10,6 +10,7 @@
 //! - **UI helpers**: highlight, show_tooltip_on_hover
 //! - **Cursor**: set_cursor_icon
 
+use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{CursorIcon, Response, Ui};
 
@@ -185,7 +186,9 @@ impl ResponseExt for Response {
     }
 
     fn show_tooltip_on_hover(&self, text: impl Into<String>) -> &Self {
-        let _ = self.clone().on_hover_text(text.into());
+        let _ = self
+            .clone()
+            .on_hover_text(l10n::text(&self.ctx, Into::<String>::into(text)));
         self
     }
 

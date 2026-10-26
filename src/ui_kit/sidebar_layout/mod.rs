@@ -15,6 +15,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
@@ -119,7 +120,8 @@ impl<'a> SidebarTab<'a> {
         let width = ui.available_width();
         let height = DESIGN_TOKENS.sizing.button_lg;
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-        response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), self.label));
+        let translated_label = l10n::text(ui.ctx(), self.label);
+        response.widget_info(|| WidgetInfo::labeled(Role::Tab, ui.is_enabled(), &translated_label));
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(self.is_active));
 
@@ -156,7 +158,7 @@ impl<'a> SidebarTab<'a> {
         ui.painter().text(
             Pos2::new(icon_x + icon_size + theme.spacing.sm, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            self.label,
+            l10n::text(ui.ctx(), self.label),
             egui::FontId::proportional(theme.text.body),
             text_color,
         );

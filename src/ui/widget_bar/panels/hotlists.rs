@@ -1,5 +1,6 @@
 //! Hotlists the feed supplies: the market's top movers by the measures the host names.
 
+use crate::localization as l10n;
 use std::sync::Arc;
 
 use egui::{Sense, Ui, vec2};
@@ -112,7 +113,7 @@ impl HotlistsPanel {
         if let Some(name) = self.lists.get(self.list) {
             dropdown(ui, "hotlist", name, |ui| {
                 for (index, name) in self.lists.iter().enumerate() {
-                    ui.selectable_value(&mut self.list, index, name);
+                    ui.selectable_value(&mut self.list, index, l10n::text(ui.ctx(), name));
                 }
             });
         }
@@ -204,8 +205,9 @@ impl HotlistsPanel {
                         true,
                         color,
                     );
+                    let translated_label = l10n::text(ui.ctx(), &entry.symbol);
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Button, true, &entry.symbol)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                     });
                     if response.clicked() {
                         action = HotlistsAction::SelectSymbol(entry.symbol.clone());

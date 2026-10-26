@@ -18,6 +18,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use egui::Ui;
 
@@ -41,5 +42,5 @@ pub fn status_message(ui: &mut Ui, kind: MessageKind, text: &str) {
     };
 
     ui.add_space(theme.spacing.sm);
-    ui.colored_label(color, text);
+    ui.colored_label(color, l10n::text(ui.ctx(), text));
 }

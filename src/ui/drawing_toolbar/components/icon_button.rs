@@ -4,6 +4,7 @@
 //! toggles, and actions.
 
 use crate::icons::Icon;
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use egui::{
     Color32, Rect, RectAlign, Response, Role, Sense, Stroke, StrokeKind, Tooltip, Ui, Vec2,
@@ -56,9 +57,16 @@ pub fn draw_icon_btn(
 
     render_svg_at_rect_themed(ui, icon, rect, response.hovered(), is_active);
 
-    response
-        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
-    response.on_hover_text(tooltip)
+    let translated_label = l10n::text(ui.ctx(), tooltip);
+    response.widget_info(|| {
+        WidgetInfo::selected(
+            Role::Button,
+            response.enabled(),
+            is_active,
+            &translated_label,
+        )
+    });
+    response.on_hover_text(l10n::text(ui.ctx(), tooltip))
 }
 
 /// Toggle button with icon (alias for draw_icon_btn since functionally identical).
@@ -135,9 +143,16 @@ pub fn draw_icon_button_padded(
     let is_hovered = response.hovered() || response.is_pointer_button_down_on();
     render_svg_at_rect_themed(ui, icon, icon_button_rect, is_hovered, is_active);
 
-    response
-        .widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), is_active, tooltip));
-    response.on_hover_text(tooltip)
+    let translated_label = l10n::text(ui.ctx(), tooltip);
+    response.widget_info(|| {
+        WidgetInfo::selected(
+            Role::Button,
+            response.enabled(),
+            is_active,
+            &translated_label,
+        )
+    });
+    response.on_hover_text(l10n::text(ui.ctx(), tooltip))
 }
 
 /// Left toolbar button (no dropdown arrow).
@@ -184,8 +199,14 @@ fn draw_rail_button(
         Vec2::new(tokens.button_width, tokens.button_height),
         Sense::click(),
     );
+    let translated_label = l10n::text(ui.ctx(), tooltip);
     response.widget_info(|| {
-        WidgetInfo::selected(Role::Button, response.enabled(), is_selected, tooltip)
+        WidgetInfo::selected(
+            Role::Button,
+            response.enabled(),
+            is_selected,
+            &translated_label,
+        )
     });
 
     if ui.is_rect_visible(rect) {
@@ -251,6 +272,6 @@ fn draw_rail_button(
 
     let mut tip = Tooltip::for_enabled(&response);
     tip.popup = tip.popup.align(RectAlign::RIGHT);
-    tip.show(|ui| ui.label(tooltip));
+    tip.show(|ui| ui.label(l10n::text(ui.ctx(), tooltip)));
     response
 }

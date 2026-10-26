@@ -3,6 +3,7 @@
 //! Renders the hierarchical tree of indicators and drawings.
 
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::ui_kit::{IconButton, buttons::ButtonSize};
 use egui::{RichText, ScrollArea, Ui};
 
@@ -288,10 +289,18 @@ fn render_empty_state(ui: &mut Ui, has_filter: bool) {
     ui.space_xl();
     ui.vertical_centered(|ui| {
         if has_filter {
-            ui.label(RichText::new("No matching objects").weak().italics());
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), "No matching objects"))
+                    .weak()
+                    .italics(),
+            );
             ui.hint_label("Try a different search");
         } else {
-            ui.label(RichText::new("No objects").weak().italics());
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), "No objects"))
+                    .weak()
+                    .italics(),
+            );
             ui.hint_label("Add indicators or drawings to see them here");
         }
     });

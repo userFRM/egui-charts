@@ -2,6 +2,7 @@
 //! import and export. The host's quote service supplies the quotes, and the host persists the
 //! lists.
 
+use crate::localization as l10n;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -366,7 +367,7 @@ impl WatchlistPanel {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let chevron = icons::CHEVRON_DOWN.as_image_square(16.0);
                 let title = LayoutJob::single_section(
-                    lists[*active].name.clone(),
+                    l10n::text(ui.ctx(), lists[*active].name.clone()),
                     weighted(theme.text.title, 700.0, theme.ui.text),
                 );
                 menu = Some(
@@ -376,7 +377,7 @@ impl WatchlistPanel {
                             .image_tint_follows_text_color(true)
                             .truncate(),
                     )
-                    .on_hover_text("Lists"),
+                    .on_hover_text(l10n::text(ui.ctx(), "Lists")),
                 );
             });
         });
@@ -385,21 +386,27 @@ impl WatchlistPanel {
         };
         egui::Popup::menu(&menu).show(|ui| {
             for (index, list) in lists.iter().enumerate() {
-                if ui.selectable_label(index == *active, &list.name).clicked() {
+                if ui
+                    .selectable_label(index == *active, l10n::text(ui.ctx(), &list.name))
+                    .clicked()
+                {
                     *active = index;
                 }
             }
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("Name");
+                ui.label(l10n::text(ui.ctx(), "Name"));
                 ui.text_edit_singleline(&mut lists[*active].name);
             });
-            if ui.button("New list").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "New list")).clicked() {
                 lists.push(Watchlist::new(format!("Watchlist {}", lists.len() + 1)));
                 *active = lists.len() - 1;
             }
             if ui
-                .add_enabled(lists.len() > 1, egui::Button::new("Delete list"))
+                .add_enabled(
+                    lists.len() > 1,
+                    egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
+                )
                 .clicked()
             {
                 lists.remove(*active);
@@ -407,15 +414,15 @@ impl WatchlistPanel {
             }
         });
         egui::Popup::menu(&more).show(|ui| {
-            if ui.button("Add section").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "Add section")).clicked() {
                 lists[*active]
                     .items
                     .push(WatchlistItem::Section("New section".to_owned()));
             }
-            if ui.button("Import list…").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "Import list…")).clicked() {
                 action = WatchlistAction::Import;
             }
-            if ui.button("Export list…").clicked() {
+            if ui.button(l10n::text(ui.ctx(), "Export list…")).clicked() {
                 action = WatchlistAction::Export {
                     name: lists[*active].name.clone(),
                     text: lists[*active].to_text(),
@@ -519,7 +526,7 @@ impl WatchlistPanel {
                     header.center().y,
                 ),
                 align,
-                label,
+                l10n::text(ui.ctx(), label),
                 font.clone(),
                 theme.ui.text_secondary,
             );
@@ -551,8 +558,13 @@ impl WatchlistPanel {
                     Sense::click(),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let translated_label = l10n::text(ui.ctx(), label);
             response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::ColumnHeader, response.enabled(), label)
+                egui::WidgetInfo::labeled(
+                    egui::Role::ColumnHeader,
+                    response.enabled(),
+                    &translated_label,
+                )
             });
             if let Some((sorted, descending)) = *sort
                 && sorted == column
@@ -632,11 +644,12 @@ impl WatchlistPanel {
                     match &mut list.items[index] {
                         WatchlistItem::Section(title) => {
                             let is_collapsed = collapsed.contains(&index);
+                            let translated_label = l10n::text(ui.ctx(), &*title);
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::Role::Button,
                                     response.enabled(),
-                                    &*title,
+                                    &translated_label,
                                 )
                             });
                             ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -671,7 +684,7 @@ impl WatchlistPanel {
                             )
                             .add(
                                 Label::new(
-                                    RichText::new(title.to_uppercase())
+                                    RichText::new(l10n::text(ui.ctx(), title.to_uppercase()))
                                         .font(small.clone())
                                         .color(theme.ui.text_secondary),
                                 )
@@ -680,7 +693,7 @@ impl WatchlistPanel {
                             );
                             response.context_menu(|ui| {
                                 ui.text_edit_singleline(title);
-                                if ui.button("Remove section").clicked() {
+                                if ui.button(l10n::text(ui.ctx(), "Remove section")).clicked() {
                                     removed = Some(index);
                                     ui.close();
                                 }
@@ -688,11 +701,12 @@ impl WatchlistPanel {
                         }
                         WatchlistItem::Symbol { symbol, flag } => {
                             let is_selected = selected.as_deref() == Some(symbol.as_str());
+                            let translated_label = symbol.as_str();
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::Role::ListBoxOption,
                                     response.enabled(),
-                                    symbol.as_str(),
+                                    translated_label,
                                 )
                             });
                             ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -748,7 +762,9 @@ impl WatchlistPanel {
                                     )
                                     .add(
                                         Label::new(
-                                            RichText::new(text).font(font.clone()).color(color),
+                                            RichText::new(l10n::text(ui.ctx(), text))
+                                                .font(font.clone())
+                                                .color(color),
                                         )
                                         .truncate()
                                         .selectable(false),
@@ -768,12 +784,14 @@ impl WatchlistPanel {
                                     for choice in WatchlistFlag::ALL {
                                         let (swatch, response) = ui
                                             .allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                        let translated_label =
+                                            l10n::text(ui.ctx(), format!("{choice:?}"));
                                         response.widget_info(|| {
                                             egui::WidgetInfo::selected(
                                                 egui::Role::RadioButton,
                                                 response.enabled(),
                                                 *flag == Some(choice),
-                                                format!("{choice:?}"),
+                                                &translated_label,
                                             )
                                         });
                                         ui.painter().circle_filled(
@@ -781,20 +799,26 @@ impl WatchlistPanel {
                                             if *flag == Some(choice) { 8.0 } else { 6.0 },
                                             choice.color(),
                                         );
-                                        if response.on_hover_text(format!("{choice:?}")).clicked() {
+                                        if response.on_hover_text(&translated_label).clicked() {
                                             *flag = Some(choice);
                                             ui.close();
                                         }
                                     }
                                 });
                                 if ui
-                                    .add_enabled(flag.is_some(), egui::Button::new("Remove flag"))
+                                    .add_enabled(
+                                        flag.is_some(),
+                                        egui::Button::new(l10n::text(ui.ctx(), "Remove flag")),
+                                    )
                                     .clicked()
                                 {
                                     *flag = None;
                                     ui.close();
                                 }
-                                if ui.button("Remove from list").clicked() {
+                                if ui
+                                    .button(l10n::text(ui.ctx(), "Remove from list"))
+                                    .clicked()
+                                {
                                     removed = Some(index);
                                     ui.close();
                                 }

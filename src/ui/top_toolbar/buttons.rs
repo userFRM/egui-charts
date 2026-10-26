@@ -2,6 +2,7 @@
 //!
 //! Eliminates ~180 lines of repetitive button rendering code.
 
+use crate::localization as l10n;
 use std::sync::Arc;
 
 use crate::icons::Icon;
@@ -79,7 +80,9 @@ impl<'a> ToolbarIconButton<'a> {
                 .paint_at(ui, icon_rect);
         }
 
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
         toolbar_tooltip(response, self.tooltip, None)
     }
 }
@@ -105,7 +108,7 @@ impl<'a> IconTextButton<'a> {
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
         let galley = ui.painter().layout_no_wrap(
-            self.label.to_owned(),
+            l10n::text(ui.ctx(), self.label),
             egui::FontId::proportional(ui.active_theme().text.title),
             Color32::PLACEHOLDER,
         );
@@ -164,13 +167,15 @@ impl<'a> IconTextButton<'a> {
             ui.painter().text(
                 Pos2::new(rect.min.x + padding + icon_size + padding, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                self.label,
+                l10n::text(ui.ctx(), self.label),
                 egui::FontId::proportional(ui.active_theme().text.title),
                 color,
             );
         }
 
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.label));
+        let translated_label = l10n::text(ui.ctx(), self.label);
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
         toolbar_tooltip(
             response,
             if self.label == "Alert" {
@@ -211,7 +216,7 @@ impl TextButton {
         // Measure actual text width
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
         let galley = ui.painter().layout_no_wrap(
-            self.text.clone(),
+            l10n::text(ui.ctx(), self.text.clone()),
             font_id,
             DESIGN_TOKENS.semantic.ui.text_light,
         );
@@ -239,13 +244,14 @@ impl TextButton {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            &self.text,
+            l10n::text(ui.ctx(), &self.text),
             egui::FontId::proportional(ui.active_theme().text.title),
             ui.visuals().text_color(),
         );
 
+        let translated_label = l10n::text(ui.ctx(), &self.text);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &self.text)
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &translated_label)
         });
         if let Some(tooltip) = self.tooltip {
             toolbar_tooltip(response, tooltip, None)
@@ -294,9 +300,11 @@ impl<'a> TextIconButton<'a> {
 
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
-        let galley =
-            ui.painter()
-                .layout_no_wrap(self.text.to_owned(), font_id, Color32::PLACEHOLDER);
+        let galley = ui.painter().layout_no_wrap(
+            l10n::text(ui.ctx(), self.text),
+            font_id,
+            Color32::PLACEHOLDER,
+        );
         galley.rect.width() + self.config.padding * 3.0 + icon_sizes::XS
     }
 
@@ -331,7 +339,7 @@ impl<'a> TextIconButton<'a> {
             ui.painter().text(
                 Pos2::new(text_x, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                self.text,
+                l10n::text(ui.ctx(), self.text),
                 font_id,
                 text_color,
             );
@@ -350,7 +358,9 @@ impl<'a> TextIconButton<'a> {
                 .paint_at(ui, icon_rect);
         }
 
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.tooltip));
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
         toolbar_tooltip(response, self.tooltip, None)
     }
 }
@@ -375,9 +385,11 @@ pub(crate) struct PillButton<'a> {
 impl PillButton<'_> {
     pub(crate) fn width(&self, ui: &Ui) -> f32 {
         let font_id = egui::FontId::proportional(ui.active_theme().text.title);
-        let galley =
-            ui.painter()
-                .layout_no_wrap(self.label.to_owned(), font_id, Color32::PLACEHOLDER);
+        let galley = ui.painter().layout_no_wrap(
+            l10n::text(ui.ctx(), self.label),
+            font_id,
+            Color32::PLACEHOLDER,
+        );
         galley.size().x + 2.0 * DESIGN_TOKENS.spacing.xl
     }
 
@@ -425,13 +437,15 @@ impl PillButton<'_> {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                self.label,
+                l10n::text(ui.ctx(), self.label),
                 egui::FontId::proportional(theme.text.title),
                 text,
             );
         }
 
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), self.label));
+        let translated_label = l10n::text(ui.ctx(), self.label);
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
         match self.tooltip {
             Some(tooltip) => toolbar_tooltip(response, tooltip, None),
             None => response,
@@ -461,7 +475,7 @@ impl Trigger<'_> {
         }
         ui.painter()
             .layout_job(egui::text::LayoutJob::single_section(
-                self.label.clone(),
+                l10n::text(ui.ctx(), self.label.clone()),
                 format,
             ))
     }
@@ -551,7 +565,9 @@ impl Trigger<'_> {
             }
         }
 
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &self.name));
+        let translated_label = l10n::text(ui.ctx(), &self.name);
+        response
+            .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &translated_label));
         toolbar_tooltip(response, &self.name, None)
     }
 }
@@ -599,7 +615,7 @@ pub fn toolbar_tooltip(
             ui.spacing_mut().interact_size.y = 17.0;
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(text)
+                    egui::RichText::new(l10n::text(ui.ctx(), text))
                         .size(14.0)
                         .color(Color32::from_gray(240)),
                 );
@@ -614,7 +630,11 @@ pub fn toolbar_tooltip(
                             .corner_radius(2)
                             .inner_margin(egui::Margin::symmetric(4, 0))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(key).size(14.0).color(Color32::WHITE));
+                                ui.label(
+                                    egui::RichText::new(l10n::text(ui.ctx(), key))
+                                        .size(14.0)
+                                        .color(Color32::WHITE),
+                                );
                             });
                     }
                 }

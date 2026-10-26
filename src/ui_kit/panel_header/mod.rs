@@ -10,6 +10,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::{Align, Layout, Response, RichText, Ui, vec2};
 
 use crate::theme::ThemeExt;
@@ -59,8 +60,12 @@ impl<'a> PanelHeader<'a> {
                 actions(ui);
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(
-                        egui::Label::new(RichText::new(self.title).strong().size(theme.text.title))
-                            .truncate(),
+                        egui::Label::new(
+                            RichText::new(l10n::text(ui.ctx(), self.title))
+                                .strong()
+                                .size(theme.text.title),
+                        )
+                        .truncate(),
                     );
                 });
             })

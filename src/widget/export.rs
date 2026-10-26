@@ -1,6 +1,7 @@
 //! Chart data export and renderer-independent image frames.
 
 use super::Chart;
+use crate::localization as l10n;
 use crate::studies::StudyFormat;
 use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
@@ -230,7 +231,7 @@ impl Chart {
                     if title.is_some() || timestamp.is_some() {
                         ui.horizontal(|ui| {
                             if let Some(title) = &title {
-                                ui.label(title);
+                                ui.label(l10n::text(ui.ctx(), title));
                             }
                             if let Some(timestamp) = &timestamp {
                                 ui.label(timestamp);

@@ -8,6 +8,7 @@
 
 use crate::drawings::DrawingToolType;
 use crate::icons::{Icon, icons};
+use crate::localization as l10n;
 use egui::Ui;
 
 use super::{DrawingToolbarAction, ToolCategory};
@@ -117,7 +118,7 @@ impl ToolCategory for CursorsCategory {
         let width = ui
             .painter()
             .layout_no_wrap(
-                values_label.into(),
+                l10n::text(ui.ctx(), values_label),
                 egui::FontId::proportional(14.0),
                 theme.ui.text,
             )
@@ -162,16 +163,17 @@ impl ToolCategory for CursorsCategory {
             ui.painter().text(
                 egui::pos2(rect.left() + 40.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                cursor.name(),
+                l10n::text(ui.ctx(), cursor.name()),
                 font.clone(),
                 foreground,
             );
+            let translated_label = l10n::text(ui.ctx(), cursor.name());
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::Role::RadioButton,
                     response.enabled(),
                     active,
-                    cursor.name(),
+                    &translated_label,
                 )
             });
             if response.has_focus() {
@@ -203,7 +205,7 @@ impl ToolCategory for CursorsCategory {
         ui.painter().text(
             rect.left_center() + egui::vec2(8.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            values_label,
+            l10n::text(ui.ctx(), values_label),
             egui::FontId::proportional(14.0),
             theme.ui.text,
         );
@@ -230,12 +232,13 @@ impl ToolCategory for CursorsCategory {
             7.0,
             theme.ui.panel_bg,
         );
+        let translated_label = l10n::text(ui.ctx(), values_label);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Switch,
                 response.enabled(),
                 state.values_tooltip,
-                values_label,
+                &translated_label,
             )
         });
         if response.has_focus() {

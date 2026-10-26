@@ -1,6 +1,7 @@
 //! A named save form and catalog for study and drawing templates.
 
 use super::TemplateStore;
+use crate::localization as l10n;
 use crate::services::StoreKind;
 use crate::ui_kit::modal::Modal;
 use serde::{Serialize, de::DeserializeOwned};
@@ -58,7 +59,7 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                     .show(ui, |ui| {
                         let ready = self.templates.ready();
                         if self.current.is_some() {
-                            ui.label("Template name");
+                            ui.label(l10n::text(ui.ctx(), "Template name"));
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.name)
                                     .desired_width(ui.available_width()),
@@ -71,7 +72,7 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                             if ui
                                 .add_enabled(
                                     ready && !self.name.trim().is_empty(),
-                                    egui::Button::new(label),
+                                    egui::Button::new(l10n::text(ui.ctx(), label)),
                                 )
                                 .clicked()
                                 && let Some(current) = &self.current
@@ -83,16 +84,27 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                         ui.separator();
                         let names: Vec<_> = self.templates.entries().keys().cloned().collect();
                         if names.is_empty() && ready {
-                            ui.label("No saved templates");
+                            ui.label(l10n::text(ui.ctx(), "No saved templates"));
                         }
                         for name in names {
-                            ui.add(egui::Label::new(&name).truncate())
-                                .on_hover_text(&name);
+                            ui.add(egui::Label::new(l10n::text(ui.ctx(), &name)).truncate())
+                                .on_hover_text(l10n::text(ui.ctx(), &name));
                             ui.horizontal(|ui| {
-                                if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+                                if ui
+                                    .add_enabled(
+                                        ready,
+                                        egui::Button::new(l10n::text(ui.ctx(), "Load")),
+                                    )
+                                    .clicked()
+                                {
                                     loaded = self.templates.entries().get(&name).cloned();
                                 }
-                                if ui.add_enabled(ready, egui::Button::new("Delete")).clicked()
+                                if ui
+                                    .add_enabled(
+                                        ready,
+                                        egui::Button::new(l10n::text(ui.ctx(), "Delete")),
+                                    )
+                                    .clicked()
                                     && let Err(error) = self.templates.delete(&name)
                                 {
                                     self.templates.error = Some(error);
@@ -100,14 +112,19 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateDialog<T> {
                             });
                         }
                         if let Some(error) = &self.templates.error {
-                            ui.colored_label(ui.visuals().error_fg_color, error);
+                            ui.colored_label(
+                                ui.visuals().error_fg_color,
+                                l10n::text(ui.ctx(), error),
+                            );
                             if !self.templates.ready()
-                                && ui.button("Retry loading templates").clicked()
+                                && ui
+                                    .button(l10n::text(ui.ctx(), "Retry loading templates"))
+                                    .clicked()
                             {
                                 self.templates.reload();
                             }
                         } else if !ready {
-                            ui.label("Loading templates…");
+                            ui.label(l10n::text(ui.ctx(), "Loading templates…"));
                         }
                     });
             });

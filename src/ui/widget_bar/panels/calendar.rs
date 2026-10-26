@@ -1,5 +1,6 @@
 //! Economic, earnings, dividend and IPO calendars the feed supplies.
 
+use crate::localization as l10n;
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Days, NaiveTime, Utc};
@@ -208,7 +209,11 @@ impl CalendarPanel {
         ui.horizontal_wrapped(|ui| {
             dropdown(ui, "calendar_range", self.range.label(), |ui| {
                 for range in CalendarRange::ALL {
-                    ui.selectable_value(&mut self.range, range, range.label());
+                    ui.selectable_value(
+                        &mut self.range,
+                        range,
+                        l10n::text(ui.ctx(), range.label()),
+                    );
                 }
             });
             if self.kind == CalendarKind::Economic {
@@ -221,7 +226,7 @@ impl CalendarPanel {
                             ui.selectable_value(
                                 &mut self.importance,
                                 importance,
-                                importance_label(importance),
+                                l10n::text(ui.ctx(), importance_label(importance)),
                             );
                         }
                     },
@@ -237,7 +242,7 @@ impl CalendarPanel {
             };
             dropdown(ui, "calendar_countries", &text, |ui| {
                 for (code, on) in &mut self.countries {
-                    ui.checkbox(on, code.as_str());
+                    ui.checkbox(on, l10n::text(ui.ctx(), code.as_str()));
                 }
             });
         }
@@ -290,10 +295,13 @@ impl CalendarPanel {
                         day = Some(event.time.date_naive());
                         ui.add_space(theme.spacing.sm);
                         ui.label(
-                            RichText::new(event.time.format("%A, %b %-d").to_string())
-                                .size(theme.text.small)
-                                .strong()
-                                .color(theme.ui.text_secondary),
+                            RichText::new(l10n::text(
+                                ui.ctx(),
+                                event.time.format("%A, %b %-d").to_string(),
+                            ))
+                            .size(theme.text.small)
+                            .strong()
+                            .color(theme.ui.text_secondary),
                         );
                         ui.separator();
                         let (header, _) = ui.allocate_exact_size(
@@ -349,11 +357,14 @@ impl CalendarPanel {
                             false,
                             color,
                         )
-                        .on_hover_text(match level {
-                            Importance::Low => "Low importance",
-                            Importance::Medium => "Medium importance",
-                            Importance::High => "High importance",
-                        });
+                        .on_hover_text(l10n::text(
+                            ui.ctx(),
+                            match level {
+                                Importance::Low => "Low importance",
+                                Importance::Medium => "Medium importance",
+                                Importance::High => "High importance",
+                            },
+                        ));
                     }
                     let title = match &event.symbol {
                         Some(symbol) => format!("{symbol} · {}", event.title),
@@ -373,8 +384,9 @@ impl CalendarPanel {
                         );
                     }
                     if let Some(symbol) = &event.symbol {
+                        let translated_label = l10n::text(ui.ctx(), &title);
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, &title)
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                         });
                         if response
                             .on_hover_cursor(egui::CursorIcon::PointingHand)

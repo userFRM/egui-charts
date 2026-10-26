@@ -1,5 +1,6 @@
 //! The products launcher: the host's other tools and pages.
 
+use crate::localization as l10n;
 use egui::{RichText, Sense, Ui};
 
 use crate::icons::{Icon, icons};
@@ -75,12 +76,18 @@ impl ProductsPanel {
                                             theme.ui.text,
                                         ));
                                         ui.vertical(|ui| {
-                                            ui.label(RichText::new(&product.title).strong());
+                                            ui.label(
+                                                RichText::new(l10n::text(ui.ctx(), &product.title))
+                                                    .strong(),
+                                            );
                                             if !product.description.is_empty() {
                                                 ui.label(
-                                                    RichText::new(&product.description)
-                                                        .size(theme.text.small)
-                                                        .color(theme.ui.text_secondary),
+                                                    RichText::new(l10n::text(
+                                                        ui.ctx(),
+                                                        &product.description,
+                                                    ))
+                                                    .size(theme.text.small)
+                                                    .color(theme.ui.text_secondary),
                                                 );
                                             }
                                         });
@@ -88,8 +95,9 @@ impl ProductsPanel {
                                 });
                         })
                         .response;
+                    let translated_label = l10n::text(ui.ctx(), &product.title);
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Button, true, &product.title)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                     });
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)

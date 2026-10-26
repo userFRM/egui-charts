@@ -4,6 +4,7 @@
 //! - `PnlLabel`: a profit or loss coloured by its sign (green, red or neutral)
 //! - `SideLabel`: coloured buy and sell or long and short badges
 
+use crate::localization as l10n;
 use egui::{Color32, Response, RichText, Ui};
 
 use crate::scales::{CurrencyFormatter, PriceFormatter};
@@ -107,7 +108,7 @@ impl PnlLabel {
         } else {
             ui.visuals().text_color()
         };
-        let mut rt = RichText::new(&self.text).color(color);
+        let mut rt = RichText::new(l10n::text(ui.ctx(), &self.text)).color(color);
         if self.strong {
             rt = rt.strong();
         }
@@ -197,7 +198,7 @@ impl SideLabel {
     /// Show the label
     pub fn show(self, ui: &mut Ui) -> Response {
         let color = side_color(ui, self.is_buy);
-        let mut rt = RichText::new(&self.text).color(color);
+        let mut rt = RichText::new(l10n::text(ui.ctx(), &self.text)).color(color);
         if let Some(s) = self.size {
             rt = rt.size(s);
         }

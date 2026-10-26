@@ -3,6 +3,7 @@
 //! Ties together all subcomponents into the complete Object Tree panel.
 
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
 use egui::{Frame, RichText, Ui, vec2};
 
@@ -191,10 +192,22 @@ impl ObjectTreePanel {
                     .tooltip("Object tree settings")
                     .show(ui);
                 egui::Popup::menu(&settings).show(|ui| {
-                    ui.checkbox(&mut self.config.show_data_window, "Show Data Window");
-                    ui.checkbox(&mut self.config.group_by_type, "Group by Type");
-                    ui.checkbox(&mut self.config.show_color_indicators, "Show Colors");
-                    ui.checkbox(&mut self.config.show_item_counts, "Show Counts");
+                    ui.checkbox(
+                        &mut self.config.show_data_window,
+                        l10n::text(ui.ctx(), "Show Data Window"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.group_by_type,
+                        l10n::text(ui.ctx(), "Group by Type"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.show_color_indicators,
+                        l10n::text(ui.ctx(), "Show Colors"),
+                    );
+                    ui.checkbox(
+                        &mut self.config.show_item_counts,
+                        l10n::text(ui.ctx(), "Show Counts"),
+                    );
                 });
 
                 // Expand all
@@ -220,25 +233,27 @@ impl ObjectTreePanel {
                     .tooltip("Object actions")
                     .show(ui);
                 egui::Popup::menu(&more).show(|ui| {
-                    if ui.button("Show all").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Show all")).clicked() {
                         *action = ObjectTreeAction::ShowAll;
                         ui.close();
                     }
-                    if ui.button("Hide all").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Hide all")).clicked() {
                         *action = ObjectTreeAction::HideAll;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Lock all").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Lock all")).clicked() {
                         *action = ObjectTreeAction::LockAll;
                         ui.close();
                     }
-                    if ui.button("Unlock all").clicked() {
+                    if ui.button(l10n::text(ui.ctx(), "Unlock all")).clicked() {
                         *action = ObjectTreeAction::UnlockAll;
                         ui.close();
                     }
                     ui.separator();
-                    if self.state.selection_count() > 0 && ui.button("Delete selected").clicked() {
+                    if self.state.selection_count() > 0
+                        && ui.button(l10n::text(ui.ctx(), "Delete selected")).clicked()
+                    {
                         *action = ObjectTreeAction::DeleteSelected;
                         ui.close();
                     }
@@ -271,11 +286,15 @@ impl ObjectTreePanel {
                             Some(SourceType::Template),
                         ] {
                             let label = source_type.map_or("All", |t| t.display_name());
-                            ui.selectable_value(&mut self.state.filter_type, source_type, label);
+                            ui.selectable_value(
+                                &mut self.state.filter_type,
+                                source_type,
+                                l10n::text(ui.ctx(), label),
+                            );
                         }
                     },
                 )
-                .accessible_name("Object type");
+                .accessible_name(l10n::text(ui.ctx(), "Object type"));
             });
         });
     }
@@ -296,17 +315,24 @@ impl ObjectTreePanel {
 
         ui.add(
             egui::Label::new(
-                RichText::new(format!(
-                    "{} objects • {} indicators • {} drawings • {} visible{}",
-                    total,
-                    indicators,
-                    drawings,
-                    visible,
-                    if selected > 0 {
-                        format!(" • {selected} selected")
-                    } else {
-                        String::new()
-                    }
+                RichText::new(l10n::format_text(
+                    ui.ctx(),
+                    "{0} objects • {1} indicators • {2} drawings • {3} visible{4}",
+                    &[
+                        ("0", format!("{}", total)),
+                        ("1", format!("{}", indicators)),
+                        ("2", format!("{}", drawings)),
+                        ("3", format!("{}", visible)),
+                        (
+                            "4",
+                            (if selected > 0 {
+                                format!(" • {selected} selected")
+                            } else {
+                                String::new()
+                            })
+                            .to_string(),
+                        ),
+                    ],
                 ))
                 .color(ui.visuals().weak_text_color())
                 .size(11.0),

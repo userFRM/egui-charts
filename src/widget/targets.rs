@@ -3,6 +3,7 @@
 use super::Chart;
 use crate::chart::coords::ChartMapping;
 use crate::data::{FeedError, inbox::Inbox};
+use crate::localization as l10n;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, PriceScaleMode};
 use crate::services::PriceTargets;
 use crate::theme::ThemeExt;
@@ -181,7 +182,11 @@ impl Chart {
                 .map(|change| format!(" ({change:+.2}%)"))
                 .unwrap_or_default();
             let text = format!("{name} {price_text}{change}");
-            let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), color);
+            let galley = painter.layout_no_wrap(
+                l10n::text(ui.ctx(), text),
+                FontId::proportional(12.0),
+                color,
+            );
             let size = galley.size();
             let top = (end.y - size.y / 2.0)
                 .min(coords.rect.bottom() - (3 - position) as f32 * (size.y + 4.0))
@@ -214,9 +219,17 @@ impl Chart {
                 ui.scope_id().with(("price_target", name)),
                 Sense::hover(),
             )
-            .on_hover_text(format!(
-                "{name}: {price_text}{change}\n{} analysts\nPublished: {}\nHorizon: {}",
-                targets.analysts, targets.published, targets.horizon
+            .on_hover_text(l10n::format_text(
+                ui.ctx(),
+                "{name}: {price_text}{change}\n{0} analysts\nPublished: {1}\nHorizon: {2}",
+                &[
+                    ("name", name.to_string()),
+                    ("price_text", price_text.to_string()),
+                    ("change", change.to_string()),
+                    ("0", format!("{}", targets.analysts)),
+                    ("1", format!("{}", targets.published)),
+                    ("2", format!("{}", targets.horizon)),
+                ],
             ));
         }
         painter.set(line_slot, egui::Shape::Vec(lines));

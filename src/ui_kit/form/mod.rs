@@ -22,6 +22,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 pub mod grid;
 
 use crate::styles::typography;
@@ -70,7 +71,7 @@ impl<'a> FormRow<'a> {
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(self.label_width);
-                    ui.label(self.label)
+                    ui.label(l10n::text(ui.ctx(), self.label))
                 },
             );
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -79,7 +80,7 @@ impl<'a> FormRow<'a> {
         });
         if let Some(desc) = self.description {
             ui.label(
-                RichText::new(desc)
+                RichText::new(l10n::text(ui.ctx(), desc))
                     .size(typography::SM)
                     .color(ui.visuals().weak_text_color()),
             );

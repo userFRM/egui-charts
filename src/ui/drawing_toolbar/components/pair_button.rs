@@ -3,6 +3,7 @@
 //! Used for: cursors, tool categories, magnet, hide, remove btns.
 
 use crate::icons::Icon;
+use crate::localization as l10n;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use super::svg_helpers::render_svg_at_rect_themed;
@@ -99,12 +100,13 @@ impl<'a> PairButton<'a> {
         // Icon button (centered in full width for visual balance)
         let icon_rect = Rect::from_center_size(pair_rect.center(), Vec2::splat(icon_size));
         let icon_res = ui.allocate_rect(icon_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
         icon_res.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
                 icon_res.enabled(),
                 self.is_icon_active,
-                self.tooltip,
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &icon_res, DESIGN_TOKENS.rounding.button);
@@ -115,8 +117,9 @@ impl<'a> PairButton<'a> {
             Vec2::new(arrow_width, height),
         );
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), self.arrow_tooltip);
         arrow_res.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), self.arrow_tooltip)
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), &translated_label)
         });
         ui.ctx()
             .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
@@ -185,8 +188,8 @@ impl<'a> PairButton<'a> {
         let arrow_hovered = arrow_res.hovered();
 
         // Tooltips (consumes the responses)
-        icon_res.on_hover_text(self.tooltip);
-        arrow_res.on_hover_text(self.arrow_tooltip);
+        icon_res.on_hover_text(l10n::text(ui.ctx(), self.tooltip));
+        arrow_res.on_hover_text(l10n::text(ui.ctx(), self.arrow_tooltip));
 
         PairButtonResponse {
             icon_clicked,
@@ -240,18 +243,20 @@ impl<'a> PairButton<'a> {
 
         // Use Response-based interactions instead of manual pointer polling
         let icon_res = ui.allocate_rect(icon_zone_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), self.tooltip);
         icon_res.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
                 icon_res.enabled(),
                 self.is_icon_active,
-                self.tooltip,
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &icon_res, inner_rounding);
         let arrow_res = ui.allocate_rect(arrow_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), self.arrow_tooltip);
         arrow_res.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), self.arrow_tooltip)
+            egui::WidgetInfo::labeled(egui::Role::Button, arrow_res.enabled(), &translated_label)
         });
         ui.ctx()
             .accesskit_node_builder(arrow_res.id, |node| node.set_expanded(self.is_expanded));
@@ -311,8 +316,8 @@ impl<'a> PairButton<'a> {
         }
 
         // Tooltips using Response-based interactions
-        icon_res.on_hover_text(self.tooltip);
-        arrow_res.on_hover_text(self.arrow_tooltip);
+        icon_res.on_hover_text(l10n::text(ui.ctx(), self.tooltip));
+        arrow_res.on_hover_text(l10n::text(ui.ctx(), self.arrow_tooltip));
 
         PairButtonResponse {
             icon_clicked,

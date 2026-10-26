@@ -7,6 +7,7 @@ use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::data::Footprint;
+use crate::localization as l10n;
 use crate::model::{MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
 use crate::styles::typography;
@@ -518,7 +519,8 @@ impl Chart {
             ui.ctx().request_discard("Chart measured its axis labels");
         }
         self.record_host_events(ui);
-        response.widget_info(|| self.accessibility_info(response.enabled()));
+        let info = self.accessibility_info(ui.ctx(), response.enabled());
+        response.widget_info(|| info.clone());
         // Within the frame of the edit, in case it is the last.
         #[cfg(feature = "drawings")]
         self.save_stored_drawings();
@@ -908,7 +910,7 @@ impl Chart {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "No data available",
+                l10n::text(ui.ctx(), "No data available"),
                 egui::FontId::proportional(typography::LG),
                 self.config.text_color,
             );
@@ -2123,7 +2125,7 @@ impl Chart {
                     );
                     if quote && let Some(rect) = tag {
                         let badge = painter.layout_no_wrap(
-                            name.to_owned(),
+                            l10n::text(ui.ctx(), name),
                             rendering::axes::axis_font(ui.ctx()),
                             egui::Color32::WHITE,
                         );

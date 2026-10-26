@@ -1,6 +1,7 @@
 //! Tiled and tabbed charts with independent state and timestamp-based synchronization.
 
 use super::Chart;
+use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
@@ -333,7 +334,10 @@ impl ChartLayout {
                     |ui, _| {
                         pointer_down |= ui.input(|i| i.pointer.any_down());
                         close |= ui.input(|i| i.viewport().close_requested());
-                        if ui.button("Return to layout").clicked() {
+                        if ui
+                            .button(l10n::text(ui.ctx(), "Return to layout"))
+                            .clicked()
+                        {
                             close = true;
                         }
                         egui::CentralPanel::default().show(ui, |ui| {
@@ -354,7 +358,10 @@ impl ChartLayout {
                 }
                 if self.mode != ChartLayoutMode::Tabs || index == self.active {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rects[index]), |ui| {
-                        if ui.button("Return chart to layout").clicked() {
+                        if ui
+                            .button(l10n::text(ui.ctx(), "Return chart to layout"))
+                            .clicked()
+                        {
                             self.detached[index] = false;
                         }
                     });
@@ -397,11 +404,11 @@ impl ChartLayout {
                         egui::Popup::menu(&button)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| {
-                                if ui.button("Detach chart").clicked() {
+                                if ui.button(l10n::text(ui.ctx(), "Detach chart")).clicked() {
                                     self.detached[index] = true;
                                     ui.close();
                                 }
-                                ui.label("Sync group");
+                                ui.label(l10n::text(ui.ctx(), "Sync group"));
                                 let mut group = self.groups[index].clone().unwrap_or_default();
                                 if ui.text_edit_singleline(&mut group).changed() {
                                     self.groups[index] = (!group.is_empty()).then_some(group);

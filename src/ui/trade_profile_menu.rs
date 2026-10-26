@@ -1,5 +1,6 @@
 //! User commands for host-owned session and composite trade profiles.
 
+use crate::localization as l10n;
 use crate::studies::TradeProfileRanges;
 use chrono::{DateTime, Utc};
 
@@ -14,7 +15,10 @@ pub fn trade_profile_menu(
 ) -> bool {
     let merge = index < ranges.ranges().len().saturating_sub(1);
     if ui
-        .add_enabled(merge, egui::Button::new("Merge with next profile"))
+        .add_enabled(
+            merge,
+            egui::Button::new(l10n::text(ui.ctx(), "Merge with next profile")),
+        )
         .clicked()
     {
         ui.close();
@@ -29,7 +33,7 @@ pub fn trade_profile_menu(
     if ui
         .add_enabled(
             split.is_some(),
-            egui::Button::new("Split profile at selected bar"),
+            egui::Button::new(l10n::text(ui.ctx(), "Split profile at selected bar")),
         )
         .clicked()
     {

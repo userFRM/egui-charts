@@ -1,6 +1,7 @@
 //! Request state shared by the instrument choosers.
 
 use crate::data::{FeedError, inbox::Inbox};
+use crate::localization as l10n;
 use crate::model::{Instrument, Symbol, SymbolType};
 use crate::services::{StoreKind, SymbolQuery, SymbolSearch};
 use crate::ui::dialogs::templates::TemplateStore;
@@ -215,10 +216,10 @@ impl Search {
 
     pub(super) fn status(&self, ui: &mut egui::Ui) {
         if self.loading {
-            ui.weak("Searching…");
+            ui.weak(l10n::text(ui.ctx(), "Searching…"));
         }
         if let Some(error) = self.error.as_ref().or(self.recents.error.as_ref()) {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            ui.colored_label(ui.visuals().error_fg_color, l10n::text(ui.ctx(), error));
         }
     }
 }

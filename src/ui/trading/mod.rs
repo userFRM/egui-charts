@@ -2,6 +2,7 @@
 //! the Buy and Sell buttons, depth ladder and the account panel. The broker holds the account;
 //! this module shows what it pushes and sends the orders the user confirms.
 
+use crate::localization as l10n;
 mod account_panel;
 mod broker_picker;
 mod dom;
@@ -870,7 +871,7 @@ fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &
     use crate::theme::ThemeExt;
     let theme = ui.ctx().active_theme();
     ui.set_width(200.0);
-    ui.label(egui::RichText::new("Quantity").color(theme.ui.text_secondary));
+    ui.label(egui::RichText::new(l10n::text(ui.ctx(), "Quantity")).color(theme.ui.text_secondary));
     if ui
         .add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY))
         .changed()
@@ -906,7 +907,7 @@ fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &
                 }
                 ui.end_row();
             }
-            if button(ui, egui::Button::new("C")) {
+            if button(ui, egui::Button::new(l10n::text(ui.ctx(), "C"))) {
                 text.clear();
             }
             if button(ui, egui::Button::image(icon(&icons::ROTATE_CCW))) {

@@ -3,6 +3,7 @@
 //! Vertical strip of icon btns on the far right edge of the screen.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -506,7 +507,7 @@ impl WidgetBar {
                     count.to_string()
                 };
                 let badge_galley = painter.layout_no_wrap(
-                    cnt_text,
+                    l10n::text(ui.ctx(), cnt_text),
                     egui::FontId::proportional(typography::XS),
                     ui.active_theme().ui.danger_text,
                 );
@@ -523,12 +524,18 @@ impl WidgetBar {
 
         // The bar is at the window's right edge, so the tooltip opens to the left, clear of the
         // next button. Unlike `on_hover_text`, `Tooltip` does not name the button.
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         btn_res.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, btn_res.enabled(), is_active, tooltip)
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                btn_res.enabled(),
+                is_active,
+                &translated_label,
+            )
         });
         let mut tip = egui::Tooltip::for_enabled(&btn_res);
         tip.popup = tip.popup.align(egui::RectAlign::LEFT);
-        tip.show(|ui| ui.label(tooltip));
+        tip.show(|ui| ui.label(l10n::text(ui.ctx(), tooltip)));
 
         btn_res
     }

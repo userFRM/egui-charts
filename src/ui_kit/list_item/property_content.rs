@@ -1,5 +1,6 @@
 //! PropertyContent - Key-value pair display for list items
 
+use crate::localization as l10n;
 use egui::{Color32, Response, Role, Ui, WidgetInfo};
 
 use super::content::{ContentContext, ListItemContent};
@@ -70,13 +71,12 @@ impl ListItemContent for PropertyContent {
             content_rect.width() * 0.4
         });
 
-        context.response.widget_info(|| {
-            WidgetInfo::labeled(
-                Role::Label,
-                ui.is_enabled(),
-                format!("{}: {}", self.label, self.value),
-            )
-        });
+        let label = l10n::text(ui.ctx(), &self.label);
+        let value = l10n::text(ui.ctx(), &self.value);
+        let translated_label = format!("{label}: {value}");
+        context
+            .response
+            .widget_info(|| WidgetInfo::labeled(Role::Label, ui.is_enabled(), &translated_label));
 
         if ui.is_rect_visible(content_rect) {
             let y_center = content_rect.center().y;
@@ -85,7 +85,7 @@ impl ListItemContent for PropertyContent {
             ui.painter().text(
                 egui::pos2(content_rect.min.x, y_center),
                 egui::Align2::LEFT_CENTER,
-                &self.label,
+                &label,
                 egui::TextStyle::Body.resolve(ui.style()),
                 label_color,
             );
@@ -94,7 +94,7 @@ impl ListItemContent for PropertyContent {
             ui.painter().text(
                 egui::pos2(content_rect.max.x, y_center),
                 egui::Align2::RIGHT_CENTER,
-                &self.value,
+                &value,
                 egui::TextStyle::Body.resolve(ui.style()),
                 value_color,
             );

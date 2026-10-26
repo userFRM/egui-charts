@@ -5,6 +5,7 @@
 
 use crate::ext::UiExt;
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
@@ -388,7 +389,7 @@ impl FloatingReplayControl {
                                 theme.ui.text_muted,
                             ))
                             .on_hover_cursor(CursorIcon::Grab)
-                            .on_hover_text("Move");
+                            .on_hover_text(l10n::text(ui.ctx(), "Move"));
 
                             ui.separator();
 
@@ -457,7 +458,11 @@ impl FloatingReplayControl {
                             let font = FontId::proportional(theme.text.label);
                             let text_width = |ui: &Ui, text: &str| {
                                 ui.painter()
-                                    .layout_no_wrap(text.to_owned(), font.clone(), theme.ui.text)
+                                    .layout_no_wrap(
+                                        l10n::text(ui.ctx(), text),
+                                        font.clone(),
+                                        theme.ui.text,
+                                    )
                                     .size()
                                     .x
                             };
@@ -476,7 +481,9 @@ impl FloatingReplayControl {
                                     combo_width,
                                 )
                             });
-                            speed_response.response.on_hover_text("Playback speed");
+                            speed_response
+                                .response
+                                .on_hover_text(l10n::text(ui.ctx(), "Playback speed"));
                             if speed_response.inner {
                                 action = ReplayControlAction::SetSpeed(speed.multiplier());
                             }
@@ -498,7 +505,7 @@ impl FloatingReplayControl {
 
                             if !self.state.symbol.is_empty() {
                                 ui.label(
-                                    RichText::new(&self.state.symbol)
+                                    RichText::new(l10n::text(ui.ctx(), &self.state.symbol))
                                         .font(font.clone())
                                         .color(theme.ui.text),
                                 );

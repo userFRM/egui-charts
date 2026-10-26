@@ -3,6 +3,7 @@
 //! A modal dialog with a date field and a month calendar for moving the chart to a date or a
 //! range of dates.
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
@@ -134,12 +135,12 @@ impl DatePicker {
             let row = Vec2::new(ui.available_width(), row_height);
 
             ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
-                let label = ui.label("Date");
+                let label = ui.label(l10n::text(ui.ctx(), "Date"));
                 let mut field = TextEdit::singleline(&mut self.date_input)
                     .desired_width(f32::INFINITY)
                     .min_size(Vec2::new(0.0, row_height))
                     .align(Align2::LEFT_CENTER)
-                    .hint_text("YYYY-MM-DD")
+                    .hint_text(l10n::text(ui.ctx(), "YYYY-MM-DD"))
                     .show(ui);
                 let date = parse_date(&self.date_input);
                 if let Some(date) = date {
@@ -201,12 +202,21 @@ impl DatePicker {
             ui.allocate_ui_with_layout(
                 Vec2::new(row.x, LINE),
                 Layout::left_to_right(Align::Center),
-                |ui| ui.label(RichText::new(status).size(theme.text.label).color(color)),
+                |ui| {
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), status))
+                            .size(theme.text.label)
+                            .color(color),
+                    )
+                },
             );
 
             ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
                 if ui
-                    .checkbox(&mut self.custom_range_mode, "Custom range")
+                    .checkbox(
+                        &mut self.custom_range_mode,
+                        l10n::text(ui.ctx(), "Custom range"),
+                    )
                     .changed()
                 {
                     self.range_start = None;
@@ -227,9 +237,12 @@ impl DatePicker {
                             .clicked();
                         ui.centered_and_justified(|ui| {
                             ui.label(
-                                RichText::new(self.displayed_month.format("%B %Y").to_string())
-                                    .strong()
-                                    .size(theme.text.body),
+                                RichText::new(l10n::text(
+                                    ui.ctx(),
+                                    self.displayed_month.format("%B %Y").to_string(),
+                                ))
+                                .strong()
+                                .size(theme.text.body),
                             );
                         });
                         next
@@ -326,7 +339,7 @@ impl DatePicker {
                     ui.add_sized(
                         [CELL, LINE],
                         Label::new(
-                            RichText::new(day)
+                            RichText::new(l10n::text(ui.ctx(), day))
                                 .size(theme.text.small)
                                 .color(theme.ui.text_muted),
                         ),
@@ -346,14 +359,14 @@ impl DatePicker {
                         let is_end = ends.contains(&Some(date));
                         let is_between =
                             matches!(ends, [Some(start), Some(end)] if start < date && date < end);
+                        let name = date.format("%A %-d %B %Y").to_string();
+                        let name = if date == today {
+                            l10n::format_text(ui.ctx(), "{name}, today", &[("name", name)])
+                        } else {
+                            name
+                        };
                         response.widget_info(|| {
-                            let name = date.format("%A %-d %B %Y");
-                            let name = if date == today {
-                                format!("{name}, today")
-                            } else {
-                                name.to_string()
-                            };
-                            WidgetInfo::selected(Role::Button, true, is_end, name)
+                            WidgetInfo::selected(Role::Button, true, is_end, &name)
                         });
 
                         let (fill, text) = if is_end {
@@ -382,7 +395,7 @@ impl DatePicker {
                         painter.text(
                             rect.center(),
                             Align2::CENTER_CENTER,
-                            date.day().to_string(),
+                            l10n::text(ui.ctx(), date.day().to_string()),
                             FontId::proportional(theme.text.body),
                             text,
                         );

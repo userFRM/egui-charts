@@ -3,6 +3,7 @@
 //! Displays symbol info, the last close and its change, bid/ask prices, and volume
 //! in a horizontal bar at the top of the chart area.
 
+use crate::localization as l10n;
 use crate::model::{Quote, percent_change};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
@@ -311,15 +312,19 @@ impl SymbolHeader {
                     for (rect, side) in [(sell, QuoteSide::Sell), (buy, QuoteSide::Buy)] {
                         let id = response.id.with(side == QuoteSide::Buy);
                         let quote_response = ui.interact(rect, id, Sense::click());
+                        let translated_label = l10n::text(
+                            ui.ctx(),
+                            if side == QuoteSide::Buy {
+                                "Buy"
+                            } else {
+                                "Sell"
+                            },
+                        );
                         quote_response.widget_info(|| {
                             egui::WidgetInfo::labeled(
                                 egui::Role::Button,
                                 quote_response.enabled(),
-                                if side == QuoteSide::Buy {
-                                    "Buy"
-                                } else {
-                                    "Sell"
-                                },
+                                &translated_label,
                             )
                         });
                         if quote_response.clicked() {
@@ -340,7 +345,11 @@ impl SymbolHeader {
 
                 // Volume
                 if config.show_volume {
-                    let vol_text = format!("Vol {}", self.format_volume(self.ohlc.volume));
+                    let vol_text = l10n::format_text(
+                        ui.ctx(),
+                        "Vol {volume}",
+                        &[("volume", self.format_volume(self.ohlc.volume))],
+                    );
                     let vol_galley = painter.layout_no_wrap(
                         vol_text,
                         egui::FontId::proportional(typography::MD),
@@ -383,7 +392,7 @@ impl SymbolHeader {
         label: &str,
         bg_color: Color32,
     ) -> Rect {
-        let text = format!("{price:.2} {label}");
+        let text = format!("{price:.2} {}", l10n::text(painter.ctx(), label));
         let galley = painter.layout_no_wrap(
             text,
             egui::FontId::proportional(typography::SM),
@@ -430,9 +439,21 @@ mod tests {
         use super::*;
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for width in [800.0, 320.0] {
-                for (label, expected) in [("SELL", QuoteSide::Sell), ("BUY", QuoteSide::Buy)] {
+                for (translated, label, expected) in [
+                    (false, "SELL", QuoteSide::Sell),
+                    (false, "BUY", QuoteSide::Buy),
+                    (true, "VERKAUFEN", QuoteSide::Sell),
+                    (true, "KAUFEN", QuoteSide::Buy),
+                ] {
                     let ctx = egui::Context::default();
                     crate::theme::apply_to_egui(&ctx, &theme);
+                    if translated {
+                        l10n::set_translator(&ctx, |english| match english {
+                            "SELL" => Some("VERKAUFEN".into()),
+                            "BUY" => Some("KAUFEN".into()),
+                            _ => None,
+                        });
+                    }
                     let mut header = SymbolHeader::new(SymbolInfo {
                         symbol: "SYM".into(),
                         company_name: "A long company name".into(),
@@ -479,7 +500,9 @@ mod tests {
                         );
                         if pass > 14 && target.is_none() {
                             target = output.shapes.iter().find_map(|shape| match &shape.shape {
-                                egui::Shape::Text(text) if text.galley.text().ends_with(label) => {
+                                egui::Shape::Text(text)
+                                    if text.galley.text().ends_with(&format!(" {label}")) =>
+                                {
                                     let rect = text.galley.rect.translate(text.pos.to_vec2());
                                     shape.clip_rect.contains_rect(rect).then_some(rect.center())
                                 }

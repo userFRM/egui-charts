@@ -1,6 +1,7 @@
 //! Pane placement, layout state and interaction controls.
 
 use super::{Chart, SeriesId};
+use crate::localization as l10n;
 use egui::{Color32, Pos2, Rect, Sense, Ui};
 
 /// Identifies a pane of a chart. [`PaneId::MAIN`] is the price pane; [`Chart::add_pane`] and
@@ -658,7 +659,7 @@ impl Chart {
             self.user_action(|chart| {
                 let pane = &mut chart.pane_layout.panes[idx];
                 if ui
-                    .selectable_label(!pane.scale.is_manual(), "Auto scale")
+                    .selectable_label(!pane.scale.is_manual(), l10n::text(ui.ctx(), "Auto scale"))
                     .clicked()
                 {
                     pane.scale.reset();
@@ -673,7 +674,10 @@ impl Chart {
                     PriceScaleMode::IndexedTo100,
                 ] {
                     if ui
-                        .selectable_label(pane.scale.options().mode == mode, mode.to_string())
+                        .selectable_label(
+                            pane.scale.options().mode == mode,
+                            l10n::text(ui.ctx(), mode.to_string()),
+                        )
                         .clicked()
                     {
                         pane.scale.options_mut().mode = mode;
@@ -683,7 +687,10 @@ impl Chart {
                 }
                 ui.separator();
                 if ui
-                    .checkbox(&mut pane.scale.options_mut().invert_scale, "Invert scale")
+                    .checkbox(
+                        &mut pane.scale.options_mut().invert_scale,
+                        l10n::text(ui.ctx(), "Invert scale"),
+                    )
                     .changed()
                 {
                     ui.close();
@@ -724,8 +731,11 @@ impl Chart {
         )
         .ui(&mut child, |ui| {
             for id in movable {
-                ui.menu_button(self.member_name(id), |ui| {
-                    if ui.button("Move to new pane").clicked() {
+                ui.menu_button(l10n::text(ui.ctx(), self.member_name(id)), |ui| {
+                    if ui
+                        .button(l10n::text(ui.ctx(), "Move to new pane"))
+                        .clicked()
+                    {
                         moved = Some((id, None));
                         ui.close();
                     }
@@ -737,7 +747,14 @@ impl Chart {
                             .members
                             .first()
                             .map_or("empty", |member| self.member_name(*member));
-                        if ui.button(format!("Move to {title} pane")).clicked() {
+                        if ui
+                            .button(l10n::format_text(
+                                ui.ctx(),
+                                "Move to {title} pane",
+                                &[("title", title.to_string())],
+                            ))
+                            .clicked()
+                        {
                             moved = Some((id, Some(pane.id)));
                             ui.close();
                         }
@@ -764,11 +781,14 @@ impl Chart {
         let maximized = self.pane_layout.maximized == Some(id);
         let response = ui
             .interact(button, ui.scope_id().with((id, "maximize")), Sense::click())
-            .on_hover_text(if maximized {
-                "Restore panes"
-            } else {
-                "Maximize pane"
-            });
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                if maximized {
+                    "Restore panes"
+                } else {
+                    "Maximize pane"
+                },
+            ));
         if response.hovered() || maximized || ui.rect_contains_pointer(rect) {
             let color = ui.visuals().text_color();
             let icon = button.shrink(5.0);
@@ -844,7 +864,10 @@ impl Chart {
                 ),
                 ("Remove pane", true, 5),
             ] {
-                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                if ui
+                    .add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
+                    .clicked()
+                {
                     action = Some(command);
                     ui.close();
                 }
@@ -854,14 +877,20 @@ impl Chart {
                 ui.separator();
             }
             for member in &members {
-                ui.menu_button(self.member_name(*member), |ui| {
-                    if ui.button("Move to main pane").clicked() {
+                ui.menu_button(l10n::text(ui.ctx(), self.member_name(*member)), |ui| {
+                    if ui
+                        .button(l10n::text(ui.ctx(), "Move to main pane"))
+                        .clicked()
+                    {
                         action = Some(6);
                         move_member = Some(*member);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(members.len() > 1, egui::Button::new("Move to new pane"))
+                        .add_enabled(
+                            members.len() > 1,
+                            egui::Button::new(l10n::text(ui.ctx(), "Move to new pane")),
+                        )
                         .clicked()
                     {
                         action = Some(7);

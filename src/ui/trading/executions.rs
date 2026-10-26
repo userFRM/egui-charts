@@ -1,6 +1,7 @@
 //! The account's fills on the chart: one mark per side and bar, an arrow under the bar's low for
 //! buys and over its high for sells, with a chevron for each fill.
 
+use crate::localization as l10n;
 use egui::{FontId, Rect, Sense, Shape, Stroke, Ui, pos2};
 
 use crate::model::{Execution, OrderSide};
@@ -197,7 +198,7 @@ pub(super) fn show(
                     .with(("execution", side_name(*side), index.to_bits())),
                 Sense::hover(),
             )
-            .on_hover_text(text);
+            .on_hover_text(l10n::text(ui.ctx(), text));
         }
     }
 }

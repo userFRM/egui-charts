@@ -179,6 +179,37 @@ fn custom_controls_report_names_roles_and_states() {
                 .selected(selected)
                 .show(ui, crate::ui_kit::list_item::LabelContent::new("Example"));
         }),
+        (Role::Label, "Price: 12.50", |ui, _| {
+            crate::ui_kit::list_item::ListItem::new().show_property(ui, "Price", "12.50");
+        }),
+        (Role::Label, "Export successful!", |ui, _| {
+            use crate::ext::UiExt;
+            ui.success_label("Export successful!");
+        }),
+        (Role::Label, "Unavailable", |ui, _| {
+            use crate::ext::UiExt;
+            ui.error_label("Unavailable");
+        }),
+        (Role::Label, "Warning", |ui, _| {
+            use crate::ext::UiExt;
+            ui.warning_label("Warning");
+        }),
+        (Role::Label, "Information", |ui, _| {
+            use crate::ext::UiExt;
+            ui.info_label("Information");
+        }),
+        (Role::Label, "Details", |ui, _| {
+            use crate::ext::UiExt;
+            ui.subdued_label("Details");
+        }),
+        (Role::Label, "Property", |ui, _| {
+            use crate::ext::UiExt;
+            ui.property_row("Property", |_| {});
+        }),
+        (Role::TextInput, "Search...", |ui, _| {
+            use crate::ext::UiExt;
+            ui.search_input(&mut String::new());
+        }),
         (Role::Button, "Pane Settings", |ui, _| {
             super::chart_controls::PaneControls::new().show(
                 ui,
@@ -281,6 +312,21 @@ fn custom_controls_report_names_roles_and_states() {
                 }
             }
         }
+    }
+
+    for &(role, label, draw) in controls {
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                crate::localization::set_translator(ctx, |english| {
+                    (english != "12.50").then(|| format!("Translated: {english}"))
+                });
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui(|ui| draw(ui, true));
+        harness.run();
+        harness.get_by_role_and_label(role, &format!("Translated: {label}"));
     }
 }
 
@@ -586,6 +632,39 @@ fn dialogs_expose_titles_and_label_their_fields() {
                 for &(role, label) in controls {
                     harness.get_by_role_and_label(role, label);
                 }
+                let labels: Vec<String> = std::iter::once(title)
+                    .chain(controls.iter().map(|(_, label)| *label))
+                    .filter(|label| *label != "TEST")
+                    .map(str::to_owned)
+                    .collect();
+                let id = dialog.accesskit_node().id();
+                crate::localization::set_translator(&harness.ctx, move |english| {
+                    if english == "TEST" {
+                        return Some("This identifier must stay unchanged".into());
+                    }
+                    (labels.iter().any(|label| label == english)
+                        || english.starts_with("Level {0}"))
+                    .then(|| format!("Translated: {english}"))
+                });
+                harness.run();
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::Dialog, &format!("Translated: {title}"))
+                        .accesskit_node()
+                        .id(),
+                    id
+                );
+                for &(role, label) in controls {
+                    let expected = if label == "TEST" {
+                        label.to_owned()
+                    } else {
+                        format!("Translated: {label}")
+                    };
+                    harness.get_by_role_and_label(role, &expected);
+                }
+                crate::localization::clear_translator(&harness.ctx);
+                harness.run();
+                harness.get_by_role_and_label(Role::Dialog, title);
             }
         }
     }

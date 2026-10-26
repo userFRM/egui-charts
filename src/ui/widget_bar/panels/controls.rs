@@ -1,5 +1,6 @@
 //! Shared controls and cells for the host-fed market panels.
 
+use crate::localization as l10n;
 use egui::{Align, Color32, Label, Layout, Rect, Response, RichText, Sense, Ui, UiBuilder, vec2};
 
 use super::watchlist::ROW_HEIGHT;
@@ -14,11 +15,14 @@ pub(super) fn dropdown(
 ) -> Response {
     ui.push_id(id, |ui| {
         let button = ui.add(
-            egui::Button::new((text, icons::CHEVRON_DOWN.as_image_square(16.0)))
-                .frame_when_inactive(false)
-                .image_tint_follows_text_color(true)
-                .min_size(vec2(0.0, 28.0))
-                .truncate(),
+            egui::Button::new((
+                l10n::text(ui.ctx(), text),
+                icons::CHEVRON_DOWN.as_image_square(16.0),
+            ))
+            .frame_when_inactive(false)
+            .image_tint_follows_text_color(true)
+            .min_size(vec2(0.0, 28.0))
+            .truncate(),
         );
         egui::Popup::menu(&button).show(|ui| {
             egui::ScrollArea::vertical()
@@ -49,7 +53,7 @@ pub(super) fn cell(ui: &mut Ui, rect: Rect, text: &str, right: bool, color: Colo
     }));
     child.set_clip_rect(rect.intersect(ui.clip_rect()));
     child.add(
-        Label::new(RichText::new(text).color(color))
+        Label::new(RichText::new(l10n::text(ui.ctx(), text)).color(color))
             .truncate()
             .selectable(false),
     )

@@ -3,6 +3,7 @@
 use super::DrawingToolbarAction;
 use crate::drawings::glyphs::{self, GLYPHS, Glyph};
 use crate::drawings::{DrawingToolRegistry, DrawingToolType};
+use crate::localization as l10n;
 use egui::{Rect, Ui, Vec2};
 
 /// Session state for the drawing glyph picker.
@@ -37,29 +38,32 @@ impl GlyphPicker {
         ui.set_width(312.0_f32.min(ui.ctx().content_rect().width() - 32.0));
         ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .hint_text("Search icons, emoji and stickers")
+                .hint_text(l10n::text(ui.ctx(), "Search icons, emoji and stickers"))
                 .desired_width(f32::INFINITY),
         );
         ui.horizontal_wrapped(|ui| {
             for group in ["All", "Icons", "Emoji", "Stickers"] {
-                ui.selectable_value(&mut self.group, group, group);
+                ui.selectable_value(&mut self.group, group, l10n::text(ui.ctx(), group));
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Size");
+            ui.label(l10n::text(ui.ctx(), "Size"));
             ui.add(
                 egui::DragValue::new(&mut self.size)
                     .range(8.0..=128.0)
-                    .suffix(" px"),
+                    .suffix(l10n::text(ui.ctx(), " px")),
             );
         });
         ui.separator();
         let query = self.query.trim().to_lowercase();
+        let ctx = ui.ctx().clone();
         let matches = |glyph: &&Glyph| {
             registry.availability(tool_type(glyph.id)).visible
                 && ((query.is_empty()
                     && (self.group == "All" || glyph.category.starts_with(self.group)))
-                    || (!query.is_empty() && glyph.name.to_lowercase().contains(&query)))
+                    || (!query.is_empty()
+                        && (glyph.name.to_lowercase().contains(&query)
+                            || l10n::text(&ctx, glyph.name).to_lowercase().contains(&query))))
         };
         let mut picked = None;
         egui::ScrollArea::vertical()
@@ -72,12 +76,12 @@ impl GlyphPicker {
                     .filter(matches)
                     .collect();
                 if !recent.is_empty() {
-                    ui.label("Recent");
+                    ui.label(l10n::text(ui.ctx(), "Recent"));
                     picked = cells(ui, &recent, registry);
                 }
                 let filtered: Vec<_> = GLYPHS.iter().filter(matches).collect();
                 if filtered.is_empty() {
-                    ui.label("No matching glyphs");
+                    ui.label(l10n::text(ui.ctx(), "No matching glyphs"));
                 }
                 let mut start = 0;
                 while start < filtered.len() {
@@ -87,7 +91,7 @@ impl GlyphPicker {
                             .iter()
                             .take_while(|g| g.category == category)
                             .count();
-                    ui.label(category);
+                    ui.label(l10n::text(ui.ctx(), category));
                     picked = picked.or(cells(ui, &filtered[start..end], registry));
                     start = end;
                 }
@@ -114,9 +118,10 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                         registry.availability(tool_type(glyph.id)).enabled,
                         egui::Button::new("").min_size(Vec2::splat(40.0)),
                     )
-                    .on_hover_text(glyph.name);
+                    .on_hover_text(l10n::text(ui.ctx(), glyph.name));
+                let translated_label = l10n::text(ui.ctx(), glyph.name);
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, glyph.name)
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                 });
                 let rect = Rect::from_center_size(response.rect.center(), Vec2::splat(26.0));
                 let color = ui.visuals().text_color();
@@ -124,7 +129,7 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        glyph.id,
+                        l10n::text(ui.ctx(), glyph.id),
                         egui::FontId::proportional(24.0),
                         color,
                     );

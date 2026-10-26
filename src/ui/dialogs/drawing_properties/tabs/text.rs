@@ -1,5 +1,6 @@
 //! Text tab - labels and font settings.
 
+use crate::localization as l10n;
 use egui::Ui;
 
 use crate::ext::UiExt;
@@ -19,7 +20,7 @@ impl TextTab {
 
         FormGrid::new("text_grid").show(ui, |ui| {
             // Label text
-            let label = ui.label("Label");
+            let label = ui.label(l10n::text(ui.ctx(), "Label"));
             ui.add(
                 egui::TextEdit::multiline(&mut props.label)
                     .desired_width(DESIGN_TOKENS.sizing.dialog.input_width * 2.0)
@@ -29,7 +30,7 @@ impl TextTab {
             ui.end_row();
 
             // Font size
-            let label = ui.label("Font size");
+            let label = ui.label(l10n::text(ui.ctx(), "Font size"));
             ui.label_inputs_by(label.id, |ui| {
                 ui.combo_select(
                     "font_size",

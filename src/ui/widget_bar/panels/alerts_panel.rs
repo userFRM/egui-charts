@@ -1,5 +1,6 @@
 //! Host-supplied alerts and their trigger log. The host stores and evaluates alerts.
 
+use crate::localization as l10n;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -245,11 +246,14 @@ impl AlertsPanel {
             }
         });
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.show_log, false, "Alerts");
-            ui.selectable_value(&mut self.show_log, true, "Log");
+            ui.selectable_value(&mut self.show_log, false, l10n::text(ui.ctx(), "Alerts"));
+            ui.selectable_value(&mut self.show_log, true, l10n::text(ui.ctx(), "Log"));
         });
         if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                l10n::text(ui.ctx(), error.to_string()),
+            );
         }
         if self.show_log {
             if Button::new("Export CSV…")
@@ -269,7 +273,7 @@ impl AlertsPanel {
                             trigger.time.format("%Y-%m-%d %H:%M:%S UTC")
                         ));
                         if let Some(price) = trigger.price {
-                            ui.label(price.to_string());
+                            ui.label(l10n::text(ui.ctx(), price.to_string()));
                         }
                         ui.separator();
                     }
@@ -303,29 +307,33 @@ impl AlertsPanel {
                                 || alert.symbol.clone(),
                                 |id| format!("Watchlist: {id}"),
                             );
-                            ui.label(RichText::new(subject).strong());
-                            ui.label(alert.condition.to_string());
+                            ui.label(RichText::new(l10n::text(ui.ctx(), subject)).strong());
+                            ui.label(l10n::text(ui.ctx(), alert.condition.to_string()));
                             if !alert.additional_conditions.is_empty() {
-                                ui.label(format!(
-                                    "{} additional conditions",
-                                    alert.additional_conditions.len()
+                                ui.label(l10n::format_text(
+                                    ui.ctx(),
+                                    "{0} additional conditions",
+                                    &[("0", format!("{}", alert.additional_conditions.len()))],
                                 ));
                             }
                             if !alert.name.is_empty() {
-                                ui.label(&alert.name);
+                                ui.label(l10n::text(ui.ctx(), &alert.name));
                             }
                             let color = self.status_color(ui, alert.status);
                             ui.colored_label(
                                 color,
-                                match alert.status {
-                                    AlertStatus::Active => "Active",
-                                    AlertStatus::Triggered => "Triggered",
-                                    AlertStatus::Disabled => "Disabled",
-                                    AlertStatus::Expired => "Expired",
-                                },
+                                l10n::text(
+                                    ui.ctx(),
+                                    match alert.status {
+                                        AlertStatus::Active => "Active",
+                                        AlertStatus::Triggered => "Triggered",
+                                        AlertStatus::Disabled => "Disabled",
+                                        AlertStatus::Expired => "Expired",
+                                    },
+                                ),
                             );
                             if !alert.message.is_empty() {
-                                ui.label(&alert.message);
+                                ui.label(l10n::text(ui.ctx(), &alert.message));
                             }
                             ui.horizontal_wrapped(|ui| {
                                 if Button::new("Edit").show(ui).clicked() {

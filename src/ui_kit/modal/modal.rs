@@ -2,6 +2,7 @@
 //!
 //! A modal dialog in the dialog chrome, centred on the screen above a dimmed backdrop.
 
+use crate::localization as l10n;
 use egui::{Color32, Context, Id, Ui};
 
 use crate::theme::ThemeExt;
@@ -158,9 +159,10 @@ impl Modal {
         });
 
         if !self.title.is_empty() {
-            response
-                .response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Dialog, true, &self.title));
+            let translated_label = l10n::text(ctx, &self.title);
+            response.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Dialog, true, &translated_label)
+            });
             ctx.accesskit_node_builder(response.response.id, |node| node.set_modal());
         }
 

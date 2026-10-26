@@ -1,5 +1,6 @@
 //! Drawing properties dialog - modal popup for editing drawing properties.
 
+use crate::localization as l10n;
 use egui::{Context, Event, Key, Modifiers, Ui, Vec2};
 
 use super::actions::{DrawingId, DrawingPropertiesAction, DrawingProps};
@@ -162,7 +163,7 @@ impl DrawingPropertiesDialog {
                     StyleTab::show(ui, &mut self.props, &mut state.pickers);
                     ui.checkbox(
                         &mut self.props.save_as_default,
-                        "Save as default for this tool",
+                        l10n::text(ui.ctx(), "Save as default for this tool"),
                     );
                 }
                 PropertiesTab::Inputs => {
@@ -178,7 +179,7 @@ impl DrawingPropertiesDialog {
             });
 
         if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            ui.colored_label(ui.visuals().error_fg_color, l10n::text(ui.ctx(), error));
         }
 
         let mut delete = false;

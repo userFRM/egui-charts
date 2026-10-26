@@ -3,6 +3,7 @@
 //! Shows btns for quick timeframe switching (1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, All)
 
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::styles::typography;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -184,8 +185,9 @@ impl TimeframeBar {
             Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
         );
         let date_res = ui.allocate_rect(date_icon_rect, Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Go to date");
         date_res.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, date_res.enabled(), "Go to date")
+            egui::WidgetInfo::labeled(egui::Role::Button, date_res.enabled(), &translated_label)
         });
         crate::styles::focus::draw_focus_ring(ui, &date_res, DESIGN_TOKENS.rounding.sm);
         if date_res.hovered() {
@@ -233,7 +235,7 @@ impl TimeframeBar {
         for tf in timeframes.iter() {
             let label = tf.label();
             let galley = painter.layout_no_wrap(
-                label.to_string(),
+                l10n::text(ui.ctx(), label),
                 egui::FontId::proportional(typography::SM),
                 self.config.text_color,
             );
@@ -247,8 +249,14 @@ impl TimeframeBar {
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
             crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.sm);
             let is_active = *tf == self.active_timeframe;
+            let translated_label = l10n::text(ui.ctx(), label);
             btn_res.widget_info(|| {
-                egui::WidgetInfo::selected(egui::Role::Button, btn_res.enabled(), is_active, label)
+                egui::WidgetInfo::selected(
+                    egui::Role::Button,
+                    btn_res.enabled(),
+                    is_active,
+                    &translated_label,
+                )
             });
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
@@ -271,7 +279,7 @@ impl TimeframeBar {
             };
 
             let text_galley = painter.layout_no_wrap(
-                label.to_string(),
+                l10n::text(ui.ctx(), label),
                 egui::FontId::proportional(typography::SM),
                 text_color,
             );
@@ -299,7 +307,7 @@ impl TimeframeBar {
         if self.show_adj {
             let adj_text = "ADJ";
             let adj_galley = painter.layout_no_wrap(
-                adj_text.to_string(),
+                l10n::text(ui.ctx(), adj_text),
                 egui::FontId::proportional(typography::XS),
                 if self.adj_enabled {
                     self.config.active_text_color
@@ -315,12 +323,13 @@ impl TimeframeBar {
                 Vec2::new(adj_galley.size().x + 12.0, self.config.height - 8.0),
             );
             let adj_res = ui.allocate_rect(adj_button_rect, Sense::click());
+            let translated_label = l10n::text(ui.ctx(), "Adjust for dividends");
             adj_res.widget_info(|| {
                 egui::WidgetInfo::selected(
                     egui::Role::Button,
                     adj_res.enabled(),
                     self.adj_enabled,
-                    "Adjust for dividends",
+                    &translated_label,
                 )
             });
             crate::styles::focus::draw_focus_ring(ui, &adj_res, DESIGN_TOKENS.rounding.sm);
@@ -334,7 +343,7 @@ impl TimeframeBar {
             }
 
             let adj_draw_galley = painter.layout_no_wrap(
-                adj_text.to_string(),
+                l10n::text(ui.ctx(), adj_text),
                 egui::FontId::proportional(typography::XS),
                 if self.adj_enabled {
                     self.config.active_text_color
@@ -366,7 +375,7 @@ impl TimeframeBar {
             now.second()
         );
         let time_galley = painter.layout_no_wrap(
-            time_str,
+            l10n::text(ui.ctx(), time_str),
             egui::FontId::proportional(typography::XS),
             self.config.text_color,
         );

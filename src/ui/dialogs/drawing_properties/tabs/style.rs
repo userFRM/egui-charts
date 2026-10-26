@@ -1,5 +1,6 @@
 //! Style tab - color, line width, line style.
 
+use crate::localization as l10n;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
 
 use crate::ext::UiExt;
@@ -21,18 +22,18 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
-            ui.label("Color");
+            ui.label(l10n::text(ui.ctx(), "Color"));
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
                 props.color = color;
             }
             ui.end_row();
 
-            ui.label("Line width");
+            ui.label(l10n::text(ui.ctx(), "Line width"));
             line_width_row(ui, &mut props.line_width);
             ui.end_row();
 
-            let label = ui.label("Line style");
+            let label = ui.label(l10n::text(ui.ctx(), "Line style"));
             ui.label_inputs_by(label.id, |ui| {
                 ui.combo_select(
                     "line_style",
@@ -43,13 +44,13 @@ impl StyleTab {
             });
             ui.end_row();
 
-            let label = ui.label("Fill");
-            ui.checkbox(&mut props.fill_enabled, "Enable fill")
+            let label = ui.label(l10n::text(ui.ctx(), "Fill"));
+            ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
                 .labelled_by(label.id);
             ui.end_row();
 
             if props.fill_enabled {
-                ui.label("Fill color");
+                ui.label(l10n::text(ui.ctx(), "Fill color"));
                 let fill = props
                     .fill_color
                     .unwrap_or(ui.active_theme().ui.accent.gamma_multiply(0.2));
@@ -63,11 +64,11 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            ui.label("Extend");
+            ui.label(l10n::text(ui.ctx(), "Extend"));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut props.extend_left, "Left");
+                ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                 ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
-                ui.checkbox(&mut props.extend_right, "Right");
+                ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
             });
             ui.end_row();
         });
@@ -97,13 +98,13 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 *width = preset;
             }
             let selected = *width == preset;
+            let translated_label = l10n::format_text(
+                ui.ctx(),
+                "{preset} px",
+                &[("preset", format!("{}", preset))],
+            );
             response.widget_info(|| {
-                WidgetInfo::selected(
-                    Role::Button,
-                    ui.is_enabled(),
-                    selected,
-                    format!("{preset} px"),
-                )
+                WidgetInfo::selected(Role::Button, ui.is_enabled(), selected, &translated_label)
             });
 
             let visuals = ui.visuals();
@@ -140,8 +141,8 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
                 .speed(0.5)
                 .max_decimals(1)
                 .custom_formatter(|v, _| v.to_string())
-                .suffix(" px"),
+                .suffix(l10n::text(ui.ctx(), " px")),
         )
-        .accessible_name("Line width");
+        .accessible_name(l10n::text(ui.ctx(), "Line width"));
     });
 }

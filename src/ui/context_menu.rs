@@ -4,6 +4,7 @@
 //! clipboard operations, chart management, and navigation options.
 
 use super::tpo_context_menu::TpoMenu;
+use crate::localization as l10n;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -299,8 +300,11 @@ fn draw_menu<A: Clone>(
     let pad = t.item_padding_h - theme.spacing.sm;
 
     let layout = |text: String, size: f32, max_width: f32| {
-        let mut job =
-            LayoutJob::simple_singleline(text, FontId::proportional(size), Color32::PLACEHOLDER);
+        let mut job = LayoutJob::simple_singleline(
+            l10n::text(ctx, text),
+            FontId::proportional(size),
+            Color32::PLACEHOLDER,
+        );
         job.wrap = TextWrapping::truncate_at_width(max_width);
         ctx.fonts_mut(|f| f.layout_job(job))
     };
@@ -487,11 +491,12 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
+    let translated_label = l10n::text(ui.ctx(), &item.label);
     response.widget_info(|| {
         WidgetInfo::labeled(
             egui::Role::MenuItem,
             response.enabled() && item.enabled,
-            &item.label,
+            &translated_label,
         )
     });
 

@@ -4,6 +4,7 @@
 
 use crate::ext::UiExt;
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use egui::{Color32, Pos2, Rect, Sense, Ui, Vec2};
@@ -212,7 +213,10 @@ impl FloatingSelectionToolbar {
                                     // Use egui's color picker button
                                     if ui
                                         .color_edit_button_srgba(&mut color)
-                                        .on_hover_text("Click to change color")
+                                        .on_hover_text(l10n::text(
+                                            ui.ctx(),
+                                            "Click to change color",
+                                        ))
                                         .changed()
                                     {
                                         color_changes.push((idx, color));

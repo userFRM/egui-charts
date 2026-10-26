@@ -1,5 +1,6 @@
 //! Settings for an existing study, staged until Apply.
 
+use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::studies::{
     Indicator, InputKind, InputValue, PlotPattern, PlotType, StudyInput, StudySettings,
@@ -133,9 +134,15 @@ impl IndicatorSettingsDialog {
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
                             if self.inputs.is_empty() {
-                                ui.label("This study has no editable inputs.");
+                                ui.label(l10n::text(
+                                    ui.ctx(),
+                                    "This study has no editable inputs.",
+                                ));
                             }
-                            if !self.inputs.is_empty() && ui.small_button("Reset inputs").clicked()
+                            if !self.inputs.is_empty()
+                                && ui
+                                    .small_button(l10n::text(ui.ctx(), "Reset inputs"))
+                                    .clicked()
                             {
                                 for input in &mut self.inputs {
                                     input.value = input.default.clone();
@@ -160,7 +167,7 @@ impl IndicatorSettingsDialog {
                                         input.value = input.default.clone();
                                         continue;
                                     }
-                                    let label = ui.label(&input.label);
+                                    let label = ui.label(l10n::text(ui.ctx(), &input.label));
                                     let response = match (&input.kind, &mut input.value) {
                                         (
                                             InputKind::Length(min, max),
@@ -180,13 +187,18 @@ impl IndicatorSettingsDialog {
                                         ),
                                         (InputKind::Choice(choices), InputValue::Choice(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
-                                                .selected_text(
+                                                .selected_text(l10n::text(
+                                                    ui.ctx(),
                                                     choices.get(*value).map_or("", String::as_str),
-                                                )
+                                                ))
                                                 .show_ui(ui, |ui| {
                                                     for (index, label) in choices.iter().enumerate()
                                                     {
-                                                        ui.selectable_value(value, index, label);
+                                                        ui.selectable_value(
+                                                            value,
+                                                            index,
+                                                            l10n::text(ui.ctx(), label),
+                                                        );
                                                     }
                                                 })
                                                 .response
@@ -196,24 +208,31 @@ impl IndicatorSettingsDialog {
                                         }
                                         (InputKind::Source, InputValue::Source(value)) => {
                                             egui::ComboBox::from_id_salt(&input.id)
-                                                .selected_text(match value {
-                                                    crate::studies::StudySource::Price(source) => {
-                                                        source.label().to_owned()
-                                                    }
-                                                    crate::studies::StudySource::Study {
-                                                        ..
-                                                    } => self
-                                                        .sources
-                                                        .iter()
-                                                        .find(|(source, _)| source == value)
-                                                        .map(|(_, label)| label.clone())
-                                                        .unwrap_or_else(|| {
-                                                            "Unavailable study".to_owned()
-                                                        }),
-                                                })
+                                                .selected_text(l10n::text(
+                                                    ui.ctx(),
+                                                    match value {
+                                                        crate::studies::StudySource::Price(
+                                                            source,
+                                                        ) => source.label().to_owned(),
+                                                        crate::studies::StudySource::Study {
+                                                            ..
+                                                        } => self
+                                                            .sources
+                                                            .iter()
+                                                            .find(|(source, _)| source == value)
+                                                            .map(|(_, label)| label.clone())
+                                                            .unwrap_or_else(|| {
+                                                                "Unavailable study".to_owned()
+                                                            }),
+                                                    },
+                                                ))
                                                 .show_ui(ui, |ui| {
                                                     for (source, label) in &self.sources {
-                                                        ui.selectable_value(value, *source, label);
+                                                        ui.selectable_value(
+                                                            value,
+                                                            *source,
+                                                            l10n::text(ui.ctx(), label),
+                                                        );
                                                     }
                                                     for source in crate::model::PriceSource::all() {
                                                         ui.selectable_value(
@@ -221,7 +240,7 @@ impl IndicatorSettingsDialog {
                                                             crate::studies::StudySource::Price(
                                                                 source,
                                                             ),
-                                                            source.label(),
+                                                            l10n::text(ui.ctx(), source.label()),
                                                         );
                                                     }
                                                 })
@@ -232,31 +251,34 @@ impl IndicatorSettingsDialog {
                                         }
                                         (InputKind::Symbol, InputValue::Symbol(value)) => ui.add(
                                             egui::TextEdit::singleline(value)
-                                                .hint_text("Chart symbol"),
+                                                .hint_text(l10n::text(ui.ctx(), "Chart symbol")),
                                         ),
                                         (InputKind::Timeframe, InputValue::Timeframe(value)) => {
                                             let response = egui::ComboBox::from_id_salt(&input.id)
-                                                .selected_text(value.map_or_else(
-                                                    || "Chart interval".to_owned(),
-                                                    |tf| tf.to_string(),
+                                                .selected_text(l10n::text(
+                                                    ui.ctx(),
+                                                    value.map_or_else(
+                                                        || "Chart interval".to_owned(),
+                                                        |tf| tf.to_string(),
+                                                    ),
                                                 ))
                                                 .show_ui(ui, |ui| {
                                                     ui.selectable_value(
                                                         value,
                                                         None,
-                                                        "Chart interval",
+                                                        l10n::text(ui.ctx(), "Chart interval"),
                                                     );
                                                     for tf in Timeframe::all() {
                                                         ui.selectable_value(
                                                             value,
                                                             Some(tf),
-                                                            tf.to_string(),
+                                                            l10n::text(ui.ctx(), tf.to_string()),
                                                         );
                                                     }
                                                     if ui
                                                         .selectable_label(
                                                             value.is_some_and(|tf| tf.is_custom()),
-                                                            "Custom",
+                                                            l10n::text(ui.ctx(), "Custom"),
                                                         )
                                                         .clicked()
                                                     {
@@ -272,7 +294,7 @@ impl IndicatorSettingsDialog {
                                                     .add(
                                                         egui::DragValue::new(&mut count)
                                                             .range(1..=u64::MAX)
-                                                            .suffix(" s"),
+                                                            .suffix(l10n::text(ui.ctx(), " s")),
                                                     )
                                                     .labelled_by(label.id)
                                                     .changed()
@@ -283,7 +305,10 @@ impl IndicatorSettingsDialog {
                                             }
                                             response
                                         }
-                                        _ => ui.label("This input is unavailable."),
+                                        _ => ui.label(l10n::text(
+                                            ui.ctx(),
+                                            "This input is unavailable.",
+                                        )),
                                     };
                                     response.labelled_by(label.id);
                                     ui.end_row();
@@ -296,21 +321,27 @@ impl IndicatorSettingsDialog {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
                                             &mut plot.visible,
-                                            self.line_names
-                                                .get(line)
-                                                .map_or("Plot", String::as_str),
+                                            l10n::text(
+                                                ui.ctx(),
+                                                self.line_names
+                                                    .get(line)
+                                                    .map_or("Plot", String::as_str),
+                                            ),
                                         );
                                         ui.color_edit_button_srgba(&mut plot.color);
                                         ui.add(
                                             egui::DragValue::new(&mut plot.width)
                                                 .range(0.5..=10.0)
-                                                .suffix(" px"),
+                                                .suffix(l10n::text(ui.ctx(), " px")),
                                         )
-                                        .accessible_name("Line width");
+                                        .accessible_name(l10n::text(ui.ctx(), "Line width"));
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         egui::ComboBox::from_id_salt("pattern")
-                                            .selected_text(format!("{:?}", plot.pattern))
+                                            .selected_text(l10n::text(
+                                                ui.ctx(),
+                                                format!("{:?}", plot.pattern),
+                                            ))
                                             .show_ui(ui, |ui| {
                                                 for pattern in [
                                                     PlotPattern::Solid,
@@ -322,14 +353,20 @@ impl IndicatorSettingsDialog {
                                                     ui.selectable_value(
                                                         &mut plot.pattern,
                                                         pattern,
-                                                        format!("{pattern:?}"),
+                                                        l10n::text(
+                                                            ui.ctx(),
+                                                            format!("{pattern:?}"),
+                                                        ),
                                                     );
                                                 }
                                             })
                                             .response
-                                            .accessible_name("Line pattern");
+                                            .accessible_name(l10n::text(ui.ctx(), "Line pattern"));
                                         egui::ComboBox::from_id_salt("plot_type")
-                                            .selected_text(format!("{:?}", plot.plot_type))
+                                            .selected_text(l10n::text(
+                                                ui.ctx(),
+                                                format!("{:?}", plot.plot_type),
+                                            ))
                                             .show_ui(ui, |ui| {
                                                 for kind in [
                                                     PlotType::Line,
@@ -339,20 +376,23 @@ impl IndicatorSettingsDialog {
                                                     ui.selectable_value(
                                                         &mut plot.plot_type,
                                                         kind,
-                                                        format!("{kind:?}"),
+                                                        l10n::text(ui.ctx(), format!("{kind:?}")),
                                                     );
                                                 }
                                             })
                                             .response
-                                            .accessible_name("Plot type");
+                                            .accessible_name(l10n::text(ui.ctx(), "Plot type"));
                                     });
                                     ui.separator();
                                 });
                             }
                             ui.horizontal_wrapped(|ui| {
-                                ui.label("Precision");
+                                ui.label(l10n::text(ui.ctx(), "Precision"));
                                 let mut automatic = edit.settings.precision.is_none();
-                                if ui.checkbox(&mut automatic, "Automatic").changed() {
+                                if ui
+                                    .checkbox(&mut automatic, l10n::text(ui.ctx(), "Automatic"))
+                                    .changed()
+                                {
                                     edit.settings.precision =
                                         if automatic { None } else { Some(2) };
                                 }
@@ -360,14 +400,14 @@ impl IndicatorSettingsDialog {
                                     ui.add(
                                         egui::DragValue::new(precision)
                                             .range(0..=12)
-                                            .suffix(" decimals"),
+                                            .suffix(l10n::text(ui.ctx(), " decimals")),
                                     )
-                                    .accessible_name("Precision");
+                                    .accessible_name(l10n::text(ui.ctx(), "Precision"));
                                 }
                             });
                         }
                         Tab::Visibility => {
-                            ui.label("Show this study on these intervals:");
+                            ui.label(l10n::text(ui.ctx(), "Show this study on these intervals:"));
                             let mut intervals = Timeframe::all();
                             for interval in self
                                 .current_interval
@@ -382,7 +422,13 @@ impl IndicatorSettingsDialog {
                                 for interval in intervals {
                                     let mut visible =
                                         !edit.settings.hidden_intervals.contains(&interval);
-                                    if ui.checkbox(&mut visible, interval.to_string()).changed() {
+                                    if ui
+                                        .checkbox(
+                                            &mut visible,
+                                            l10n::text(ui.ctx(), interval.to_string()),
+                                        )
+                                        .changed()
+                                    {
                                         edit.settings.hidden_intervals.retain(|tf| *tf != interval);
                                         if !visible {
                                             edit.settings.hidden_intervals.push(interval);

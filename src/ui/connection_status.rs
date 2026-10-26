@@ -4,6 +4,7 @@
 //! Used in the top toolbar to show real-time data connectivity.
 
 use crate::icons::{Icon, icons};
+use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -85,7 +86,11 @@ impl<'a> Widget for ConnectionStatusIndicator<'a> {
 
             // Optional label
             if self.show_label {
-                ui.label(RichText::new(self.state_label()).color(color).size(11.0));
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), self.state_label()))
+                        .color(color)
+                        .size(11.0),
+                );
             }
         })
         .response

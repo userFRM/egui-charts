@@ -2,6 +2,7 @@
 //! trade, the user's working orders at their prices, and orders placed, moved and cancelled from
 //! the ladder.
 
+use crate::localization as l10n;
 use std::collections::{BTreeMap, HashMap};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -389,15 +390,9 @@ impl Ladder {
                         .map_or("unknown".to_owned(), |n| format!("{n:+}"))
                 };
                 let [bid_traded, ask_traded, unknown] = volumes[row];
-                response.clone().on_hover_text(format!(
-                    "Bid orders: {} · Ask orders: {}\nSize change: bid {}, ask {}\nTraded at bid: {} · at ask: {}\nUnclassified: {} · Total: {}\nProfile: retained feed trades{}",
-                    counts(bid.1), counts(ask.1), delta(0), delta(1),
-                    format_size(bid_traded), format_size(ask_traded), format_size(unknown),
-                    format_size(bid_traded + ask_traded + unknown),
-                    if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
+                response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nSize change: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: retained feed trades{8}", &[("0", counts(bid.1).to_string()), ("1", counts(ask.1).to_string()), ("2", delta(0).to_string()), ("3", delta(1).to_string()), ("4", format_size(bid_traded).to_string()), ("5", format_size(ask_traded).to_string()), ("6", format_size(unknown).to_string()), ("7", format_size(bid_traded + ask_traded + unknown).to_string()), ("8", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
                         "\nLast account fill"
-                    } else { "" }
-                ));
+                    } else { "" }).to_string())]));
             }
         }
 
@@ -473,7 +468,7 @@ impl Ladder {
                     }
                 }
                 Err(reason) => {
-                    response.clone().on_hover_text(reason);
+                    response.clone().on_hover_text(l10n::text(ui.ctx(), reason));
                 }
             }
         }
@@ -534,7 +529,7 @@ impl Ladder {
             );
             if group.len() > 1 {
                 egui::Popup::menu(&tag_response).show(|ui| {
-                    ui.label("Choose an order to drag or cancel");
+                    ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
                     for order in group {
                         let label = format!(
                             "{} {} · {}",
@@ -542,20 +537,16 @@ impl Ladder {
                             tag(&order.request.order_type),
                             order.id.0,
                         );
-                        if ui.selectable_label(order.id == working.id, label).clicked() {
+                        if ui
+                            .selectable_label(order.id == working.id, l10n::text(ui.ctx(), label))
+                            .clicked()
+                        {
                             self.selected = Some(order.id.clone());
                         }
                     }
                 });
             }
-            let tag_response = tag_response.on_hover_text(format!(
-                "{} {} @ {} {label} · {}. Drag to move, right-click to cancel. {} order(s) here; click to choose",
-                side.label(),
-                grouped(working.request.quantity - working.filled, quantity_decimals, false),
-                grouped(at, market.decimals, false),
-                working.id.0,
-                group.len(),
-            ));
+            let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", grouped(working.request.quantity - working.filled, quantity_decimals, false).to_string()), ("2", grouped(at, market.decimals, false).to_string()), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
             if tag_response.secondary_clicked() {
                 action = Some(Action::Confirm(TradingLineAction::Cancel(working.clone())));
             }
@@ -630,9 +621,10 @@ impl Ladder {
                     ui.make_persistent_id(("dom_cancel", index)),
                     Sense::click(),
                 )
-                .on_hover_text(&label);
+                .on_hover_text(l10n::text(ui.ctx(), &label));
+            let translated_label = l10n::text(ui.ctx(), &label);
             response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, !ids.is_empty(), &label)
+                egui::WidgetInfo::labeled(egui::Role::Button, !ids.is_empty(), &translated_label)
             });
             let ink = if response.hovered() && !ids.is_empty() {
                 theme.ui.text
@@ -667,13 +659,17 @@ impl Ladder {
         let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
         let lock_response = ui
             .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
-            .on_hover_text(if self.locked {
-                "Re-centre the ladder on the market"
-            } else {
-                "Keep the ladder from re-centring on the market"
-            });
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                if self.locked {
+                    "Re-centre the ladder on the market"
+                } else {
+                    "Keep the ladder from re-centring on the market"
+                },
+            ));
+        let translated_label = l10n::text(ui.ctx(), "Lock the ladder");
         lock_response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, true, self.locked, "Lock the ladder")
+            egui::WidgetInfo::selected(egui::Role::Button, true, self.locked, &translated_label)
         });
         if lock_response.clicked() {
             self.locked = !self.locked;
@@ -739,7 +735,7 @@ impl Ladder {
         ui.columns(3, |thirds| {
             let close = market.capabilities.market && position.is_some();
             let outlined = |ui: &mut Ui, enabled: bool, label: &str| {
-                let button = egui::Button::new(label)
+                let button = egui::Button::new(l10n::text(ui.ctx(), label))
                     .fill(Color32::TRANSPARENT)
                     .stroke(Stroke::new(1.0, theme.ui.border_control))
                     .corner_radius(6.0);
@@ -772,9 +768,11 @@ impl Ladder {
             for (index, side) in [(0, OrderSide::Buy), (2, OrderSide::Sell)] {
                 let ui = &mut thirds[index];
                 let label = format!("{} Mkt", side_name(side));
-                let button = egui::Button::new(egui::RichText::new(label).color(Color32::WHITE))
-                    .fill(side_fill(&theme, side))
-                    .corner_radius(6.0);
+                let button = egui::Button::new(
+                    egui::RichText::new(l10n::text(ui.ctx(), label)).color(Color32::WHITE),
+                )
+                .fill(side_fill(&theme, side))
+                .corner_radius(6.0);
                 let request = order(side, OrderType::Market);
                 let enabled = market.capabilities.market && request.is_ok();
                 let size = [ui.available_width(), 36.0];
@@ -782,7 +780,7 @@ impl Ladder {
                     .add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner;
                 let response = match &request {
-                    Err(reason) => response.on_disabled_hover_text(reason),
+                    Err(reason) => response.on_disabled_hover_text(l10n::text(ui.ctx(), reason)),
                     Ok(_) => response,
                 };
                 if response.clicked()
@@ -799,14 +797,15 @@ impl Ladder {
         // The Details section with the time in force of the ladder's orders.
         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
         let details = ui.interact(row, ui.make_persistent_id("dom_details"), Sense::click());
+        let translated_label = l10n::text(ui.ctx(), "Details");
         details.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, true, self.details, "Details")
+            egui::WidgetInfo::selected(egui::Role::Button, true, self.details, &translated_label)
         });
         if details.clicked() {
             self.details = !self.details;
         }
         let galley = ui.painter().layout_no_wrap(
-            "DETAILS  ".to_owned(),
+            l10n::text(ui.ctx(), "DETAILS  "),
             egui::FontId::proportional(11.0),
             theme.ui.text_muted,
         );

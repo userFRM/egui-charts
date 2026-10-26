@@ -2,6 +2,7 @@
 //!
 //! Lists the handled keyboard shortcuts by category. The host opens it on `?` or `F1`.
 
+use crate::localization as l10n;
 use egui::{
     Color32, Context, FontId, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, RichText, Role,
     ScrollArea, Stroke, Ui, WidgetInfo,
@@ -109,20 +110,27 @@ impl KeyboardShortcutsDialog {
         }
         // The chart reads its keys only while it has keyboard focus.
         ui.label(
-            RichText::new("Click the chart to use the chart keys.")
-                .size(theme.text.small)
-                .color(ui.visuals().weak_text_color()),
+            RichText::new(l10n::text(
+                ui.ctx(),
+                "Click the chart to use the chart keys.",
+            ))
+            .size(theme.text.small)
+            .color(ui.visuals().weak_text_color()),
         );
         ui.add_space(theme.spacing.lg);
 
         let categories = shortcuts.by_category();
         let font = FontId::proportional(theme.text.body);
+        let labels: Vec<_> = categories
+            .iter()
+            .flat_map(|(_, actions)| actions)
+            .map(|action| l10n::text(ui.ctx(), action.label()))
+            .collect();
         let widest = ui.fonts_mut(|f| {
-            categories
-                .iter()
-                .flat_map(|(_, actions)| actions)
-                .map(|a| {
-                    f.layout_no_wrap(a.label().to_owned(), font.clone(), Color32::PLACEHOLDER)
+            labels
+                .into_iter()
+                .map(|label| {
+                    f.layout_no_wrap(label, font.clone(), Color32::PLACEHOLDER)
                         .size()
                         .x
                 })
@@ -142,7 +150,7 @@ impl KeyboardShortcutsDialog {
                             ui.add_space(theme.spacing.xxl - ui.spacing().item_spacing.y);
                         }
                         ui.label(
-                            RichText::new(*name)
+                            RichText::new(l10n::text(ui.ctx(), *name))
                                 .size(theme.text.small)
                                 .strong()
                                 .color(theme.ui.text_secondary),
@@ -156,7 +164,10 @@ impl KeyboardShortcutsDialog {
                             .max_col_width(label_w)
                             .show(ui, |ui| {
                                 for action in actions {
-                                    ui.label(RichText::new(action.label()).size(theme.text.body));
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), action.label()))
+                                            .size(theme.text.body),
+                                    );
                                     let keys: Vec<_> = shortcuts.keys_for(*action).collect();
                                     ui.horizontal_wrapped(|ui| key_badges(ui, &theme, &keys));
                                     ui.end_row();
@@ -175,7 +186,7 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
     for (idx, shortcut) in shortcuts.iter().enumerate() {
         if idx > 0 {
             ui.label(
-                RichText::new("or")
+                RichText::new(l10n::text(ui.ctx(), "or"))
                     .size(theme.text.small)
                     .color(ui.visuals().weak_text_color()),
             );
@@ -205,15 +216,16 @@ fn key_badges(ui: &mut Ui, theme: &Theme, shortcuts: &[KeyboardShortcut]) {
                 theme.spacing.xs as i8,
             ))
             .show(ui, |ui| {
+                let translated_label = l10n::text(ui.ctx(), &name);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(text)
+                        RichText::new(l10n::text(ui.ctx(), text))
                             .size(theme.text.small)
                             .color(theme.ui.text),
                     )
                     .wrap_mode(egui::TextWrapMode::Extend),
                 )
-                .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+                .widget_info(|| WidgetInfo::labeled(Role::Label, true, &translated_label));
             });
     }
 }

@@ -16,6 +16,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::text::LayoutJob;
 use egui::{Align, CollapsingResponse, Id, RichText, TextStyle, Ui, Vec2, WidgetText};
 
@@ -70,7 +71,7 @@ impl Section {
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> CollapsingResponse<R> {
         let theme = ui.active_theme();
-        let mut text = RichText::new(&self.title).size(theme.text.small);
+        let mut text = RichText::new(l10n::text(ui.ctx(), &self.title)).size(theme.text.small);
         if self.strong_header {
             text = text.strong();
         }

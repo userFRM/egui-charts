@@ -2,6 +2,7 @@
 //!
 //! A dropdown menu for selecting chart timeframes with favorites support.
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::styles::focus::focus_ring_color;
 use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
@@ -334,7 +335,7 @@ impl CustomTimeframeDialog {
                         .align(egui::Align2::LEFT_CENTER)
                         .font(egui::FontId::proportional(theme.text.body)),
                 )
-                .accessible_name("Interval value");
+                .accessible_name(l10n::text(ui.ctx(), "Interval value"));
                 let width = ui
                     .horizontal(|ui| {
                         let unit = Self::available_units()
@@ -342,9 +343,12 @@ impl CustomTimeframeDialog {
                             .find(|(u, _)| *u == self.unit)
                             .map_or_else(|| self.unit.name(), |(_, label)| label);
                         // A submenu keeps the interval menu open when a unit is picked.
-                        ui.menu_button(unit, |ui| {
+                        ui.menu_button(l10n::text(ui.ctx(), unit), |ui| {
                             for (u, label) in Self::available_units() {
-                                if ui.selectable_label(self.unit == *u, *label).clicked() {
+                                if ui
+                                    .selectable_label(self.unit == *u, l10n::text(ui.ctx(), *label))
+                                    .clicked()
+                                {
                                     self.unit = *u;
                                 }
                             }
@@ -367,7 +371,7 @@ impl CustomTimeframeDialog {
             ui.horizontal(|ui| {
                 ui.add_space(theme.spacing.lg);
                 ui.label(
-                    RichText::new(err)
+                    RichText::new(l10n::text(ui.ctx(), err))
                         .size(theme.text.small)
                         .color(ui.visuals().error_fg_color),
                 );
@@ -524,7 +528,11 @@ impl TimeframeSelector {
         let font = egui::FontId::proportional(14.0);
         let width = |text: String| {
             ui.painter()
-                .layout_no_wrap(text, font.clone(), Color32::PLACEHOLDER)
+                .layout_no_wrap(
+                    l10n::text(ui.ctx(), text),
+                    font.clone(),
+                    Color32::PLACEHOLDER,
+                )
                 .size()
                 .x
         };
@@ -709,7 +717,7 @@ fn section_header(ui: &mut Ui, theme: &Theme, text: &str) {
     );
     title.add(
         egui::Label::new(
-            RichText::new(text.to_uppercase())
+            RichText::new(l10n::text(ui.ctx(), text.to_uppercase()))
                 .size(theme.text.small)
                 .color(theme.ui.text_secondary),
         )
@@ -734,12 +742,13 @@ impl ListItemContent for TimeframeRow<'_> {
         } else {
             theme.ui.text
         };
+        let translated_label = l10n::text(ui.ctx(), self.tf.display_long());
         context.response.widget_info(|| {
             WidgetInfo::selected(
                 Role::MenuItemRadio,
                 context.response.enabled(),
                 context.selected,
-                self.tf.display_long(),
+                &translated_label,
             )
         });
 
@@ -757,8 +766,14 @@ impl ListItemContent for TimeframeRow<'_> {
         } else {
             "Add to favorites"
         };
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         star.widget_info(|| {
-            WidgetInfo::selected(Role::Button, ui.is_enabled(), self.favorite, tooltip)
+            WidgetInfo::selected(
+                Role::Button,
+                ui.is_enabled(),
+                self.favorite,
+                &translated_label,
+            )
         });
         *self.toggle_favorite = star.clicked();
         let icon = if self.favorite {
@@ -772,11 +787,11 @@ impl ListItemContent for TimeframeRow<'_> {
                 Rect::from_center_size(star_rect.center(), vec2(icon_sizes::SM, icon_sizes::SM)),
             );
         menu_row_focus(ui, &star);
-        star.on_hover_text(tooltip);
+        star.on_hover_text(l10n::text(ui.ctx(), tooltip));
         ui.painter().text(
             pos2(rect.min.x, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            self.tf.display_long(),
+            l10n::text(ui.ctx(), self.tf.display_long()),
             egui::FontId::proportional(14.0),
             text,
         );

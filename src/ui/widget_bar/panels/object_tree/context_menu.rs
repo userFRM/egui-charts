@@ -2,6 +2,7 @@
 //!
 //! Right-click menu with full object management options.
 
+use crate::localization as l10n;
 use egui::{Key, Ui};
 
 use super::actions::ObjectTreeAction;
@@ -18,7 +19,10 @@ pub(super) fn render_item_menu(
     let id = item.id;
 
     // Properties/Settings
-    if ui.selectable_label(false, "Properties…").clicked() {
+    if ui
+        .selectable_label(false, l10n::text(ui.ctx(), "Properties…"))
+        .clicked()
+    {
         action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::OpenIndicatorSettings(id)
         } else {
@@ -28,7 +32,11 @@ pub(super) fn render_item_menu(
     }
 
     // Rename
-    if item.is_drawing() && ui.selectable_label(false, "Rename…").clicked() {
+    if item.is_drawing()
+        && ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Rename…"))
+            .clicked()
+    {
         state.start_rename(id, item.display_name());
         ui.close();
     }
@@ -37,7 +45,9 @@ pub(super) fn render_item_menu(
 
     // Duplicate (drawings and indicators)
     if (item.is_drawing() || item.is_indicator())
-        && ui.selectable_label(false, "Duplicate").clicked()
+        && ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Duplicate"))
+            .clicked()
     {
         action = ObjectTreeAction::Duplicate(id);
         ui.close();
@@ -47,19 +57,31 @@ pub(super) fn render_item_menu(
 
     // Z-ordering (drawings only)
     if item.source_type == SourceType::Drawing {
-        if ui.selectable_label(false, "Bring to front").clicked() {
+        if ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Bring to front"))
+            .clicked()
+        {
             action = ObjectTreeAction::BringToFront(id);
             ui.close();
         }
-        if ui.selectable_label(false, "Move up").clicked() {
+        if ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Move up"))
+            .clicked()
+        {
             action = ObjectTreeAction::MoveUp(id);
             ui.close();
         }
-        if ui.selectable_label(false, "Move down").clicked() {
+        if ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Move down"))
+            .clicked()
+        {
             action = ObjectTreeAction::MoveDown(id);
             ui.close();
         }
-        if ui.selectable_label(false, "Send to back").clicked() {
+        if ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Send to back"))
+            .clicked()
+        {
             action = ObjectTreeAction::SendToBack(id);
             ui.close();
         }
@@ -69,7 +91,10 @@ pub(super) fn render_item_menu(
 
     // Visibility toggle
     let vis_label = if item.visible { "Hide" } else { "Show" };
-    if ui.selectable_label(false, vis_label).clicked() {
+    if ui
+        .selectable_label(false, l10n::text(ui.ctx(), vis_label))
+        .clicked()
+    {
         action = ObjectTreeAction::ToggleVisibility(id);
         ui.close();
     }
@@ -77,7 +102,10 @@ pub(super) fn render_item_menu(
     // Lock toggle (drawings only)
     if item.source_type == SourceType::Drawing {
         let lock_label = if item.locked { "Unlock" } else { "Lock" };
-        if ui.selectable_label(false, lock_label).clicked() {
+        if ui
+            .selectable_label(false, l10n::text(ui.ctx(), lock_label))
+            .clicked()
+        {
             action = ObjectTreeAction::ToggleLock(id);
             ui.close();
         }
@@ -86,7 +114,11 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Zoom to
-    if item.is_drawing() && ui.selectable_label(false, "Zoom to object").clicked() {
+    if item.is_drawing()
+        && ui
+            .selectable_label(false, l10n::text(ui.ctx(), "Zoom to object"))
+            .clicked()
+    {
         action = ObjectTreeAction::ZoomTo(id);
         ui.close();
     }
@@ -100,7 +132,9 @@ pub(super) fn render_item_menu(
         "Delete"
     };
     if item.source_type != SourceType::DataSource
-        && ui.selectable_label(false, delete_label).clicked()
+        && ui
+            .selectable_label(false, l10n::text(ui.ctx(), delete_label))
+            .clicked()
     {
         action = if item.source_type == SourceType::Indicator {
             ObjectTreeAction::RemoveIndicator(id)

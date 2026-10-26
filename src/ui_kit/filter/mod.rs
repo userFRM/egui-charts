@@ -22,6 +22,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::{Margin, Rect, Response, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2};
 
 use crate::icons::icons;
@@ -160,7 +161,7 @@ fn search_field(
 
             let margin = |icon: bool| (if icon { icon_slot } else { inset }) as i8;
             TextEdit::singleline(query)
-                .hint_text(placeholder)
+                .hint_text(l10n::text(ui.ctx(), placeholder))
                 .desired_width(f32::INFINITY)
                 .min_size(Vec2::new(0.0, ui.spacing().interact_size.y))
                 .margin(Margin {
@@ -171,7 +172,7 @@ fn search_field(
                 .ui(ui)
         })
         .inner
-        .accessible_name(placeholder);
+        .accessible_name(l10n::text(ui.ctx(), placeholder));
 
     let icon_rect = |center_x: f32| {
         Rect::from_center_size(

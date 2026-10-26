@@ -1,6 +1,7 @@
 //! Grid presets and synchronization switches for a chart layout.
 
 use crate::icons::{Icon, icons};
+use crate::localization as l10n;
 use crate::ui::model::ChartLayoutMode;
 use crate::ui_kit::buttons::IconButton;
 use crate::widget::ChartSyncOptions;
@@ -58,7 +59,10 @@ impl ChartGridSelector {
             .show(ui, |ui| {
                 for &layout in ChartLayoutMode::all() {
                     if ui
-                        .selectable_label(self.current == layout, layout.label())
+                        .selectable_label(
+                            self.current == layout,
+                            l10n::text(ui.ctx(), layout.label()),
+                        )
                         .clicked()
                     {
                         self.current = layout;
@@ -68,13 +72,28 @@ impl ChartGridSelector {
                 }
             });
         ui.separator();
-        ui.label("Synchronize within group");
-        ui.checkbox(&mut self.sync.sync_symbol, "Symbol");
-        ui.checkbox(&mut self.sync.sync_timeframe, "Interval");
-        ui.checkbox(&mut self.sync.sync_crosshair, "Crosshair");
-        ui.checkbox(&mut self.sync.sync_time_axis, "Scroll and zoom");
-        ui.checkbox(&mut self.sync.sync_date_range, "Date range");
-        ui.checkbox(&mut self.sync.sync_drawings, "Drawings on the same symbol");
+        ui.label(l10n::text(ui.ctx(), "Synchronize within group"));
+        ui.checkbox(&mut self.sync.sync_symbol, l10n::text(ui.ctx(), "Symbol"));
+        ui.checkbox(
+            &mut self.sync.sync_timeframe,
+            l10n::text(ui.ctx(), "Interval"),
+        );
+        ui.checkbox(
+            &mut self.sync.sync_crosshair,
+            l10n::text(ui.ctx(), "Crosshair"),
+        );
+        ui.checkbox(
+            &mut self.sync.sync_time_axis,
+            l10n::text(ui.ctx(), "Scroll and zoom"),
+        );
+        ui.checkbox(
+            &mut self.sync.sync_date_range,
+            l10n::text(ui.ctx(), "Date range"),
+        );
+        ui.checkbox(
+            &mut self.sync.sync_drawings,
+            l10n::text(ui.ctx(), "Drawings on the same symbol"),
+        );
         selected
     }
 }

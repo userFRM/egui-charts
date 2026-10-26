@@ -3,6 +3,7 @@
 //! A button that supports semantic variants (Primary, Secondary, Ghost, etc.)
 //! providing clear visual hierarchy for different action types.
 
+use crate::localization as l10n;
 use egui::{Color32, Rect, Response, Sense, TextStyle, Ui, Vec2, Widget, pos2};
 
 use super::{ButtonSize, ButtonVariant, finish};
@@ -219,8 +220,11 @@ impl<'a> Widget for Button<'a> {
         let icon_size = self.size.icon_pixels(self.icon_scale);
         let galley = self.text.as_ref().map(|text| {
             let font = TextStyle::Button.resolve(ui.style());
-            ui.painter()
-                .layout_no_wrap(text.clone(), font, Color32::PLACEHOLDER)
+            ui.painter().layout_no_wrap(
+                l10n::text(ui.ctx(), text.clone()),
+                font,
+                Color32::PLACEHOLDER,
+            )
         });
 
         // Content is laid out text, so the padding is the same for every label.

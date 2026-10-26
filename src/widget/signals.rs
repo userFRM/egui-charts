@@ -3,6 +3,7 @@
 use super::Chart;
 use crate::chart::coords::ChartMapping;
 use crate::data::inbox::Inbox;
+use crate::localization as l10n;
 use crate::model::{Direction, Signal, SignalShape, Timeframe};
 use crate::services::{Listener, SignalEvent, Signals};
 use crate::theme::ThemeExt;
@@ -260,7 +261,7 @@ impl Chart {
                 let label_rect = painter.text(
                     label,
                     Align2::LEFT_CENTER,
-                    label_text,
+                    l10n::text(ui.ctx(), label_text),
                     FontId::proportional(11.0),
                     color,
                 );
@@ -275,7 +276,7 @@ impl Chart {
                 source.source.clicked(&signal.id);
             }
             if let Some(tooltip) = &signal.tooltip {
-                response.on_hover_text(tooltip);
+                response.on_hover_text(l10n::text(ui.ctx(), tooltip));
             }
         }
     }
@@ -296,10 +297,13 @@ impl Chart {
                     Vec2::new(80.0, 24.0),
                 )),
                 |ui| {
-                    ui.menu_button("Signals", |ui| {
+                    ui.menu_button(l10n::text(ui.ctx(), "Signals"), |ui| {
                         for category in categories {
                             let mut visible = !self.hidden_signal_categories.contains(&category);
-                            if ui.checkbox(&mut visible, &category).changed() {
+                            if ui
+                                .checkbox(&mut visible, l10n::text(ui.ctx(), &category))
+                                .changed()
+                            {
                                 self.set_signal_category_visible(&category, visible);
                             }
                         }

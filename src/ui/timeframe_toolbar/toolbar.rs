@@ -7,6 +7,7 @@
 use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarState};
 use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
+use crate::localization as l10n;
 use crate::styles::{icons as icon_sizes, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -201,17 +202,20 @@ impl TimeframeToolbar {
             if ranges_width + reserved + 48.0 > ui.available_width() {
                 let response = ui.add(
                     egui::Button::new(
-                        egui::RichText::new(if compact { "…" } else { "Ranges" })
-                            .size(self.config.font_size),
+                        egui::RichText::new(l10n::text(
+                            ui.ctx(),
+                            if compact { "…" } else { "Ranges" },
+                        ))
+                        .size(self.config.font_size),
                     )
                     .frame(false),
                 );
-                let response = response.on_hover_text("Date ranges");
+                let response = response.on_hover_text(l10n::text(ui.ctx(), "Date ranges"));
                 egui::Popup::menu(&response).show(|ui| {
                     for range in ranges {
                         if ui
-                            .button(range.label())
-                            .on_hover_text(range.tooltip())
+                            .button(l10n::text(ui.ctx(), range.label()))
+                            .on_hover_text(l10n::text(ui.ctx(), range.tooltip()))
                             .clicked()
                         {
                             self.state.set_date_range(range);
@@ -343,21 +347,22 @@ impl TimeframeToolbar {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            text,
+            l10n::text(ui.ctx(), text),
             font_id,
             text_color,
         );
 
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tooltip)
+            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &translated_label)
         });
-        response.on_hover_text(tooltip)
+        response.on_hover_text(l10n::text(ui.ctx(), tooltip))
     }
 
     fn range_btn_width(&self, ui: &Ui, text: &str) -> f32 {
         let galley = ui.painter().layout_no_wrap(
-            text.to_owned(),
+            l10n::text(ui.ctx(), text),
             FontId::proportional(self.config.font_size),
             self.config.text_color,
         );
@@ -406,16 +411,22 @@ impl TimeframeToolbar {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            text,
+            l10n::text(ui.ctx(), text),
             font_id,
             text_color,
         );
 
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_active, tooltip)
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                ui.is_enabled(),
+                is_active,
+                &translated_label,
+            )
         });
-        response.on_hover_text(tooltip)
+        response.on_hover_text(l10n::text(ui.ctx(), tooltip))
     }
 
     /// Render the calendar icon button (Go to date)
@@ -457,15 +468,16 @@ impl TimeframeToolbar {
             .paint_at(ui, icon_rect);
 
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
                 ui.is_enabled(),
                 self.state.date_picker_open,
-                tooltip,
+                &translated_label,
             )
         });
-        response.on_hover_text(tooltip)
+        response.on_hover_text(l10n::text(ui.ctx(), tooltip))
     }
 
     /// Render a vertical separator

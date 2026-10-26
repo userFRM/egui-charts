@@ -1,6 +1,7 @@
 //! Facts about the chart's symbol: its quote, the key statistics and profile the feed supplies,
 //! and the user's notes, kept through the storage service.
 
+use crate::localization as l10n;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -318,7 +319,7 @@ impl SymbolDetailsPanel {
                 .tooltip("More")
                 .show(ui);
             egui::Popup::menu(&more).show(|ui| {
-                if ui.button("Copy symbol").clicked() {
+                if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
                     ui.ctx().copy_text(instrument.symbol.clone());
                 }
             });
@@ -334,7 +335,10 @@ impl SymbolDetailsPanel {
                 .show(|ui| {
                     for section in SECTIONS {
                         let mut shown = !hidden.contains(section);
-                        if ui.checkbox(&mut shown, section).changed() {
+                        if ui
+                            .checkbox(&mut shown, l10n::text(ui.ctx(), section))
+                            .changed()
+                        {
                             if shown {
                                 hidden.remove(section);
                             } else {
@@ -345,7 +349,7 @@ impl SymbolDetailsPanel {
                 });
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let title = LayoutJob::single_section(
-                    instrument.symbol.clone(),
+                    l10n::text(ui.ctx(), instrument.symbol.clone()),
                     weighted(theme.text.heading, 700.0, theme.ui.text),
                 );
                 ui.add(Label::new(title).truncate());
@@ -379,7 +383,7 @@ impl SymbolDetailsPanel {
                             ui.set_max_width(ui.available_width() - 16.0);
                             ui.add(
                                 Label::new(
-                                    RichText::new(name.join(" · "))
+                                    RichText::new(l10n::text(ui.ctx(), name.join(" · ")))
                                         .size(theme.text.label)
                                         .color(theme.ui.text),
                                 )
@@ -405,7 +409,7 @@ impl SymbolDetailsPanel {
                         instrument.currency.as_deref(),
                     );
                     ui.label(
-                        RichText::new(update(quote.time))
+                        RichText::new(l10n::text(ui.ctx(), update(quote.time)))
                             .size(theme.text.small)
                             .color(theme.ui.text_secondary),
                     );
@@ -426,9 +430,13 @@ impl SymbolDetailsPanel {
                             ExtendedSession::PostMarket => ("Post-market", theme.ui.info),
                         };
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(session).size(theme.text.small).color(color));
                             ui.label(
-                                RichText::new(update(extended.time))
+                                RichText::new(l10n::text(ui.ctx(), session))
+                                    .size(theme.text.small)
+                                    .color(color),
+                            );
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), update(extended.time)))
                                     .size(theme.text.small)
                                     .color(theme.ui.text_secondary),
                             );
@@ -456,9 +464,17 @@ impl SymbolDetailsPanel {
                         ),
                     ] {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(left).size(size).color(color));
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), left))
+                                    .size(size)
+                                    .color(color),
+                            );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(RichText::new(right).size(size).color(color));
+                                ui.label(
+                                    RichText::new(l10n::text(ui.ctx(), right))
+                                        .size(size)
+                                        .color(color),
+                                );
                             });
                         });
                     }
@@ -476,9 +492,14 @@ impl SymbolDetailsPanel {
                         ui.label(RichText::new(title).strong());
                         for (label, value) in rows {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(label).color(theme.ui.text_secondary));
+                                ui.label(
+                                    RichText::new(l10n::text(ui.ctx(), label))
+                                        .color(theme.ui.text_secondary),
+                                );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.add(Label::new(value.as_str()).truncate());
+                                    ui.add(
+                                        Label::new(l10n::text(ui.ctx(), value.as_str())).truncate(),
+                                    );
                                 });
                             });
                         }
@@ -486,12 +507,12 @@ impl SymbolDetailsPanel {
                 }
                 if shown("Notes") {
                     ui.add_space(theme.spacing.md);
-                    ui.label(RichText::new("Notes").strong());
+                    ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
                     let notes = notes.entry(instrument.symbol.clone()).or_default();
                     let field = ui.add_enabled(
                         notes.written.is_some(),
                         egui::TextEdit::multiline(&mut notes.text)
-                            .hint_text("Add a note")
+                            .hint_text(l10n::text(ui.ctx(), "Add a note"))
                             .desired_width(f32::INFINITY)
                             .desired_rows(4),
                     );
@@ -528,7 +549,7 @@ fn price_line(
     };
     // One text, so the figures of different sizes share a baseline.
     let mut job = LayoutJob::single_section(
-        format_price(price, Some(decimals)),
+        l10n::text(ui.ctx(), format_price(price, Some(decimals))),
         weighted(size, 700.0, theme.ui.text),
     );
     if let Some(currency) = currency {
@@ -568,9 +589,10 @@ fn external_link(ui: &mut Ui, url: &str) {
     let (rect, response) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(url);
+        .on_hover_text(l10n::text(ui.ctx(), url));
+    let translated_label = l10n::text(ui.ctx(), "Open instrument page");
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), "Open instrument page")
+        egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), &translated_label)
     });
     let color = if response.hovered() {
         theme.ui.accent

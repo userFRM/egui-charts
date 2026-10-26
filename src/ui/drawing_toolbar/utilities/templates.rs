@@ -4,6 +4,7 @@
 //! and loading drawing templates.
 
 use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingTemplate;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
@@ -89,13 +90,13 @@ impl TemplatesButton {
                         ui.space_lg();
 
                         ui.label(
-                            egui::RichText::new("Save Template")
+                            egui::RichText::new(l10n::text(ui.ctx(), "Save Template"))
                                 .size(DESIGN_TOKENS.typography.body)
                                 .strong(),
                         );
                         ui.space_md();
 
-                        ui.label("Template name:");
+                        ui.label(l10n::text(ui.ctx(), "Template name:"));
                         ui.space_sm();
 
                         let text_response = ui.text_edit_singleline(name_input);
@@ -114,7 +115,10 @@ impl TemplatesButton {
                             let can_save = !name_input.trim().is_empty();
 
                             if ui
-                                .add_enabled(can_save, egui::Button::new("Save"))
+                                .add_enabled(
+                                    can_save,
+                                    egui::Button::new(l10n::text(ui.ctx(), "Save")),
+                                )
                                 .clicked()
                             {
                                 action = Some(DrawingToolbarAction::SaveTemplate {
@@ -122,7 +126,7 @@ impl TemplatesButton {
                                 });
                             }
 
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(l10n::text(ui.ctx(), "Cancel")).clicked() {
                                 name_input.clear();
                                 action = Some(DrawingToolbarAction::None);
                             }

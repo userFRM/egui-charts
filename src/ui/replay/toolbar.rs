@@ -5,6 +5,7 @@
 
 use crate::ext::UiExt;
 use crate::icons::icons;
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::model::{
@@ -282,7 +283,7 @@ impl<'a> ReplayToolbar<'a> {
         let current = self.state.speed;
 
         egui::ComboBox::from_id_salt("replay_speed")
-            .selected_text(current.display_name())
+            .selected_text(l10n::text(ui.ctx(), current.display_name()))
             .width(DESIGN_TOKENS.sizing.replay.speed_dropdown_width)
             .show_ui(ui, |ui| {
                 for speed in [
@@ -295,7 +296,7 @@ impl<'a> ReplayToolbar<'a> {
                         .selectable_value(
                             &mut self.state.speed.clone(),
                             speed,
-                            speed.display_name(),
+                            l10n::text(ui.ctx(), speed.display_name()),
                         )
                         .clicked()
                         && speed != current
@@ -319,11 +320,12 @@ impl<'a> ReplayToolbar<'a> {
                 theme.spacing.sm,
             );
             let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+            let translated_label = l10n::text(ui.ctx(), "Replay progress");
             response.widget_info(|| {
                 let mut info = egui::WidgetInfo::labeled(
                     egui::Role::ProgressIndicator,
                     response.enabled(),
-                    "Replay progress",
+                    &translated_label,
                 );
                 info.value = Some(f64::from(pct) * 100.0);
                 info
@@ -355,7 +357,11 @@ impl<'a> ReplayToolbar<'a> {
     fn show_time_display(&self, ui: &mut Ui) {
         if let Some(ref progress) = self.state.progress {
             let time_str = progress.current_time.format("%H:%M:%S").to_string();
-            ui.label(egui::RichText::new(time_str).monospace().small());
+            ui.label(
+                egui::RichText::new(l10n::text(ui.ctx(), time_str))
+                    .monospace()
+                    .small(),
+            );
 
             // Bars played
             let bars_str = format!("{}/{}", progress.bars_played, progress.total_bars);

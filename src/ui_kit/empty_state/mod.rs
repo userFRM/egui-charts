@@ -13,6 +13,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use egui::{Frame, Margin, RichText, Ui, Vec2};
 
 use crate::icons::Icon;
@@ -96,9 +97,15 @@ impl<'a> EmptyState<'a> {
                     if let Some(icon) = self.icon {
                         ui.add(icon.as_image_tinted(Vec2::splat(ICON_SIZE), muted));
                     }
-                    ui.label(RichText::new(self.message).size(theme.text.body));
+                    ui.label(
+                        RichText::new(l10n::text(ui.ctx(), self.message)).size(theme.text.body),
+                    );
                     if let Some(desc) = self.description {
-                        ui.label(RichText::new(desc).size(theme.text.small).color(muted));
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), desc))
+                                .size(theme.text.small)
+                                .color(muted),
+                        );
                     }
                     self.action
                         .is_some_and(|label| Button::new(label).primary().show(ui).clicked())

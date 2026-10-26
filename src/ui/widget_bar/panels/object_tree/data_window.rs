@@ -3,6 +3,7 @@
 //! Displays real-time OHLCV data at the cursor position.
 //! Collapsible section at the top of the Object Tree panel.
 
+use crate::localization as l10n;
 use egui::{RichText, Ui};
 
 use crate::icons::icons;
@@ -78,7 +79,7 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
         ui.right_aligned(|ui| {
             if !data.symbol.is_empty() {
                 ui.label(
-                    RichText::new(&data.symbol)
+                    RichText::new(l10n::text(ui.ctx(), &data.symbol))
                         .small()
                         .color(ui.visuals().weak_text_color()),
                 );
@@ -94,12 +95,12 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
             egui::Grid::new("bar_time").num_columns(2).show(ui, |ui| {
                 if !data.timestamp.is_empty() {
                     ui.hint_label("Time");
-                    ui.label(&data.timestamp);
+                    ui.label(l10n::text(ui.ctx(), &data.timestamp));
                     ui.end_row();
                 }
                 if !data.timeframe.is_empty() {
                     ui.hint_label("Interval");
-                    ui.label(&data.timeframe);
+                    ui.label(l10n::text(ui.ctx(), &data.timeframe));
                     ui.end_row();
                 }
             });
@@ -114,7 +115,10 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
                     .show(ui, |ui| {
                         for study in &data.studies {
                             ui.hint_label(study.label());
-                            ui.label(RichText::new(study.formatted_value()).color(study.color));
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), study.formatted_value()))
+                                    .color(study.color),
+                            );
                             ui.end_row();
                         }
                     });
@@ -141,30 +145,46 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         .min_col_width(50.0)
         .show(ui, |ui| {
             ui.hint_label("O");
-            ui.label(format_price(data.open, data.price_decimals));
+            ui.label(l10n::text(
+                ui.ctx(),
+                format_price(data.open, data.price_decimals),
+            ));
             ui.end_row();
             ui.hint_label("H");
-            ui.label(format_price(data.high, data.price_decimals));
+            ui.label(l10n::text(
+                ui.ctx(),
+                format_price(data.high, data.price_decimals),
+            ));
             ui.end_row();
 
             ui.hint_label("L");
-            ui.label(format_price(data.low, data.price_decimals));
+            ui.label(l10n::text(
+                ui.ctx(),
+                format_price(data.low, data.price_decimals),
+            ));
             ui.end_row();
             ui.hint_label("C");
             ui.label(
-                RichText::new(format_price(data.close, data.price_decimals)).color(change_color),
+                RichText::new(l10n::text(
+                    ui.ctx(),
+                    format_price(data.close, data.price_decimals),
+                ))
+                .color(change_color),
             );
             ui.end_row();
 
             ui.hint_label("Vol");
-            ui.label(data.volume_precision.map_or_else(
-                || format_volume(data.volume),
-                |decimals| {
-                    VolumeFormatter {
-                        precision: usize::from(decimals),
-                    }
-                    .format(data.volume)
-                },
+            ui.label(l10n::text(
+                ui.ctx(),
+                data.volume_precision.map_or_else(
+                    || format_volume(data.volume),
+                    |decimals| {
+                        VolumeFormatter {
+                            precision: usize::from(decimals),
+                        }
+                        .format(data.volume)
+                    },
+                ),
             ));
             ui.end_row();
             ui.hint_label("Chg");

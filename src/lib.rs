@@ -100,6 +100,13 @@
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.
 //!
+//! UI labels use the crate's English text by default. Install a host lookup with
+//! [`localization::set_translator`] before drawing to translate toolbars, dialogs,
+//! panels and accessibility names in that egui context. Missing entries retain
+//! English; replacing or clearing the lookup takes effect on the next frame.
+//! The host supplies translation resources and any additional fonts. Date and
+//! numeric formatting remain controlled by the chart's formatters and locale.
+//!
 //! ## Building for the web
 //!
 //! The download of a `wasm32` build shrinks with:
@@ -189,6 +196,8 @@ pub mod ui;
 // ─── Convenience re-exports ──────────────────────────────────────────────────
 
 pub use model::ChartType;
+#[cfg(feature = "widget")]
+pub use widget::localization;
 #[cfg(feature = "widget")]
 pub use widget::{Chart, ChartBuilder, RightClickTarget};
 

@@ -30,6 +30,7 @@
 //! ```
 
 use crate::ext::UiExt;
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_frame, title_row};
@@ -319,11 +320,15 @@ impl ExportDialog {
         let mut response = ExportResponse::None;
         ui.add_enabled_ui(self.export_status != ExportStatus::Exporting, |ui| {
             FormGrid::new("export_form").show(ui, |ui| {
-                let label = ui.label("Format");
+                let label = ui.label(l10n::text(ui.ctx(), "Format"));
                 ui.horizontal(|ui| {
                     for &format in &self.formats {
                         if ui
-                            .radio_value(&mut self.config.format, format, format.as_str())
+                            .radio_value(
+                                &mut self.config.format,
+                                format,
+                                l10n::text(ui.ctx(), format.as_str()),
+                            )
                             .changed()
                         {
                             self.export_status = ExportStatus::Idle;
@@ -335,14 +340,14 @@ impl ExportDialog {
                 ui.end_row();
 
                 if !self.config.format.is_data_format() {
-                    ui.label("Image size");
+                    ui.label(l10n::text(ui.ctx(), "Image size"));
                     let mut changed = false;
                     ui.horizontal(|ui| {
                         changed |= ui
                             .add(
                                 egui::DragValue::new(&mut self.config.image.size[0])
                                     .range(100..=7680)
-                                    .suffix(" px"),
+                                    .suffix(l10n::text(ui.ctx(), " px")),
                             )
                             .changed();
                         ui.label("×");
@@ -350,26 +355,35 @@ impl ExportDialog {
                             .add(
                                 egui::DragValue::new(&mut self.config.image.size[1])
                                     .range(100..=4320)
-                                    .suffix(" px"),
+                                    .suffix(l10n::text(ui.ctx(), " px")),
                             )
                             .changed();
                     });
                     ui.end_row();
-                    ui.label("Include");
+                    ui.label(l10n::text(ui.ctx(), "Include"));
                     ui.vertical(|ui| {
                         changed |= ui
-                            .checkbox(&mut self.config.image.include_title, "Chart title")
+                            .checkbox(
+                                &mut self.config.image.include_title,
+                                l10n::text(ui.ctx(), "Chart title"),
+                            )
                             .changed();
                         changed |= ui
-                            .checkbox(&mut self.config.image.include_timestamp, "Export timestamp")
+                            .checkbox(
+                                &mut self.config.image.include_timestamp,
+                                l10n::text(ui.ctx(), "Export timestamp"),
+                            )
                             .changed();
                         changed |= ui
-                            .checkbox(&mut self.config.image.include_crosshair, "Crosshair")
+                            .checkbox(
+                                &mut self.config.image.include_crosshair,
+                                l10n::text(ui.ctx(), "Crosshair"),
+                            )
                             .changed();
                         changed |= ui
                             .checkbox(
                                 &mut self.config.image.transparent_background,
-                                "Transparent background",
+                                l10n::text(ui.ctx(), "Transparent background"),
                             )
                             .changed();
                     });
@@ -384,12 +398,12 @@ impl ExportDialog {
                         "File path, such as chart_export.{}",
                         self.config.format.file_extension().unwrap_or("png")
                     );
-                    let label = ui.label("File");
+                    let label = ui.label(l10n::text(ui.ctx(), "File"));
                     let field = ui
                         .add(
                             egui::TextEdit::singleline(&mut self.save_path)
                                 .id(path_field())
-                                .hint_text(hint)
+                                .hint_text(l10n::text(ui.ctx(), hint))
                                 .desired_width(f32::INFINITY),
                         )
                         .labelled_by(label.id);
@@ -407,7 +421,7 @@ impl ExportDialog {
         if self.config.format.is_data_format() {
             ui.add_space(theme.spacing.md);
             ui.label(
-                RichText::new("Exports loaded bars and visible study values, using the chart time zone and price precision.")
+                RichText::new(l10n::text(ui.ctx(), "Exports loaded bars and visible study values, using the chart time zone and price precision."))
                     .size(theme.text.small)
                     .color(theme.ui.text_secondary),
             );
@@ -431,7 +445,7 @@ impl ExportDialog {
             ExportStatus::Idle => {}
             ExportStatus::Exporting => {
                 ui.spinner();
-                ui.label("Exporting...");
+                ui.label(l10n::text(ui.ctx(), "Exporting..."));
             }
             ExportStatus::Success => {
                 if self.config.format == ExportFormat::Clipboard {
@@ -522,9 +536,17 @@ impl ExportButton {
     /// Returns `true` if the button was clicked.
     #[must_use = "Button click should be handled"]
     pub fn show(self, ui: &mut egui::Ui) -> bool {
-        ui.button(format!("Export {}", self.format.as_str()))
-            .on_hover_text(format!("Export chart as {}", self.format.as_str()))
-            .clicked()
+        ui.button(l10n::format_text(
+            ui.ctx(),
+            "Export {0}",
+            &[("0", self.format.as_str().to_string())],
+        ))
+        .on_hover_text(l10n::format_text(
+            ui.ctx(),
+            "Export chart as {0}",
+            &[("0", self.format.as_str().to_string())],
+        ))
+        .clicked()
     }
 }
 

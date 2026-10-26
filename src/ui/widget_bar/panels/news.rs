@@ -1,5 +1,6 @@
 //! Headlines and highlights the feed supplies, for the chart's symbol or the whole market.
 
+use crate::localization as l10n;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -172,25 +173,25 @@ impl NewsPanel {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new(&story.headline)
+                        RichText::new(l10n::text(ui.ctx(), &story.headline))
                             .size(theme.text.heading)
                             .strong(),
                     );
                     ui.label(
-                        RichText::new(meta(story))
+                        RichText::new(l10n::text(ui.ctx(), meta(story)))
                             .size(theme.text.small)
                             .color(theme.ui.text_secondary),
                     );
                     if !story.symbols.is_empty() {
                         ui.label(
-                            RichText::new(story.symbols.join(", "))
+                            RichText::new(l10n::text(ui.ctx(), story.symbols.join(", ")))
                                 .size(theme.text.small)
                                 .color(theme.ui.text_secondary),
                         );
                     }
                     ui.add_space(theme.spacing.sm);
                     if !story.body.is_empty() {
-                        ui.label(&story.body);
+                        ui.label(l10n::text(ui.ctx(), &story.body));
                         ui.add_space(theme.spacing.sm);
                     }
                     ui.horizontal_wrapped(|ui| {
@@ -234,14 +235,14 @@ impl NewsPanel {
                     if let Some(symbol) = &self.symbol
                         && ui
                             .add(
-                                egui::Button::new(symbol)
+                                egui::Button::new(l10n::text(ui.ctx(), symbol))
                                     .frame_when_inactive(!self.market)
                                     .stroke(egui::Stroke::NONE)
                                     .selected(!self.market)
                                     .min_size(egui::vec2(0.0, 24.0))
                                     .truncate(),
                             )
-                            .on_hover_text(symbol)
+                            .on_hover_text(l10n::text(ui.ctx(), symbol))
                             .clicked()
                     {
                         self.market = false;
@@ -293,21 +294,26 @@ impl NewsPanel {
                                     ui.set_min_height(26.0);
                                     ui.style_mut().interaction.selectable_labels = false;
                                     ui.label(
-                                        RichText::new(meta(story))
+                                        RichText::new(l10n::text(ui.ctx(), meta(story)))
                                             .size(theme.text.small)
                                             .color(theme.ui.text_secondary),
                                     );
                                     ui.add(
-                                        Label::new(RichText::new(&story.headline).strong()).wrap(),
+                                        Label::new(
+                                            RichText::new(l10n::text(ui.ctx(), &story.headline))
+                                                .strong(),
+                                        )
+                                        .wrap(),
                                     );
                                     if self.highlights && !story.body.is_empty() {
-                                        ui.label(&story.body);
+                                        ui.label(l10n::text(ui.ctx(), &story.body));
                                     }
                                 });
                         })
                         .response;
+                    let translated_label = l10n::text(ui.ctx(), &story.headline);
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Button, true, &story.headline)
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                     });
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)

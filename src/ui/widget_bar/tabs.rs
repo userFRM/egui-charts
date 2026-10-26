@@ -3,6 +3,7 @@
 //! Displays a tabbed interface for Alerts and Object Tree panels.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::styles::{icons, stroke, typography};
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
@@ -184,8 +185,9 @@ impl RightPanelTabs {
 
             // Check for clicks
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
+            let translated_label = l10n::text(ui.ctx(), tab.label());
             btn_res.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Tab, btn_res.enabled(), tab.label())
+                egui::WidgetInfo::labeled(egui::Role::Tab, btn_res.enabled(), &translated_label)
             });
             ui.ctx()
                 .accesskit_node_builder(btn_res.id, |node| node.set_selected(is_active));
@@ -240,7 +242,7 @@ impl RightPanelTabs {
 
             // Tooltip
             if is_hovered {
-                btn_res.on_hover_text(tab.label());
+                btn_res.on_hover_text(l10n::text(ui.ctx(), tab.label()));
             }
 
             y += self.config.tab_button_size + DESIGN_TOKENS.spacing.sm;
@@ -271,7 +273,7 @@ impl RightPanelTabs {
 
         // Tab title
         let title_galley = painter.layout_no_wrap(
-            self.active_tab.label().to_string(),
+            l10n::text(ui.ctx(), self.active_tab.label()),
             egui::FontId::proportional(typography::SM),
             ui.visuals().text_color(),
         );

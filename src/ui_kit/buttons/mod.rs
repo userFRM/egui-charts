@@ -28,6 +28,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 mod button;
 mod icon_button;
 mod split_button;
@@ -87,15 +88,24 @@ fn finish(
     label: &str,
     tooltip: Option<&str>,
 ) -> Response {
+    let translated_label = l10n::text(&response.ctx, label);
     response.widget_info(|| {
         if let Some(selected) = selected {
-            WidgetInfo::selected(Role::Button, response.enabled(), selected, label)
+            WidgetInfo::selected(
+                Role::Button,
+                response.enabled(),
+                selected,
+                &translated_label,
+            )
         } else {
-            WidgetInfo::labeled(Role::Button, response.enabled(), label)
+            WidgetInfo::labeled(Role::Button, response.enabled(), &translated_label)
         }
     });
     match tooltip {
-        Some(tip) => response.on_hover_text(tip).on_disabled_hover_text(tip),
+        Some(tip) => {
+            let tip = l10n::text(&response.ctx, tip);
+            response.on_hover_text(&tip).on_disabled_hover_text(&tip)
+        }
         None => response,
     }
 }

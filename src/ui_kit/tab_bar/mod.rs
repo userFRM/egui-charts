@@ -28,6 +28,7 @@
 //! # });
 //! ```
 
+use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::ButtonSize;
@@ -76,7 +77,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
             for tab in self.tabs {
                 let is_active = *tab == *self.active;
                 let galley = ui.painter().layout_no_wrap(
-                    tab.tab_label().to_owned(),
+                    l10n::text(ui.ctx(), tab.tab_label()),
                     egui::FontId::proportional(if self.pills { 14.0 } else { theme.text.label }),
                     egui::Color32::PLACEHOLDER,
                 );

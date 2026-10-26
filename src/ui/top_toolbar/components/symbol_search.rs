@@ -43,6 +43,7 @@
 //! # }
 //! ```
 
+use crate::localization as l10n;
 mod service;
 
 use crate::ext::UiExt;
@@ -344,8 +345,9 @@ impl SymbolSearchDialog {
             .height(480.0)
             .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
             .show(ctx, &mut open, |ui| {
+                let translated_label = l10n::text(ui.ctx(), "Search symbols");
                 ui.response().widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, "Search symbols")
+                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, &translated_label)
                 });
                 ui.ctx()
                     .accesskit_node_builder(ui.response().id, |node| node.set_modal());
@@ -364,11 +366,14 @@ impl SymbolSearchDialog {
                             egui::TextEdit::singleline(&mut self.search_query)
                                 .id(search_id)
                                 .font(egui::FontId::proportional(16.0))
-                                .hint_text(RichText::new("Search symbols").size(16.0))
+                                .hint_text(
+                                    RichText::new(l10n::text(ui.ctx(), "Search symbols"))
+                                        .size(16.0),
+                                )
                                 .frame(egui::Frame::NONE)
                                 .desired_width((ui.available_width() - 40.0).max(0.0)),
                         )
-                        .accessible_name("Search symbols");
+                        .accessible_name(l10n::text(ui.ctx(), "Search symbols"));
                     if IconButton::new(&icons::CLOSE)
                         .tooltip("Close")
                         .show(ui)
@@ -439,7 +444,7 @@ impl SymbolSearchDialog {
                     && self.search.exchange.is_none()
                     && self.search.has_recents()
                 {
-                    ui.weak("Recently opened");
+                    ui.weak(l10n::text(ui.ctx(), "Recently opened"));
                 }
                 let mut next_page = false;
                 // Results list
@@ -453,17 +458,24 @@ impl SymbolSearchDialog {
                             if !self.search_query.is_empty()
                                 && self.search_query.len() < self.config.min_search_len
                             {
-                                ui.label(format!(
-                                    "Type at least {} {} to search",
-                                    self.config.min_search_len,
-                                    if self.config.min_search_len == 1 {
-                                        "character"
-                                    } else {
-                                        "characters"
-                                    }
+                                ui.label(l10n::format_text(
+                                    ui.ctx(),
+                                    "Type at least {0} {1} to search",
+                                    &[
+                                        ("0", format!("{}", self.config.min_search_len)),
+                                        (
+                                            "1",
+                                            (if self.config.min_search_len == 1 {
+                                                "character"
+                                            } else {
+                                                "characters"
+                                            })
+                                            .to_string(),
+                                        ),
+                                    ],
                                 ));
                             } else {
-                                ui.label("No symbols found");
+                                ui.label(l10n::text(ui.ctx(), "No symbols found"));
                             }
                         } else {
                             for (idx, symbol) in self.filtered_symbols.iter().enumerate() {
@@ -499,8 +511,16 @@ impl SymbolSearchDialog {
                     for (key, action) in
                         [("↑ ↓", "Navigate"), ("Enter", "Select"), ("Esc", "Close")]
                     {
-                        ui.label(RichText::new(key).monospace().size(11.0));
-                        ui.label(RichText::new(action).size(11.0).weak());
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), key))
+                                .monospace()
+                                .size(11.0),
+                        );
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), action))
+                                .size(11.0)
+                                .weak(),
+                        );
                         ui.add_space(12.0);
                     }
                 });
@@ -625,7 +645,7 @@ impl SymbolSearchDialog {
                     };
                     ui.painter()
                         .layout_no_wrap(
-                            text,
+                            l10n::text(ui.ctx(), text),
                             egui::FontId::proportional(11.0),
                             theme.ui.text_secondary,
                         )
@@ -643,7 +663,7 @@ impl SymbolSearchDialog {
             (exchange, exchange_right, exchange_width),
         ] {
             let galley = egui::WidgetText::from(
-                RichText::new(text)
+                RichText::new(l10n::text(ui.ctx(), text))
                     .size(11.0)
                     .color(theme.ui.text_secondary),
             )
@@ -910,8 +930,9 @@ impl CompareSymbolsDialog {
             .height(config.height)
             .fill(config.bg_color)
             .show(ctx, &mut is_open, |ui| {
+                let translated_label = l10n::text(ui.ctx(), "Compare symbols");
                 ui.response().widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, "Compare symbols")
+                    egui::WidgetInfo::labeled(egui::Role::Dialog, true, &translated_label)
                 });
                 ui.ctx()
                     .accesskit_node_builder(ui.response().id, |node| node.set_modal());
@@ -938,12 +959,12 @@ impl CompareSymbolsDialog {
             ui.add(icons::QUICK_SEARCH.as_image_tinted(Vec2::splat(24.0), config.muted_color));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text(RichText::new("Search symbols").size(16.0))
+                    .hint_text(RichText::new(l10n::text(ui.ctx(), "Search symbols")).size(16.0))
                     .font(egui::FontId::proportional(16.0))
                     .frame(egui::Frame::NONE)
                     .desired_width((ui.available_width() - 40.0).max(0.0)),
             )
-            .accessible_name("Search symbols");
+            .accessible_name(l10n::text(ui.ctx(), "Search symbols"));
             if IconButton::new(&icons::CLOSE)
                 .tooltip("Close")
                 .show(ui)
@@ -956,7 +977,10 @@ impl CompareSymbolsDialog {
 
         // Currently compared symbols
         if !self.compared_symbols.is_empty() {
-            ui.label(RichText::new("Currently comparing:").color(config.muted_color));
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), "Currently comparing:"))
+                    .color(config.muted_color),
+            );
             ui.space_sm();
 
             egui::ScrollArea::vertical()
@@ -972,7 +996,7 @@ impl CompareSymbolsDialog {
                             );
                             ui.painter().circle_filled(rect.center(), 5.0, symbol.color);
 
-                            ui.label(&symbol.symbol);
+                            ui.label(l10n::text(ui.ctx(), &symbol.symbol));
                             ui.label(
                                 RichText::new(&symbol.name)
                                     .color(config.muted_color)
@@ -980,12 +1004,12 @@ impl CompareSymbolsDialog {
                             );
 
                             ui.right_aligned(|ui| {
-                                if ui.small_button("X").clicked() {
+                                if ui.small_button(l10n::text(ui.ctx(), "X")).clicked() {
                                     action = CompareAction::RemoveSymbol(symbol.symbol.clone());
                                 }
 
                                 let eye_label = if symbol.visible { "Hide" } else { "Show" };
-                                if ui.small_button(eye_label).clicked() {
+                                if ui.small_button(l10n::text(ui.ctx(), eye_label)).clicked() {
                                     action = CompareAction::ToggleVisibility(symbol.symbol.clone());
                                 }
                             });
@@ -1005,7 +1029,7 @@ impl CompareSymbolsDialog {
         self.search.status(ui);
         let mut next_page = false;
         // Suggestions
-        ui.label(RichText::new("Symbols").color(config.muted_color));
+        ui.label(RichText::new(l10n::text(ui.ctx(), "Symbols")).color(config.muted_color));
         ui.space_lg();
 
         if symbols.is_empty() {
@@ -1074,7 +1098,7 @@ impl CompareSymbolsDialog {
             ui.painter().text(
                 indicator_pos,
                 egui::Align2::CENTER_CENTER,
-                "v",
+                l10n::text(ui.ctx(), "v"),
                 egui::FontId::proportional(typography::MICRO),
                 DESIGN_TOKENS.semantic.ui.text_light,
             );

@@ -10,6 +10,7 @@ use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
 use crate::ext::UiExt;
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::styles::responsive::LayoutContext;
 use crate::styles::{icons as icon_sizes, typography};
 use crate::theme::ThemeExt;
@@ -353,7 +354,7 @@ impl DrawingToolbar {
             ui.horizontal(|ui| {
                 egui::TextEdit::singleline(query)
                     .id(Self::search_id())
-                    .hint_text("Search tools")
+                    .hint_text(l10n::text(ui.ctx(), "Search tools"))
                     .desired_width(DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_lg)
                     .show(ui);
                 close_clicked = IconButton::new(&embedded_icons::CLOSE)
@@ -438,7 +439,12 @@ impl DrawingToolbar {
             // Filter by search
             if !self.state.search_query.is_empty() {
                 let query = self.state.search_query.to_lowercase();
-                tools.retain(|tool| tool.as_str().to_lowercase().contains(&query));
+                tools.retain(|tool| {
+                    tool.as_str().to_lowercase().contains(&query)
+                        || l10n::text(ui.ctx(), tool.as_str())
+                            .to_lowercase()
+                            .contains(&query)
+                });
             }
 
             let is_icons = category == "Icons/Emojis";
@@ -755,7 +761,7 @@ impl DrawingToolbar {
             .show(ui, |ui| {
                 ui.set_min_size(Vec2::new(popup_width, popup_height));
                 ui.space_lg();
-                ui.label(RichText::new("Drawing Color").size(typography::SM));
+                ui.label(RichText::new(l10n::text(ui.ctx(), "Drawing Color")).size(typography::SM));
                 ui.space_md();
 
                 sel_color = self.render_color_swatches(ui, current_color);
@@ -832,12 +838,13 @@ impl DrawingToolbar {
         current_color: [u8; 4],
     ) -> Option<[u8; 4]> {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(swatch_size), Sense::click());
+        let translated_label = l10n::text(ui.ctx(), name);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::RadioButton,
                 response.enabled(),
                 current_color == color_val,
-                name,
+                &translated_label,
             )
         });
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.sm);
@@ -848,7 +855,7 @@ impl DrawingToolbar {
 
         self.render_swatch_border(ui, rect, &response, current_color == color_val);
         let clicked = response.clicked();
-        response.on_hover_text(name);
+        response.on_hover_text(l10n::text(ui.ctx(), name));
 
         if clicked { Some(color_val) } else { None }
     }
@@ -953,12 +960,13 @@ impl DrawingToolbar {
                                     Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                     Sense::click(),
                                 );
+                                let translated_label = l10n::text(ui.ctx(), tool.as_str());
                                 response.widget_info(|| {
                                     egui::WidgetInfo::selected(
                                         egui::Role::Button,
                                         response.enabled(),
                                         is_sel,
-                                        tool.as_str(),
+                                        &translated_label,
                                     )
                                 });
                                 crate::styles::focus::draw_focus_ring(
@@ -990,7 +998,10 @@ impl DrawingToolbar {
                                     is_sel,
                                 );
 
-                                if response.on_hover_text(tool.as_str()).clicked() {
+                                if response
+                                    .on_hover_text(l10n::text(ui.ctx(), tool.as_str()))
+                                    .clicked()
+                                {
                                     new_selection = Some(tool);
                                 }
                             }
@@ -1002,12 +1013,13 @@ impl DrawingToolbar {
                                 Vec2::splat(DESIGN_TOKENS.sizing.button_md),
                                 Sense::click(),
                             );
+                            let translated_label = l10n::text(ui.ctx(), "Magnet Mode");
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
                                     egui::Role::Button,
                                     response.enabled(),
                                     self.state.magnet_mode,
-                                    "Magnet Mode",
+                                    &translated_label,
                                 )
                             });
                             crate::styles::focus::draw_focus_ring(
@@ -1035,7 +1047,10 @@ impl DrawingToolbar {
                                 self.state.magnet_mode,
                             );
 
-                            if response.on_hover_text("Magnet Mode").clicked() {
+                            if response
+                                .on_hover_text(l10n::text(ui.ctx(), "Magnet Mode"))
+                                .clicked()
+                            {
                                 self.state.magnet_mode = !self.state.magnet_mode;
                             }
 
@@ -1043,9 +1058,12 @@ impl DrawingToolbar {
 
                             ui.menu_button(" ", |ui| {
                                 for category in DrawingToolType::categories() {
-                                    ui.menu_button(*category, |ui| {
+                                    ui.menu_button(l10n::text(ui.ctx(), *category), |ui| {
                                         for tool in DrawingToolType::by_category(category) {
-                                            if ui.button(tool.as_str()).clicked() {
+                                            if ui
+                                                .button(l10n::text(ui.ctx(), tool.as_str()))
+                                                .clicked()
+                                            {
                                                 new_selection = Some(tool);
                                                 ui.close();
                                             }
@@ -1054,7 +1072,7 @@ impl DrawingToolbar {
                                 }
                             })
                             .response
-                            .accessible_name("More drawing tools");
+                            .accessible_name(l10n::text(ui.ctx(), "More drawing tools"));
                         });
                     });
             });
@@ -1130,6 +1148,7 @@ mod tests {
                 } else {
                     egui::Visuals::light()
                 });
+                l10n::set_translator(&ctx, |english| (english == "Star").then(|| "Etoile".into()));
                 let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height));
                 ctx.run_ui(
                     RawInput {
@@ -1145,6 +1164,7 @@ mod tests {
                 let mut previous = "Search icons, emoji and stickers";
                 for (query, glyph) in [
                     ("star", "icon:star"),
+                    ("etoile", "icon:star"),
                     ("grinning", "😀"),
                     ("idea", "sticker:idea"),
                     ("", "sticker:idea"),

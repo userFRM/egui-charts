@@ -5,6 +5,7 @@
 //! - Uses `crate::theme::components::SettingsDialogStyle` for all colors
 //! - Implements full interaction states (hover, active, focus)
 
+use crate::localization as l10n;
 mod tabs;
 
 use super::{
@@ -382,7 +383,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             ),
             egui::Button::new((
-                RichText::new(&template_label)
+                RichText::new(l10n::text(ui.ctx(), &template_label))
                     .size(typography::LG)
                     .color(style.val_text),
                 embedded_icons::CHEVRON_DOWN.as_image_tinted(Vec2::splat(12.0), style.val_text),
@@ -395,7 +396,7 @@ impl SettingsDialog {
                 DESIGN_TOKENS.sizing.settings_dialog.button_height,
             )),
         )
-        .on_hover_text(template_label)
+        .on_hover_text(l10n::text(ui.ctx(), template_label))
     }
 
     fn draw_template_menu(
@@ -461,7 +462,7 @@ impl SettingsDialog {
 
     fn draw_save_as_button(&mut self, ui: &mut Ui, mut action: SettingsAction) -> SettingsAction {
         if let Some(name) = &mut self.save_name {
-            let label = ui.label("Template name");
+            let label = ui.label(l10n::text(ui.ctx(), "Template name"));
             ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()))
                 .labelled_by(label.id);
             let name = name.trim().to_owned();
@@ -473,10 +474,10 @@ impl SettingsDialog {
             let save = ui
                 .add_enabled(
                     self.templates.ready() && !name.is_empty(),
-                    egui::Button::new(label),
+                    egui::Button::new(l10n::text(ui.ctx(), label)),
                 )
                 .clicked();
-            let cancel = ui.button("Cancel").clicked();
+            let cancel = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
             if save {
                 self.settings.sync_legacy_fields();
                 match self.templates.save(&name, self.settings.clone()) {
@@ -491,14 +492,18 @@ impl SettingsDialog {
                 self.save_name = None;
             }
         } else if ui
-            .button(RichText::new("Save as...").size(typography::MD))
+            .button(RichText::new(l10n::text(ui.ctx(), "Save as...")).size(typography::MD))
             .clicked()
         {
             self.save_name = Some(String::new());
         }
         if let Some(error) = &self.templates.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-            if !self.templates.ready() && ui.button("Retry loading templates").clicked() {
+            ui.colored_label(ui.visuals().error_fg_color, l10n::text(ui.ctx(), error));
+            if !self.templates.ready()
+                && ui
+                    .button(l10n::text(ui.ctx(), "Retry loading templates"))
+                    .clicked()
+            {
                 self.templates.reload();
             }
         }
@@ -515,7 +520,9 @@ impl SettingsDialog {
             && ui
                 .add_enabled(
                     self.templates.ready(),
-                    egui::Button::new(RichText::new("Update current").size(typography::MD)),
+                    egui::Button::new(
+                        RichText::new(l10n::text(ui.ctx(), "Update current")).size(typography::MD),
+                    ),
                 )
                 .clicked()
         {
@@ -541,7 +548,7 @@ impl SettingsDialog {
 
         if templates.is_empty() {
             ui.label(
-                RichText::new("No saved templates")
+                RichText::new(l10n::text(ui.ctx(), "No saved templates"))
                     .size(typography::SM)
                     .color(style.section_header_text),
             );
@@ -562,16 +569,16 @@ impl SettingsDialog {
     ) -> SettingsAction {
         let is_sel = self.template_name == name;
         let text = if is_sel {
-            RichText::new(&name)
+            RichText::new(l10n::text(ui.ctx(), &name))
                 .size(typography::MD)
                 .color(style.tab_text_active)
         } else {
-            RichText::new(&name).size(typography::MD)
+            RichText::new(l10n::text(ui.ctx(), &name)).size(typography::MD)
         };
 
         if ui
             .add_enabled(self.templates.ready(), egui::Button::new(text).truncate())
-            .on_hover_text(&name)
+            .on_hover_text(l10n::text(ui.ctx(), &name))
             .clicked()
         {
             if let Some(template) = self.templates.entries().get(&name) {
@@ -585,7 +592,12 @@ impl SettingsDialog {
         if ui
             .add_enabled(
                 self.templates.ready(),
-                egui::Button::new(format!("Delete {name}")).truncate(),
+                egui::Button::new(l10n::format_text(
+                    ui.ctx(),
+                    "Delete {name}",
+                    &[("name", name.to_string())],
+                ))
+                .truncate(),
             )
             .clicked()
         {
@@ -603,7 +615,7 @@ impl SettingsDialog {
 
     fn draw_reset_button(&mut self, ui: &mut Ui) {
         if ui
-            .button(RichText::new("Reset to defaults").size(typography::MD))
+            .button(RichText::new(l10n::text(ui.ctx(), "Reset to defaults")).size(typography::MD))
             .clicked()
         {
             self.settings = ChartSettingsState::default();

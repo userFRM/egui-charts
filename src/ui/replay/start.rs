@@ -1,5 +1,6 @@
 //! Start selection intents; the host supplies history, randomness and saved sessions.
 
+use crate::localization as l10n;
 use crate::ui_kit::{buttons::Button, modal::Modal};
 use chrono::{DateTime, NaiveDate, Utc};
 
@@ -45,7 +46,10 @@ impl ReplayStartPicker {
         Modal::new("replay_start", "Start replay")
             .width(360.0)
             .show(ctx, &mut self.is_open, |ui| {
-                ui.label("Choose where to begin. Playback starts paused.");
+                ui.label(l10n::text(
+                    ui.ctx(),
+                    "Choose where to begin. Playback starts paused.",
+                ));
                 ui.add_space(8.0);
                 for (label, choice) in [
                     ("Select a bar on the chart", ReplayStartAction::SelectBar),
@@ -57,7 +61,7 @@ impl ReplayStartPicker {
                     }
                 }
                 ui.separator();
-                ui.label("Date (UTC, YYYY-MM-DD)");
+                ui.label(l10n::text(ui.ctx(), "Date (UTC, YYYY-MM-DD)"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.date).desired_width(ui.available_width()),
                 );

@@ -2,6 +2,7 @@
 
 use crate::drawings::manager::TextEditState;
 use crate::drawings::{DrawingManager, DrawingToolType};
+use crate::localization as l10n;
 use egui::{Id, Key, Modifiers, Rect, Ui};
 
 pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
@@ -102,7 +103,10 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                 if request_focus {
                     field.request_focus();
                 }
-                ui.small("Ctrl/Cmd+Enter to save, Esc to cancel");
+                ui.small(l10n::text(
+                    ui.ctx(),
+                    "Ctrl/Cmd+Enter to save, Esc to cancel",
+                ));
             });
             outside = frame > opened_frame && response.response.clicked_elsewhere();
         });

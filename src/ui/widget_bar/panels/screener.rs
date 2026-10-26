@@ -1,5 +1,6 @@
 //! A screener table of the rows the feed finds for the user's filters.
 
+use crate::localization as l10n;
 use std::sync::Arc;
 
 use egui::{Sense, Ui, vec2};
@@ -187,7 +188,7 @@ impl ScreenerPanel {
             let before = self.set;
             dropdown(ui, "screener_set", &name, |ui| {
                 for (index, set) in self.sets.iter().enumerate() {
-                    ui.selectable_value(&mut self.set, index, &set.name);
+                    ui.selectable_value(&mut self.set, index, l10n::text(ui.ctx(), &set.name));
                 }
             });
             if self.set != before {
@@ -221,13 +222,13 @@ impl ScreenerPanel {
                     &columns[*column].title,
                     |ui| {
                         for (index, entry) in columns.iter().enumerate() {
-                            ui.selectable_value(column, index, &entry.title);
+                            ui.selectable_value(column, index, l10n::text(ui.ctx(), &entry.title));
                         }
                     },
                 );
                 dropdown(ui, "screener_filter_op", op_label(*op), |ui| {
                     for entry in [ScreenerOp::Above, ScreenerOp::Below] {
-                        ui.selectable_value(op, entry, op_label(entry));
+                        ui.selectable_value(op, entry, l10n::text(ui.ctx(), op_label(entry)));
                     }
                 });
                 ui.allocate_ui(vec2(128.0, 28.0), |ui| {
@@ -267,7 +268,7 @@ impl ScreenerPanel {
                 if Button::new(text)
                     .small()
                     .show(ui)
-                    .on_hover_text("Remove filter")
+                    .on_hover_text(l10n::text(ui.ctx(), "Remove filter"))
                     .clicked()
                 {
                     remove = Some(index);
@@ -346,10 +347,14 @@ impl ScreenerPanel {
                             ui.scope_id().with(("sort", &column.id)),
                             Sense::click(),
                         );
+                        let translated_label = l10n::text(ui.ctx(), &column.title);
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, &column.title)
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                         });
-                        if response.on_hover_text("Sort by this column").clicked() {
+                        if response
+                            .on_hover_text(l10n::text(ui.ctx(), "Sort by this column"))
+                            .clicked()
+                        {
                             if sorted {
                                 self.descending = !self.descending;
                             } else {
@@ -366,8 +371,9 @@ impl ScreenerPanel {
                         for (rect, value) in cells.iter().skip(1).zip(&entry.values) {
                             cell(ui, *rect, value, true, theme.ui.text);
                         }
+                        let translated_label = l10n::text(ui.ctx(), &entry.symbol);
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, &entry.symbol)
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                         });
                         if response.clicked() {
                             action = ScreenerAction::SelectSymbol(entry.symbol.clone());

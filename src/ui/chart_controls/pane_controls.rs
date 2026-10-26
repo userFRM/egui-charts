@@ -3,6 +3,7 @@
 //! Shows maximize, minimize, close, and settings buttons on hover.
 
 use crate::icons::{Icon, icons as embedded_icons};
+use crate::localization as l10n;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Sense, Ui, Vec2};
 
@@ -165,8 +166,13 @@ impl PaneControls {
             );
 
             let btn_response = ui.allocate_rect(btn_rect, Sense::click());
+            let translated_label = l10n::text(ui.ctx(), tooltip);
             btn_response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, btn_response.enabled(), tooltip)
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    btn_response.enabled(),
+                    &translated_label,
+                )
             });
             crate::styles::focus::draw_focus_ring(ui, &btn_response, DESIGN_TOKENS.rounding.sm);
             let is_hovered = btn_response.hovered();
@@ -188,7 +194,7 @@ impl PaneControls {
             icon.as_image_tinted(Vec2::splat(icon_size), icon_color_final)
                 .paint_at(ui, icon_rect);
 
-            btn_response.on_hover_text(tooltip);
+            btn_response.on_hover_text(l10n::text(ui.ctx(), tooltip));
 
             if was_clicked {
                 action = action_fn(pane_id);
