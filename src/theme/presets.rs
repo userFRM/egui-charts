@@ -113,10 +113,10 @@ impl Theme {
                 grid_line_major: rgb(209, 209, 209),
                 axis_text: rgb(26, 26, 26),
                 axis_text_secondary: rgb(51, 51, 51),
-                // 3.2:1 on the white chart.
-                crosshair_line: Color32::from_rgba_unmultiplied(120, 120, 120, 210),
-                crosshair_label_bg: rgb(235, 235, 235),
-                crosshair_label_text: rgb(26, 26, 26),
+                // #9C9C9C on the white chart.
+                crosshair_line: Color32::from_rgba_unmultiplied(135, 135, 135, 210),
+                crosshair_label_bg: Color32::BLACK,
+                crosshair_label_text: Color32::WHITE,
                 candle_up: rgb(8, 153, 129),
                 candle_down: rgb(242, 54, 69),
                 volume_alpha: 128,

@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The light preset's crosshair tags are black with white text instead of #EBEBEB with #1A1A1A text, and its dashed crosshair lines read #9C9C9C on the white plot instead of #909090, so the hovered price and time stand out from the axis labels at every display density. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
+
 - The light preset draws grid lines in #D1D1D1 instead of #DCDCDC, so the dotted grid stays visible on the white plot. Horizontal and vertical grid lines keep their separate visibility settings. ([#1010](https://github.com/userFRM/egui-charts/issues/1010))
 
 - Crate and public API documentation now describe host-supplied history and streaming data, current feature boundaries and a populated quick start. Stale capability claims, counts and implementation inventories are removed, and the README and package description use the same scope. ([#933](https://github.com/userFRM/egui-charts/issues/933))
