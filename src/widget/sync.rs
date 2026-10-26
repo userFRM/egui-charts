@@ -62,12 +62,11 @@ impl Chart {
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
         let bars = self.state.shown();
+        let right = scale.base_idx() as f64 + f64::from(scale.right_offset()) + 0.5;
+        let left = right - (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing());
         Some(VisibleTimeRange {
-            from: time_at(bars, scale.coord_to_idx(0.0, 0.0, scale.width()) as f64)?,
-            to: time_at(
-                bars,
-                scale.coord_to_idx(scale.width() - 1.0, 0.0, scale.width()) as f64,
-            )?,
+            from: time_at(bars, left)?,
+            to: time_at(bars, right)?,
         })
     }
 
