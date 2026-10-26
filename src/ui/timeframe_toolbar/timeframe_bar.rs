@@ -184,6 +184,9 @@ impl TimeframeBar {
             Vec2::splat(DESIGN_TOKENS.sizing.icon_md),
         );
         let date_res = ui.allocate_rect(date_icon_rect, Sense::click());
+        date_res.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, date_res.enabled(), "Go to date")
+        });
         crate::styles::focus::draw_focus_ring(ui, &date_res, DESIGN_TOKENS.rounding.sm);
         if date_res.hovered() {
             painter.rect_filled(
@@ -244,6 +247,9 @@ impl TimeframeBar {
             let btn_res = ui.allocate_rect(btn_rect, Sense::click());
             crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.sm);
             let is_active = *tf == self.active_timeframe;
+            btn_res.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, btn_res.enabled(), is_active, label)
+            });
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
 
@@ -309,6 +315,14 @@ impl TimeframeBar {
                 Vec2::new(adj_galley.size().x + 12.0, self.config.height - 8.0),
             );
             let adj_res = ui.allocate_rect(adj_button_rect, Sense::click());
+            adj_res.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::Button,
+                    adj_res.enabled(),
+                    self.adj_enabled,
+                    "Adjust for dividends",
+                )
+            });
             crate::styles::focus::draw_focus_ring(ui, &adj_res, DESIGN_TOKENS.rounding.sm);
 
             if adj_res.hovered() || self.adj_enabled {

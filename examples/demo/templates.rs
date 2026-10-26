@@ -1,53 +1,27 @@
-//! The example host keeps template and symbol notes documents in application storage. Remote
-//! storage is host-owned.
+//! Study and drawing templates, kept in the demo's storage.
 
 use super::DemoApp;
-use egui_charts::data::Reply;
-use egui_charts::services::{Storage, StoreKind};
+use egui_charts::studies::{InputValue, StudySource};
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate};
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-#[derive(Default)]
-pub(super) struct TemplateStorage(pub Mutex<HashMap<String, String>>);
-
-impl Storage for TemplateStorage {
-    fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
-        let prefix = format!("{kind:?}/");
-        reply.send(Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .keys()
-            .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
-            .collect()));
-    }
-    fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
-        reply.send(Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .get(&format!("{kind:?}/{name}"))
-            .cloned()));
-    }
-    fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(format!("{kind:?}/{name}"), document);
-        reply.send(Ok(()));
-    }
-    fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().remove(&format!("{kind:?}/{name}"));
-        reply.send(Ok(()));
-    }
-}
 
 impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {
-        self.chart
-            .indicators()
-            .map(|(_, study)| StudyTemplate::from_study(study))
+        let studies: Vec<_> = self.chart.indicators().collect();
+        studies
+            .iter()
+            .map(|(_, study)| {
+                let mut template = StudyTemplate::from_study(*study);
+                // Saved sources refer to positions in this template, not the old chart's ids.
+                for (_, value) in &mut template.inputs {
+                    if let InputValue::Source(StudySource::Study { id, .. }) = value {
+                        *id = studies
+                            .iter()
+                            .position(|(source, _)| source.0 == *id)
+                            .unwrap_or(usize::MAX);
+                    }
+                }
+                template
+            })
             .collect()
     }
 
@@ -59,10 +33,30 @@ impl DemoApp {
         {
             Ok(studies) => self.user_action(|app| {
                 app.remove_all_indicators();
+                let mut ids = Vec::new();
                 for study in studies {
                     let inputs = super::study_input_summary(study.as_ref());
                     let id = app.chart.add_indicator(study);
                     app.chart.set_indicator_inputs(id, inputs);
+                    ids.push(id);
+                }
+                for (id, stored) in ids.iter().zip(template) {
+                    for (input, value) in &stored.inputs {
+                        if let InputValue::Source(StudySource::Study { id: parent, plot }) = value {
+                            let study = app.chart.indicator_mut(*id).expect("added study");
+                            study
+                                .set_input(
+                                    input,
+                                    InputValue::Source(StudySource::Study {
+                                        id: ids.get(*parent).map_or(usize::MAX, |id| id.0),
+                                        plot: *plot,
+                                    }),
+                                )
+                                .expect("validated study source");
+                            let inputs = super::study_input_summary(study);
+                            app.chart.set_indicator_inputs(*id, inputs);
+                        }
+                    }
                 }
             }),
             Err(error) => self.notify(error),

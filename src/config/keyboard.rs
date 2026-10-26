@@ -12,7 +12,7 @@ use egui::Key;
 use std::fmt;
 
 /// Global keyboard shortcut configuration.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct KeyboardOptions {
     /// Enable keyboard shortcuts
     pub enabled: bool,
@@ -66,7 +66,7 @@ pub enum KeyboardAction {
     /// Complete a multi-point drawing.
     CompleteDrawing,
     /// Select a drawing tool.
-    DrawingTool(crate::drawings::DrawingToolType),
+    DrawingTool(crate::config::DrawingToolType),
 
     // Navigation
     /// Pan left (Left arrow)
@@ -310,6 +310,7 @@ impl KeyboardAction {
             Self::OpenQuickSearch => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::K)] },
             Self::GoToDate => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::G)] },
             Self::Snapshot => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::S)] },
+            Self::SaveLayout => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::S)] },
             Self::Undo => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)] },
             Self::Redo => {
                 const {
@@ -346,16 +347,16 @@ impl KeyboardAction {
                     ]
                 }
             }
-            Self::DrawingTool(crate::drawings::DrawingToolType::TrendLine) => {
+            Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::T)] }
             }
-            Self::DrawingTool(crate::drawings::DrawingToolType::HorizontalLine) => {
+            Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::H)] }
             }
-            Self::DrawingTool(crate::drawings::DrawingToolType::VerticalLine) => {
+            Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::V)] }
             }
-            Self::DrawingTool(crate::drawings::DrawingToolType::FibonacciRetracement) => {
+            Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => {
                 const { &[KeyboardShortcut::new(Modifiers::ALT, Key::F)] }
             }
             _ => &[],
@@ -394,6 +395,7 @@ impl KeyboardAction {
             Self::OpenIndicatorSearch => "/",
             Self::GoToDate => "Alt+G",
             Self::Snapshot => "Alt+S",
+            Self::SaveLayout => "Ctrl+S",
             Self::MaximizeChart => "Alt+Enter",
             Self::DeleteSelectedDrawing => "Del / Backspace",
             Self::Cancel => "Esc",
@@ -401,17 +403,17 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
-            Self::DrawingTool(crate::drawings::DrawingToolType::TrendLine) => "Alt+T",
-            Self::DrawingTool(crate::drawings::DrawingToolType::HorizontalLine) => "Alt+H",
-            Self::DrawingTool(crate::drawings::DrawingToolType::VerticalLine) => "Alt+V",
-            Self::DrawingTool(crate::drawings::DrawingToolType::FibonacciRetracement) => "Alt+F",
+            Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
+            Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
+            Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
+            Self::DrawingTool(crate::config::DrawingToolType::FibonacciRetracement) => "Alt+F",
             _ => "",
         }
     }
 
     /// The actions with a bound key, grouped by category (for the shortcuts dialog).
     pub fn all_by_category() -> Vec<(&'static str, Vec<KeyboardAction>)> {
-        use crate::drawings::DrawingToolType;
+        use crate::config::DrawingToolType;
         vec![
             (
                 "Navigation",
@@ -467,6 +469,7 @@ impl KeyboardAction {
                     Self::CreateAlert,
                     Self::GoToDate,
                     Self::Snapshot,
+                    Self::SaveLayout,
                     Self::MaximizeChart,
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,

@@ -166,14 +166,16 @@ impl CommandPalette {
                     if focus_search {
                         ui.memory_mut(|memory| memory.request_focus(search_id));
                     }
-                    let response = ui.add(
-                        TextEdit::singleline(&mut self.search_query)
-                            .id(search_id)
-                            .hint_text("Search actions")
-                            .frame(egui::Frame::NONE)
-                            .desired_width(ui.available_width())
-                            .font(egui::FontId::proportional(14.0)),
-                    );
+                    let response = ui
+                        .add(
+                            TextEdit::singleline(&mut self.search_query)
+                                .id(search_id)
+                                .hint_text("Search actions")
+                                .frame(egui::Frame::NONE)
+                                .desired_width(ui.available_width())
+                                .font(egui::FontId::proportional(14.0)),
+                        )
+                        .accessible_name("Search actions");
                     // Sizing passes clear invisible widgets' focus while building the field.
                     if focus_search {
                         response.request_focus();

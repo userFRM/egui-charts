@@ -90,6 +90,14 @@ impl SyncButton {
 
         let desired_size = Vec2::splat(DESIGN_TOKENS.sizing.button_md);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::Role::Button,
+                response.enabled(),
+                any_sync_enabled,
+                "Chart Sync Options",
+            )
+        });
         crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
 
         // Background - highlight if sync is enabled
@@ -190,6 +198,14 @@ impl SyncButton {
             );
 
             let item_response = ui.allocate_rect(item_rect, Sense::click());
+            item_response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::CheckBox,
+                    item_response.enabled(),
+                    enabled,
+                    label,
+                )
+            });
             crate::styles::focus::draw_focus_ring(ui, &item_response, DESIGN_TOKENS.rounding.sm);
 
             // Highlight on hover

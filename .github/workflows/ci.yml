@@ -33,6 +33,8 @@ jobs:
         run: cargo build --no-default-features
       - name: Build (widget only)
         run: cargo build --no-default-features --features widget
+      - name: Build (widget with drawings)
+        run: cargo build --no-default-features --features widget,drawings
       - name: Build (studies only)
         run: cargo build --no-default-features --features studies
       - name: Build (all features)
@@ -45,6 +47,8 @@ jobs:
         run: cargo clippy --no-default-features --all-targets -- -D warnings
       - name: Clippy (widget only)
         run: cargo clippy --no-default-features --features widget --all-targets -- -D warnings
+      - name: Clippy (widget with drawings)
+        run: cargo clippy --no-default-features --features widget,drawings --all-targets -- -D warnings
       - name: Clippy (studies only)
         run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 

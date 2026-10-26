@@ -98,6 +98,12 @@ impl Default for DetrendedPriceOscillator {
 }
 
 impl Indicator for DetrendedPriceOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Length", 1, usize::MAX),
         centered: toggle("Centered")

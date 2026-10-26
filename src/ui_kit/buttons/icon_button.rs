@@ -35,7 +35,7 @@ pub struct IconButton<'a> {
     icon: &'a Icon,
     size: ButtonSize,
     tooltip: Option<String>,
-    selected: bool,
+    selected: Option<bool>,
     enabled: bool,
     icon_scale: Option<f32>,
 }
@@ -47,7 +47,7 @@ impl<'a> IconButton<'a> {
             icon,
             size: ButtonSize::MD,
             tooltip: None,
-            selected: false,
+            selected: None,
             enabled: true,
             icon_scale: None,
         }
@@ -70,7 +70,7 @@ impl<'a> IconButton<'a> {
     /// Set whether the button is in selected/active state
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
+        self.selected = Some(selected);
         self
     }
 
@@ -110,7 +110,7 @@ impl<'a> IconButton<'a> {
         if ui.is_rect_visible(rect) {
             let hovered = response.hovered();
             let pressed = response.is_pointer_button_down_on();
-            let variant = if self.selected {
+            let variant = if self.selected == Some(true) {
                 ButtonVariant::Primary
             } else {
                 ButtonVariant::Ghost
@@ -121,7 +121,7 @@ impl<'a> IconButton<'a> {
                 variant.bg_color(ui, hovered, pressed),
             );
 
-            let icon_color = if self.selected {
+            let icon_color = if self.selected == Some(true) {
                 variant.fg_color(ui)
             } else {
                 ui.style().interact(&response).fg_stroke.color

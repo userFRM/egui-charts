@@ -249,6 +249,15 @@ impl Chart {
             if pane_id == PaneId::MAIN {
                 continue;
             }
+            #[cfg(feature = "drawings")]
+            let eraser_mode = self.drawings.eraser_mode;
+            #[cfg(not(feature = "drawings"))]
+            let eraser_mode = false;
+            #[cfg(feature = "drawings")]
+            let drawing_tool_active = self.drawings.active_tool.is_some();
+            #[cfg(not(feature = "drawings"))]
+            let drawing_tool_active = false;
+
             let height = panel_rect.height();
             let members = self.pane_layout.panes[pane_idx].members.clone();
             let series: Vec<_> = members
@@ -491,9 +500,7 @@ impl Chart {
                     })
                     .filter(|_| !egui::Popup::is_any_open(ui.ctx()));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
-                if self.drawings.eraser_mode
-                    && crosshair_options.style != crate::config::CrosshairStyle::Hidden
-                {
+                if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
@@ -634,6 +641,19 @@ impl Chart {
                         } else {
                             "Collapse pane"
                         });
+                    toggle.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            toggle.enabled(),
+                            if collapsed {
+                                "Expand pane"
+                            } else {
+                                "Collapse pane"
+                            },
+                        )
+                    });
+                    ui.ctx()
+                        .accesskit_node_builder(toggle.id, |node| node.set_expanded(!collapsed));
                     if toggle.clicked() && !control_clicked {
                         pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();
@@ -704,8 +724,8 @@ impl Chart {
                         && !toggle.clicked()
                         && !control_clicked
                         && pane_response.clicked()
-                        && self.drawings.active_tool.is_none()
-                        && !self.drawings.eraser_mode
+                        && !drawing_tool_active
+                        && !eraser_mode
                         && let Some(click_pos) = pane_response.interact_pointer_pos()
                     {
                         let hit = study_at(click_pos);
@@ -715,13 +735,16 @@ impl Chart {
                     }
                     // What the pointer is over, for host pointer events: drawings sit on top.
                     if !collapsed && let Some(pos) = pointer {
+                        #[cfg(feature = "drawings")]
                         let drawing = self.drawings.hit_test(pos);
+                        #[cfg(not(feature = "drawings"))]
+                        let drawing: Option<usize> = None;
                         if let Some(hit) = primitive_hit.filter(|_| {
                             drawing.is_none()
                                 && pane_response.hovered()
                                 && !pane_response.dragged()
-                                && !self.drawings.eraser_mode
-                                && self.drawings.active_tool.is_none()
+                                && !eraser_mode
+                                && !drawing_tool_active
                         }) {
                             ui.ctx().set_cursor_icon(hit.cursor);
                         }
@@ -838,25 +861,40 @@ impl Chart {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
-                let history = self.history.start_drawing_action(&mut self.drawings);
-                let mut drawings = std::mem::take(&mut self.drawings);
-                let mut cursors = std::mem::take(&mut self.cursor_modes);
-                let timescale = self.state.time_scale().clone();
-                let painter = ui.painter().clone();
-                self.handle_pane_drawings(
-                    ui,
-                    &mut drawings,
-                    &mut cursors,
-                    &pane_response,
-                    chart_rect,
-                    &map,
-                    &painter,
-                    &timescale,
-                    Some(pane_id),
-                );
-                let drawing_hit = pane_response
-                    .interact_pointer_pos()
-                    .and_then(|pos| drawings.hit_test(pos));
+                #[cfg(feature = "drawings")]
+                let drawing_hit = {
+                    let history = self.history.start_drawing_action(&mut self.drawings);
+                    let mut drawings = std::mem::take(&mut self.drawings);
+                    let mut cursors = std::mem::take(&mut self.cursor_modes);
+                    let timescale = self.state.time_scale().clone();
+                    let painter = ui.painter().clone();
+                    self.handle_pane_drawings(
+                        ui,
+                        &mut drawings,
+                        &mut cursors,
+                        &pane_response,
+                        chart_rect,
+                        &map,
+                        &painter,
+                        &timescale,
+                        Some(pane_id),
+                    );
+                    let drawing_hit = pane_response
+                        .interact_pointer_pos()
+                        .and_then(|pos| drawings.hit_test(pos));
+                    super::tool_interaction::render_pane_eraser_highlight(
+                        &ui.painter().with_clip_rect(chart_rect),
+                        &drawings,
+                        &cursors,
+                    );
+                    self.drawings = drawings;
+                    self.cursor_modes = cursors;
+                    self.history
+                        .finish_drawing_action(&mut self.drawings, history);
+                    drawing_hit
+                };
+                #[cfg(not(feature = "drawings"))]
+                let drawing_hit: Option<usize> = None;
                 if pane_response.double_clicked()
                     && drawing_hit.is_none()
                     && let Some(id) = study_id
@@ -867,21 +905,20 @@ impl Chart {
                     pending_pane_selection = None;
                     self.selection.deselect();
                 }
-                super::tool_interaction::render_pane_eraser_highlight(
-                    &ui.painter().with_clip_rect(chart_rect),
-                    &drawings,
-                    &cursors,
-                );
                 if pane_response.secondary_clicked()
                     && let Some(pos) = pane_response.interact_pointer_pos()
                 {
-                    self.right_click = Some(if let Some(id) = drawings.hit_test(pos) {
-                        if drawings.is_selected(id) {
-                            let ids: Vec<_> =
-                                std::iter::once(id).chain(drawings.selected_ids()).collect();
-                            drawings.select_drawings(ids);
-                        } else {
-                            drawings.select(id);
+                    self.right_click = Some(if let Some(id) = drawing_hit {
+                        #[cfg(feature = "drawings")]
+                        {
+                            if self.drawings.is_selected(id) {
+                                let ids: Vec<_> = std::iter::once(id)
+                                    .chain(self.drawings.selected_ids())
+                                    .collect();
+                                self.drawings.select_drawings(ids);
+                            } else {
+                                self.drawings.select(id);
+                            }
                         }
                         super::RightClickTarget::Drawing {
                             drawing_id: id,
@@ -894,10 +931,6 @@ impl Chart {
                         }
                     });
                 }
-                self.drawings = drawings;
-                self.cursor_modes = cursors;
-                self.history
-                    .finish_drawing_action(&mut self.drawings, history);
                 // The last pass of the pane's primitives, above its drawings.
                 let painter = ui.painter().with_clip_rect(chart_rect);
                 for item in self.primitives.iter().filter(|item| {
@@ -1010,6 +1043,7 @@ mod tests {
 
     /// Pane drawings retain study units through editing, layout changes and storage.
     #[test]
+    #[cfg(feature = "drawings")]
     fn drawings_use_the_owning_study_pane_scale() {
         use crate::drawings::DrawingToolType;
         use crate::scales::PriceScaleMode;

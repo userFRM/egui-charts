@@ -6,8 +6,8 @@ use crate::data::{MaybeSend, Reply};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StoreKind {
-    /// The user's settings: theme, last symbol and interval, drawing toolbar favourites. One
-    /// document.
+    /// The user's settings: theme, last symbol and interval, drawing toolbar favourites and the
+    /// open layout. One document, named `settings`.
     Settings,
     /// The drawings of one symbol, one document per symbol, named by the symbol.
     Drawings,
@@ -21,6 +21,9 @@ pub enum StoreKind {
     DrawingTemplates,
     /// The user's notes on one symbol, one document per symbol, named by the symbol.
     SymbolNotes,
+    /// Named chart layouts: the arrangement of the charts and the symbol, interval, chart type,
+    /// studies, panes, scales, settings and drawings of each.
+    Layouts,
     /// Recently opened instruments, newest first.
     RecentSymbols,
 }

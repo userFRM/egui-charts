@@ -3,6 +3,7 @@
 //! Right-click context menu for the chart area. Provides trading actions,
 //! clipboard operations, chart management, and navigation options.
 
+use super::tpo_context_menu::TpoMenu;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -53,6 +54,12 @@ pub enum ContextMenuAction {
     ExportCsv,
     /// Reset the chart view to defaults
     ResetChart,
+    /// Merge the clicked TPO profile with its previous neighbour. Already applied by [`ChartMenus`].
+    MergeTpoPrevious,
+    /// Merge the clicked TPO profile with its next neighbour. Already applied by [`ChartMenus`].
+    MergeTpoNext,
+    /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
+    SplitTpoProfile,
 }
 
 // ============================================================================
@@ -480,7 +487,13 @@ fn draw_item<A>(
         },
     );
     crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.sm);
-    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, item.enabled, &item.label));
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            egui::Role::MenuItem,
+            response.enabled() && item.enabled,
+            &item.label,
+        )
+    });
 
     let hovered = item.enabled && (response.hovered() || highlighted);
     // (label, icon, trailing text)
@@ -936,6 +949,7 @@ pub struct ChartMenus {
     study: StudyContextMenu,
     drawing: DrawingContextMenu,
     axes: super::axis_context_menu::AxisMenus,
+    tpo: Option<TpoMenu>,
     /// Host rows in display order. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,
     context: Option<HostMenuContext>,
@@ -1013,6 +1027,14 @@ impl ChartMenus {
                 time,
                 price,
             });
+            self.tpo = match target {
+                RightClickTarget::Background { .. }
+                | RightClickTarget::Element {
+                    id: ChartElementId::Series(SeriesId::MAIN),
+                    ..
+                } => TpoMenu::open(chart, pos),
+                _ => None,
+            };
             self.just_opened = true;
             // A new right-click supersedes any menu still open.
             self.chart.close();
@@ -1078,6 +1100,11 @@ impl ChartMenus {
                 if let Some(ChartContextAction::Study { id, action }) = &picked {
                     chart.user_action(|chart| study_context_menu::apply(chart, *id, action));
                 }
+                if let Some(ChartContextAction::Chart(action)) = &picked
+                    && let Some(tpo) = &self.tpo
+                {
+                    chart.user_action(|chart| tpo.apply(chart, action));
+                }
                 menu_action = picked;
                 self.context = None;
                 self.chart.close();
@@ -1128,6 +1155,14 @@ impl ChartMenus {
                 ChartContextAction::Drawing,
             ),
         };
+        if let Some(tpo) = &self.tpo {
+            let mut profile = tagged(tpo.entries(), ChartContextAction::Chart);
+            if !entries.is_empty() {
+                profile.push(MenuEntry::Separator);
+            }
+            profile.extend(entries);
+            entries = profile;
+        }
         let mut separated = false;
         for entry in &self.host_entries {
             if !(entry.condition)(&context) {
@@ -1812,6 +1847,131 @@ mod tests {
         assert_eq!(ctx.format_shortcut(&shortcut), "Alt+R");
     }
 
+    /// Guards #106: actual profile clicks merge neighbours, extend a composite and split it,
+    /// preserving unrelated host ranges and making each command one undoable edit.
+    #[test]
+    fn tpo_profile_menu_merges_and_splits_sessions() {
+        use crate::model::{Bar, BarData, ChartType, Timeframe, to_tpo_profiles};
+        use chrono::{DateTime, Duration};
+        use egui::{Event, PointerButton, RawInput, Shape};
+        for (theme, width) in [
+            (Theme::dark(), 900.0),
+            (Theme::light(), 900.0),
+            (Theme::dark(), 320.0),
+            (Theme::light(), 320.0),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let day = |d| DateTime::UNIX_EPOCH + Duration::days(d);
+            let bars: Vec<_> = (0..16)
+                .map(|i| {
+                    Bar::new(
+                        day(i / 4) + Duration::minutes(i % 4 * 30),
+                        100.0,
+                        102.0,
+                        100.0,
+                        102.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            let mut params = chart.chart_type_params().clone();
+            // The last loaded session belongs to a separate host range extending into the future.
+            params.tpo_composites = vec![day(3)..=day(4)];
+            chart.set_chart_type_params(params);
+            let mut menus = ChartMenus::default();
+            let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+                let mut action = None;
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        action = menus.show(ui.ctx(), chart);
+                    },
+                );
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                (action, shapes)
+            };
+            frame(&mut chart, &mut menus, vec![]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 18.0));
+            frame(&mut chart, &mut menus, vec![]);
+            let click = |chart: &mut Chart, menus: &mut ChartMenus, pos, button| {
+                frame(chart, menus, vec![Event::PointerMoved(pos)]);
+                let mut action = None;
+                for pressed in [true, false] {
+                    action = action.or(frame(
+                        chart,
+                        menus,
+                        vec![Event::PointerButton {
+                            pos,
+                            button,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    )
+                    .0);
+                }
+                action
+            };
+            let pick = |chart: &mut Chart, menus: &mut ChartMenus, bar, label: &str| {
+                frame(chart, menus, vec![]);
+                let map = chart.get_chart_mapping();
+                let pos = Pos2::new(
+                    map.idx_to_x(bar).max(map.rect.left()) + 4.0,
+                    map.price_to_y(101.0),
+                );
+                click(chart, menus, pos, PointerButton::Secondary);
+                let (_, shapes) = frame(chart, menus, vec![]);
+                let row = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("no {label} row for profile at {bar}"));
+                click(chart, menus, row, PointerButton::Primary)
+            };
+            let counts = |chart: &Chart| {
+                let mut config = chart.chart_type_params().tpo_config(None);
+                config.tick_size = 1.0;
+                to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
+                    .iter()
+                    .map(|p| p.tpo_count_at(101.0, p.tick_size))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert!(matches!(
+                pick(&mut chart, &mut menus, 4, "Merge with previous profile"),
+                Some(ChartContextAction::Chart(_))
+            ));
+            // Four half-hour periods per session, one letter at every row per period.
+            assert_eq!(counts(&chart), [8, 4, 4]);
+            assert!(chart.undo());
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert!(chart.redo());
+            assert_eq!(counts(&chart), [8, 4, 4]);
+            pick(&mut chart, &mut menus, 0, "Merge with next profile");
+            assert_eq!(counts(&chart), [12, 4]);
+            // Pan the composite's opening offscreen; its displayed anchor still opens its menu.
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(3.0, 18.0));
+            pick(&mut chart, &mut menus, 0, "Split profile");
+            assert_eq!(counts(&chart), [4, 4, 4, 4]);
+            assert_eq!(chart.chart_type_params().tpo_composites, [day(3)..=day(4)]);
+            assert!(chart.undo());
+            assert_eq!(counts(&chart), [12, 4]);
+        }
+    }
+
     /// Guards #850: a secondary click on a study's legend row opens the study's menu, and each
     /// entry changes the study through the chart's public API or returns its host intent.
     #[test]
@@ -1967,8 +2127,10 @@ mod tests {
         let sma_behind = |chart: &mut Chart, menus: &mut ChartMenus| {
             let (_, shapes) = frame(chart, menus, vec![]);
             let first = |color| {
-                shapes.iter().position(|shape| {
-                    matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)
+                shapes.iter().position(|shape| match shape {
+                    Shape::LineSegment { stroke, .. } => stroke.color == color,
+                    Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                    _ => false,
                 })
             };
             first(sma_color).unwrap() < first(bullish).unwrap()

@@ -12,7 +12,7 @@ path = "main.rs"
 
 [dependencies]
 egui-charts = { path = "../..", features = ["ui"] }
-eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 # The emoji fonts draw the icons the drawing bar's Icons/Emojis menu places.
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 egui_extras = { version = "0.37.0", features = ["svg"] }
@@ -23,7 +23,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Native gets the windowing backends and the system clipboard.
 # WASM uses the canvas backend and browser downloads.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "wgpu", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "x11", "wayland"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.108"
@@ -31,3 +31,11 @@ wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url"] }
 console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
+
+# `index.html` builds the web release with this profile; native builds keep `release`.
+# The same as the library's `wasm-release`, which explains the settings.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1

@@ -15,7 +15,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Tooltip display mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TooltipMode {
     /// Floating tooltip that follows cursor position
     /// Shows OHLC, volume, and change info in a popup near the mouse
@@ -44,7 +44,7 @@ impl std::fmt::Display for TooltipMode {
 }
 
 /// Tooltip configuration options
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TooltipOptions {
     /// Whether the hover readout is drawn at all.
     ///

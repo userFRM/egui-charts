@@ -48,8 +48,8 @@
 //! | **Data** | [`data`] | `Datafeed` contract for history and live data, `Reply`, `Sink`, bar resampling |
 //! | **Host services** | [`services`] | Traits a host implements to supply services such as storage, symbol search, signals, alerts and a trading account |
 //! | **Chart engine** | [`chart`] | Rendering, hit-testing, coordinate mapping, overlays |
-//! | **Drawing tools** | [`drawings`] | 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
-//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 158 indicator names in `IndicatorFactory` |
+//! | **Drawing tools** | `drawings` | *(feature `drawings`)* 98 drawing tool types counting cursor modes (trend lines, Fibonacci, patterns, etc.), undo/redo |
+//! | **Indicators** | [`studies`] | `Indicator` trait, `IndicatorRegistry`, `CustomIndicator`; *(feature `studies`)* built-in studies and 170 indicator names in `IndicatorFactory` with default features; automatic drawing studies also require `drawings` |
 //! | **Scales** | [`scales`] | Price scales (normal, log, percentage), time scales, tick generators, formatters |
 //! | **Configuration** | [`config`] | `ChartConfig`, `ChartOptions`, crosshair, tooltip, keyboard, kinetic scroll |
 //! | **Theme system** | [`theme`], [`tokens`], [`styles`] | Design tokens as Rust constants, `Theme` with dark, light and high-contrast presets |
@@ -69,10 +69,11 @@
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `drawings`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`] and the `Indicator` trait layer of [`studies`]. Required by `icons` and `ui`. |
+//! | `widget` | **on** | The egui chart widget and the modules built on it: `chart`, `config`, `theme`, `styles` and `widget`. Without it the crate is the headless engine: [`model`], [`scales`], [`data`], [`services`], [`tokens`] and the `Indicator` trait layer of [`studies`]. Required by `drawings`, `icons` and `ui`. |
+//! | `drawings` | **on** | Drawing tools, rendering, hit tests, undo and persistence. Implies `widget`; enabled by `ui`. |
 //! | `studies` | **on** | The built-in studies and `IndicatorFactory`. Needs no egui, so a headless build can compute the same studies. `Indicator`, `IndicatorValue`, `IndicatorRegistry` and `CustomIndicator` are in every build. Required by `ui`. |
 //! | `icons` | **on** | Compile-time embedded SVG icons, drawn through egui_extras' SVG image loader, which the chart installs in the egui context. Required by `ui`. |
-//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons` and `studies`. |
+//! | `ui` | **on** | Application-level UI: toolbars, panels, sidebars, dialogs, the reusable `ui_kit` widget library they are built on, and the `ext` helpers. Enables `icons`, `studies` and `drawings`. |
 //! | `locales` | **on** | Month and weekday names and the AM/PM marker in the language of the locale given to `Chart::set_locale` or [`LocaleTimeFormatter`](scales::LocaleTimeFormatter), from chrono's locale tables. Without it those labels stay in English. |
 //! | `serde` | off | `Serialize` and `Deserialize` for `theme::Theme`. |
 //!
@@ -99,6 +100,22 @@
 //! 4. Apply a theme at startup with [`theme::apply_to_egui`] to propagate
 //!    design tokens into egui's visual system.
 //!
+//! ## Building for the web
+//!
+//! The download of a `wasm32` build shrinks with:
+//!
+//! - the `[profile.wasm-release]` of this crate's `Cargo.toml` (`opt-level = "s"`,
+//!   `lto = "fat"`, `codegen-units = 1`) and `wasm-opt -Oz`;
+//! - eframe's `glow` renderer instead of `wgpu`;
+//! - eframe without its `default_fonts` feature: [`theme::apply_to_egui`] installs the
+//!   one font the chart draws with;
+//! - chrono-tz's `filter-by-regex` feature with a `CHRONO_TZ_TIMEZONE_FILTER` that
+//!   keeps the zones the application uses and the ones this crate names: `UTC`,
+//!   `America/New_York`, `Europe/London`, `Asia/Tokyo` and `Asia/Hong_Kong`.
+//!
+//! `scripts/web-size.sh` builds `examples/bare_chart.rs`, which takes the first three,
+//! and the demo for the web and prints their sizes.
+//!
 //! ## Crate-level re-exports
 //!
 //! The most commonly used types are re-exported at the crate root for
@@ -122,7 +139,7 @@ extern crate ecolor as egui;
 
 #[cfg(feature = "widget")]
 pub mod chart;
-#[cfg(feature = "widget")]
+#[cfg(feature = "drawings")]
 pub mod drawings;
 pub mod model;
 pub mod scales;

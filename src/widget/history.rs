@@ -2,7 +2,9 @@
 
 use super::{Chart, ChartElementId, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
+#[cfg(feature = "drawings")]
 use crate::drawings::DrawingManager;
+#[cfg(feature = "drawings")]
 use crate::drawings::services::HistoryService;
 use crate::model::{ChartType, ChartTypeParams, Timeframe};
 use crate::scales::PriceScale;
@@ -14,11 +16,16 @@ pub(super) struct ChartHistory {
     redo: Vec<Action>,
     pending: Option<Pending>,
     changed: bool,
+    /// User edits recorded, undone or redone, kept when the history is cleared.
+    pub(super) edits: u64,
+    /// The edits among them that changed drawings.
+    pub(super) drawing_edits: u64,
 }
 
 struct Pending {
     depth: usize,
     before: Action,
+    #[cfg(feature = "drawings")]
     standalone_drawings: HistoryService,
     study_order: Vec<SeriesId>,
 }
@@ -35,6 +42,7 @@ struct Action {
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     studies: Vec<StudyChange>,
+    #[cfg(feature = "drawings")]
     drawings: HistoryService,
 }
 
@@ -51,6 +59,7 @@ struct Study {
 }
 
 impl ChartHistory {
+    #[cfg(feature = "drawings")]
     pub(super) fn visit_chart_points(
         &mut self,
         visit: &mut impl FnMut(&mut crate::drawings::ChartPoint),
@@ -64,7 +73,21 @@ impl ChartHistory {
         }
     }
 
+    /// Forgets every action, keeping the edit counts.
+    pub(super) fn clear(&mut self) {
+        *self = Self {
+            edits: self.edits,
+            drawing_edits: self.drawing_edits,
+            ..Self::default()
+        };
+    }
+
     fn push(&mut self, action: Action) {
+        self.edits += 1;
+        #[cfg(feature = "drawings")]
+        if action.drawings.can_undo() {
+            self.drawing_edits += 1;
+        }
         self.redo.clear();
         if self.undo.len() == 100 {
             self.undo.remove(0);
@@ -72,6 +95,7 @@ impl ChartHistory {
         self.undo.push(action);
     }
 
+    #[cfg(feature = "drawings")]
     pub(super) fn start_drawing_action(
         &self,
         drawings: &mut DrawingManager,
@@ -84,6 +108,7 @@ impl ChartHistory {
         Some(history)
     }
 
+    #[cfg(feature = "drawings")]
     pub(super) fn finish_drawing_action(
         &mut self,
         drawings: &mut DrawingManager,
@@ -161,8 +186,10 @@ impl Chart {
             pending.depth += 1;
             return;
         }
+        #[cfg(feature = "drawings")]
         let mut standalone_drawings = HistoryService::with_max_size(0);
         self.sync_panes();
+        #[cfg(feature = "drawings")]
         self.drawings.swap_history(&mut standalone_drawings);
         self.history.pending = Some(Pending {
             depth: 1,
@@ -178,6 +205,7 @@ impl Chart {
                 interval: Some(self.timeframe),
                 ..Action::default()
             },
+            #[cfg(feature = "drawings")]
             standalone_drawings,
             study_order: self.study_ids.clone(),
         });
@@ -201,10 +229,14 @@ impl Chart {
             return;
         }
         self.apply_config_scale_mode();
+        #[cfg(feature = "drawings")]
         self.drawings.swap_history(&mut pending.standalone_drawings);
         self.sync_panes();
         let mut action = pending.before;
-        action.drawings = pending.standalone_drawings;
+        #[cfg(feature = "drawings")]
+        {
+            action.drawings = pending.standalone_drawings;
+        }
         if action.view == Some(self.get_time_scale_state()) {
             action.view = None;
         }
@@ -264,6 +296,10 @@ impl Chart {
                 _ => true,
             },
         );
+        #[cfg(feature = "drawings")]
+        let drawings_changed = action.drawings.can_undo();
+        #[cfg(not(feature = "drawings"))]
+        let drawings_changed = false;
         if action.view.is_none()
             && action.config.is_none()
             && action.main_series_visible.is_none()
@@ -274,7 +310,7 @@ impl Chart {
             && action.chart_type.is_none()
             && action.interval.is_none()
             && action.studies.is_empty()
-            && !action.drawings.can_undo()
+            && !drawings_changed
         {
             return;
         }
@@ -339,6 +375,13 @@ impl Chart {
         std::mem::take(&mut self.history.changed)
     }
 
+    /// A count that changes with every user edit of the chart, undo and redo included, and with
+    /// every change of symbol. Compare it with the count at the last save to tell whether the
+    /// chart changed since, for example to save a layout automatically.
+    pub fn edit_count(&self) -> u64 {
+        self.history.edits
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
         if self.history.pending.is_some() {
             return false;
@@ -364,6 +407,7 @@ impl Chart {
                 self.set_timeframe(timeframe);
             } else {
                 self.timeframe = None;
+                #[cfg(feature = "drawings")]
                 self.drawings.curr_timeframe.clear();
             }
             *interval = current;
@@ -436,6 +480,7 @@ impl Chart {
             self.pending_from.insert(at, None);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
+        self.recalculate_studies();
         // Replacing a study during history replay is not a volume-switch edit.
         self.config.show_volume = show_volume;
         for (change, before) in action.studies.iter_mut().zip(current) {
@@ -450,13 +495,21 @@ impl Chart {
         {
             self.selection.deselect();
         }
-        self.drawings.swap_history(&mut action.drawings);
-        if redo {
-            while self.drawings.redo() {}
-        } else {
-            while self.drawings.undo() {}
+        #[cfg(feature = "drawings")]
+        {
+            self.drawings.swap_history(&mut action.drawings);
+            if redo {
+                while self.drawings.redo() {}
+            } else {
+                while self.drawings.undo() {}
+            }
+            self.drawings.swap_history(&mut action.drawings);
         }
-        self.drawings.swap_history(&mut action.drawings);
+        self.history.edits += 1;
+        #[cfg(feature = "drawings")]
+        if action.drawings.can_undo() || action.drawings.can_redo() {
+            self.history.drawing_edits += 1;
+        }
         if redo {
             self.history.undo.push(action);
         } else {
@@ -470,12 +523,16 @@ impl Chart {
 #[cfg(all(test, feature = "studies"))]
 mod tests {
     use super::*;
+    #[cfg(feature = "drawings")]
     use crate::drawings::manager::DrawingSyncAction;
+    #[cfg(feature = "drawings")]
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::BarData;
     use crate::studies::{InputValue, RSI, SMA};
     use crate::widget::test_frames::chart;
-    use egui::{Color32, Context, Event, Key, Modifiers, RawInput};
+    use egui::Color32;
+    #[cfg(feature = "drawings")]
+    use egui::{Context, Event, Key, Modifiers, RawInput};
 
     #[test]
     fn study_edits_and_bulk_removal_restore_ids_order_and_settings() {
@@ -679,6 +736,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn host_updates_and_unchanged_actions_do_not_enter_or_clear_history() {
         let mut chart = Chart::new(BarData::new());
         chart.set_timeframe(Timeframe::Min1);
@@ -720,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn drawing_snapshots_keep_host_loads_sync_events_and_prepended_coordinates() {
         let mut chart = chart(&[10.0, 11.0], &[20.0, 21.0]);
         chart.user_action(|chart| {
@@ -772,6 +831,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "drawings")]
     fn command_z_y_and_shift_z_share_the_chart_history_on_both_platforms() {
         for mac in [false, true] {
             let ctx = Context::default();

@@ -392,7 +392,7 @@ impl TimeFormatter for RelativeTimeFormatter {
 }
 
 /// Timezone display mode for time axis labels.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TimezoneMode {
     /// Display in UTC
     #[default]
