@@ -72,10 +72,11 @@ impl Book {
         ] {
             side.clear();
             // Reversed so that, after the stable sort, the first of equal keys is the last pushed.
-            let levels = levels.into_iter().rev().filter(|level| level.size > 0.0);
+            let levels = levels.into_iter().rev();
             side.extend(levels.map(|level| (key(self.tick, level.price) ^ order, level)));
             side.sort_by_key(|(key, _)| *key);
             side.dedup_by_key(|(key, _)| *key);
+            side.retain(|(_, level)| level.size > 0.0);
         }
         let held = std::mem::take(&mut self.held);
         (self.sequence, self.requested, self.changed) = (Some(sequence), false, true);
@@ -270,12 +271,20 @@ mod tests {
         let deep = |levels: usize| book(&Vec::from_iter((0..levels).map(|i| (i as f64, 1.0))), &[]);
         #[rustfmt::skip]
         let cases = [
+            ("snapshot duplicates use the last size on both sides",
+                vec![Snapshot(1, book(&[(99.0, 5.0), (99.0, 0.0), (98.0, 0.0), (98.0, 2.0)],
+                    &[(100.0, 5.0), (100.0, 0.0), (101.0, 0.0), (101.0, 3.0)]))],
+                vec![Ok(())], Some(book(&[(98.0, 2.0)], &[(101.0, 3.0)]))),
             ("deltas apply in sequence; size 0 removes; a replay is ignored",
                 vec![initial(),
                     Delta(11, book(&[(99.0, 5.0), (98.0, 0.0), (-1.0, 1.0)], &[])),
                     Delta(12, book(&[], &[(101.0, 4.0), (102.0, 0.0)])),
                     Delta(11, book(&[(99.0, 7.0)], &[]))],
                 vec![Ok(()), Ok(()), Ok(()), Ok(())], Some(applied)),
+            ("rounded tick duplicates use the last zero size",
+                vec![Snapshot(1, book(&[(99.0, 5.0), (99.000000001, 0.0)],
+                    &[(100.0, 5.0), (99.999999999, 0.0)]))],
+                vec![Ok(())], Some(book(&[], &[]))),
             ("a gap clears the book and asks once",
                 vec![initial(), Delta(12, book(&[(99.0, 5.0)], &[])),
                     Delta(13, book(&[(99.0, 6.0)], &[]))],
@@ -324,7 +333,7 @@ mod tests {
                 Some(book(&[], &[]))),
         ];
         for (name, pushes, outcomes, expected) in cases {
-            let mut depth = Book::default();
+            let mut depth = Book::new(name.starts_with("rounded").then_some(0.25));
             let got: Vec<_> = pushes
                 .into_iter()
                 .map(|push| match push {

@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Depth snapshots resolve duplicate tick prices before removing zero sizes, so the last supplied level removes earlier liquidity on either side. ([#909](https://github.com/userFRM/egui-charts/issues/909))
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 
