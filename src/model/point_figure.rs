@@ -89,7 +89,7 @@ pub struct PnfColumn {
     pub end_time: DateTime<Utc>,
     /// Box size used for this column
     pub box_size: f64,
-    /// Number of boxes in this column
+    /// Inclusive number of boxes, saturated at `usize::MAX` when the count is larger.
     pub box_cnt: usize,
 }
 
@@ -104,17 +104,32 @@ impl PnfColumn {
         self.start_price.max(self.end_price)
     }
 
-    /// Get all box prices in this column
-    pub fn boxes(&self) -> Vec<f64> {
-        let mut prices = Vec::new();
-        let low = self.low();
-        let count = ((self.high() - low) / self.box_size).round() as usize;
-
-        for i in 0..=count {
-            prices.push(low + (i as f64 * self.box_size));
+    /// Get all box prices in ascending price order.
+    ///
+    /// # Errors
+    /// Returns an error for non-finite endpoints, an invalid box size, more than two million
+    /// boxes, or an allocation failure. The column endpoints remain available without expansion.
+    pub fn boxes(&self) -> Result<Vec<f64>, String> {
+        if !self.start_price.is_finite()
+            || !self.end_price.is_finite()
+            || !(self.box_size > 0.0 && self.box_size.is_finite())
+        {
+            return Err(
+                "Box prices require finite endpoints and a positive finite box size".into(),
+            );
         }
-
+        let count = box_count(self.start_price, self.end_price, self.box_size);
+        const MAX_BOXES: usize = 2_000_000;
+        if count > MAX_BOXES {
+            return Err("Column exceeds the two-million-box expansion limit".into());
+        }
+        let mut prices = Vec::new();
         prices
+            .try_reserve_exact(count)
+            .map_err(|error| error.to_string())?;
+        let low = self.low();
+        prices.extend((0..count).map(|i| low + i as f64 * self.box_size));
+        Ok(prices)
     }
 
     /// Check if column contains a specific price level
@@ -207,10 +222,8 @@ impl PriceBuilder for PnfBuilder {
                 if new_high > curr_column.end_price {
                     curr_column.end_price = new_high;
                     curr_column.end_time = bar.time;
-                    curr_column.box_cnt = ((curr_column.end_price - curr_column.start_price)
-                        / box_size)
-                        .round() as usize
-                        + 1;
+                    curr_column.box_cnt =
+                        box_count(curr_column.start_price, curr_column.end_price, box_size);
                 }
 
                 // Check for reversal
@@ -224,9 +237,7 @@ impl PriceBuilder for PnfBuilder {
                         start_time: bar.time,
                         end_time: bar.time,
                         box_size,
-                        box_cnt: ((curr_column.end_price - box_size - new_low) / box_size).round()
-                            as usize
-                            + 1,
+                        box_cnt: box_count(curr_column.end_price - box_size, new_low, box_size),
                     };
                     self.columns
                         .push(std::mem::replace(&mut curr_column, reversed));
@@ -238,10 +249,8 @@ impl PriceBuilder for PnfBuilder {
                 if new_low < curr_column.end_price {
                     curr_column.end_price = new_low;
                     curr_column.end_time = bar.time;
-                    curr_column.box_cnt = ((curr_column.start_price - curr_column.end_price)
-                        / box_size)
-                        .round() as usize
-                        + 1;
+                    curr_column.box_cnt =
+                        box_count(curr_column.start_price, curr_column.end_price, box_size);
                 }
 
                 // Check for reversal
@@ -255,9 +264,7 @@ impl PriceBuilder for PnfBuilder {
                         start_time: bar.time,
                         end_time: bar.time,
                         box_size,
-                        box_cnt: ((new_high - curr_column.end_price - box_size) / box_size).round()
-                            as usize
-                            + 1,
+                        box_cnt: box_count(curr_column.end_price + box_size, new_high, box_size),
                     };
                     self.columns
                         .push(std::mem::replace(&mut curr_column, reversed));
@@ -277,6 +284,16 @@ impl PriceBuilder for PnfBuilder {
         columns.extend(self.curr_column.clone());
         columns.drain(..columns.len().saturating_sub(MAX_COLUMNS));
         columns
+    }
+}
+
+// Check the floating count before converting: the inclusive endpoint can exceed `usize` too.
+fn box_count(start: f64, end: f64, size: f64) -> usize {
+    let steps = ((end - start).abs() / size).round();
+    if steps >= usize::MAX as f64 {
+        usize::MAX
+    } else {
+        steps as usize + 1
     }
 }
 
@@ -387,18 +404,75 @@ mod tests {
     }
 
     #[test]
-    fn test_column_boxes() {
-        let column = PnfColumn {
-            start_price: 100.0,
-            end_price: 105.0,
-            direction: ColumnDirection::Up,
-            start_time: Utc::now(),
-            end_time: Utc::now(),
-            box_size: 1.0,
-            box_cnt: 6,
-        };
+    fn column_counts_saturate_without_losing_price_endpoints() {
+        // Inclusive counts: 100..101 has two boxes; 100..150 at 1e-8 has 5,000,000,001.
+        for (prices, size, expected) in [
+            (vec![100.0, 101.0], 1.0, 2),
+            (
+                vec![100.0, 150.0],
+                1e-8,
+                5_000_000_001_u64.min(usize::MAX as u64) as usize,
+            ),
+            (vec![100.0, 1e20], 1.0, usize::MAX),
+            (vec![100.0, -1e20], 1.0, usize::MAX),
+            (vec![100.0, 97.0, -1e20], 1.0, usize::MAX),
+            (vec![100.0, 97.0, 1e20], 1.0, usize::MAX),
+        ] {
+            let data: Vec<_> = prices
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| {
+                    Bar::new(
+                        DateTime::from_timestamp(i as i64, 0).unwrap(),
+                        p,
+                        p,
+                        p,
+                        p,
+                        0.0,
+                    )
+                })
+                .collect();
+            let columns = to_pnf_columns(&data, &PointFigureConfig::new(size, 3));
+            let last = columns.last().unwrap();
+            assert_eq!(last.box_cnt, expected, "{prices:?} size {size}");
+            assert_eq!(last.end_price, *prices.last().unwrap());
+        }
+    }
 
-        let boxes = column.boxes();
-        assert_eq!(boxes.len(), 6); // 100, 101, 102, 103, 104, 105
+    #[test]
+    fn test_column_boxes() {
+        for (start, end, size, expected) in [
+            (
+                100.0,
+                105.0,
+                1.0,
+                Some(vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0]),
+            ),
+            (
+                105.0,
+                100.0,
+                1.0,
+                Some(vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0]),
+            ),
+            (100.0, 100.0, 1.0, Some(vec![100.0])),
+            (100.0, 1e12, 1.0, None),
+            (100.0, 1e20, 1.0, None),
+            (100.0, 150.0, 1e-8, None),
+            (100.0, 105.0, 0.0, None),
+            (100.0, 105.0, f64::NAN, None),
+            (100.0, f64::INFINITY, 1.0, None),
+            (f64::NAN, 105.0, 1.0, None),
+        ] {
+            let column = PnfColumn {
+                start_price: start,
+                end_price: end,
+                direction: ColumnDirection::Up,
+                start_time: Utc::now(),
+                end_time: Utc::now(),
+                box_size: size,
+                box_cnt: 1,
+            };
+            assert_eq!(column.boxes().ok(), expected, "{start}..{end} size {size}");
+        }
     }
 }
