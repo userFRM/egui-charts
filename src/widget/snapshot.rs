@@ -549,8 +549,11 @@ mod tests {
             assert!(restored.restore(&snapshot).is_err());
             assert_eq!(restored.symbol(), "A");
         }
+        let unchanged = serde_json::to_value(restored.snapshot().unwrap()).unwrap();
         for key in ["price_scale", "panes"] {
             let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();
+            invalid["charts"][0]["symbol"] = "Invalid".into();
+            invalid["charts"][0]["drawings"] = serde_json::Value::Null;
             let scale = if key == "price_scale" {
                 &mut invalid["charts"][0]["price_scale"]
             } else {
@@ -559,7 +562,10 @@ mod tests {
             scale["options"]["tick_marks"]["max_marks"] = usize::MAX.into();
             let invalid = SavedLayout::from_json(&invalid.to_string()).unwrap();
             assert!(restored.restore(&invalid.charts[0]).is_err());
-            assert_eq!(restored.symbol(), "A");
+            assert_eq!(
+                serde_json::to_value(restored.snapshot().unwrap()).unwrap(),
+                unchanged
+            );
         }
         // Both theme palettes survive instead of being replaced by dialog defaults.
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {

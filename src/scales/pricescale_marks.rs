@@ -498,15 +498,22 @@ mod tests {
     fn test_linear_marks_generation() {
         let generator = PriceMarkGenerator::new();
         let marks = generator.generate_marks(&map(PriceScaleMode::Normal, 100.0, 200.0));
-        let oversized = PriceMarkGenerator::with_config(PriceMarkGeneratorConfig {
-            max_marks: usize::MAX,
-            ..Default::default()
-        });
-        assert!(
-            !oversized
-                .generate_marks(&map(PriceScaleMode::Normal, 100.0, 200.0))
-                .is_empty()
-        );
+        for max_marks in [1_000, 1_001, usize::MAX] {
+            let bounded = PriceMarkGenerator::with_config(PriceMarkGeneratorConfig {
+                max_marks,
+                min_spacing: 0.0,
+                target_density: 100.0,
+                ..Default::default()
+            });
+            assert_eq!(
+                bounded
+                    .generate_marks(
+                        &map(PriceScaleMode::Normal, 0.0, 2_000.0).with_bounds(0.0, 2_000.0)
+                    )
+                    .len(),
+                1_000
+            );
+        }
 
         assert!(!marks.is_empty());
         assert!(marks.len() <= 20); // Max marks constraint

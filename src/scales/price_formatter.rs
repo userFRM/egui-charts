@@ -496,15 +496,18 @@ mod tests {
     fn extreme_precision_is_bounded() {
         let decimals = "0".repeat(324);
         for precision in [324, 325, usize::MAX] {
-            for formatter in [
-                DefaultPriceFormatter::with_precision(precision),
+            assert_eq!(
+                DefaultPriceFormatter::with_precision(precision).format(100.0),
+                format!("100.{decimals}")
+            );
+            assert_eq!(
                 DefaultPriceFormatter {
                     precision,
-                    min_precision: 1,
-                },
-            ] {
-                assert_eq!(formatter.format(100.0), format!("100.{decimals}"));
-            }
+                    min_precision: 0,
+                }
+                .format(100.0),
+                "100"
+            );
             assert_eq!(
                 CurrencyFormatter::new("$", precision).format(100.0),
                 format!("$100.{decimals}")
