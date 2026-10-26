@@ -226,8 +226,8 @@ impl Chart {
         id: super::SeriesId,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     ) -> bool {
-        if !(id == super::SeriesId::MAIN && self.main_series_present)
-            && !self.price_series.iter().any(|item| item.id == id)
+        if !(id == super::SeriesId::MAIN && self.main_series_present
+            || self.price_series.iter().any(|item| item.id == id))
         {
             return false;
         }
