@@ -524,7 +524,7 @@ impl Chart {
         let logical = self.state.time_scale().visible_logical_range();
         let bars = self.state.shown();
         super::sync::time_at(bars, logical.left.floor() as f64)
-            .zip(super::sync::time_at(bars, logical.right.floor() as f64))
+            .zip(super::sync::time_at(bars, logical.right.ceil() as f64))
             .filter(|(first, last)| first <= last)
     }
 
@@ -1220,10 +1220,15 @@ mod tests {
     }
 
     /// The first transformed open after the gap is (100 + 100) / 2 = 100,
-    /// although every visible raw bar is between 9 and 11.
+    /// although its raw prices are between 9 and 11. A right edge at 1.5 also fits bar 2.
     #[test]
     fn heikin_ashi_fit_uses_the_transformed_visible_candles() {
-        for secondary in [false, true] {
+        for (secondary, right, high) in [
+            (false, 8.0, 100.0),
+            (true, 8.0, 100.0),
+            (false, 1.5, 1001.0),
+            (true, 1.5, 1001.0),
+        ] {
             let mut input = bars(&[10.0; 9]);
             for bar in &mut input {
                 bar.high = 11.0;
@@ -1233,6 +1238,12 @@ mod tests {
             input[0].close = 100.0;
             input[0].high = 101.0;
             input[0].low = 99.0;
+            if right == 1.5 {
+                input[2].open = 1000.0;
+                input[2].close = 1000.0;
+                input[2].high = high;
+                input[2].low = 999.0;
+            }
             let mut chart = Chart::new(BarData::from_bars(input.clone()));
             let id = if secondary {
                 let id = chart.add_series(SeriesOptions {
@@ -1248,16 +1259,16 @@ mod tests {
             };
             let ctx = egui::Context::default();
             frame(&ctx, &mut chart, 0.0, vec![]);
-            chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, 8.0));
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, right));
             let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
             let map = chart.series_price_map(id).unwrap();
             assert!(
-                (map.range().min - (9.0 - 91.0 / 8.0)).abs() < 1e-8,
-                "secondary={secondary}: {:?}",
+                (map.range().min - (9.0 - (high - 9.0) / 8.0)).abs() < 1e-8,
+                "secondary={secondary}, right={right}: {:?}",
                 map.range()
             );
-            assert!((map.range().max - (100.0 + 91.0 / 8.0)).abs() < 1e-8);
-            for price in [9.0, 10.0, 100.0] {
+            assert!((map.range().max - (high + (high - 9.0) / 8.0)).abs() < 1e-8);
+            for price in [9.0, 10.0, 100.0, high] {
                 let (top, bottom) = map.extent();
                 assert!((top..=bottom).contains(&map.price_to_y(price)));
             }
