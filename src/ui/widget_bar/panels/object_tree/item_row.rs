@@ -217,7 +217,7 @@ fn render_row_content(
             );
             painter.rect_stroke(
                 color_rect,
-                2.0,
+                ui.active_theme().radius.xs,
                 Stroke::new(
                     DESIGN_TOKENS.stroke.hairline,
                     ui.active_theme().ui.text_muted,
@@ -476,8 +476,13 @@ mod tests {
     use egui::Color32;
 
     #[test]
-    fn selected_names_use_selection_colours_and_end_before_the_buttons() {
-        for (_, theme) in crate::theme::presets() {
+    fn selected_rows_use_the_theme_and_end_names_before_the_buttons() {
+        let mut custom = crate::theme::Theme::light();
+        custom.radius.xs = 6.0;
+        for (_, theme) in crate::theme::presets()
+            .into_iter()
+            .chain([("custom", custom)])
+        {
             for width in [220.0, 280.0] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
@@ -497,6 +502,18 @@ mod tests {
                     render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
                 });
                 output.textures_delta.clear();
+                let swatches: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.rect.size() == vec2(10.0, 10.0) => {
+                            Some(rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(swatches.len(), 2);
+                assert!(swatches.iter().all(|rect| rect.corner_radius == egui::CornerRadius::from(theme.radius.xs)));
                 assert!(output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == row && rect.fill == selection.bg_fill)
                 }));
