@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
+
 - The command palette consumes Enter in search and Enter or Space on a focused row before returning a command, so a host can open an export dialog without also submitting its empty save path. ([#834](https://github.com/userFRM/egui-charts/issues/834))
 
 - The scroll-to-latest button is a theme-aware 28-point double chevron at the bottom right of the main pane, clear of the legend and navigation, with matching paint and hit rectangles, a pointer cursor and “Scroll to the most recent bar” tooltip. Clicking or using the return shortcut animates to the configured right margin without changing zoom. The button is hidden at the live edge and available in history or future whitespace. Custom position, size, text and colours remain supported; `realtime_button_text: None` selects the icon and `Color32::PLACEHOLDER` colours follow the active theme. ([#930](https://github.com/userFRM/egui-charts/issues/930))

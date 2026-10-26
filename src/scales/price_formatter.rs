@@ -512,7 +512,7 @@ mod tests {
             (CurrencyFormatter::usd(), 0.0, "$0.00"),
             (CurrencyFormatter::usd(), 123.45, "$123.45"),
             // Symbol after the value keeps the sign on the number itself.
-            (CurrencyFormatter::eur(), -1234.5, "-1.234.50 €"),
+            (CurrencyFormatter::btc(), -1234.5, "-1,234.50000000 ₿"),
         ];
         for (formatter, value, expected) in cases {
             assert_eq!(formatter.format(value), expected);
