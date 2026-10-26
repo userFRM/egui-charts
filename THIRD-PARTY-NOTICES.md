@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Documentation site
+
+The guide built from `docs/book` bundles mdBook 0.5.2's theme, navigation and search scripts under the Mozilla Public License 2.0. Its inline Font Awesome Free 6.2.0 SVG icons are copyright 2022 Fonticons, Inc. and licensed under Creative Commons Attribution 4.0. The clipboard.js 2.0.4, mark.js 8.11.1 and elasticlunr.js 0.9.5 scripts and the Ayu and Tomorrow color themes use the MIT License; highlight.js 10.1.1 uses the BSD 3-Clause License. Their copyright notices, source links and full license texts are in [`docs/book/src/licenses.txt`](docs/book/src/licenses.txt), published at `/egui-charts/docs/licenses.txt` and linked from the guide.
+
+mdBook also distributes Open Sans under the Apache License 2.0 and Source Code Pro under the SIL Open Font License 1.1, with `fonts/OPEN-SANS-LICENSE.txt` and `fonts/SOURCE-CODE-PRO-LICENSE.txt` in the generated guide.
+
+The generated API reference retains rustdoc's scripts and styles under the MIT or Apache License 2.0, Fira, Source Code Pro, Source Serif 4 and Nanum Barun Gothic under the SIL Open Font License 1.1, and the Rust Foundation's logos under Creative Commons Attribution. Their copyright notices and license files ship in `/egui-charts/docs/api/static.files/` with rustdoc's generated filename suffixes. The Creative Commons Attribution 4.0 text is also included in the guide's license file.
+
 ## Original interface icons
 
 `src/ui/top_toolbar/menu.svg` is original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.

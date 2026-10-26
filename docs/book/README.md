@@ -5,17 +5,16 @@ Use the exact mdBook release pinned by `MDBOOK_VERSION` in
 From the repository root:
 
 ```sh
-python3 docs/book/build.py
+mdbook build docs/book
 RUSTUP_TOOLCHAIN=stable cargo test --doc --all-features
 RUSTUP_TOOLCHAIN=stable RUSTDOCFLAGS="-Dwarnings --extend-css docs/book/theme/api.css" cargo doc --no-deps --all-features
 cp -r target/doc target/book/api
 python3 -m http.server --directory target/book
 ```
 
-Open `http://localhost:8000`. The book build removes unused theme menu items from
-mdBook's output so its keyboard navigation visits only Light and Dark. Themes
-follow the system preference until the reader chooses one. Navigation and search
-use mdBook's bundled scripts; no external assets or services are loaded.
+Open `http://localhost:8000`. Themes follow the system preference until the reader
+chooses one; select Auto to follow the system again. Navigation, search and theme
+selection use mdBook's bundled scripts; no external assets or services are loaded.
 
 Keep existing `docs/*.md` guides in place and include them from chapter files.
 When a chapter or an included guide carries Rust examples, add a `cfg(doctest)`

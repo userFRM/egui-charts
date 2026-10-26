@@ -54,7 +54,7 @@ jobs:
       - name: Test documentation examples
         run: cargo test --doc --all-features
       - name: Build guide
-        run: python3 docs/book/build.py
+        run: mdbook build docs/book
       - name: Build API reference
         env:
           RUSTDOCFLAGS: -Dwarnings --extend-css docs/book/theme/api.css

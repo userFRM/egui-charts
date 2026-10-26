@@ -41,3 +41,5 @@ This guide follows the repository's `main` branch, which contains changes beyond
 the published 0.2.0 release. Use the Git dependency described in
 [installation](installation.md) to follow these examples. For released APIs, read
 [the 0.2.0 documentation](https://docs.rs/egui-charts/0.2.0).
+
+This site includes third-party assets; see [their licenses](licenses.txt).
