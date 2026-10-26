@@ -1,7 +1,7 @@
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Coppock Curve
@@ -28,7 +28,7 @@ impl CoppockCurve {
             short_roc: 11,
             wma_period: 10,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple,
+            color: palette::PURPLE,
             visible: true,
         }
     }

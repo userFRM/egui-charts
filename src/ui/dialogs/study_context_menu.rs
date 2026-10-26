@@ -19,6 +19,7 @@ use std::collections::HashSet;
 /// the chart as one undoable user action before it returns them; the host carries out the
 /// others.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum StudyContextMenuAction {
     /// Save this alert, on the study's value at the menu's bar, through the host's alerts
     /// service, for example with
@@ -420,7 +421,7 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
                     .indicators()
                     .find(|(study, _)| *study == id)
                     .and_then(|(_, study)| {
-                        (0..study.line_cnt())
+                        (0..study.line_count())
                             .find(|line| {
                                 let plot = study.plot_style(*line);
                                 plot.visible

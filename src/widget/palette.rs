@@ -13,9 +13,9 @@ impl Chart {
             .inherited_theme
             .as_ref()
             .map_or_else(ChartConfig::default, |theme| {
-                theme.apply_to_config(ChartConfig::default())
+                ChartConfig::default().with_theme(theme)
             });
-        let new = theme.apply_to_config(ChartConfig::default());
+        let new = ChartConfig::default().with_theme(theme);
         macro_rules! follow {
             ($($field:ident),+ $(,)?) => { $(if self.config.$field == old.$field { self.config.$field = new.$field; })+ };
         }

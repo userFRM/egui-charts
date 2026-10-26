@@ -2,8 +2,8 @@
 //!
 //! Includes: font icon, image placeholder, tweet placeholder, and idea placeholder.
 
-use crate::chart::rendering::finite_clip;
 use crate::drawings::domain::Drawing;
+use crate::painting::dashed_line::finite_clip;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};

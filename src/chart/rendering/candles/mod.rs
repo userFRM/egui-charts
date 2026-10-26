@@ -23,6 +23,7 @@ pub mod tpo;
 pub(crate) mod volume;
 
 use crate::theme::ThemeExt;
+pub use heikin_ashi::HeikinAshiCache;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
@@ -128,6 +129,7 @@ pub fn render_chart_type(
                 ctx.visible_data,
                 ctx.full_data,
                 ctx.revision,
+                ctx.heikin_ashi,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),

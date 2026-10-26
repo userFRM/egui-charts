@@ -44,3 +44,8 @@ pub(crate) use bar::{last_with_value, percent_change};
 pub use bar_data::BarData;
 pub(crate) use levels::{bar_level_keys, level_grid};
 pub use patterns::CandlePatterns;
+
+#[cfg(feature = "widget")]
+mod time;
+#[cfg(feature = "widget")]
+pub(crate) use time::{index_at, time_at};

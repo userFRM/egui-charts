@@ -68,7 +68,7 @@ mod trading;
 pub mod traits;
 // The painter the drawing renderers share with the chart.
 pub(crate) mod utils {
-    pub(crate) use crate::chart::rendering::draw_dashed_line;
+    pub(crate) use crate::painting::dashed_line::draw_dashed_line;
 }
 
 pub use traits::DrawingRenderer;
@@ -88,7 +88,7 @@ pub struct ChartView<'a> {
     pub instrument: Option<&'a crate::model::Instrument>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
-    /// [`ChartState::revision`](crate::model::ChartState::revision) of `bars`.
+    /// [`ChartState::revision`](crate::studies::ChartState::revision) of `bars`.
     /// Results computed from the bars are cached under it, so it must change
     /// whenever a bar before the last one changes.
     pub revision: u64,
@@ -642,7 +642,7 @@ mod tests {
     /// their configured colour. Dashes in a 200 px horizontal edge cannot be one solid edge.
     #[test]
     fn common_stroke_and_fill_styles_reach_tool_families() {
-        use crate::drawings::LineStyle;
+        use crate::model::LineStyle;
         for tool in [
             DrawingToolType::Rect,
             DrawingToolType::Circle,
@@ -928,7 +928,7 @@ mod tests {
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = vec![Pos2::new(100., 100.), Pos2::new(300., 100.)];
-            drawing.line_style = crate::drawings::LineStyle::Dashed;
+            drawing.line_style = crate::model::LineStyle::Dashed;
             drawing.extend_left = true;
             drawing.extend_right = true;
             fn extent(shapes: &[Shape]) -> (f32, f32) {
@@ -987,7 +987,7 @@ mod tests {
             Pos2::new(200., 200.),
             Pos2::new(200., 100.),
         ];
-        drawing.line_style = crate::drawings::LineStyle::Dashed;
+        drawing.line_style = crate::model::LineStyle::Dashed;
         fn length(shapes: &[Shape]) -> f32 {
             shapes
                 .iter()

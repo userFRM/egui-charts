@@ -3,6 +3,7 @@
 use crate::studies::Indicator;
 
 /// Actions emitted by the indicator dialog
+#[non_exhaustive]
 pub enum IndicatorDialogAction {
     /// No action
     None,

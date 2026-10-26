@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::Duration;
 use egui::Color32;
 use std::collections::VecDeque;
@@ -22,7 +22,7 @@ impl Week52HighLow {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.pink],
+            colors: vec![palette::PINK],
             visible: true,
         }
     }
@@ -53,8 +53,8 @@ impl Week52HighLow {
 }
 
 impl Indicator for Week52HighLow {
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {
@@ -122,10 +122,7 @@ impl Week52HighLowLevels {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,
-                DESIGN_TOKENS.semantic.extended.pink,
-            ],
+            colors: vec![palette::BLUE, palette::PINK],
             visible: true,
         }
     }

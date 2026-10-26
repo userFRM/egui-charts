@@ -57,7 +57,7 @@ impl Chart {
         {
             let names = study.line_names();
             let colors = study.colors();
-            for line in (0..study.line_cnt()).filter(|line| study.plot_style(*line).visible) {
+            for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
                 let row = StudyValue {
                     formatted: study
                         .plot_value(line, index)
@@ -69,12 +69,12 @@ impl Chart {
                     precision: study
                         .precision()
                         .unwrap_or_else(|| match study.value_format() {
-                            crate::studies::StudyFormat::Price => self
+                            crate::scales::StudyFormat::Price => self
                                 .instrument()
                                 .and_then(crate::scales::instrument_price_precision)
                                 .map_or(2, usize::from),
-                            crate::studies::StudyFormat::Fixed(decimals) => decimals.min(12),
-                            crate::studies::StudyFormat::Volume
+                            crate::scales::StudyFormat::Fixed(decimals) => decimals.min(12),
+                            crate::scales::StudyFormat::Volume
                                 if study
                                     .plot_value(line, index)
                                     .is_some_and(|value| value.abs() < 1_000.0) =>

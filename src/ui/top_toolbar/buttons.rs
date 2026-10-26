@@ -10,9 +10,9 @@ use crate::styles::{icons as icon_sizes, stroke};
 use egui::{Color32, Galley, Pos2, Rect, Response, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use super::TopToolbarConfig;
-use crate::ext::UiExt;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 
 /// Menu glyph with three 18 px bars spanning 14 px on the toolbar's 24 px icon grid.
 pub const MENU_ICON: Icon = Icon::new("top-toolbar-menu.svg", include_bytes!("menu.svg"));
@@ -218,7 +218,7 @@ impl TextButton {
         let galley = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), self.text.clone()),
             font_id,
-            DESIGN_TOKENS.semantic.ui.text_light,
+            ui.active_theme().ui.text,
         );
         let text_width = galley.rect.width();
         let total_width = text_width + padding * 2.0;
@@ -390,7 +390,7 @@ impl PillButton<'_> {
             font_id,
             Color32::PLACEHOLDER,
         );
-        galley.size().x + 2.0 * DESIGN_TOKENS.spacing.xl
+        galley.size().x + 2.0 * ui.active_theme().spacing.xl
     }
 
     pub(crate) fn show(self, ui: &mut Ui) -> Response {
@@ -607,7 +607,7 @@ pub fn toolbar_tooltip(
         .frame(
             egui::Frame::new()
                 .fill(fill)
-                .corner_radius(3)
+                .corner_radius(response.ctx.active_theme().radius.sm)
                 .inner_margin(egui::Margin::symmetric(8, 3)),
         )
         .show(|ui| {
@@ -627,7 +627,7 @@ pub fn toolbar_tooltip(
                         }
                         egui::Frame::new()
                             .fill(Color32::from_gray(80))
-                            .corner_radius(2)
+                            .corner_radius(ui.active_theme().radius.xs)
                             .inner_margin(egui::Margin::symmetric(4, 0))
                             .show(ui, |ui| {
                                 ui.label(

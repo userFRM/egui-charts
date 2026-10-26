@@ -156,7 +156,7 @@ pub fn footprint_studies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
 
     #[test]
@@ -164,14 +164,14 @@ mod tests {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         for (second, price, size, side) in [
-            (0, 100.0, 1.0, TradeSide::Sell),
-            (1, 101.0, 1.0, TradeSide::Sell),
-            (2, 101.0, 4.0, TradeSide::Buy),
-            (3, 102.0, 1.0, TradeSide::Sell),
-            (4, 102.0, 4.0, TradeSide::Buy),
-            (5, 103.0, 4.0, TradeSide::Buy),
-            (60, 110.0, 1.0, TradeSide::Buy),
-            (120, 102.0, 1.0, TradeSide::Sell),
+            (0, 100.0, 1.0, OrderSide::Sell),
+            (1, 101.0, 1.0, OrderSide::Sell),
+            (2, 101.0, 4.0, OrderSide::Buy),
+            (3, 102.0, 1.0, OrderSide::Sell),
+            (4, 102.0, 4.0, OrderSide::Buy),
+            (5, 103.0, 4.0, OrderSide::Buy),
+            (60, 110.0, 1.0, OrderSide::Buy),
+            (120, 102.0, 1.0, OrderSide::Sell),
         ] {
             flow.push(&Tick::new(
                 start + TimeDelta::seconds(second),
@@ -224,9 +224,9 @@ mod tests {
         ); // 5/15 at 101 and 102.
         // Unknown volume does not make a two-sided auction; one price is only marked once.
         for (sides, unfinished) in [
-            ([Some(TradeSide::Buy), Some(TradeSide::Sell)], 1),
-            ([Some(TradeSide::Buy), Some(TradeSide::Buy)], 0),
-            ([Some(TradeSide::Sell), None], 0),
+            ([Some(OrderSide::Buy), Some(OrderSide::Sell)], 1),
+            ([Some(OrderSide::Buy), Some(OrderSide::Buy)], 0),
+            ([Some(OrderSide::Sell), None], 0),
         ] {
             let mut extreme = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
             for side in sides {

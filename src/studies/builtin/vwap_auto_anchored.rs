@@ -28,8 +28,8 @@
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::over_finite_bars;
 use crate::model::{Bar, Instrument, PriceSource, Timeframe};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// How [`VwapAutoAnchored`] finds its anchor bar.
@@ -91,7 +91,7 @@ impl VwapAutoAnchored {
             interval: Timeframe::Min1,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.indicators.vwap],
+            colors: vec![palette::YELLOW],
             visible: true,
         }
     }

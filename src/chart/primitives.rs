@@ -120,7 +120,7 @@ impl PrimitiveView<'_> {
     /// The x of a UTC time, interpolated between bars and extrapolated into whitespace as
     /// [`Chart::time_to_index`](crate::widget::Chart::time_to_index) does. `None` without bars.
     pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
-        crate::widget::sync::index_at(self.bars, time).map(|index| self.index_to_x(index))
+        crate::model::index_at(self.bars, time).map(|index| self.index_to_x(index))
     }
 }
 

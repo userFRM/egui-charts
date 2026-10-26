@@ -13,6 +13,7 @@ use crate::theme::ThemeExt;
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
 /// broker.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum TradingLineAction {
     /// Cancel the working order.
     Cancel(Order),

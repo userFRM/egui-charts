@@ -3,13 +3,13 @@
 //! of commission on each fill. Equity is marked at every bar close after incurred fees.
 //!
 //! Run headlessly with `cargo run --example backtesting --no-default-features`.
+//! With the `ui` feature, also opens the replaceable report view. Export and trade selection
+//! are host actions; this example copies CSV and displays the requested trade span.
 
 mod support;
 
 use chrono::{TimeDelta, TimeZone, Utc};
-use egui_charts::model::{
-    Bar, StrategyExit, StrategyReport, StrategySide, StrategyTrade, Timeframe,
-};
+use egui_charts::model::{Bar, OrderSide, StrategyExit, StrategyReport, StrategyTrade, Timeframe};
 
 fn buy_and_hold(bars: &[Bar]) -> StrategyReport {
     let mut report = StrategyReport::new("Buy and hold", "SAMPLE", Timeframe::Hour1, 10_000.0);
@@ -20,7 +20,7 @@ fn buy_and_hold(bars: &[Bar]) -> StrategyReport {
     let quantity = 2.0;
     let commission = 1.0;
     let profit = (last.close - first.open) * quantity - 2.0 * commission;
-    let mut trade = StrategyTrade::new(StrategySide::Long, quantity, first.time, first.open);
+    let mut trade = StrategyTrade::new(OrderSide::Buy, quantity, first.time, first.open);
     trade.fees = 2.0 * commission;
     trade.exit = Some(StrategyExit::new(
         last.time + TimeDelta::hours(1),
@@ -60,6 +60,60 @@ fn main() {
             .expect("sample has a valid equity curve")
     );
     println!("{}", report.trades_csv());
+    let comparison = report.comparison(&bars);
+    println!("Buy-and-hold return: {:?}", comparison.buy_and_hold_return);
+    println!("Trade excursions: {:?}", comparison.excursions);
+    #[cfg(feature = "ui")]
+    show_report(report, &bars);
+}
+
+#[cfg(feature = "ui")]
+fn show_report(report: StrategyReport, bars: &[Bar]) {
+    use egui_charts::ui::strategy_report::{StrategyReportAction, StrategyReportPanel};
+
+    struct ReportApp {
+        panel: StrategyReportPanel,
+        selection: String,
+    }
+    impl eframe::App for ReportApp {
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if !self.selection.is_empty() {
+                    ui.label(&self.selection);
+                }
+                match self.panel.show(ui) {
+                    StrategyReportAction::ExportCsv(csv) => {
+                        ui.ctx().copy_text(csv);
+                        self.selection = "Trades CSV copied to clipboard".into();
+                    }
+                    StrategyReportAction::SelectTrade(trade) => {
+                        self.selection = format!(
+                            "Reveal {} ({}) from {} to {:?}",
+                            trade.symbol, trade.timeframe, trade.entry_time, trade.exit_time
+                        );
+                    }
+                    _ => {}
+                }
+            });
+        }
+    }
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), bars);
+    eframe::run_native(
+        "Strategy report",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 900.0]),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            egui_charts::theme::apply_to_egui(&cc.egui_ctx, &egui_charts::theme::Theme::dark());
+            Ok(Box::new(ReportApp {
+                panel,
+                selection: String::new(),
+            }))
+        }),
+    )
+    .expect("open strategy report window");
 }
 
 #[cfg(test)]

@@ -75,12 +75,12 @@ impl UserSettings {
 
 /// Keeps [`UserSettings`] in the host's [`Storage`]: reads them once, then writes them a second
 /// after they last changed. A failed write keeps the settings in memory and is reported once by
-/// [`take_error`](Self::take_error); the next change writes again. Settings that could not be
-/// read are never written over.
+/// [`take_error`](Self::take_error); a later poll or explicit flush retries it. Settings that
+/// could not be read are never written over.
 pub struct SettingsStore {
     storage: Arc<dyn Storage>,
     document: StoredDocument,
-    /// The settings in storage, or being written; `None` until read.
+    /// The settings confirmed in storage; `None` until read.
     written: Option<UserSettings>,
     /// Settings that differ from `written`, with the input time they were first seen.
     changed: Option<(UserSettings, f64)>,
@@ -123,6 +123,10 @@ impl SettingsStore {
                     }
                 }
                 Received::Failed(error) => self.error = Some(error),
+                Received::Saved(document) => {
+                    self.written =
+                        Some(UserSettings::from_json(&document).expect("saved settings"));
+                }
             }
         }
         if self
@@ -155,18 +159,22 @@ impl SettingsStore {
     pub fn flush(&mut self, current: &UserSettings) {
         if self.written.is_some() {
             for received in self.document.receive(&*self.storage) {
-                if let Received::Failed(error) = received {
-                    self.error = Some(error);
+                match received {
+                    Received::Failed(error) => self.error = Some(error),
+                    Received::Saved(document) => {
+                        self.written =
+                            Some(UserSettings::from_json(&document).expect("saved settings"));
+                    }
+                    Received::Loaded(_) => {}
                 }
             }
         }
         if self
             .written
             .as_ref()
-            .is_some_and(|written| written != current)
+            .is_some_and(|written| written != current || self.document.saving())
         {
             self.changed = None;
-            self.written = Some(current.clone());
             self.document.save(&*self.storage, current.to_json());
         }
     }
@@ -185,6 +193,70 @@ mod tests {
 
     #[derive(Default)]
     struct Host(Mutex<Option<String>>);
+
+    #[derive(Default)]
+    struct DelayedHost(Mutex<Vec<(String, Reply<()>)>>);
+
+    impl Storage for DelayedHost {
+        fn list(&self, _: StoreKind, _: Reply<Vec<String>>) {
+            unreachable!()
+        }
+        fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(None));
+        }
+        fn save(&self, _: StoreKind, _: &str, document: String, reply: Reply<()>) {
+            self.0.lock().unwrap().push((document, reply));
+        }
+        fn delete(&self, _: StoreKind, _: &str, _: Reply<()>) {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn failed_saves_remain_dirty_and_pending_edits_can_return_to_stored_settings() {
+        let host = Arc::new(DelayedHost::default());
+        let mut store = SettingsStore::new(host.clone());
+        let ctx = egui::Context::default();
+        let original = UserSettings::default();
+        store.poll(&ctx, &original);
+        let mut current = original.clone();
+        current.symbol = Some("A".into());
+        for attempt in 0..3 {
+            store.flush(&current);
+            store.flush(&current);
+            let (json, reply) = host
+                .0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("dirty settings must be retried");
+            assert_eq!(UserSettings::from_json(&json).unwrap(), current);
+            if attempt < 2 {
+                reply.send(Err(crate::data::FeedError::Network("temporary".into())));
+                store.poll(&ctx, &current);
+                assert_eq!(store.take_error().is_some(), attempt == 0);
+            } else {
+                reply.send(Ok(()));
+            }
+        }
+        store.flush(&current);
+        assert!(
+            host.0.lock().unwrap().is_empty(),
+            "confirmed settings need no write"
+        );
+        current.symbol = Some("B".into());
+        store.flush(&current);
+        let (_, reply) = host.0.lock().unwrap().pop().unwrap();
+        current.symbol = Some("A".into());
+        store.flush(&current);
+        reply.send(Ok(()));
+        store.flush(&current);
+        let (json, reply) = host.0.lock().unwrap().pop().unwrap();
+        assert_eq!(UserSettings::from_json(&json).unwrap(), current);
+        reply.send(Ok(()));
+        store.flush(&current);
+        assert!(host.0.lock().unwrap().is_empty());
+    }
 
     impl Storage for Host {
         fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {

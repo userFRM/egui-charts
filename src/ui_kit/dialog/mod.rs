@@ -8,22 +8,20 @@
 //! over a scrim.
 
 use crate::localization as l10n;
-use egui::{
-    Align, Align2, Context, Frame, Layout, RichText, Style, Ui, UiBuilder, UiStackInfo, Vec2,
-};
+use crate::theme::ThemeExt;
+use egui::{Align, Align2, Context, Frame, Layout, RichText, Ui, UiBuilder, UiStackInfo, Vec2};
 
 use crate::icons::icons;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
 
 /// The dialog surface: the theme's panel fill, window border, radius and shadow, padded 16 px.
-pub(crate) fn dialog_frame(style: &Style) -> Frame {
-    Frame::window(style)
-        .fill(style.visuals.panel_fill)
-        .inner_margin(DESIGN_TOKENS.spacing.xxl)
+pub(crate) fn dialog_frame(ctx: &Context) -> Frame {
+    Frame::window(&ctx.global_style())
+        .fill(ctx.global_style().visuals.panel_fill)
+        .inner_margin(ctx.active_theme().spacing.xxl)
 }
 
 /// A centered dialog window with standard styling.
@@ -84,11 +82,14 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
-        let mut frame = dialog_frame(&ctx.global_style());
+        let mut frame = dialog_frame(ctx);
         if let Some(r) = self.rounding {
             frame = frame.corner_radius(r);
         }
-        let max = ctx.content_rect().shrink(DESIGN_TOKENS.spacing.xxxl).size()
+        let max = ctx
+            .content_rect()
+            .shrink(ctx.active_theme().spacing.xxxl)
+            .size()
             - frame.total_margin().sum();
         let inner = self.size.min(max).max(Vec2::ZERO);
 
@@ -177,7 +178,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), title))
                     .strong()
-                    .size(14.0),
+                    .size(ui.active_theme().text.title),
             );
             closable
                 && ui
@@ -190,7 +191,7 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
                     .inner
         })
         .inner;
-    ui.add_space(DESIGN_TOKENS.spacing.sm);
+    ui.add_space(ui.active_theme().spacing.sm);
     close
 }
 
@@ -268,15 +269,15 @@ impl DialogFooter {
         }
         let top = ui.cursor().top();
 
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
         ui.separator();
-        ui.add_space(DESIGN_TOKENS.spacing.lg);
+        ui.add_space(ui.active_theme().spacing.lg);
 
         let row = ui.horizontal(|ui| {
             left_content(ui);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.lg;
+                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
                 let font = egui::TextStyle::Button.resolve(ui.style());
                 let width = std::iter::once(&self.primary_label)
                     .chain(self.secondary_label.iter())
@@ -289,12 +290,12 @@ impl DialogFooter {
                             )
                             .size()
                             .x
-                            + 2.0 * DESIGN_TOKENS.spacing.xl)
+                            + 2.0 * ui.active_theme().spacing.xl)
                             .max(ButtonSize::MD.pixels())
                     })
                     .sum::<f32>()
                     + if self.secondary_label.is_some() {
-                        DESIGN_TOKENS.spacing.lg
+                        ui.active_theme().spacing.lg
                     } else {
                         0.0
                     };
@@ -443,7 +444,7 @@ mod tests {
             first.0, second.0,
             "the window moved after its first visible frame"
         );
-        let inner_bottom = second.0.bottom() - DESIGN_TOKENS.spacing.xxl;
+        let inner_bottom = second.0.bottom() - ctx.active_theme().spacing.xxl;
         assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
     }
 

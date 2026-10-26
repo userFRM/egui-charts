@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Chaikin Volatility
@@ -26,7 +26,7 @@ impl ChaikinVolatility {
             ema_period: ema_period.max(1),
             roc_period: roc_period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_orange,
+            color: palette::DEEP_ORANGE,
             visible: true,
         }
     }
@@ -89,8 +89,8 @@ impl Indicator for ChaikinVolatility {
         roc_period: length("Roc period", 1, usize::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {

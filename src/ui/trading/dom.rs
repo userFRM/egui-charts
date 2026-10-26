@@ -3,11 +3,11 @@
 //! the ladder.
 
 use crate::localization as l10n;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 
-use super::account_panel::grouped;
+use super::account_panel::{HISTORY_LIMIT, grouped};
 use super::ticket::{
     Action, Market, chevron, field, muted, number, order_quantity, side_color, side_fill,
     side_name, text, time_in_force_menu,
@@ -15,7 +15,7 @@ use super::ticket::{
 use crate::chart::{TradingLineAction, decimals, to_step};
 use crate::icons::icons;
 use crate::model::{
-    Execution, Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce, TradeSide,
+    Execution, Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Tick, TimeInForce,
 };
 use crate::theme::ThemeExt;
 
@@ -46,27 +46,67 @@ pub(super) struct Ladder {
 pub(super) struct Fills {
     pub(super) orders: HashMap<OrderId, OrderRequest>,
     pub(super) executions: Vec<Execution>,
+    working: HashSet<OrderId>,
+    filled: HashMap<OrderId, f64>,
+    /// Latest fill for each symbol, independent of execution-history eviction.
+    latest: HashMap<String, Execution>,
 }
 
 impl Fills {
     pub(super) fn order(&mut self, order: &Order) {
         self.orders.insert(order.id.clone(), order.request.clone());
+        if order.status == OrderStatus::Working {
+            self.working.insert(order.id.clone());
+        } else {
+            self.working.remove(&order.id);
+        }
+        if let Some(fill) = self
+            .executions
+            .iter()
+            .filter(|fill| fill.order == order.id)
+            .max_by_key(|fill| fill.time)
+            .cloned()
+        {
+            self.remember(&order.request.symbol, &fill);
+        }
     }
 
     pub(super) fn execution(&mut self, fill: &Execution) {
+        *self.filled.entry(fill.order.clone()).or_default() += fill.quantity;
+        if let Some(order) = self.orders.get(&fill.order) {
+            let symbol = order.symbol.clone();
+            self.remember(&symbol, fill);
+        }
         self.executions.push(fill.clone());
+        if self.executions.len() > HISTORY_LIMIT {
+            let old = self.executions.remove(0);
+            self.forget(&old.order);
+        }
+    }
+
+    pub(super) fn forget(&mut self, id: &OrderId) {
+        if !self.working.contains(id) && !self.executions.iter().any(|fill| &fill.order == id) {
+            self.orders.remove(id);
+            self.filled.remove(id);
+        }
+    }
+
+    fn remember(&mut self, symbol: &str, fill: &Execution) {
+        if self
+            .latest
+            .get(symbol)
+            .is_none_or(|old| old.time <= fill.time)
+        {
+            self.latest.insert(symbol.to_owned(), fill.clone());
+        }
     }
 
     pub(super) fn price(&self, symbol: &str) -> Option<f64> {
-        self.executions
-            .iter()
-            .filter(|fill| {
-                self.orders
-                    .get(&fill.order)
-                    .is_some_and(|order| order.symbol == symbol)
-            })
-            .max_by_key(|fill| fill.time)
-            .map(|fill| fill.price)
+        self.latest.get(symbol).map(|fill| fill.price)
+    }
+
+    pub(super) fn filled_quantity(&self, id: &OrderId) -> f64 {
+        self.filled.get(id).copied().unwrap_or_default()
     }
 }
 
@@ -82,8 +122,8 @@ fn traded(trades: &[&Tick], tick: f64, top: i64, rows: usize) -> Vec<[f64; 3]> {
             && let Some(volume) = volumes.get_mut(row)
         {
             let side = match trade.side {
-                Some(TradeSide::Sell) => 0,
-                Some(TradeSide::Buy) => 1,
+                Some(OrderSide::Sell) => 0,
+                Some(OrderSide::Buy) => 1,
                 None => 2,
             };
             volume[side] += trade.size;
@@ -738,7 +778,7 @@ impl Ladder {
                 let button = egui::Button::new(l10n::text(ui.ctx(), label))
                     .fill(Color32::TRANSPARENT)
                     .stroke(Stroke::new(1.0, theme.ui.border_control))
-                    .corner_radius(6.0);
+                    .corner_radius(ui.active_theme().radius.md);
                 let size = [ui.available_width(), 32.0];
                 ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner
@@ -772,7 +812,7 @@ impl Ladder {
                     egui::RichText::new(l10n::text(ui.ctx(), label)).color(Color32::WHITE),
                 )
                 .fill(side_fill(&theme, side))
-                .corner_radius(6.0);
+                .corner_radius(ui.active_theme().radius.md);
                 let request = order(side, OrderType::Market);
                 let enabled = market.capabilities.market && request.is_ok();
                 let size = [ui.available_width(), 36.0];
@@ -1103,12 +1143,12 @@ mod tests {
     fn profile_keeps_bid_ask_and_unknown_volume_at_their_ticks() {
         let now = chrono::Utc::now();
         let trades = [
-            Tick::new(now, 100.0, 2.0, Some(TradeSide::Sell)),
-            Tick::new(now, 100.0 + 1e-12, 3.0, Some(TradeSide::Sell)),
-            Tick::new(now, 100.0, 7.0, Some(TradeSide::Buy)),
+            Tick::new(now, 100.0, 2.0, Some(OrderSide::Sell)),
+            Tick::new(now, 100.0 + 1e-12, 3.0, Some(OrderSide::Sell)),
+            Tick::new(now, 100.0, 7.0, Some(OrderSide::Buy)),
             Tick::new(now, 100.0, 11.0, None),
-            Tick::new(now, 100.25, 13.0, Some(TradeSide::Buy)),
-            Tick::new(now, 99.5, 17.0, Some(TradeSide::Sell)),
+            Tick::new(now, 100.25, 13.0, Some(OrderSide::Buy)),
+            Tick::new(now, 99.5, 17.0, Some(OrderSide::Sell)),
         ];
         // Rows descend by 0.25: 100.25, 100, 99.75. At 100 the bid has 2 + 3,
         // the ask 7 and unknown 11, so the profile is 23; 99.5 is outside the view.

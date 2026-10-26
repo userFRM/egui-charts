@@ -46,10 +46,9 @@ pub fn run(name: &str, frames: usize) {
         },
         min_bar_spacing: 0.5,
     });
-    chart.update_config(egui_charts::config::ChartConfig {
-        show_volume: false,
-        ..chart.config().clone()
-    });
+    let mut config = chart.config().clone();
+    config.show_volume = false;
+    chart.update_config(config);
     if name.ends_with("-studies") {
         chart.add_indicator(Box::new(SMA::new(20)));
         chart.add_indicator(Box::new(EMA::new(20)));

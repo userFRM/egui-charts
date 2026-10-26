@@ -442,7 +442,7 @@ impl TimezoneMode {
 
 /// Timezone-aware formatter wrapper
 /// Converts ts to target timezone before formatting
-pub struct TimezoneAwareFormatter<T> {
+pub(crate) struct TimezoneAwareFormatter<T> {
     inner: Box<dyn TimeFormatter>,
     timezone: T,
     time_visible: bool,
@@ -460,7 +460,7 @@ impl<T: Clone> Clone for TimezoneAwareFormatter<T> {
 
 impl<T: chrono::TimeZone> TimezoneAwareFormatter<T> {
     /// Create a new timezone-aware formatter
-    pub fn new(inner: Box<dyn TimeFormatter>, timezone: T, time_visible: bool) -> Self {
+    pub(crate) fn new(inner: Box<dyn TimeFormatter>, timezone: T, time_visible: bool) -> Self {
         Self {
             inner,
             timezone,

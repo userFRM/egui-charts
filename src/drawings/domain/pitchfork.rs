@@ -1,6 +1,6 @@
 //! Saved level and background settings for the pitchfork tools.
 
-use super::LineStyle;
+use crate::model::LineStyle;
 use serde::{Deserialize, Serialize};
 
 /// A multiple of the median-to-tine distance, mirrored on both sides of the median.

@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 /// [`drawing_to_stored`](crate::drawings::persistence::drawing_to_stored). A host that writes
 /// to [`DrawingManager::drawings`] directly queues nothing.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum DrawingSyncAction {
     /// A new drawing was created and should be saved. Carries the drawing ID.
     SaveDrawing(usize),
@@ -1565,7 +1566,7 @@ impl DrawingManager {
     }
 
     pub(crate) fn validate_drawing(&self, drawing: &Drawing) -> Result<(), &'static str> {
-        super::api::validate(drawing)?;
+        super::validation::validate(drawing)?;
         if let Some(id) = &drawing.custom_tool {
             let tool = self.registry.get(id).ok_or("Unknown drawing tool")?;
             if drawing.tool_type != DrawingToolType::Polyline

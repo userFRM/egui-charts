@@ -115,7 +115,7 @@ impl Chart {
                 };
                 // Multi-line indicators highlight every line so the whole study
                 // reads as selected.
-                for line_idx in 0..indicator.line_cnt() {
+                for line_idx in 0..indicator.line_count() {
                     render_indicator_selection_dots(
                         painter,
                         indicator,

@@ -207,7 +207,7 @@ impl Chart {
         let time_scale = self.state.time_scale();
         let coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
-            time_scale.right_offset(),
+            time_scale.right_offset_precise(),
             self.state.shown().len().saturating_sub(1),
             start_idx,
         );
@@ -243,7 +243,7 @@ impl Chart {
         // Draws the background, grid, axis and crosshair of a pane without a visible study.
         let frame = CustomIndicator::new("", |_| Vec::new())
             .with_overlay(false)
-            .with_line_cnt(0);
+            .with_line_count(0);
 
         for ((pane_idx, pane_id, collapsed), panel_rect) in
             panes.iter().copied().zip(rects.iter().copied())
@@ -336,7 +336,7 @@ impl Chart {
                     if !study.is_visible() {
                         return None;
                     }
-                    (0..study.line_cnt())
+                    (0..study.line_count())
                         .filter(|line| {
                             let plot = study.plot_style(*line);
                             plot.visible
@@ -368,7 +368,7 @@ impl Chart {
                     if study.is_visible()
                         && !matches!(study.scale(), crate::studies::StudyScale::Shared(key) if key != primary)
                     {
-                        for line in (0..study.line_cnt()).filter(|line| {
+                        for line in (0..study.line_count()).filter(|line| {
                             let plot = study.plot_style(*line);
                             plot.visible
                                 && !matches!(
@@ -627,7 +627,7 @@ impl Chart {
                                 .map(|idx| studies.indicators()[idx].as_ref())
                                 .filter(|study| study.is_visible())
                                 .flat_map(|study| {
-                                    (0..study.line_cnt())
+                                    (0..study.line_count())
                                         .filter(|line| {
                                             let plot = study.plot_style(*line);
                                             plot.visible
@@ -927,7 +927,7 @@ impl Chart {
                             dot_interval: calculate_dot_interval(pane_coords.bar_spacing),
                             ..Default::default()
                         };
-                        for line_idx in 0..indicator.line_cnt() {
+                        for line_idx in 0..indicator.line_count() {
                             render_indicator_selection_dots(
                                 &ui.painter()
                                     .with_clip_rect(chart_rect.intersect(ui.clip_rect())),
@@ -1983,10 +1983,8 @@ mod tests {
             let overlay = chart.add_indicator(Box::new(CustomIndicator::new("Overlay", |bars| {
                 vec![IndicatorValue::Single(107.25); bars.len()]
             })));
-            chart.chart_options.crosshair.vert_line_style =
-                crate::config::CrosshairLineStyle::Solid;
-            chart.chart_options.crosshair.horz_line_style =
-                crate::config::CrosshairLineStyle::Solid;
+            chart.chart_options.crosshair.vert_line_style = crate::model::LineStyle::Solid;
+            chart.chart_options.crosshair.horz_line_style = crate::model::LineStyle::Solid;
             chart.chart_options.crosshair.vert_line_color = egui::Color32::RED;
             chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
             frame(&ctx, &mut chart, 0.0, vec![]);

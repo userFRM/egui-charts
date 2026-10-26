@@ -17,7 +17,7 @@
 //!
 //! ```
 //! use egui::Vec2;
-//! use egui_charts::ext::UiExt;
+//! use egui_charts::ui_kit::ext::UiExt;
 //! use egui_charts::icons::icons;
 //!
 //! # egui::__run_test_ui(|ui| {

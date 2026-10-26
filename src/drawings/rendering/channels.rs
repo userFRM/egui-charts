@@ -4,8 +4,8 @@
 
 use crate::drawings::domain::Drawing;
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
+use crate::model::math::{LinearFit, Moments};
 use crate::model::{Bar, SpanCache};
-use crate::studies::math::{LinearFit, Moments};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};

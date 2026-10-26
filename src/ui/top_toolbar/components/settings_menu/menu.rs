@@ -3,13 +3,14 @@
 //! A compact popup menu for quick chart configuration changes (chart type,
 //! grid visibility, scale mode, and label options).
 
-use super::{config::ChartSettings, types::ScaleMode};
+use super::config::ChartSettings;
 use crate::config::ChartConfig;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::model::ChartType;
-use crate::styles::typography;
+use crate::scales::PriceScaleMode;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 
 // ============================================================================
@@ -84,7 +85,7 @@ impl SettingsMenu {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &translated_label)
         });
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         let visuals = ui.style().interact(&response);
         let bg_color = if response.hovered() {
@@ -94,12 +95,12 @@ impl SettingsMenu {
         };
 
         ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(btn_rect, ui.active_theme().radius.md, bg_color);
         ui.painter().text(
             btn_rect.center(),
             Align2::CENTER_CENTER,
             l10n::text(ui.ctx(), "S"),
-            egui::FontId::proportional(typography::TITLE),
+            egui::FontId::proportional(ui.active_theme().text.dialog_title),
             visuals.text_color(),
         );
 
@@ -208,12 +209,12 @@ impl SettingsMenu {
 
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Auto,
+                self.settings.scale_mode == PriceScaleMode::Normal,
                 l10n::text(ui.ctx(), "Auto Scale"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Auto;
+            self.settings.scale_mode = PriceScaleMode::Normal;
         }
 
         ui.checkbox(
@@ -228,21 +229,21 @@ impl SettingsMenu {
 
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Percentage,
+                self.settings.scale_mode == PriceScaleMode::Percentage,
                 l10n::text(ui.ctx(), "Percentage"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Percentage;
+            self.settings.scale_mode = PriceScaleMode::Percentage;
         }
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Logarithmic,
+                self.settings.scale_mode == PriceScaleMode::Logarithmic,
                 l10n::text(ui.ctx(), "Log Scale"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Logarithmic;
+            self.settings.scale_mode = PriceScaleMode::Logarithmic;
         }
         ui.separator();
     }

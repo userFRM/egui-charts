@@ -31,6 +31,7 @@ pub enum QuoteSide {
 
 /// An action on the zero-based study index in a legend's study slice.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum StudyAction {
     /// Open the study's settings in the host.
     Settings(usize),
@@ -480,17 +481,17 @@ impl<'a> Legend<'a> {
                     }
                     let study_colors = study.colors();
                     let precision = study.precision().or_else(|| {
-                        (study.value_format() == crate::studies::StudyFormat::Price)
+                        (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
                     });
-                    for index in (0..study.line_cnt()).filter(|index| {
+                    for index in (0..study.line_count()).filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.plot_style(*index).visible
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
-                            if study.value_format() == crate::studies::StudyFormat::Price {
+                            if study.value_format() == crate::scales::StudyFormat::Price {
                                 study.value_format().format(value, precision)
                             } else {
                                 study.format_value(value)

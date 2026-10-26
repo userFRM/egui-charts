@@ -53,7 +53,7 @@ pub(super) fn range(
     groups: Option<&super::merge::Groups>,
 ) -> (f64, f64) {
     let values = study.values();
-    let max = (0..study.line_cnt())
+    let max = (0..study.line_count())
         .map(|line| (line, study.plot_style(line)))
         .filter(|(_, plot)| plot.visible)
         .map(
@@ -91,7 +91,7 @@ pub(super) fn paint(
     let groups = groups.filter(|groups| groups.factor() > 1);
     let factor = groups.map_or(1, super::merge::Groups::factor);
     let x = |bar| coords.idx_to_x(bar);
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let mut plot = study.plot_style(line);
         if !plot.visible {
             continue;
@@ -177,7 +177,7 @@ impl super::Chart {
             study.is_volume()
                 && study.is_overlay()
                 && study.is_visible()
-                && (0..study.line_cnt()).any(|line| study.plot_style(line).visible)
+                && (0..study.line_count()).any(|line| study.plot_style(line).visible)
         }) || (!cfg!(feature = "studies") && self.config.show_volume);
         self.main_series_visible && self.chart_type.supports_volume() && visible
     }

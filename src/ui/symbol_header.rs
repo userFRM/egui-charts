@@ -4,25 +4,12 @@
 //! in a horizontal bar at the top of the chart area.
 
 use crate::localization as l10n;
-use crate::model::{Quote, percent_change};
-use crate::styles::typography;
+use crate::model::{Instrument, Quote, percent_change};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+
 use crate::widget::QuoteSide;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
-
-/// Symbol information for display
-#[derive(Clone, Debug, Default)]
-pub struct SymbolInfo {
-    /// Ticker symbol (e.g. "AAPL")
-    pub symbol: String,
-    /// Full company name
-    pub company_name: String,
-    /// Exchange name (e.g. "NASDAQ")
-    pub exchange: String,
-    /// Chart timeframe (e.g. "1D")
-    pub timeframe: String,
-}
 
 /// OHLC price data for the current bar
 #[derive(Clone, Debug, Default)]
@@ -137,7 +124,10 @@ impl SymbolHeaderConfig {
 
 /// Symbol Header Widget
 pub struct SymbolHeader {
-    pub symbol_info: SymbolInfo,
+    /// Instrument whose quote is shown.
+    pub instrument: Instrument,
+    /// Chart interval label.
+    pub timeframe: String,
     pub ohlc: OhlcData,
     /// The symbol's quote, such as the one `WatchlistPanel::quote` holds. Its bid and ask show
     /// when both are known.
@@ -147,9 +137,10 @@ pub struct SymbolHeader {
 
 impl SymbolHeader {
     /// Create a new symbol header for the given symbol
-    pub fn new(symbol_info: SymbolInfo) -> Self {
+    pub fn new(instrument: Instrument, timeframe: impl Into<String>) -> Self {
         Self {
-            symbol_info,
+            instrument,
+            timeframe: timeframe.into(),
             ohlc: OhlcData::default(),
             quote: None,
             config: SymbolHeaderConfig::default(),
@@ -192,13 +183,13 @@ impl SymbolHeader {
                 let painter = ui.painter().clone();
                 let rect = response.rect;
 
-                let mut x = rect.min.x + DESIGN_TOKENS.spacing.sm;
+                let mut x = rect.min.x + ui.active_theme().spacing.sm;
                 let center_y = rect.center().y;
 
                 // Symbol name (bold, larger)
                 let symbol_galley = painter.layout_no_wrap(
-                    self.symbol_info.symbol.clone(),
-                    egui::FontId::proportional(typography::LG),
+                    self.instrument.symbol.clone(),
+                    egui::FontId::proportional(ui.active_theme().text.title),
                     config.text_color,
                 );
                 painter.galley(
@@ -206,20 +197,23 @@ impl SymbolHeader {
                     symbol_galley.clone(),
                     Color32::TRANSPARENT,
                 );
-                x += symbol_galley.size().x + DESIGN_TOKENS.spacing.sm;
+                x += symbol_galley.size().x + ui.active_theme().spacing.sm;
 
                 // Company name • Exchange • Timeframe, skipping empty fields
-                let info = &self.symbol_info;
-                let info_text = [&info.company_name, &info.exchange, &info.timeframe]
-                    .into_iter()
-                    .filter(|field| !field.is_empty())
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" • ");
+                let info = &self.instrument;
+                let info_text = [
+                    info.description.as_deref().unwrap_or_default(),
+                    info.exchange.as_deref().unwrap_or_default(),
+                    &self.timeframe,
+                ]
+                .into_iter()
+                .filter(|field| !field.is_empty())
+                .collect::<Vec<_>>()
+                .join(" • ");
                 if config.show_company_name && !info_text.is_empty() {
                     let info_galley = painter.layout_no_wrap(
                         info_text,
-                        egui::FontId::proportional(typography::MD),
+                        egui::FontId::proportional(ui.active_theme().text.body),
                         config.label_color,
                     );
                     painter.galley(
@@ -227,7 +221,7 @@ impl SymbolHeader {
                         info_galley.clone(),
                         Color32::TRANSPARENT,
                     );
-                    x += info_galley.size().x + DESIGN_TOKENS.spacing.md;
+                    x += info_galley.size().x + ui.active_theme().spacing.md;
                 }
 
                 // Separator
@@ -235,10 +229,10 @@ impl SymbolHeader {
                     &painter,
                     config,
                     x,
-                    rect.min.y + DESIGN_TOKENS.spacing.xs,
-                    rect.max.y - DESIGN_TOKENS.spacing.xs,
+                    rect.min.y + ui.active_theme().spacing.xs,
+                    rect.max.y - ui.active_theme().spacing.xs,
                 );
-                x += DESIGN_TOKENS.spacing.md;
+                x += ui.active_theme().spacing.md;
 
                 // Last close and change; the chart legend shows the bar's OHLC.
                 let price_color = if self.ohlc.is_bullish() {
@@ -261,7 +255,7 @@ impl SymbolHeader {
                 );
                 let change_galley = painter.layout_no_wrap(
                     change_text,
-                    egui::FontId::proportional(typography::MD),
+                    egui::FontId::proportional(ui.active_theme().text.body),
                     price_color,
                 );
                 painter.galley(
@@ -269,17 +263,17 @@ impl SymbolHeader {
                     change_galley.clone(),
                     Color32::TRANSPARENT,
                 );
-                x += change_galley.size().x + DESIGN_TOKENS.spacing.md;
+                x += change_galley.size().x + ui.active_theme().spacing.md;
 
                 // Separator
                 self.draw_separator(
                     &painter,
                     config,
                     x,
-                    rect.min.y + DESIGN_TOKENS.spacing.xs,
-                    rect.max.y - DESIGN_TOKENS.spacing.xs,
+                    rect.min.y + ui.active_theme().spacing.xs,
+                    rect.max.y - ui.active_theme().spacing.xs,
                 );
-                x += DESIGN_TOKENS.spacing.md;
+                x += ui.active_theme().spacing.md;
 
                 // Bid/Ask boxes
                 let mut quote_action = None;
@@ -298,7 +292,7 @@ impl SymbolHeader {
                         "SELL",
                         config.bearish_color,
                     );
-                    x = sell.right() + DESIGN_TOKENS.spacing.xs;
+                    x = sell.right() + ui.active_theme().spacing.xs;
                     // BUY box (green background)
                     let buy = self.draw_quote_box(
                         &painter,
@@ -308,7 +302,7 @@ impl SymbolHeader {
                         "BUY",
                         config.bullish_color,
                     );
-                    x = buy.right() + DESIGN_TOKENS.spacing.md;
+                    x = buy.right() + ui.active_theme().spacing.md;
                     for (rect, side) in [(sell, QuoteSide::Sell), (buy, QuoteSide::Buy)] {
                         let id = response.id.with(side == QuoteSide::Buy);
                         let quote_response = ui.interact(rect, id, Sense::click());
@@ -337,10 +331,10 @@ impl SymbolHeader {
                         &painter,
                         config,
                         x,
-                        rect.min.y + DESIGN_TOKENS.spacing.xs,
-                        rect.max.y - DESIGN_TOKENS.spacing.xs,
+                        rect.min.y + ui.active_theme().spacing.xs,
+                        rect.max.y - ui.active_theme().spacing.xs,
                     );
-                    x += DESIGN_TOKENS.spacing.md;
+                    x += ui.active_theme().spacing.md;
                 }
 
                 // Volume
@@ -352,7 +346,7 @@ impl SymbolHeader {
                     );
                     let vol_galley = painter.layout_no_wrap(
                         vol_text,
-                        egui::FontId::proportional(typography::MD),
+                        egui::FontId::proportional(ui.active_theme().text.body),
                         config.label_color,
                     );
                     let width = vol_galley.size().x;
@@ -363,7 +357,7 @@ impl SymbolHeader {
                     );
                     x += width;
                 }
-                ui.set_min_width(x - rect.left() + DESIGN_TOKENS.spacing.sm);
+                ui.set_min_width(x - rect.left() + ui.active_theme().spacing.sm);
                 (response, quote_action)
             })
             .inner
@@ -395,10 +389,16 @@ impl SymbolHeader {
         let text = format!("{price:.2} {}", l10n::text(painter.ctx(), label));
         let galley = painter.layout_no_wrap(
             text,
-            egui::FontId::proportional(typography::SM),
-            DESIGN_TOKENS.semantic.ui.text_light,
+            egui::FontId::proportional(painter.ctx().active_theme().text.small),
+            if crate::theme::contrast(Color32::WHITE, bg_color)
+                >= crate::theme::contrast(Color32::BLACK, bg_color)
+            {
+                Color32::WHITE
+            } else {
+                Color32::BLACK
+            },
         );
-        let padding = DESIGN_TOKENS.spacing.xs;
+        let padding = painter.ctx().active_theme().spacing.xs;
         let box_width = galley.size().x + padding * 2.0;
         let box_height = DESIGN_TOKENS.sizing.symbol_header.quote_box_height;
 
@@ -407,7 +407,7 @@ impl SymbolHeader {
             Vec2::new(box_width, box_height),
         );
 
-        painter.rect_filled(box_rect, DESIGN_TOKENS.rounding.sm, bg_color);
+        painter.rect_filled(box_rect, painter.ctx().active_theme().radius.sm, bg_color);
         painter.galley(
             Pos2::new(x + padding, center_y - galley.size().y / 2.0),
             galley.clone(),
@@ -454,11 +454,10 @@ mod tests {
                             _ => None,
                         });
                     }
-                    let mut header = SymbolHeader::new(SymbolInfo {
-                        symbol: "SYM".into(),
-                        company_name: "A long company name".into(),
-                        ..Default::default()
-                    });
+                    let mut header = SymbolHeader::new(
+                        Instrument::new("SYM").with_description("A long company name"),
+                        "",
+                    );
                     let quote = Quote::new(100.5, 100.0, Default::default());
                     header.quote = Some(quote.with_bid_ask(100.0, 101.0));
                     let mut selected = None;

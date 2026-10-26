@@ -4,6 +4,7 @@ use super::tabs::RightPanelTab;
 
 /// Actions returned from right toolbar interactions
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RightToolbarAction {
     /// No action taken
     None,

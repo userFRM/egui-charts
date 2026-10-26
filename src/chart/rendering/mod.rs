@@ -6,19 +6,16 @@
 
 pub mod axes;
 pub mod candles;
-mod dashed_line;
 pub mod grid;
 pub mod overlays;
 
 // Re-export rendering functions
 pub use super::renderers::{render_price_labels, render_time_labels, render_tooltip_with_options};
+pub(crate) use crate::painting::dashed_line::{draw_dashed_line, draw_dashed_polyline};
 pub use axes::render_price_line;
 pub use candles::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
     render_chart_type,
 };
-#[cfg(feature = "drawings")]
-pub(crate) use dashed_line::finite_clip;
-pub(crate) use dashed_line::{draw_dashed_line, draw_dashed_polyline};
 pub use grid::{render_grid, render_vertical_grid};
 pub use overlays::{render_box_zoom, render_crosshair_with_options, render_realtime_btn};

@@ -213,25 +213,7 @@ impl DemoApp {
     }
 
     pub(super) fn refresh_interval_control(&mut self) {
-        use egui_charts::ui::top_toolbar::components::timeframe_selector::{
-            Timeframe as Interval, TimeframeUnit as Unit,
-        };
-        let tf = self.state.timeframe;
-        let seconds = tf.duration_ms() / 1000;
-        let (value, unit) = match tf {
-            Timeframe::Ticks(n) => (n.get(), Unit::Tick),
-            Timeframe::Volume(n) => (n.get(), Unit::Volume),
-            Timeframe::Range(n) => (n.get(), Unit::Range),
-            Timeframe::Delta(n) => (n.get(), Unit::Delta),
-            Timeframe::Month1 => (1, Unit::Month),
-            Timeframe::Week1 => (1, Unit::Week),
-            _ if seconds >= 86400 && seconds % 86400 == 0 => (seconds as u64 / 86400, Unit::Day),
-            _ if seconds >= 3600 && seconds % 3600 == 0 => (seconds as u64 / 3600, Unit::Hour),
-            _ if seconds >= 60 && seconds % 60 == 0 => (seconds as u64 / 60, Unit::Minute),
-            _ => (seconds.max(1) as u64, Unit::Second),
-        };
-        self.top_toolbar.timeframe_selector.current =
-            Interval::new(value.min(u32::MAX as u64) as u32, unit);
+        self.top_toolbar.timeframe_selector.current = self.state.timeframe;
     }
 
     pub(super) fn show_layout_tabs(&mut self, ui: &mut egui::Ui) {
@@ -440,6 +422,7 @@ impl DemoApp {
                 self.export_dialog.open();
             }
             LayoutAction::None => {}
+            _ => {}
         }
     }
 
@@ -541,7 +524,7 @@ impl DemoApp {
         }
         self.refresh_active_chart();
         self.settings_state =
-            egui_charts::ui::top_toolbar::components::settings_menu::data::ChartSettingsState::from_chart(&self.chart);
+            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
     }
 
     /// The settings the demo keeps between sessions.

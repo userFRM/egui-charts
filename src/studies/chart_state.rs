@@ -4,20 +4,10 @@
 //! It tracks which bars are visible, manages price auto-scaling, and maintains
 //! a zoom-history stack for undo/redo.
 
-use super::{Bar, BarData, TimeScale};
+use crate::model::{Bar, BarData, TimeScale, next_revision};
 use crate::scales::{PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::Indicator;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Source of [`ChartState::revision`] values, so that no two chart states or
-/// histories ever share one.
-static REVISIONS: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn next_revision() -> u64 {
-    REVISIONS.fetch_add(1, Ordering::Relaxed)
-}
-
 /// A snapshot of zoom parameters, used for undo/redo of zoom operations.
 ///
 /// The chart maintains a stack of these snapshots so the user can press
@@ -27,7 +17,7 @@ pub struct ZoomState {
     /// Pixels per bar at the time of the snapshot.
     pub bar_spacing: f32,
     /// Right offset in bars from the chart edge.
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Manual price range in prices, or `None` when auto-scaled.
     pub price_range: Option<(f64, f64)>,
 }
@@ -42,7 +32,8 @@ pub struct ZoomState {
 /// # Example
 ///
 /// ```
-/// use egui_charts::model::{BarData, ChartState};
+/// use egui_charts::model::BarData;
+/// use egui_charts::studies::ChartState;
 ///
 /// let data = BarData::new();
 /// let state = ChartState::new(data);
@@ -182,7 +173,7 @@ impl ChartState {
         let near_live = ts.is_near_live_edge();
         let kept = (!old.is_empty() && !new.is_empty()).then(|| {
             // Several elements can share the completion time of one source bar.
-            let right = ts.base_idx() as f32 + ts.right_offset();
+            let right = ts.base_idx() as f64 + ts.right_offset_precise();
             let at = (right.floor().max(0.0) as usize).min(old.len() - 1);
             let time = old[at].time;
             let rank = at - old.partition_point(|bar| bar.time < time);
@@ -191,7 +182,7 @@ impl ChartState {
             let to = (first + rank.min(same.saturating_sub(1))).min(new.len() - 1);
             let newer = new[new.len() - 1].time > old[old.len() - 1].time;
             (
-                to as f32 + (right - at as f32) - (new.len() - 1) as f32,
+                to as f64 + (right - at as f64) - (new.len() - 1) as f64,
                 newer,
             )
         });
@@ -330,6 +321,7 @@ impl ChartState {
     ) -> PriceTransform {
         self.fit_price_scale_with_series(
             indicators,
+            None,
             true,
             None,
             None,
@@ -340,20 +332,21 @@ impl ChartState {
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
-    /// `series_values` are already in scale units. `main_range` reuses a precomputed exact
-    /// visible range, when available, before calling the autoscale provider.
+    /// `series_values` are already in scale units. `main_bars` supplies transformed visible
+    /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
+        main_bars: Option<&[Bar]>,
         main_visible: bool,
-        autoscale: Option<&super::AutoscaleProvider>,
+        autoscale: Option<&crate::model::AutoscaleProvider>,
         main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
     ) -> PriceTransform {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
-        let visible = &self.shown()[start..end];
+        let visible = main_bars.unwrap_or(&self.shown()[start..end]);
         // In whitespace retain the nearest reference bar so relative axis units stay valid: the
         // first bar with a value from the left edge on, or else the last one before it.
         let at = start.min(self.shown().len().saturating_sub(1));
@@ -362,19 +355,7 @@ impl ChartState {
             .find(|bar| !bar.is_whitespace())
             .or_else(|| crate::model::last_with_value(&self.shown()[..at]))
             .map_or(f64::NAN, |bar| bar.close);
-        let relative = matches!(
-            mode,
-            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
-        );
-        // Without a usable base there is no percentage, so such a frame shows prices. The other
-        // modes ignore the base, so a scroll does not change their transform.
-        let transform = if !relative {
-            PriceTransform { mode, base: 0.0 }
-        } else if base.is_finite() && base != 0.0 {
-            PriceTransform { mode, base }
-        } else {
-            PriceTransform::default()
-        };
+        let transform = PriceTransform::new(mode, base);
         let (study_start, study_end) = self.time_scale.visible_logical_range().to_strict_range();
         let study_values = indicators
             .into_iter()
@@ -391,7 +372,7 @@ impl ChartState {
                     study,
                     study_start.max(start)..study_end.max(end),
                 );
-                (0..study.line_cnt())
+                (0..study.line_count())
                     .filter(|&index| {
                         let plot = study.plot_style(index);
                         plot.visible
@@ -465,7 +446,13 @@ impl ChartState {
                     visible
                         .iter()
                         .flat_map(|bar| [bar.low, bar.high])
-                        .filter(|value| value.is_finite())
+                        .chain(
+                            visible
+                                .iter()
+                                .flat_map(|bar| [bar.open, bar.close])
+                                .filter(|_| mode == PriceScaleMode::Logarithmic),
+                        )
+                        .filter(|value| transform.to_scale(*value).is_finite())
                         .fold(None, |range: Option<(f64, f64)>, value| {
                             Some(range.map_or((value, value), |(min, max)| {
                                 (min.min(value), max.max(value))
@@ -499,7 +486,7 @@ impl ChartState {
         let (range, t) = (self.price_scale.range(), self.price_scale.transform());
         let curr_state = ZoomState {
             bar_spacing: self.time_scale.bar_spacing(),
-            right_offset: self.time_scale.right_offset(),
+            right_offset: self.time_scale.right_offset_precise(),
             price_range: self
                 .price_scale
                 .is_manual()

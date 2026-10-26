@@ -4,6 +4,7 @@ use super::components::layout_menu::LayoutAction;
 
 /// Actions emitted by the top toolbar
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum TopToolbarAction {
     /// A registered host button or dropdown item was chosen.
     Host(String),

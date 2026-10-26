@@ -64,9 +64,9 @@ pub(super) fn group_mapping(coords: &ChartMapping, factor: usize, start: usize) 
         bar_spacing: coords.bar_spacing * factor as f32,
         start_idx: start,
         base_idx: base,
-        right_offset: (coords.base_idx as f32 + coords.right_offset + 0.5) / factor as f32
+        right_offset: (coords.base_idx as f64 + coords.right_offset + 0.5) / factor as f64
             - 0.5
-            - base as f32,
+            - base as f64,
         ..*coords
     }
 }

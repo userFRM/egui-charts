@@ -1,8 +1,9 @@
 //! Study and drawing templates, kept in the demo's storage.
 
 use super::DemoApp;
+use egui_charts::studies::StudyTemplate;
 use egui_charts::studies::{InputValue, StudySource};
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, StudyTemplate};
+use egui_charts::ui::dialogs::templates::DrawingTemplate;
 
 impl DemoApp {
     pub(super) fn current_study_template(&self) -> Vec<StudyTemplate> {

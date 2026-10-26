@@ -24,7 +24,7 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
     let end = coords.x_to_idx(coords.rect.right()).saturating_add(2);
     let mut low = f64::INFINITY;
     let mut high = f64::NEG_INFINITY;
-    for line in 0..study.line_cnt() {
+    for line in 0..study.line_count() {
         let plot = study.plot_style(line);
         if !plot.visible
             || matches!(
@@ -103,7 +103,7 @@ pub(crate) fn render_study_axis(
         let Some(bar) = member.values().len().checked_sub(1) else {
             continue;
         };
-        for line in 0..member.line_cnt() {
+        for line in 0..member.line_count() {
             let plot = member.plot_style(line);
             if plot.visible
                 && !matches!(
@@ -177,7 +177,8 @@ pub(crate) fn render_study_axis(
 mod tests {
     use super::*;
     use crate::chart::renderers::{IndicatorRenderer, RenderContext};
-    use crate::studies::{CustomIndicator, IndicatorValue, StudyFormat};
+    use crate::scales::StudyFormat;
+    use crate::studies::{CustomIndicator, IndicatorValue};
 
     #[test]
     fn independent_and_hidden_scales_map_volume_without_price_units() {

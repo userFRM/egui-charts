@@ -1,10 +1,9 @@
 //! Settings for an existing study, staged until Apply.
 
 use crate::localization as l10n;
+use crate::model::LineStyle;
 use crate::model::Timeframe;
-use crate::studies::{
-    Indicator, InputKind, InputValue, PlotPattern, PlotType, StudyInput, StudySettings,
-};
+use crate::studies::{Indicator, InputKind, InputValue, PlotType, StudyInput, StudySettings};
 use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
@@ -344,11 +343,11 @@ impl IndicatorSettingsDialog {
                                             ))
                                             .show_ui(ui, |ui| {
                                                 for pattern in [
-                                                    PlotPattern::Solid,
-                                                    PlotPattern::Dashed,
-                                                    PlotPattern::Dotted,
-                                                    PlotPattern::LargeDashed,
-                                                    PlotPattern::SparseDotted,
+                                                    LineStyle::Solid,
+                                                    LineStyle::Dashed,
+                                                    LineStyle::Dotted,
+                                                    LineStyle::LargeDashed,
+                                                    LineStyle::SparseDotted,
                                                 ] {
                                                     ui.selectable_value(
                                                         &mut plot.pattern,

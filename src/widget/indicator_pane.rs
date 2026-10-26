@@ -11,7 +11,9 @@
 //! they can also be used standalone:
 //!
 //! ```rust
-//! use egui_charts::widget::indicator_pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig};
+//! use egui_charts::widget::{
+//!     IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig
+//! };
 //!
 //! # fn example(
 //! #     ui: &mut egui::Ui,
@@ -32,9 +34,9 @@
 //! right offset, and base index so that indicator panes draw their data points
 //! at exactly the same x-coordinates as the corresponding candlesticks above.
 
-use crate::chart::rendering::draw_dashed_line;
 use crate::localization as l10n;
 use crate::model::Bar;
+use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::Indicator;
 use crate::theme::ThemeExt;
@@ -196,7 +198,7 @@ pub struct IndicatorCoordParams {
     /// Bar spacing in pixels
     pub bar_spacing: f32,
     /// Right offset (bars to the right of last data point)
-    pub right_offset: f32,
+    pub right_offset: f64,
     /// Base index (index of last data point)
     pub base_idx: usize,
     /// Start index (index of first visible bar)
@@ -208,10 +210,15 @@ impl IndicatorCoordParams {
     ///
     /// These values are typically obtained from the chart after rendering via
     /// [`super::Chart::get_chart_mapping`] or the internal time-scale accessors.
-    pub fn new(bar_spacing: f32, right_offset: f32, base_idx: usize, start_idx: usize) -> Self {
+    pub fn new(
+        bar_spacing: f32,
+        right_offset: impl Into<f64>,
+        base_idx: usize,
+        start_idx: usize,
+    ) -> Self {
         Self {
             bar_spacing,
-            right_offset,
+            right_offset: right_offset.into(),
             base_idx,
             start_idx,
         }
@@ -244,6 +251,7 @@ impl IndicatorCoordParams {
 /// Returned by [`IndicatorPane::show_aligned_interactive`]. Besides the rects
 /// and y-axis range used for click hit-testing, it carries the [`Response`] for
 /// the legend's close "x" so the host can offer one-click pane removal.
+#[non_exhaustive]
 pub struct PaneInteraction {
     /// Full panel rect, including the y-axis label gutter.
     pub panel_rect: Rect,
@@ -644,7 +652,7 @@ impl IndicatorPane {
                     && let Some(value) = crate::chart::renderers::snap_to_values(
                         pos.y,
                         &mapping.price,
-                        (0..indicator.line_cnt())
+                        (0..indicator.line_count())
                             .filter(|line| {
                                 let plot = indicator.plot_style(*line);
                                 plot.visible
@@ -859,7 +867,7 @@ impl IndicatorPane {
         let mut min_val = f64::MAX;
         let mut max_val = f64::MIN;
 
-        for line in (0..indicator.line_cnt()).filter(|line| {
+        for line in (0..indicator.line_count()).filter(|line| {
             let plot = indicator.plot_style(*line);
             plot.visible
                 && !matches!(
@@ -914,7 +922,7 @@ impl IndicatorPane {
         }
 
         if min_val != f64::MAX
-            && (0..indicator.line_cnt()).any(|line| {
+            && (0..indicator.line_count()).any(|line| {
                 let plot = indicator.plot_style(line);
                 plot.visible
                     && matches!(
@@ -1396,7 +1404,8 @@ impl IndicatorPane {
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            for line in (0..indicator.line_cnt()).filter(|line| indicator.plot_style(*line).visible)
+            for line in
+                (0..indicator.line_count()).filter(|line| indicator.plot_style(*line).visible)
             {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
@@ -1620,7 +1629,8 @@ mod tests {
 
     #[test]
     fn volume_units_reach_pane_axes_and_legends() {
-        use crate::studies::{OnBalanceVolume, StudyFormat};
+        use crate::scales::StudyFormat;
+        use crate::studies::OnBalanceVolume;
         let bars: Vec<_> = [10.0, 11.0, 12.0]
             .into_iter()
             .map(|price| Bar::new(chrono::Utc::now(), price, price, price, price, 1_000_000.0))
@@ -1704,7 +1714,7 @@ mod tests {
                 vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
             })
             .with_colors(colors.clone())
-            .with_line_cnt(3);
+            .with_line_count(3);
             study.calculate(&[]);
             let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {

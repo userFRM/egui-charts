@@ -215,7 +215,7 @@ impl Chart {
             .iter_mut()
             .chain(self.element_studies.studies.indicators_mut().iter_mut())
         {
-            if study.value_format() == crate::studies::StudyFormat::Volume {
+            if study.value_format() == crate::scales::StudyFormat::Volume {
                 study.set_value_formatter(formatter.clone());
             }
         }
@@ -1090,6 +1090,10 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
+        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin).then(|| {
+            self.heikin_ashi
+                .bars(&self.state.data().bars, self.state.revision())
+        });
         let transform = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
@@ -1101,9 +1105,13 @@ impl Chart {
             .zip(&self.study_autoscale)
             .filter(|(study, autoscale)| **autoscale && !study.is_volume())
             .map(|(study, _)| study.as_ref()),
+            heikin_ashi.as_ref().map(|bars| &bars[start_idx..end_idx]),
             self.main_series_visible,
             self.main_series_style.autoscale.as_ref(),
-            (factor > 1)
+            (factor > 1
+                && heikin_ashi.is_none()
+                && self.state.price_scale().options().mode
+                    != crate::scales::PriceScaleMode::Logarithmic)
                 .then(|| {
                     self.merge_groups
                         .price_range(self.state.shown(), start_idx..end_idx)
@@ -1115,6 +1123,7 @@ impl Chart {
                 .chain(target_prices),
             series_values,
         );
+        drop(heikin_ashi);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
@@ -1200,7 +1209,7 @@ impl Chart {
             bar_spacing,
             start_idx,
             self.state.time_scale().base_idx(),
-            self.state.time_scale().right_offset(),
+            self.state.time_scale().right_offset_precise(),
             price_map,
         );
         let (time_data, time_coords) = match (&time_bars, groups) {
@@ -1359,6 +1368,7 @@ impl Chart {
             // computed over the complete series, not just the visible slice.
             full_data: &self.state.data().bars,
             revision: self.state.revision(),
+            heikin_ashi: &self.heikin_ashi,
             start_idx,
             clock: &bar_clock,
             tick_size: self
@@ -2708,7 +2718,7 @@ impl Chart {
                         axis_edge,
                         None,
                         Some(
-                            crate::studies::StudyFormat::Volume
+                            crate::scales::StudyFormat::Volume
                                 .format(map.y_to_price(pos.y), map.price_precision()),
                         ),
                     );
@@ -3086,7 +3096,7 @@ mod tests {
     fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
         use crate::chart::overlays::{FootprintColor, FootprintConfig};
         use crate::data::Footprint;
-        use crate::model::{BarClock, Tick, Timeframe, TradeSide};
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
                 let ctx = egui::Context::default();
@@ -3106,7 +3116,7 @@ mod tests {
                         .time,
                     100.0,
                     2.0,
-                    Some(TradeSide::Buy),
+                    Some(OrderSide::Buy),
                 ))
                 .unwrap();
                 let config = FootprintConfig {
@@ -3774,7 +3784,7 @@ mod tests {
                 });
             }
             chart.config.show_session_breaks = true;
-            chart.config.session_break_style = crate::config::SessionBreakStyle::Solid;
+            chart.config.session_break_style = crate::model::LineStyle::Solid;
             chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
             chart.config.extended_hours_color =
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
@@ -4296,7 +4306,7 @@ mod tests {
                         crate::studies::CustomIndicator::new("Volume units", |bars| {
                             vec![crate::studies::IndicatorValue::Single(99.0); bars.len()]
                         })
-                        .with_value_format(crate::studies::StudyFormat::Volume),
+                        .with_value_format(crate::scales::StudyFormat::Volume),
                     ));
                     chart.set_volume_formatter(Some(Arc::new(Host)));
                 },
@@ -5038,9 +5048,8 @@ mod tests {
         assert_eq!(chart.config.navigation_buttons, Never);
         #[cfg(feature = "ui")]
         assert_eq!(
-            crate::ui::top_toolbar::components::settings_menu::ButtonsSettings::default()
-                .navigation,
-            crate::ui::top_toolbar::components::settings_menu::ButtonVisibility::Hidden,
+            crate::widget::settings::ButtonsSettings::default().navigation,
+            crate::widget::settings::ButtonVisibility::Hidden,
         );
         frame(&ctx, &mut chart, 0.0, Vec::new());
         for (i, (manual, mode, visibility, hover, selected)) in [

@@ -177,7 +177,7 @@ pub(super) fn line_break(
         line_break::MAX_LINES,
         || {
             LineBreakBuilder::new(&LineBreakConfig {
-                line_cnt: count,
+                line_count: count,
                 source: params.line_break_source,
             })
         },
@@ -247,7 +247,7 @@ pub(super) fn range_bars(
 /// start; other elements cover the interval up to their completion. Repeated completions
 /// choose the first slot. Times in unloaded history or outside the source series have no slot.
 pub(crate) fn element_index_at(
-    state: &crate::model::ChartState,
+    state: &crate::studies::ChartState,
     chart_type: ChartType,
     params: &ChartTypeParams,
     older_bars_drawn: bool,
@@ -284,7 +284,7 @@ pub(crate) fn element_index_at(
 /// Maps host marker times to their element slots, excluding unloaded history.
 pub(crate) fn markers(
     markers: &[crate::model::Marker],
-    state: &crate::model::ChartState,
+    state: &crate::studies::ChartState,
     chart_type: ChartType,
     params: &ChartTypeParams,
     older_bars_drawn: bool,

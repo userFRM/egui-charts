@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Ehlers Fisher Transform (John Ehlers version)
@@ -27,8 +27,8 @@ impl EhlersFisher {
             period: period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Fisher
-                DESIGN_TOKENS.semantic.extended.warning, // Orange - Trigger
+                palette::BLUE,   // Blue - Fisher
+                palette::ORANGE, // Orange - Trigger
             ],
             visible: true,
         }

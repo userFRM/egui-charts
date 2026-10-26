@@ -55,6 +55,7 @@ use std::str::FromStr;
 /// assert_eq!(tf.to_string(), "4h");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Timeframe {
     // Millisecond timeframes (for high-frequency trading)
     /// 100-millisecond bars (HFT).

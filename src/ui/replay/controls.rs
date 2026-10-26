@@ -3,13 +3,13 @@
 //! Playback controls for historical data replay.
 
 use super::{ReplayAction, ReplayColors, ReplayConfig, ReplaySpeed, ReplayState};
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{RichText, Ui, Vec2};
 
 /// The configured colours, or the active theme's while they are the defaults.
@@ -72,7 +72,7 @@ impl<'a> ReplayControls<'a> {
         // Update playback timing
         let _bars_advanced = state.update();
 
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let mut result_action = ReplayAction::None;
 
         ui.horizontal(|ui| {
@@ -156,7 +156,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render playback control btns
     fn render_playback_controls(&self, ui: &mut Ui, state: &ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
 
@@ -214,7 +214,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render the progress bar
     fn render_progress_bar(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let colors = colors(self.config, ui);
         let mut action = ReplayAction::None;
 
@@ -227,7 +227,7 @@ impl<'a> ReplayControls<'a> {
             Vec2::new(width, layout.progress_bar_height),
             egui::Sense::click_and_drag(),
         );
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.xs);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.xs);
         response.widget_info(|| {
             egui::WidgetInfo::slider(
                 response.enabled(),
@@ -239,14 +239,17 @@ impl<'a> ReplayControls<'a> {
         if ui.is_rect_visible(rect) {
             // Background
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.xs, colors.progress_bg);
+                .rect_filled(rect, ui.active_theme().radius.xs, colors.progress_bg);
 
             // Filled portion
             let filled_width = rect.width() * progress;
             let filled_rect =
                 egui::Rect::from_min_size(rect.min, Vec2::new(filled_width, rect.height()));
-            ui.painter()
-                .rect_filled(filled_rect, DESIGN_TOKENS.rounding.xs, colors.progress_fill);
+            ui.painter().rect_filled(
+                filled_rect,
+                ui.active_theme().radius.xs,
+                colors.progress_fill,
+            );
 
             // Cursor/handle
             let cursor_x = rect.min.x + filled_width;
@@ -304,7 +307,7 @@ impl<'a> ReplayControls<'a> {
 
     /// Render speed control
     fn render_speed_control(&self, ui: &mut Ui, state: &mut ReplayState) -> ReplayAction {
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
         let colors = colors(self.config, ui);
         let small = kit_size(layout.small_button_size);
         let mut action = ReplayAction::None;
@@ -354,7 +357,7 @@ impl<'a> ReplayControls<'a> {
     /// Render info display (bar counter, time, etc.)
     fn render_info_display(&self, ui: &mut Ui, state: &ReplayState) {
         let behavior = &self.config.behavior;
-        let layout = &self.config.layout;
+        let layout = self.config.layout.resolved(&ui.active_theme());
 
         ui.right_aligned(|ui| {
             // Bar counter

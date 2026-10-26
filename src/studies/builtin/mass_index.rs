@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Mass Index
@@ -26,7 +26,7 @@ impl MassIndex {
             ema_period: 9,
             sum_period: 25,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_orange,
+            color: palette::DEEP_ORANGE,
             visible: true,
         }
     }

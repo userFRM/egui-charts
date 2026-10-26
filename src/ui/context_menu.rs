@@ -33,6 +33,7 @@ use egui::{
 
 /// Action triggered by selecting a context menu item
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ContextMenuAction {
     /// No action
     None,
@@ -909,6 +910,7 @@ impl HostMenuEntry {
 /// action enum. [`ChartMenus::show`] returns this unified value so a host can match a single
 /// type.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ChartContextAction {
     /// A registered host entry, with the original click context.
     Host {
@@ -1010,7 +1012,7 @@ impl ChartMenus {
                 | RightClickTarget::Background { pos, .. } => pos,
             };
             let mapping = chart.get_chart_mapping();
-            let index = mapping.x_to_idx_f32(pos.x).round();
+            let index = mapping.x_to_idx_f64(pos.x).round();
             let time = (index >= 0.0)
                 .then(|| chart.state().shown().get(index as usize))
                 .flatten()

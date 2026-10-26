@@ -37,6 +37,7 @@ fn parse_date(text: &str) -> Option<NaiveDate> {
 
 /// Action from date picker
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DatePickerAction {
     None,
     GoToDate(NaiveDate),

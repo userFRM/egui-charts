@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// True Strength Index (TSI), William Blau, "Momentum, Direction, and Divergence" (1995).
@@ -34,8 +34,8 @@ impl TrueStrengthIndex {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.info,        // Blue - TSI
-                DESIGN_TOKENS.semantic.extended.deep_orange, // Deep Orange - Signal
+                palette::BLUE,        // Blue - TSI
+                palette::DEEP_ORANGE, // Deep Orange - Signal
             ],
             visible: true,
         }
@@ -162,7 +162,7 @@ impl Indicator for TrueStrengthIndex {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2
     }
 
@@ -256,7 +256,7 @@ mod tests {
                     tsi.values.to_rows()[bar]
                 );
             };
-            assert_eq!(got.len(), tsi.line_cnt());
+            assert_eq!(got.len(), tsi.line_count());
             assert!(
                 (got[0] - main).abs() < 1e-12,
                 "bar {bar}: TSI {} vs {main}",

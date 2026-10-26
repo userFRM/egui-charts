@@ -24,10 +24,10 @@ use crate::model::{
 };
 use crate::services::{AccountEvent, Broker, Listener};
 use crate::theme::ThemeExt;
-use crate::ui::top_toolbar::components::settings_menu::{TradingNotifications, TradingSettings};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::Chart;
+use crate::widget::settings::{TradingNotifications, TradingSettings};
 use ticket::{Action, Market, OrderTicket, order_quantity};
 
 /// The trading controls of one chart, connected to the host's [`Broker`].
@@ -73,7 +73,10 @@ pub struct Trading {
     positions: Vec<Position>,
     rules: TradingRules,
     rules_key: u64,
+    request_key: u64,
     rules_ready: bool,
+    /// Confirmed position orders waiting for their symbol's trading rules.
+    placing: Vec<(u64, Position, OrderRequest)>,
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
@@ -91,7 +94,7 @@ pub struct Trading {
     pub account_panel: AccountPanel,
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
-    /// Copy the chart settings' [`trading`](crate::ui::top_toolbar::ChartSettingsState::trading)
+    /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
     /// options here when the user applies them.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
@@ -112,7 +115,9 @@ impl Default for Trading {
             positions: Vec::new(),
             rules: TradingRules::new(""),
             rules_key: 1,
+            request_key: 1,
             rules_ready: false,
+            placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
             decimals: 2,
@@ -169,6 +174,7 @@ impl Trading {
         self.account = None;
         self.orders.clear();
         self.positions.clear();
+        self.placing.clear();
         self.account_panel.clear();
         // Stream keys are even; symbol rules use odd keys, and order replies use zero.
         self.generation += 2;
@@ -238,7 +244,8 @@ impl Trading {
             self.pending = None;
             self.rules = TradingRules::new(symbol);
             self.rules_ready = false;
-            self.rules_key += 2;
+            self.request_key += 2;
+            self.rules_key = self.request_key;
             if let Some(service) = &self.service {
                 service.rules(symbol, self.inbox.reply(self.rules_key));
             }
@@ -257,6 +264,27 @@ impl Trading {
             if key == self.generation {
                 if let Ok(event) = answer.downcast::<AccountEvent>() {
                     self.apply(*event, toasts);
+                }
+                continue;
+            }
+            if let Some(index) = self.placing.iter().position(|(id, _, _)| *id == key) {
+                let (_, _, mut order) = self.placing.remove(index);
+                if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
+                    match *answer {
+                        Ok(rules) if rules.symbol == order.symbol && valid(&rules) => {
+                            order.time_in_force = rules.time_in_force[0];
+                            self.place(order);
+                        }
+                        Err(FeedError::NotSupported) => self.place(order),
+                        Err(error) => self.notify(
+                            toasts,
+                            Toast::error(format!("Trading rules unavailable: {error}")),
+                        ),
+                        Ok(_) => self.notify(
+                            toasts,
+                            Toast::error("The broker returned invalid trading rules"),
+                        ),
+                    }
                 }
                 continue;
             }
@@ -352,6 +380,8 @@ impl Trading {
         self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
+                self.placing
+                    .retain(|(_, _, order)| account.capabilities.accepts(&order.order_type));
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
                     && !account.capabilities.modify
                     || matches!(
@@ -404,6 +434,11 @@ impl Trading {
                 }
             }
             AccountEvent::Position(position) => {
+                self.placing.retain(|(_, old, _)| {
+                    old.symbol != position.symbol
+                        || (old.quantity == position.quantity
+                            && old.average_price == position.average_price)
+                });
                 if matches!(&self.pending,
                     Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old) | TradingLineAction::Exit(old, _))
                     if old.symbol == position.symbol
@@ -423,14 +458,7 @@ impl Trading {
                     text += &format!(" {}", order.symbol);
                 }
                 text += &format!(" at {:.*}", self.decimals, fill.price);
-                let filled = self
-                    .account_panel
-                    .fills
-                    .executions
-                    .iter()
-                    .filter(|earlier| earlier.order == fill.order)
-                    .map(|earlier| earlier.quantity)
-                    .sum::<f64>();
+                let filled = self.account_panel.fills.filled_quantity(&fill.order);
                 // Fills that add up to the order within rounding complete it.
                 let mut toast = match order {
                     Some(order) => {
@@ -594,10 +622,6 @@ impl Trading {
         if self.account_panel.editing.is_none() {
             self.load_rules(symbol);
         }
-        let currency = self
-            .account
-            .as_ref()
-            .map_or("", |account| account.currency.as_str());
         let capabilities = self.capabilities();
 
         if self.service.is_some() {
@@ -605,7 +629,7 @@ impl Trading {
             let display = &self.display;
             let options = TradingLineOptions {
                 show_orders: display.show_orders,
-                show_positions: display.show_poss,
+                show_positions: display.show_positions,
                 submit: false,
                 modify: capabilities.modify,
                 close: capabilities.market,
@@ -620,7 +644,10 @@ impl Trading {
                 } else {
                     1.0
                 },
-                currency,
+                currency: self
+                    .account
+                    .as_ref()
+                    .map_or("", |account| account.currency.as_str()),
                 tick_size: tick,
             };
             let mut shown_orders = self.orders.clone();
@@ -745,7 +772,10 @@ impl Trading {
                     .then_some(self.display.bracket_pnl_unit),
                 last_price: last,
                 point_value: self.rules.point_value,
-                currency,
+                currency: self
+                    .account
+                    .as_ref()
+                    .map_or("", |account| account.currency.as_str()),
                 tick_size: tick,
             };
             let order = Order::new(
@@ -777,22 +807,19 @@ impl Trading {
 
     /// Sends a confirmed change to the broker. Closing and reversing a position are market
     /// orders on the other side, for the position's size and for twice it.
-    fn execute(&self, action: Option<TradingLineAction>) {
+    fn execute(&mut self, action: Option<TradingLineAction>) {
         let Some(service) = &self.service else {
             return;
         };
         let reverse = matches!(action, Some(TradingLineAction::Reverse(_)));
-        match action {
-            Some(TradingLineAction::Cancel(order)) => service.cancel(order.id, self.inbox.reply(0)),
+        let (position, mut order) = match action {
+            Some(TradingLineAction::Cancel(order)) => {
+                return service.cancel(order.id, self.inbox.reply(0));
+            }
             Some(TradingLineAction::Modify(order, request)) => {
-                service.modify(order.id, request, self.inbox.reply(0));
+                return service.modify(order.id, request, self.inbox.reply(0));
             }
-            Some(TradingLineAction::Exit(_, mut exit)) => {
-                if self.rules_ready && self.rules.symbol == exit.symbol {
-                    exit.time_in_force = self.rules.time_in_force[0];
-                }
-                service.place(exit, self.inbox.reply(0));
-            }
+            Some(TradingLineAction::Exit(position, exit)) => (position, exit),
             Some(TradingLineAction::Close(position) | TradingLineAction::Reverse(position))
                 if position.quantity != 0.0 =>
             {
@@ -802,14 +829,18 @@ impl Trading {
                     OrderSide::Buy
                 };
                 let quantity = position.quantity.abs() * if reverse { 2.0 } else { 1.0 };
-                let mut order =
-                    OrderRequest::new(position.symbol, side, quantity, OrderType::Market);
-                if self.rules_ready && self.rules.symbol == order.symbol {
-                    order.time_in_force = self.rules.time_in_force[0];
-                }
-                service.place(order, self.inbox.reply(0));
+                let order = OrderRequest::new(&position.symbol, side, quantity, OrderType::Market);
+                (position, order)
             }
-            _ => {}
+            _ => return,
+        };
+        if self.rules_ready && self.rules.symbol == order.symbol {
+            order.time_in_force = self.rules.time_in_force[0];
+            self.place(order);
+        } else {
+            self.request_key += 2;
+            service.rules(&order.symbol, self.inbox.reply(self.request_key));
+            self.placing.push((self.request_key, position, order));
         }
     }
 }
@@ -1126,6 +1157,79 @@ mod tests {
     }
 
     #[test]
+    fn position_actions_use_their_symbol_rules_before_placing() {
+        use crate::model::{PositionBracket, TimeInForce};
+        for operation in ["close", "reverse", "take profit", "stop loss"] {
+            for response in ["supported", "fallback", "failure", "invalid", "changed"] {
+                let broker = Arc::new(Recorder::default());
+                let mut trading = Trading::default();
+                trading.set_service(broker.clone());
+                let ctx = egui::Context::default();
+                trading.load_rules("CHART");
+                let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+                reply.send(Ok(TradingRules::new("CHART")));
+                trading.poll(&ctx, &mut Toasts::new());
+                let position = Position::new("OTHER", 2.0, 100.0);
+                let mut expected = OrderRequest::new(
+                    "OTHER",
+                    OrderSide::Sell,
+                    if operation == "reverse" { 4.0 } else { 2.0 },
+                    match operation {
+                        "take profit" => OrderType::Limit(110.0),
+                        "stop loss" => OrderType::Stop(90.0),
+                        _ => OrderType::Market,
+                    },
+                );
+                expected.position_bracket = match operation {
+                    "take profit" => Some(PositionBracket::TakeProfit),
+                    "stop loss" => Some(PositionBracket::StopLoss),
+                    _ => None,
+                };
+                let action = match operation {
+                    "close" => TradingLineAction::Close(position),
+                    "reverse" => TradingLineAction::Reverse(position),
+                    _ => TradingLineAction::Exit(position, expected.clone()),
+                };
+                trading.execute(Some(action));
+                assert!(
+                    broker.placed.lock().unwrap().is_empty(),
+                    "wait for {operation} rules"
+                );
+                let (symbol, reply) = broker.rules.lock().unwrap().pop().unwrap();
+                assert_eq!(symbol, "OTHER");
+                let mut rules = TradingRules::new(symbol);
+                rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+                if response == "changed" {
+                    trading.apply(
+                        AccountEvent::Position(Position::new("OTHER", 1.0, 100.0)),
+                        &mut Toasts::new(),
+                    );
+                }
+                if response == "invalid" {
+                    rules.time_in_force.clear();
+                }
+                reply.send(match response {
+                    "fallback" => Err(FeedError::NotSupported),
+                    "failure" => Err(FeedError::Network("offline".into())),
+                    _ => Ok(rules),
+                });
+                trading.poll(&ctx, &mut Toasts::new());
+                let placed = std::mem::take(&mut *broker.placed.lock().unwrap());
+                if matches!(response, "supported" | "fallback") {
+                    if response == "supported" {
+                        expected.time_in_force = TimeInForce::GoodTillCancelled;
+                    }
+                    assert_eq!(placed, [expected]);
+                } else {
+                    assert!(placed.is_empty(), "{operation} with {response} rules");
+                }
+                assert_eq!(trading.rules.symbol, "CHART");
+                assert!(trading.rules_ready);
+            }
+        }
+    }
+
+    #[test]
     fn ladder_changes_still_wait_for_confirmation_with_instant_orders() {
         let broker = Arc::new(Recorder::default());
         let mut trading = Trading::default();
@@ -1206,6 +1310,9 @@ mod tests {
                         );
                         chart.set_theme_override(Some(theme.clone()));
                         let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+                            for (_, reply) in std::mem::take(&mut *broker.rules.lock().unwrap()) {
+                                reply.send(Err(FeedError::NotSupported));
+                            }
                             let output = ctx.run_ui(
                                 egui::RawInput {
                                     screen_rect: Some(egui::Rect::from_min_size(
@@ -1509,7 +1616,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let hidden = TradingSettings {
-            show_poss: false,
+            show_positions: false,
             show_orders: false,
             show_executions: false,
             ..TradingSettings::default()
@@ -1797,7 +1904,7 @@ mod tests {
                 });
                 let mut trading = Trading::default();
                 trading.set_service(broker);
-                trading.display.show_poss = show_positions;
+                trading.display.show_positions = show_positions;
                 trading.display.show_orders = show_orders;
                 let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                 chart.symbol = "SYM".into();

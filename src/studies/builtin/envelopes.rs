@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Moving Average Envelopes
@@ -24,9 +24,9 @@ impl Envelopes {
             ma_type: ma_type.to_string(),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::BLUE,  // Blue - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }
@@ -99,7 +99,7 @@ impl Indicator for Envelopes {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

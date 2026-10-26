@@ -23,6 +23,7 @@
 //! ```
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::{Margin, Rect, Response, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2};
 
 use crate::icons::icons;
@@ -148,8 +149,8 @@ fn search_field(
     show_clear: bool,
 ) -> Response {
     let icon_size = DESIGN_TOKENS.sizing.icon_sm;
-    let inset = DESIGN_TOKENS.spacing.lg;
-    let icon_slot = inset + icon_size + DESIGN_TOKENS.spacing.sm;
+    let inset = ui.active_theme().spacing.lg;
+    let icon_slot = inset + icon_size + ui.active_theme().spacing.sm;
     let tint = ui.visuals().widgets.noninteractive.fg_stroke.color;
 
     let response = ui
