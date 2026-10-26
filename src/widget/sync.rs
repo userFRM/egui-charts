@@ -62,12 +62,12 @@ impl Chart {
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
         let bars = self.state.shown();
+        // Keep fractional indices in f64: a rounded edge can move minutes across a session gap.
+        let right = scale.base_idx() as f64 + f64::from(scale.right_offset()) + 0.5;
+        let left = right - (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing());
         Some(VisibleTimeRange {
-            from: time_at(bars, scale.coord_to_idx(0.0, 0.0, scale.width()) as f64)?,
-            to: time_at(
-                bars,
-                scale.coord_to_idx(scale.width() - 1.0, 0.0, scale.width()) as f64,
-            )?,
+            from: time_at(bars, left)?,
+            to: time_at(bars, right)?,
         })
     }
 
@@ -282,6 +282,21 @@ mod tests {
                 to: range.from
             }));
             assert_eq!(receiver.get_time_scale_state(), before);
+        }
+        // A day inside a three-day session gap spans one third of a bar, even after long history.
+        for count in [2, 20_000] {
+            let mut times: Vec<_> = (0..count).map(|i| i * 60).collect();
+            let last = times[count as usize - 1];
+            times.push(last + 3 * 86_400);
+            let mut receiver = chart(&times, 1001.0);
+            let range = VisibleTimeRange {
+                from: time(last + 86_400),
+                to: time(last + 2 * 86_400),
+            };
+            assert!(receiver.apply_synced_time_range(range));
+            let actual = receiver.visible_time_range().unwrap();
+            assert!((actual.from - range.from).num_milliseconds().abs() < 10);
+            assert!((actual.to - range.to).num_milliseconds().abs() < 10);
         }
         assert!(!chart(&[], 501.0).apply_synced_time_range(range));
         // Execution bars need sub-millisecond precision; no epoch-sized float conversion.
