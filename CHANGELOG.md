@@ -295,6 +295,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `PaperAccount` checks placement and modification against account-wide equity, position margin, other working-order reservations and commissions. Replacing an order releases its old reservation before checking the new request; a refused modification leaves it intact. Working orders are checked again at the actual price before filling after a gap, and market reductions and position exits remain available when funds are insufficient. Available funds reserve working-order commissions. ([#905](https://github.com/userFRM/egui-charts/issues/905))
+
+- `PaperAccount` offers and accepts only good-till-cancelled orders until the host can supply trading-session boundaries. DAY and other unsupported expiry requests fail before changing the account, including on modification. Migration: direct paper-account callers set `OrderRequest::time_in_force` to `TimeInForce::GoodTillCancelled`; the ticket reads the supported choice from the broker. ([#906](https://github.com/userFRM/egui-charts/issues/906))
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 

@@ -18,7 +18,8 @@ use crate::model::{
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Market orders fill at the last price; limit and
+/// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
+/// the account has no trading-session calendar. Market orders fill at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
 /// a triggered stop-limit works on as a limit order. An order's take profit and stop loss become
 /// exit orders once it fills, and when one exit fills the other is cancelled. Each symbol has
@@ -26,8 +27,10 @@ use crate::model::{
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
-/// pays the commission rate times its value. Orders that increase exposure beyond the balance
-/// at the account's leverage are rejected. Position exits only reduce the remaining position.
+/// pays the commission rate times its value. Placement and modification reserve buying power
+/// across all symbols, including working orders and their commissions. Market orders that
+/// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
+/// remaining position.
 /// Every change is pushed as an [`AccountEvent`], with
 /// the most recent 1,000 finished orders, executions, balance changes and journal entries.
 /// The history bound keeps a reconnect snapshot below the event stream's burst limit for
@@ -227,11 +230,24 @@ impl State {
             .filter_map(|p| p.unrealized_pnl)
             .sum();
         let margin: f64 = self.positions.values().filter_map(|p| p.margin).sum();
-        let orders_margin: f64 = self
+        let (orders_margin, commissions) = self.reservations(terms, None);
+        let equity = self.balance + open;
+        account.equity = Some(equity);
+        account.realized_pnl = Some(self.balance - terms.initial);
+        account.margin = Some(margin);
+        account.orders_margin = Some(orders_margin);
+        account.available_funds = Some(equity - margin - orders_margin - commissions);
+        AccountEvent::Account(account)
+    }
+
+    fn reservations(&self, terms: &PaperAccount, replacing: Option<&OrderId>) -> (f64, f64) {
+        let value: f64 = self
             .working
             .iter()
             .filter(|order| {
-                !self.exits.contains_key(&order.id) && order.request.position_bracket.is_none()
+                Some(&order.id) != replacing
+                    && !self.exits.contains_key(&order.id)
+                    && order.request.position_bracket.is_none()
             })
             .map(|order| {
                 let price = match order.request.order_type {
@@ -239,16 +255,79 @@ impl State {
                     OrderType::StopLimit { limit, .. } => limit,
                     _ => self.last.get(&order.request.symbol).copied().unwrap_or(0.0),
                 };
-                order.request.quantity * price.abs() / terms.leverage
+                order.request.quantity * price.abs()
             })
             .sum();
-        let equity = self.balance + open;
-        account.equity = Some(equity);
-        account.realized_pnl = Some(self.balance - terms.initial);
-        account.margin = Some(margin);
-        account.orders_margin = Some(orders_margin);
-        account.available_funds = Some(equity - margin - orders_margin);
-        AccountEvent::Account(account)
+        (value / terms.leverage, value * terms.commission)
+    }
+
+    /// Projects this request against the whole account, excluding the order it replaces.
+    fn buying_power(
+        &self,
+        terms: &PaperAccount,
+        request: &OrderRequest,
+        replacing: Option<&OrderId>,
+    ) -> Result<(), FeedError> {
+        let held = self
+            .positions
+            .get(&request.symbol)
+            .map_or(0.0, |p| p.quantity);
+        let signed = if request.side == OrderSide::Buy {
+            request.quantity
+        } else {
+            -request.quantity
+        };
+        let after = held + signed;
+        if request.position_bracket.is_some()
+            || replacing.is_some_and(|id| self.exits.contains_key(id))
+        {
+            return Ok(());
+        }
+        let last = self.last[&request.symbol];
+        let buy = request.side == OrderSide::Buy;
+        let limit_reached = |limit| if buy { last <= limit } else { last >= limit };
+        let stop_reached = |stop| if buy { last >= stop } else { last <= stop };
+        let immediate = match request.order_type {
+            OrderType::Market => true,
+            OrderType::Limit(limit) => limit_reached(limit),
+            OrderType::Stop(stop) => stop_reached(stop),
+            OrderType::StopLimit { stop, limit } => stop_reached(stop) && limit_reached(limit),
+        };
+        if immediate && after.abs() < held.abs() {
+            return Ok(());
+        }
+        let mut equity = self.balance;
+        let mut margin = 0.0;
+        for position in self.positions.values() {
+            let price = self
+                .last
+                .get(&position.symbol)
+                .copied()
+                .unwrap_or(position.average_price);
+            equity += (price - position.average_price) * position.quantity;
+            margin += position.quantity.abs() * price.abs() / terms.leverage;
+        }
+        let price = match request.order_type {
+            _ if immediate => last,
+            OrderType::Market => last,
+            OrderType::Limit(price) | OrderType::Stop(price) => price,
+            OrderType::StopLimit { limit, .. } => limit,
+        };
+        let (reserved, commissions) = self.reservations(terms, replacing);
+        let value = request.quantity * price.abs();
+        if immediate {
+            margin += (after.abs() - held.abs()) * last.abs() / terms.leverage;
+        } else {
+            margin += value / terms.leverage;
+        }
+        let needed = margin + reserved + commissions + value * terms.commission;
+        if !needed.is_finite() || !equity.is_finite() || needed > equity {
+            return Err(FeedError::Other(format!(
+                "Insufficient buying power: {needed:.2} {} needed, {equity:.2} available",
+                terms.currency
+            )));
+        }
+        Ok(())
     }
 
     fn id(&mut self) -> OrderId {
@@ -458,7 +537,16 @@ impl State {
             };
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
-                self.fill(terms, order, fill);
+                let mut request = order.request.clone();
+                request.order_type = OrderType::Market;
+                match self.buying_power(terms, &request, Some(&order.id)) {
+                    Ok(()) => self.fill(terms, order, fill),
+                    Err(error) => {
+                        self.log(format!("Order {} rejected: {error}", order.id));
+                        self.finish(order, OrderStatus::Rejected(error.to_string()));
+                        self.push(self.account(terms));
+                    }
+                }
                 index = 0;
             } else {
                 index += 1;
@@ -491,10 +579,7 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
             "invalid quantity, price or brackets".into(),
         ));
     }
-    if !matches!(
-        order.time_in_force,
-        TimeInForce::Day | TimeInForce::GoodTillCancelled
-    ) {
+    if order.time_in_force != TimeInForce::GoodTillCancelled {
         return Err(FeedError::NotSupported);
     }
     Ok(())
@@ -551,19 +636,8 @@ impl Broker for PaperAccount {
             );
             return;
         }
-        let signed = if request.side == OrderSide::Buy {
-            request.quantity
-        } else {
-            -request.quantity
-        };
-        let after = held + signed;
-        let needed = after.abs() * last.abs() / self.leverage;
-        if after.abs() > held.abs() && needed > state.balance {
-            let reason = format!(
-                "Insufficient buying power: {needed:.2} {} needed, {:.2} available",
-                self.currency, state.balance
-            );
-            state.finish(order, OrderStatus::Rejected(reason));
+        if let Err(error) = state.buying_power(self, request, None) {
+            state.finish(order, OrderStatus::Rejected(error.to_string()));
             return;
         }
         if order.request.order_type == OrderType::Market {
@@ -620,6 +694,9 @@ impl Broker for PaperAccount {
                 "an exit may only reduce its position".into(),
             )));
         }
+        if let Err(error) = state.buying_power(self, &order, Some(&id)) {
+            return reply.send(Err(error));
+        }
         let working = state
             .working
             .iter_mut()
@@ -642,7 +719,7 @@ impl Broker for PaperAccount {
 
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
         let mut rules = TradingRules::new(symbol);
-        rules.time_in_force = vec![TimeInForce::Day, TimeInForce::GoodTillCancelled];
+        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
         rules.leverage = Some(self.leverage);
         reply.send(Ok(rules));
     }
@@ -667,7 +744,8 @@ mod tests {
             .collect()
     }
 
-    fn place(paper: &PaperAccount, request: OrderRequest) -> Result<OrderId, FeedError> {
+    fn place(paper: &PaperAccount, mut request: OrderRequest) -> Result<OrderId, FeedError> {
+        request.time_in_force = TimeInForce::GoodTillCancelled;
         let inbox = Arc::new(Inbox::default());
         paper.place(request, inbox.reply(0));
         *inbox
@@ -772,7 +850,7 @@ mod tests {
             assert_eq!(account.orders_margin, Some(9.0));
             assert_eq!(
                 account.available_funds,
-                Some(account.equity.unwrap() - account.margin.unwrap() - 9.0)
+                Some(account.equity.unwrap() - account.margin.unwrap() - 9.0 - 0.09)
             );
             assert_eq!(
                 events
@@ -963,6 +1041,122 @@ mod tests {
     }
 
     #[test]
+    fn buying_power_counts_other_symbols_reservations_costs_and_modifications() {
+        for (first, commission, quantity) in [
+            (OrderType::Market, 0.0, 10.0),
+            (OrderType::Limit(90.0), 0.0, 6.0),
+            (OrderType::Market, 0.01, 5.0),
+        ] {
+            let paper = PaperAccount::new("USD", 1_000.0).commission(commission);
+            paper.set_price("A", 100.0);
+            paper.set_price("B", 100.0);
+            // A holds 1,000 or 500 margin, or reserves 450. The new B order
+            // needs 1,000, 600 or 500 plus 5 commission, respectively.
+            place(
+                &paper,
+                OrderRequest::new(
+                    "A",
+                    OrderSide::Buy,
+                    if quantity == 10.0 { 10.0 } else { 5.0 },
+                    first,
+                ),
+            )
+            .unwrap();
+            let id = place(
+                &paper,
+                OrderRequest::new("B", OrderSide::Buy, quantity, OrderType::Market),
+            )
+            .unwrap();
+            let state = paper.lock();
+            assert!(!state.positions.contains_key("B"));
+            assert!(state.finished.iter().any(|order| order.id == id && matches!(order.status, OrderStatus::Rejected(_))));
+        }
+        let paper = PaperAccount::new("USD", 1_000.0).commission(0.001);
+        paper.set_price("A", 100.0);
+        let mut request = OrderRequest::new("A", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        let id = place(&paper, request.clone()).unwrap();
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let inbox = Arc::new(Inbox::default());
+        for (quantity, price, accepted) in [
+            (20.0, 90.0, false),
+            (10.0, 90.0, true),
+            (10.0, 91.0, true),
+            (10.0, 100.0, false),
+        ] {
+            let before = snapshot(&paper);
+            request.quantity = quantity;
+            request.order_type = OrderType::Limit(price);
+            paper.modify(id.clone(), request.clone(), inbox.reply(0));
+            let result = *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<(), FeedError>>()
+                .unwrap();
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{quantity} at {price}: {result:?}"
+            );
+            if !accepted {
+                assert_eq!(snapshot(&paper), before);
+            }
+        }
+        paper.set_price("A", 90.0);
+        let state = paper.lock();
+        assert_eq!(state.positions["A"].quantity, 10.0);
+        // 10 * 90 margin and 900 * 0.001 commission leave 99.10 available.
+        assert_eq!(state.balance, 999.1);
+        assert_eq!(state.positions["A"].margin, Some(900.0));
+        drop(state);
+
+        // A gap through a stop cannot spend funds already held in another symbol.
+        let paper = PaperAccount::new("USD", 1_000.0);
+        paper.set_price("A", 100.0);
+        paper.set_price("B", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("A", OrderSide::Buy, 5.0, OrderType::Market),
+        )
+        .unwrap();
+        let id = place(
+            &paper,
+            OrderRequest::new("B", OrderSide::Buy, 4.0, OrderType::Stop(110.0)),
+        )
+        .unwrap();
+        paper.set_price("B", 200.0);
+        assert!(!paper.lock().positions.contains_key("B"));
+        assert!(
+            paper
+                .lock()
+                .finished
+                .iter()
+                .any(|order| order.id == id && matches!(order.status, OrderStatus::Rejected(_)))
+        );
+        // Unrealised losses reduce equity even though the cash balance has not changed.
+        paper.set_price("A", 50.0);
+        paper.set_price("B", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("B", OrderSide::Buy, 6.0, OrderType::Market),
+        )
+        .unwrap();
+        assert!(!paper.lock().positions.contains_key("B"));
+        // A marketable limit uses its actual, better fill price: 11 * 90 = 990.
+        let paper = PaperAccount::new("USD", 1_000.0).commission(0.001);
+        paper.set_price("A", 90.0);
+        place(
+            &paper,
+            OrderRequest::new("A", OrderSide::Buy, 11.0, OrderType::Limit(100.0)),
+        )
+        .unwrap();
+        assert_eq!(paper.lock().positions["A"].quantity, 11.0);
+        assert_eq!(paper.lock().positions["A"].average_price, 90.0);
+    }
+
+    #[test]
     fn malformed_requests_and_exit_increases_leave_the_account_unchanged() {
         let paper = PaperAccount::new("USD", 10_000.0);
         paper.set_price("SYM", 100.0);
@@ -1013,6 +1207,62 @@ mod tests {
                 .is_err()
         );
         assert_eq!(snapshot(&paper), before);
+    }
+
+    #[test]
+    fn only_gtc_orders_are_offered_and_accepted_without_session_boundaries() {
+        let paper = PaperAccount::new("USD", 1_000.0);
+        paper.set_price("SYM", 100.0);
+        let inbox = Arc::new(Inbox::default());
+        paper.rules("SYM", inbox.reply(0));
+        let rules = *inbox
+            .drain()
+            .answers
+            .pop()
+            .unwrap()
+            .1
+            .downcast::<Result<TradingRules, FeedError>>()
+            .unwrap();
+        assert_eq!(
+            rules.unwrap().time_in_force,
+            vec![TimeInForce::GoodTillCancelled]
+        );
+        let mut request = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let id = place(&paper, request.clone()).unwrap();
+        for time_in_force in [
+            TimeInForce::Day,
+            TimeInForce::Week,
+            TimeInForce::Month,
+            TimeInForce::ImmediateOrCancel,
+            TimeInForce::FillOrKill,
+        ] {
+            request.time_in_force = time_in_force;
+            paper.place(request.clone(), inbox.reply(0));
+            let result = *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<OrderId, FeedError>>()
+                .unwrap();
+            assert_eq!(result, Err(FeedError::NotSupported));
+            paper.modify(id.clone(), request.clone(), inbox.reply(0));
+            let result = *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<(), FeedError>>()
+                .unwrap();
+            assert_eq!(result, Err(FeedError::NotSupported));
+        }
+        assert_eq!(
+            paper.lock().working[0].request.time_in_force,
+            TimeInForce::GoodTillCancelled
+        );
     }
     #[test]
     fn bracket_exits_only_reduce_the_remaining_position() {
