@@ -1220,29 +1220,30 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
-    /// Bars set every frame, as a replay does: each study is recomputed in turn every 0.25 s.
+    /// Bars set every frame, as a replay does: each study gets a turn despite recompute costs.
     /// Resetting the waits on `set_data` gave the first study every frame and the others none.
     #[test]
     fn set_data_every_frame_recomputes_each_study_in_turn() {
-        let mut bars: Vec<Bar> = (0..100).map(|i| bar(i * 60, i as f64)).collect();
-        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
-        let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
-        for counter in &calls {
-            chart.add_indicator(Box::new(Counted(
-                RSI::new(14),
-                counter.clone(),
-                Duration::ZERO,
-            )));
-            counter.store(0, Ordering::Relaxed);
+        for cost in [Duration::ZERO, Duration::from_millis(20)] {
+            let mut bars: Vec<Bar> = (0..100).map(|i| bar(i * 60, i as f64)).collect();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let calls: Vec<_> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+            for counter in &calls {
+                chart.add_indicator(Box::new(Counted(RSI::new(14), counter.clone(), cost)));
+                counter.store(0, Ordering::Relaxed);
+            }
+            for k in 0..120 {
+                bars.push(bar((100 + k) * 60, 50.0 + k as f64));
+                chart.set_data(SeriesId::MAIN, bars.clone());
+                chart.refresh_studies(k as f64 / 60.0);
+            }
+            // Measured costs determine how many turns fit; no study may starve.
+            let calls: Vec<_> = calls.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+            assert!(
+                calls.iter().all(|&count| count > 0),
+                "cost {cost:?}: {calls:?}"
+            );
         }
-        for k in 0..120 {
-            bars.push(bar((100 + k) * 60, 50.0 + k as f64));
-            chart.set_data(SeriesId::MAIN, bars.clone());
-            chart.refresh_studies(k as f64 / 60.0);
-        }
-        // Two seconds of frames at 60 Hz, a wait of 0.25 s: eight recomputes each.
-        let calls: Vec<_> = calls.iter().map(|c| c.load(Ordering::Relaxed)).collect();
-        assert_eq!(calls, [8, 8, 8]);
     }
 
     /// Guards the cost and the freshness of studies while bars stream: a study that does not

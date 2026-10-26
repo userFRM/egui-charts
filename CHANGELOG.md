@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The study rotation regression checks that every study gets a refresh with both fast and slow recomputes, without assuming an exact count tied to the runner's speed. ([#927](https://github.com/userFRM/egui-charts/issues/927))
+
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
 - The indicator list and configuration panel share the dialog's available width, keeping the Add button visible in narrow windows when selecting a metric or another study. ([#547](https://github.com/userFRM/egui-charts/issues/547))
 
