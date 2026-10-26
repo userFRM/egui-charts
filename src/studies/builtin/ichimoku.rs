@@ -29,6 +29,7 @@ use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -178,11 +179,36 @@ impl Indicator for IchimokuCloud {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let lookback = self
+            .tenkan_period
+            .max(self.kijun_period)
+            .max(self.senkou_b_period)
+            - 1;
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(lookback, |b| {
+                b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+                    |data| self.compute(data),
+                )
+            },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

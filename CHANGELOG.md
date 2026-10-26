@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- KST, Ichimoku, Parabolic SAR and the remaining studies in the thirty-study streaming benchmark resume last-bar updates and appends without recalculating their whole histories. Window studies read only the required lookback; recursive studies replay the developing bar from saved state. Warm-up values, skipped inputs, cloud displacement and SAR reversals retain their batch behavior. `cargo bench --bench stream -- tail` compares tick and append costs over 1,000, 100,000 and 1,000,000 bars. ([#946](https://github.com/userFRM/egui-charts/issues/946))
+
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
 
 - `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))

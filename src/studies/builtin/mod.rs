@@ -524,3 +524,8 @@ pub use trade_profile::{TradeProfile, TradeProfileRanges, trade_profiles};
 
 mod order_flow;
 pub use order_flow::OrderFlowStudy;
+
+#[cfg(test)]
+mod incremental_tests;
+
+mod smoothing;

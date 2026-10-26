@@ -119,7 +119,9 @@ impl DirectionalMovement {
         }
 
         // Calculate +DI and -DI, next to the ADX line of the ADX study
-        let adx = ADX::new(self.period).compute(data);
+        let mut adx = ADX::new(self.period);
+        adx.calculate(data);
+        let adx = adx.values();
         for i in 0..data.len() {
             let adx = adx.value(0, i).unwrap_or(f64::NAN);
             if smoothed_tr[i].is_nan() || smoothed_tr[i] == 0.0 {

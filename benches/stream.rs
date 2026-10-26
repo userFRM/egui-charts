@@ -1,6 +1,7 @@
 //! Studies on a live feed of 10,000 trades a second, with frames paced at 60 Hz.
 //! `FRAME_TIME_FRAMES` sets the measured frames (default 300) after studies catch up and
 //! 60 warm-up frames; arguments select scenarios by name as in `frame_time`.
+//! `-- tail` measures direct last-bar updates and appends at three history lengths.
 
 use std::sync::{
     Arc,
@@ -29,6 +30,10 @@ fn main() {
         .skip(1)
         .filter(|a| !a.starts_with("--"))
         .collect();
+    if filters.iter().any(|f| f == "tail") {
+        tail_updates();
+        return;
+    }
     println!("| scenario | frame p50 ms | frame p99 ms | frame max ms | full recomputes/s |");
     println!("|---|---:|---:|---:|---:|");
     for (name, bars, studies, streaming) in [
@@ -38,7 +43,7 @@ fn main() {
         ("common 10, 1,000,000 bars, streaming", 1_000_000, 10, true),
         ("common 30, 1,000,000 bars, feed idle", 1_000_000, 30, false),
         ("common 30, 1,000,000 bars, streaming", 1_000_000, 30, true),
-        ("fallback, 1,000,000 bars, streaming", 1_000_000, 1, true),
+        ("KST, 1,000,000 bars, streaming", 1_000_000, 1, true),
     ] {
         if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
             continue;
@@ -150,6 +155,76 @@ fn main() {
     }
 }
 
+/// Compare tick and append work at several history lengths, without layout or feed timing.
+fn tail_updates() {
+    println!("| study | bars | tick median us | append median us | incremental |");
+    println!("|---|---:|---:|---:|---|");
+    let factory = IndicatorFactory::new();
+    for count in [1_000, 100_000, 1_000_000] {
+        let mut bars: Vec<_> = (0..count + 5)
+            .map(|i| {
+                let p = 100.0 + (i as f64 / 7.0).sin();
+                Bar::new(
+                    chrono::DateTime::<Utc>::UNIX_EPOCH + TimeDelta::minutes(i as i64),
+                    p,
+                    p + 1.0,
+                    p - 1.0,
+                    p,
+                    100.0,
+                )
+            })
+            .collect();
+        for name in [
+            "KST",
+            "Ichimoku",
+            "PSAR",
+            "WMA",
+            "DEMA",
+            "TEMA",
+            "HMA",
+            "Keltner",
+            "Donchian",
+            "ADX",
+            "CCI",
+            "Williams %R",
+            "MFI",
+            "ROC",
+            "StochRSI",
+            "TRIX",
+            "Aroon",
+            "CMF",
+            "AO",
+            "Envelopes",
+            "StdDev",
+            "VWMA",
+        ] {
+            let mut study = factory.create(name).expect("a built-in study");
+            study.calculate(&bars[..count]);
+            let mut ticks = Vec::new();
+            for _ in 0..5 {
+                bars[count - 1].close += 0.001;
+                let start = Instant::now();
+                study.update(std::hint::black_box(&bars[..count]), count - 1);
+                ticks.push(start.elapsed());
+            }
+            let mut appends = Vec::new();
+            for end in count..count + 5 {
+                let start = Instant::now();
+                study.update(std::hint::black_box(&bars[..=end]), end);
+                appends.push(start.elapsed());
+            }
+            ticks.sort();
+            appends.sort();
+            println!(
+                "| {name} | {count} | {:.3} | {:.3} | {} |",
+                ticks[2].as_secs_f64() * 1e6,
+                appends[2].as_secs_f64() * 1e6,
+                study.is_incremental()
+            );
+        }
+    }
+}
+
 struct Rng(u64);
 impl Rng {
     fn unit(&mut self) -> f64 {
@@ -235,10 +310,13 @@ impl Indicator for Counted {
         self.0.calculate(data);
     }
     fn update(&mut self, data: &[Bar], from: usize) {
-        if !data.is_empty() {
+        if !data.is_empty() && (from == 0 || !self.0.is_incremental()) {
             self.1.fetch_add(1, Ordering::Relaxed);
         }
         self.0.update(data, from);
+    }
+    fn is_incremental(&self) -> bool {
+        self.0.is_incremental()
     }
     fn values(&self) -> &IndicatorValues {
         self.0.values()

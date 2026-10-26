@@ -23,9 +23,10 @@
 //! ```
 
 use super::clamp_param;
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -36,10 +37,19 @@ pub struct KeltnerChannels {
     atr_period: usize,
     multiplier: f64,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     upper_color: Color32,
     middle_color: Color32,
     lower_color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<f64>,
+    ema: Smoothing,
+    atr: f64,
+    count: usize,
 }
 
 impl KeltnerChannels {
@@ -55,6 +65,7 @@ impl KeltnerChannels {
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             upper_color: palette::PINK,    // Pink
             middle_color: palette::PURPLE, // Purple
             lower_color: palette::PINK,    // Pink
@@ -82,72 +93,6 @@ impl KeltnerChannels {
         let hc = (bar.high - prev_close).abs();
         let lc = (bar.low - prev_close).abs();
         hl.max(hc).max(lc)
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let min_period = self.ema_period.max(self.atr_period);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate EMA of close prices
-        let multiplier = 2.0 / (self.ema_period as f64 + 1.0);
-        let mut ema = vec![0.0; data.len()];
-
-        // Initial EMA is SMA
-        let initial_sum: f64 = data[..self.ema_period].iter().map(|b| b.close).sum();
-        ema[self.ema_period - 1] = initial_sum / self.ema_period as f64;
-
-        // Subsequent EMA values
-        for i in self.ema_period..data.len() {
-            ema[i] = (data[i].close - ema[i - 1]) * multiplier + ema[i - 1];
-        }
-
-        // Calculate ATR
-        let mut tr = Vec::with_capacity(data.len());
-        tr.push(data[0].high - data[0].low);
-
-        for i in 1..data.len() {
-            tr.push(Self::true_range(&data[i], data[i - 1].close));
-        }
-
-        // Calculate ATR using Wilder's smoothing
-        let atr_multiplier = 1.0 / self.atr_period as f64;
-        let mut atr = vec![0.0; data.len()];
-
-        // Initial ATR is simple avg
-        if self.atr_period <= data.len() {
-            let initial_atr: f64 =
-                tr[..self.atr_period].iter().sum::<f64>() / self.atr_period as f64;
-            atr[self.atr_period - 1] = initial_atr;
-
-            // Subsequent ATR values
-            for i in self.atr_period..data.len() {
-                atr[i] = atr[i - 1] + atr_multiplier * (tr[i] - atr[i - 1]);
-            }
-        }
-
-        // Build output values
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                let middle = ema[i];
-                let band_width = self.multiplier * atr[i];
-                let upper = middle + band_width;
-                let lower = middle - band_width;
-
-                values.push_lines(&[middle, upper, lower]);
-            }
-        }
-
-        values
     }
 }
 
@@ -184,11 +129,43 @@ impl Indicator for KeltnerChannels {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let tr = state
+                    .previous
+                    .map_or(bar.high - bar.low, |close| Self::true_range(bar, close));
+                state.previous = Some(bar.close);
+                let middle = state.ema.next(
+                    bar.close,
+                    self.ema_period,
+                    2.0 / (self.ema_period as f64 + 1.0),
+                );
+                state.count += 1;
+                if state.count <= self.atr_period {
+                    state.atr += tr;
+                    if state.count == self.atr_period {
+                        state.atr /= self.atr_period as f64;
+                    }
+                } else {
+                    state.atr += (1.0 / self.atr_period as f64) * (tr - state.atr);
+                }
+                if state.count < self.ema_period.max(self.atr_period) {
+                    return IndicatorValue::None;
+                }
+                let width = self.multiplier * state.atr;
+                IndicatorValue::Multiple(vec![middle, middle + width, middle - width])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
