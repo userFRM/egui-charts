@@ -910,6 +910,8 @@ impl DemoApp {
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(id) = self.quick_search.show(ctx) {
+            // Activation belongs to search, not the dialog the command opens.
+            ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             self.execute_search_command(ctx, &id);
         }
         self.indicator_dialog
@@ -3970,17 +3972,21 @@ mod tests {
     fn quick_search_executes_studies_tools_and_settings() {
         use eframe::App;
         use egui::{Event, Key, Modifiers, RawInput};
-        for (query, same_frame, toolbar) in
-            ["RSI", "Trend Line", "Chart settings", "Sample backtest"]
-                .into_iter()
-                .flat_map(|query| {
-                    [
-                        (query, false, false),
-                        (query, true, false),
-                        (query, true, true),
-                    ]
-                })
-        {
+        for (query, same_frame, toolbar) in [
+            "RSI",
+            "Trend Line",
+            "Chart settings",
+            "Sample backtest",
+            "Export chart",
+        ]
+        .into_iter()
+        .flat_map(|query| {
+            [
+                (query, false, false),
+                (query, true, false),
+                (query, true, true),
+            ]
+        }) {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
@@ -4097,6 +4103,15 @@ mod tests {
                     });
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::Text(text) if text.galley.text() == "Strategy report")));
+                    output.drop_without_applying_deltas();
+                }
+                "Export chart" => {
+                    assert!(app.export_dialog.is_open());
+                    let output = ctx.run_ui(RawInput::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest());
+                    });
+                    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with("Error:"))));
                     output.drop_without_applying_deltas();
                 }
                 _ => assert!(app.settings_dialog.is_open),
