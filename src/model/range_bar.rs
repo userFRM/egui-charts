@@ -216,7 +216,10 @@ pub fn to_range_bars_from_ohlc(data: &[Bar], config: &RangeBarConfig) -> Vec<Ran
         return Vec::new();
     }
     let mut builder = RangeBarBuilder::new(range_size);
-    for bar in &data[work_start(data, range_size)..] {
+    for bar in data[work_start(data, range_size)..]
+        .iter()
+        .filter(|bar| !bar.is_whitespace())
+    {
         builder.push(bar);
     }
     builder.elements()
@@ -341,19 +344,25 @@ fn add_volume(volume: f64, added: f64) -> f64 {
 /// only seeds the state, and its own range is split at the next bar's first price.
 pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
     let mut total = 0.0;
-    for i in (1..bars.len()).rev() {
-        let (b, prev) = (&bars[i], &bars[i - 1]);
-        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
-        total += (((b.open - prev.close).abs()
+    let mut priced = bars
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, bar)| !bar.is_whitespace());
+    let Some((mut i, mut b)) = priced.next() else {
+        return 0;
+    };
+    for (previous_i, prev) in priced {
+        total += ((b.open - prev.close).abs()
             + (b.high - b.open).abs()
             + (b.high - b.low)
             + (b.close - b.low).abs())
-            / size)
-            .max(0.0)
+            / size
             + 4.0;
         if total + (prev.high - prev.low) / size > super::MAX_WORK {
             return i;
         }
+        (i, b) = (previous_i, prev);
     }
     0
 }
