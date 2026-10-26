@@ -295,6 +295,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Watchlist service pushes and `set_quote` reject older timestamps and non-finite required or supplied numeric fields, retaining the last usable quote for the watchlist and host consumers. Equal timestamps can still correct prices. ([#904](https://github.com/userFRM/egui-charts/issues/904))
+
 - Depth snapshots resolve duplicate tick prices before removing zero sizes, so the last supplied level removes earlier liquidity on either side. ([#909](https://github.com/userFRM/egui-charts/issues/909))
 
 - Chart panning includes the first movement after a pointer press, so a drag completed in one movement frame moves by its full distance. Headless widget tests check the complete pan, pointer-anchored wheel zoom and finite, bounded frames for empty, single-bar and flat histories. ([#245](https://github.com/userFRM/egui-charts/issues/245))
