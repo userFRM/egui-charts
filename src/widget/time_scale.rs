@@ -301,6 +301,17 @@ mod tests {
         let fractional = chart.index_to_x(999_999.005).unwrap();
         assert!((fractional - x - 1.0).abs() < 1e-4);
         assert!((chart.x_to_index(fractional).unwrap() - 999_999.005).abs() < 1e-6);
+        let scale = chart.state.time_scale();
+        let distance = (f64::from(scale.width()) - 1.0) / 200.0 - 0.5;
+        let expected = chart.bars(SeriesId::MAIN).last().unwrap().time
+            - Duration::nanoseconds((distance * 60e9).round() as i64);
+        assert!(
+            (chart.visible_time_range().unwrap().from - expected)
+                .num_nanoseconds()
+                .unwrap()
+                .abs()
+                < 1_000
+        );
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical

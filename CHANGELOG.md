@@ -295,7 +295,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Time coordinates subtract absolute indices before applying fractional offsets and retain double precision through host conversions and zoom anchoring. Small pans on million-bar histories move smoothly at high zoom; existing `f32` inverse methods remain available alongside precise inverses. ([#916](https://github.com/userFRM/egui-charts/issues/916))
+- Time coordinates subtract absolute indices before applying fractional offsets and retain double precision through host conversions and zoom anchoring. Small pans on million-bar histories move smoothly at high zoom, and synchronized UTC edge times retain their fractional indices; existing `f32` inverse methods remain available alongside precise inverses. ([#916](https://github.com/userFRM/egui-charts/issues/916))
 
 - Main and comparison series use the same ordinary-price fallback when their percentage or indexed reference is zero or unavailable, keeping drawable comparison coordinates finite. ([#913](https://github.com/userFRM/egui-charts/issues/913))
 

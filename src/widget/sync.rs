@@ -63,10 +63,10 @@ impl Chart {
         let scale = self.state.time_scale();
         let bars = self.state.shown();
         Some(VisibleTimeRange {
-            from: time_at(bars, scale.coord_to_idx(0.0, 0.0, scale.width()) as f64)?,
+            from: time_at(bars, scale.coord_to_idx_precise(0.0, 0.0, scale.width()))?,
             to: time_at(
                 bars,
-                scale.coord_to_idx(scale.width() - 1.0, 0.0, scale.width()) as f64,
+                scale.coord_to_idx_precise(scale.width() - 1.0, 0.0, scale.width()),
             )?,
         })
     }
