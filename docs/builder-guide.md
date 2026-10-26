@@ -105,7 +105,7 @@ Exchange UTC positions between charts, including charts with different intervals
 or history lengths. Local bar indices and spacing depend on each chart's data and
 width. After showing the source chart:
 
-```rust,no_run
+```rust
 # use egui_charts::{Chart, model::BarData};
 # let source = Chart::new(BarData::new());
 # let mut target = Chart::new(BarData::new());
@@ -137,8 +137,8 @@ report compilation and execution errors in the host UI. A closure may capture an
 
 ## Runnable examples
 
-Run `cargo run --example <name>` from the repository. All use the public API and
-generated sample data, and CI compiles each through its `--all-targets` checks.
+Run `cargo run --example <name>` from the repository. The examples use the public API and
+generated sample data.
 
 | Name | Workflow |
 |---|---|

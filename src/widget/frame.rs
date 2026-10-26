@@ -11,10 +11,18 @@ use crate::localization as l10n;
 use crate::model::{MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
 impl Chart {
+    fn show_realtime_button(&mut self, ui: &Ui, rect: Option<Rect>, chart_id: egui::Id) {
+        if let Some(rect) = rect
+            && rendering::realtime_button(ui, rect, chart_id, &self.config).clicked()
+        {
+            self.user_action(|chart| chart.scroll_to_real_time(true));
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Formats a timestamp with the chart's zone, clock visibility and bar duration, or a key
     /// as the crosshair label of the [horizontal scale](Self::set_horizontal_scale) reads.
     /// Hosts can use this for data windows and other readouts beside the chart.
@@ -771,6 +779,33 @@ impl Chart {
                     self.interact_navigation(ui, nav, chart_rect, response.id),
                 )
             });
+        let scale = self.state.time_scale();
+        let mut live_scale = scale.clone();
+        live_scale.scroll_to_realtime();
+        let realtime_rect = (self.config.show_realtime_btn
+            && !self.state.data().is_empty()
+            && (scale.right_offset_precise() - live_scale.right_offset_precise()).abs() > 1e-6)
+            .then(|| {
+                rendering::realtime_button_rect(
+                    chart_rect,
+                    self.config.realtime_button_size,
+                    self.config.realtime_button_pos,
+                    navigation_rect.filter(|_| {
+                        self.config.navigation_buttons != crate::config::NavigationButtons::Never
+                    }),
+                )
+            })
+            .flatten();
+        let realtime_interaction = realtime_rect.is_some_and(|button| {
+            ui.input(|input| {
+                (input.pointer.any_down() || input.pointer.any_released())
+                    && input
+                        .pointer
+                        .press_origin()
+                        .or_else(|| input.pointer.hover_pos())
+                        .is_some_and(|pos| button.contains(pos))
+            })
+        });
         let navigation_interaction = navigation_rect.is_some_and(|nav| {
             self.config.navigation_buttons != crate::config::NavigationButtons::Never
                 && !self.state.data().is_empty()
@@ -816,7 +851,7 @@ impl Chart {
                                 || self.axis_hover.is_some_and(|(_, tag)| tag.contains(pos))
                         })
             });
-        if navigation_interaction || axis_interaction {
+        if navigation_interaction || realtime_interaction || axis_interaction {
             response = ui.interact(
                 Rect::NOTHING,
                 response.id.with("navigation_input"),
@@ -1040,28 +1075,6 @@ impl Chart {
         }
         self.start_idx = start_idx;
 
-        // Capture near_live status for button
-        let near_live_edge = self.state.time_scale().is_near_live_edge();
-
-        // Handle "Jump to Latest" button interaction
-        if !near_live_edge {
-            let btn_size = Vec2::new(
-                DESIGN_TOKENS.sizing.charts_ext.realtime_button_width,
-                DESIGN_TOKENS.sizing.button_md,
-            );
-            let btn_pos = Pos2::new(
-                price_rect.center().x - btn_size.x / 2.0,
-                price_rect.min.y + DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
-            );
-            let btn_rect = Rect::from_min_size(btn_pos, btn_size);
-            let btn_id = ui.scope_id().with("jump_to_latest");
-            let btn_res = ui.interact(btn_rect, btn_id, egui::Sense::click());
-
-            if btn_res.clicked() {
-                self.state.time_scale_mut().scroll_to_realtime();
-            }
-        }
-
         // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
         let factor = super::merge::factor(
             self.state.time_scale().bar_spacing(),
@@ -1166,6 +1179,7 @@ impl Chart {
             if let Some((nav, buttons)) = navigation {
                 self.paint_navigation(ui, nav, buttons);
             }
+            self.show_realtime_button(ui, realtime_rect, shown.id);
             return shown;
         }
 
@@ -2411,35 +2425,6 @@ impl Chart {
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
         self.paint_primitives(&painter, &coords, PrimitivePass::Above);
 
-        // Render "Jump to Latest" button
-        if self.config.show_realtime_btn {
-            let btn_id = ui.scope_id().with("jump_to_latest");
-            let btn_size = Vec2::new(
-                DESIGN_TOKENS.sizing.charts_ext.realtime_button_width,
-                DESIGN_TOKENS.sizing.button_md,
-            );
-            let btn_pos = Pos2::new(
-                price_rect.center().x - btn_size.x / 2.0,
-                price_rect.min.y + DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
-            );
-            let btn_rect = Rect::from_min_size(btn_pos, btn_size);
-            let btn_res = ui.interact(btn_rect, btn_id, egui::Sense::click());
-
-            rendering::render_realtime_btn(
-                &painter,
-                price_rect,
-                near_live_edge,
-                self.config.show_realtime_btn,
-                self.config.realtime_button_size,
-                self.config.realtime_button_pos,
-                self.config.realtime_button_color,
-                self.config.realtime_button_hover_color,
-                self.config.realtime_button_text_color,
-                self.config.realtime_button_text.as_deref(),
-                btn_res.hovered(),
-            );
-        }
-
         let bar_seconds = self.time_label_seconds();
 
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
@@ -2972,6 +2957,8 @@ impl Chart {
         if let Some((nav, buttons)) = navigation {
             self.paint_navigation(ui, nav, buttons);
         }
+
+        self.show_realtime_button(ui, realtime_rect, shown.id);
 
         // Focus ring for keyboard accessibility
         crate::styles::focus::draw_focus_ring(ui, &shown, 0.0);

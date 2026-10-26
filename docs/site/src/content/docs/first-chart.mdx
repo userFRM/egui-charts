@@ -1,0 +1,82 @@
+---
+title: Your first chart
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Create a chart once, give it bars ordered from oldest to newest, and show it on
+every frame. This complete native application uses the dependencies from
+[installation](installation.mdx).
+
+<Steps>
+
+1. **Create an application.**
+
+   Follow [installation](installation.mdx) to create a Cargo project and add the
+   chart widget, eframe and chrono.
+
+2. **Replace `src/main.rs`.**
+
+   ```rust,no_run
+   // src/main.rs
+   use chrono::{TimeDelta, Utc};
+   use eframe::egui;
+   use egui_charts::{Chart, model::{Bar, BarData}};
+
+   fn main() -> eframe::Result {
+       let start = Utc::now() - TimeDelta::minutes(2);
+       let bars = vec![
+           Bar::new(start, 100.0, 103.0, 99.0, 102.0, 800.0),
+           Bar::new(start + TimeDelta::minutes(1),
+                    102.0, 104.0, 101.0, 103.0, 600.0),
+       ];
+       let mut chart = Chart::new(BarData::from_bars(bars));
+       chart.set_symbol("SAMPLE");
+
+       eframe::run_ui_native("My chart", Default::default(), move |ui, _| {
+           egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+       })
+   }
+   ```
+
+3. **Open your chart.**
+
+   ```sh
+   cargo run
+   ```
+
+   Pan and zoom inside the plot. The crosshair follows your pointer.
+
+</Steps>
+
+## Keep state between frames
+
+<Aside type="caution" title="Create the chart once">
+The closure owns the chart. Recreating it inside the frame callback discards
+its view and interaction state. Keep it alive and let `Chart::show` handle
+panning, zooming and the crosshair on each frame.
+</Aside>
+
+## Replace history or update the last bar
+
+Use `SeriesId::MAIN` to address the main series. `set_data` replaces its history;
+`update` replaces a bar with the same timestamp or appends a later one.
+
+```rust
+use chrono::DateTime;
+use egui_charts::{Chart, model::{Bar, BarData}, widget::SeriesId};
+
+let mut chart = Chart::new(BarData::new());
+let time = DateTime::UNIX_EPOCH;
+chart.set_data(SeriesId::MAIN, vec![
+    Bar::new(time, 100.0, 102.0, 99.0, 101.0, 10.0),
+]);
+chart.update(SeriesId::MAIN,
+    Bar::new(time, 100.0, 103.0, 99.0, 102.0, 15.0));
+assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
+assert_eq!(chart.bars(SeriesId::MAIN)[0].close, 102.0);
+```
+
+For a live application, keep retrieval off the UI thread and use the
+[historical and streaming data contract](data.mdx). The
+[builder guide](../../../../builder-guide.md) covers events, persistence and synchronization.
