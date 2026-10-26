@@ -987,7 +987,7 @@ mod tests {
                     let ctx = egui::Context::default();
                     crate::theme::apply_to_egui(&ctx, &theme);
                     let mut selector = TimeframeSelector::new(Model::Min1);
-                    if !all_presets().contains(&selected) {
+                    if matches!(selected, Model::Custom(_)) && !all_presets().contains(&selected) {
                         selector.custom_timeframes.push(selected);
                     }
                     let available = supported.as_ref().is_none_or(|values| !values.is_empty());
