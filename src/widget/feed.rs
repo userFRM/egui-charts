@@ -208,13 +208,25 @@ impl Chart {
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
-                self.symbol_drawings.insert(self.symbol.clone(), next);
+                if !next.0.drawings.is_empty()
+                    || !next.1.is_empty()
+                    || !next
+                        .0
+                        .pending_sync
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_empty()
+                {
+                    self.symbol_drawings.insert(self.symbol.clone(), next);
+                }
             }
             #[cfg(not(feature = "drawings"))]
             {
                 let mut next_marks = self.symbol_markers.remove(&symbol).unwrap_or_default();
                 std::mem::swap(&mut self.marks, &mut next_marks);
-                self.symbol_markers.insert(self.symbol.clone(), next_marks);
+                if !next_marks.is_empty() {
+                    self.symbol_markers.insert(self.symbol.clone(), next_marks);
+                }
             }
             self.history.clear();
             self.history.edits += 1;
@@ -235,6 +247,33 @@ impl Chart {
             self.state.price_scale_mut().set_price_precision(None);
         }
         self.symbol = symbol;
+    }
+
+    /// Drops the cached drawings, markers and storage reader of an inactive symbol.
+    /// Returns `false` for the current symbol or while local drawing edits await a storage
+    /// read or write acknowledgement. Otherwise returns `true`, also for an uncached symbol.
+    /// Stored documents are left in host storage and read again on the next visit. Without
+    /// storage, forgotten drawings and markers are lost, including pending sync notifications.
+    pub fn forget_symbol(&mut self, symbol: &str) -> bool {
+        if symbol == self.symbol {
+            return false;
+        }
+        #[cfg(feature = "drawings")]
+        {
+            if let Some(store) = &mut self.drawing_store
+                && !store.forget(symbol)
+            {
+                return false;
+            }
+            self.symbol_drawings.remove(symbol);
+            self.symbol_drawings.shrink_to_fit();
+        }
+        #[cfg(not(feature = "drawings"))]
+        {
+            self.symbol_markers.remove(symbol);
+            self.symbol_markers.shrink_to_fit();
+        }
+        true
     }
 
     /// Shows bars of `timeframe` from the next [`show`](Self::show), by the rules of
@@ -1159,6 +1198,33 @@ mod tests {
         fn request_depth_snapshot(&self, id: SubscriptionId) {
             self.calls.lock().unwrap().push(Call::Snapshot(id));
         }
+    }
+
+    /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.
+    #[test]
+    fn inactive_symbol_state_can_be_forgotten() {
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(2)));
+        for i in 0..10_000 {
+            chart.set_symbol(format!("SYMBOL-{i}"));
+            chart.drain_events().for_each(drop);
+        }
+        #[cfg(feature = "drawings")]
+        assert!(chart.symbol_drawings.is_empty());
+        #[cfg(not(feature = "drawings"))]
+        assert!(chart.symbol_markers.is_empty());
+        chart.set_symbol("marked");
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![crate::model::Marker::new(bars(1)[0].time)],
+        );
+        chart.set_symbol("other");
+        chart.set_symbol("marked");
+        assert_eq!(chart.markers(SeriesId::MAIN).len(), 1);
+        assert!(!chart.forget_symbol("marked"));
+        chart.set_symbol("other");
+        assert!(chart.forget_symbol("marked"));
+        chart.set_symbol("marked");
+        assert!(chart.markers(SeriesId::MAIN).is_empty());
     }
 
     /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.

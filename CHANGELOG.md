@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Chart::forget_symbol` releases an inactive symbol's drawings, markers and storage reader without deleting host storage. Pending local storage edits must finish first. Symbol changes no longer cache empty drawing managers or marker lists; pending drawing sync notifications are retained. ([#949](https://github.com/userFRM/egui-charts/issues/949))
+
 - The demo quick search runs a sample backtest on completed synthetic bars, marks equity at their closes and opens the strategy report below the chart. Reports can be replaced or cleared; selecting a trade restores its symbol and interval, scrolls to its bars and highlights its span. Entry and exit markers share the signals service with the API samples, including in newly added chart slots. Trades CSV is saved or downloaded by the host. Strategy execution, market data and storage remain host-owned. ([#225](https://github.com/userFRM/egui-charts/issues/225))
 
 - The documentation site at `/egui-charts/docs/` brings installation, first-chart and feature guides together with the all-feature Rust API reference at `/egui-charts/docs/api/`. Existing guides are included directly, Rust samples compile in CI, and the searchable guide follows system light/dark preferences with responsive navigation, installation steps and feature choices. The demo URLs are unchanged. ([#929](https://github.com/userFRM/egui-charts/issues/929))

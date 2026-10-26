@@ -23,6 +23,24 @@ pub(super) struct DrawingStore {
     error: Option<String>,
 }
 
+impl DrawingStore {
+    pub(super) fn forget(&mut self, symbol: &str) -> bool {
+        if self.pending.contains_key(symbol)
+            || self
+                .documents
+                .get(symbol)
+                .is_some_and(StoredDocument::saving)
+        {
+            return false;
+        }
+        self.documents.remove(symbol);
+        self.loaded.remove(symbol);
+        self.documents.shrink_to_fit();
+        self.loaded.shrink_to_fit();
+        true
+    }
+}
+
 #[cfg(feature = "ui")]
 impl DrawingStore {
     pub(super) fn ready(&self, symbol: &str) -> bool {
@@ -334,6 +352,25 @@ mod tests {
             assert_eq!(saved.drawings().len(), 1, "transient drawing was saved");
         }
 
+        chart.set_symbol("away");
+        assert!(chart.forget_symbol("A"));
+        assert!(
+            !chart
+                .drawing_store
+                .as_ref()
+                .unwrap()
+                .documents
+                .contains_key("A")
+        );
+        assert!(host.documents.lock().unwrap().contains_key("A"));
+        chart.set_symbol("A");
+        frame(&mut chart);
+        assert_eq!(
+            chart.drawings().drawings.len(),
+            1,
+            "forgotten state reloads storage"
+        );
+
         let mut restarted = new_chart(&host);
         frame(&mut restarted);
         let restored = &restarted.drawings().drawings;
@@ -377,6 +414,10 @@ mod tests {
         );
         draw(&mut delayed);
         delayed.set_symbol("D");
+        assert!(
+            !delayed.forget_symbol("A"),
+            "pending edits must finish loading"
+        );
         frame(&mut delayed);
         for (symbol, reply) in std::mem::take(&mut *host.loads.lock().unwrap()) {
             reply.send(Ok(host.documents.lock().unwrap().get(&symbol).cloned()));
