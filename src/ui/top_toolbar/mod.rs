@@ -15,8 +15,6 @@ mod toolbar;
 pub use actions::TopToolbarAction;
 pub use buttons::{IconTextButton, TextButton, ToolbarIconButton, separator};
 pub use components::{
-    CandleColorConfig,
-    ChartSettingsState,
     // Upper toolbar components (ChartType re-exported from crate::model)
     ChartTypeAction,
     ChartTypeSelector,
@@ -36,17 +34,13 @@ pub use components::{
     LayoutAction,
     LayoutMenu,
     LayoutMenuConfig,
-    PrecisionMode,
-    ScaleMode,
     SettingsAction,
     SettingsDialog,
     SettingsDialogConfig,
     SettingsMenu,
     SettingsTab,
-    StatusLineOptions,
     SymbolSearchConfig,
     SymbolSearchDialog,
-    Timeframe,
     TimeframeAction,
     TimeframePreferences,
     TimeframeSelector,

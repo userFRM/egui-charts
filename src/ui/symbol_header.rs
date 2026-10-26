@@ -4,24 +4,12 @@
 //! in a horizontal bar at the top of the chart area.
 
 use crate::localization as l10n;
-use crate::model::{Quote, percent_change};
+use crate::model::{Instrument, Quote, percent_change};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+
 use crate::widget::QuoteSide;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
-
-/// Symbol information for display
-#[derive(Clone, Debug, Default)]
-pub struct SymbolInfo {
-    /// Ticker symbol (e.g. "AAPL")
-    pub symbol: String,
-    /// Full company name
-    pub company_name: String,
-    /// Exchange name (e.g. "NASDAQ")
-    pub exchange: String,
-    /// Chart timeframe (e.g. "1D")
-    pub timeframe: String,
-}
 
 /// OHLC price data for the current bar
 #[derive(Clone, Debug, Default)]
@@ -136,7 +124,10 @@ impl SymbolHeaderConfig {
 
 /// Symbol Header Widget
 pub struct SymbolHeader {
-    pub symbol_info: SymbolInfo,
+    /// Instrument whose quote is shown.
+    pub instrument: Instrument,
+    /// Chart interval label.
+    pub timeframe: String,
     pub ohlc: OhlcData,
     /// The symbol's quote, such as the one `WatchlistPanel::quote` holds. Its bid and ask show
     /// when both are known.
@@ -146,9 +137,10 @@ pub struct SymbolHeader {
 
 impl SymbolHeader {
     /// Create a new symbol header for the given symbol
-    pub fn new(symbol_info: SymbolInfo) -> Self {
+    pub fn new(instrument: Instrument, timeframe: impl Into<String>) -> Self {
         Self {
-            symbol_info,
+            instrument,
+            timeframe: timeframe.into(),
             ohlc: OhlcData::default(),
             quote: None,
             config: SymbolHeaderConfig::default(),
@@ -196,7 +188,7 @@ impl SymbolHeader {
 
                 // Symbol name (bold, larger)
                 let symbol_galley = painter.layout_no_wrap(
-                    self.symbol_info.symbol.clone(),
+                    self.instrument.symbol.clone(),
                     egui::FontId::proportional(ui.active_theme().text.title),
                     config.text_color,
                 );
@@ -208,13 +200,16 @@ impl SymbolHeader {
                 x += symbol_galley.size().x + ui.active_theme().spacing.sm;
 
                 // Company name • Exchange • Timeframe, skipping empty fields
-                let info = &self.symbol_info;
-                let info_text = [&info.company_name, &info.exchange, &info.timeframe]
-                    .into_iter()
-                    .filter(|field| !field.is_empty())
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" • ");
+                let info = &self.instrument;
+                let info_text = [
+                    info.description.as_deref().unwrap_or_default(),
+                    info.exchange.as_deref().unwrap_or_default(),
+                    &self.timeframe,
+                ]
+                .into_iter()
+                .filter(|field| !field.is_empty())
+                .collect::<Vec<_>>()
+                .join(" • ");
                 if config.show_company_name && !info_text.is_empty() {
                     let info_galley = painter.layout_no_wrap(
                         info_text,
@@ -459,11 +454,10 @@ mod tests {
                             _ => None,
                         });
                     }
-                    let mut header = SymbolHeader::new(SymbolInfo {
-                        symbol: "SYM".into(),
-                        company_name: "A long company name".into(),
-                        ..Default::default()
-                    });
+                    let mut header = SymbolHeader::new(
+                        Instrument::new("SYM").with_description("A long company name"),
+                        "",
+                    );
                     let quote = Quote::new(100.5, 100.0, Default::default());
                     header.quote = Some(quote.with_bid_ask(100.0, 101.0));
                     let mut selected = None;

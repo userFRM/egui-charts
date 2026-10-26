@@ -233,7 +233,7 @@ impl Indicator for RsiDivergence {
         crate::studies::PlotStyle {
             color,
             width: 2.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type,
             visible: true,
         }

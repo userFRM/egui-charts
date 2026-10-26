@@ -148,6 +148,7 @@ pub struct WidgetBarWidget {
 
 /// Action returned by the right icon bar
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum WidgetBarAction {
     None,
     Clicked(RightBarIcon),

@@ -100,6 +100,7 @@ theme_derived!(RightPanelTabsConfig {
 
 /// Action returned by the right panel tabs
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum RightPanelAction {
     None,
     TabChanged(RightPanelTab),

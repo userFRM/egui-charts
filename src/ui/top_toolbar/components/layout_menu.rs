@@ -26,6 +26,7 @@ impl Default for LayoutMenuConfig {
 
 /// Action from layout menu
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum LayoutAction {
     None,
     /// Select a tiled or tabbed chart arrangement.

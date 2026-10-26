@@ -15,7 +15,7 @@ use super::data_window::show_data_window;
 use super::source_tree::render_source_tree;
 use super::state::ObjectTreeState;
 use super::types::{DataWindowInfo, SourceItem, SourceType};
-use crate::ext::UiExt;
+use crate::ui_kit::ext::UiExt;
 
 /// Object Tree panel widget
 ///

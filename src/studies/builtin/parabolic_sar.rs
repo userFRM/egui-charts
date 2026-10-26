@@ -204,7 +204,7 @@ impl Indicator for ParabolicSAR {
         crate::studies::PlotStyle {
             color: self.colors()[line],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Circles,
             visible: true,
         }

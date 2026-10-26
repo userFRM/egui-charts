@@ -1,6 +1,6 @@
 use super::clamp_param;
+use crate::model::math::{LinearFit, Moments};
 use crate::model::{Bar, PriceSource};
-use crate::studies::math::{LinearFit, Moments};
 use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -171,7 +171,7 @@ impl Indicator for LinearRegressionChannel {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

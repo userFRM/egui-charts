@@ -1,46 +1,14 @@
 //! Actions from the drawing properties dialog.
 
 use super::tabs::CoordinatesState;
-use crate::drawings::{Drawing, DrawingTemplate, LineStyle, TimeframeVisibility};
+use crate::drawings::{Drawing, DrawingTemplate, TimeframeVisibility};
+use crate::model::LineStyle;
 use crate::widget::Chart;
 use egui::Color32;
 
 /// Unique identifier for a drawing
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DrawingId(pub usize);
-
-/// Line style options
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum DrawingLineStyle {
-    #[default]
-    Solid,
-    Dashed,
-    Dotted,
-    LargeDashed,
-    SparseDotted,
-}
-
-impl DrawingLineStyle {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Solid => "Solid",
-            Self::Dashed => "Dashed",
-            Self::Dotted => "Dotted",
-            Self::LargeDashed => "Large dashed",
-            Self::SparseDotted => "Sparse dotted",
-        }
-    }
-
-    pub fn all() -> [Self; 5] {
-        [
-            Self::Solid,
-            Self::Dashed,
-            Self::Dotted,
-            Self::LargeDashed,
-            Self::SparseDotted,
-        ]
-    }
-}
 
 /// Drawing properties that can be edited
 #[derive(Clone, Debug)]
@@ -58,7 +26,7 @@ pub struct DrawingProps {
     /// Line width (1-10)
     pub line_width: f32,
     /// Line style
-    pub line_style: DrawingLineStyle,
+    pub line_style: LineStyle,
     /// Fill color (for shapes)
     pub fill_color: Option<Color32>,
     /// Fill enabled
@@ -86,7 +54,7 @@ impl Default for DrawingProps {
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
             line_width: 1.0,
-            line_style: DrawingLineStyle::Solid,
+            line_style: LineStyle::Solid,
             fill_color: None,
             fill_enabled: false,
             extend_left: false,
@@ -101,6 +69,7 @@ impl Default for DrawingProps {
 
 /// Actions from the drawing properties dialog
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum DrawingPropertiesAction {
     None,
     Cancel,
@@ -118,13 +87,7 @@ impl DrawingProps {
             coordinates: CoordinatesState::from_drawing(drawing, chart),
             color: drawing.color32(),
             line_width: drawing.stroke_width,
-            line_style: match drawing.line_style {
-                LineStyle::Solid => DrawingLineStyle::Solid,
-                LineStyle::Dashed => DrawingLineStyle::Dashed,
-                LineStyle::Dotted => DrawingLineStyle::Dotted,
-                LineStyle::LargeDashed => DrawingLineStyle::LargeDashed,
-                LineStyle::SparseDotted => DrawingLineStyle::SparseDotted,
-            },
+            line_style: drawing.line_style,
             fill_color: drawing.fill_color32(),
             fill_enabled: drawing.fill_color.is_some(),
             extend_left: drawing.extend_left,
@@ -182,13 +145,7 @@ impl DrawingProps {
             manager.edit_selected(|drawing| {
                 drawing.color = self.color.to_srgba_unmultiplied();
                 drawing.stroke_width = self.line_width;
-                drawing.line_style = match self.line_style {
-                    DrawingLineStyle::Solid => LineStyle::Solid,
-                    DrawingLineStyle::Dashed => LineStyle::Dashed,
-                    DrawingLineStyle::Dotted => LineStyle::Dotted,
-                    DrawingLineStyle::LargeDashed => LineStyle::LargeDashed,
-                    DrawingLineStyle::SparseDotted => LineStyle::SparseDotted,
-                };
+                drawing.line_style = self.line_style;
                 drawing.extend_left = self.extend_left;
                 drawing.extend_right = self.extend_right;
                 drawing.text = (!self.label.is_empty()).then(|| self.label.clone());

@@ -161,7 +161,7 @@ impl Indicator for PivotPointsHighLow {
                 self.low_color
             },
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             // The label sits over a downward triangle and under an upward one.
             plot_type: if line == 0 {
                 crate::studies::PlotType::TriangleDown

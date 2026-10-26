@@ -422,7 +422,7 @@ macro_rules! impl_ma_preset {
                 self.inner.colors()
             }
             fn set_colors(&mut self, colors: Vec<egui::Color32>) {
-                if colors.len() >= self.inner.line_cnt() {
+                if colors.len() >= self.inner.line_count() {
                     self.inner.set_colors(colors);
                 }
             }

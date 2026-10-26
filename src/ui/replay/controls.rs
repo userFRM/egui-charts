@@ -3,13 +3,13 @@
 //! Playback controls for historical data replay.
 
 use super::{ReplayAction, ReplayColors, ReplayConfig, ReplaySpeed, ReplayState};
-use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::ui_kit::ext::UiExt;
 use egui::{RichText, Ui, Vec2};
 
 /// The configured colours, or the active theme's while they are the defaults.

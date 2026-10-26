@@ -14,6 +14,7 @@ pub struct PaneId(pub usize);
 
 /// Actions from pane controls
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum PaneControlAction {
     /// No action taken
     None,

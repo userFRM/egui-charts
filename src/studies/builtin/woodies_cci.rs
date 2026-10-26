@@ -111,7 +111,7 @@ impl Indicator for WoodiesCCI {
         crate::studies::PlotStyle {
             color: self.colors[line],
             width: if line == 0 { 1.0 } else { 2.0 },
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 0 {
                 crate::studies::PlotType::Columns
             } else {
@@ -198,7 +198,7 @@ impl Indicator for WoodiesCCI {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 

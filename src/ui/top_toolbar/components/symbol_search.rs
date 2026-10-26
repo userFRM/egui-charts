@@ -1,24 +1,24 @@
-//! Symbol search and comparison dialogs
+//! Instrument search and comparison dialogs
 //!
 //! Provides symbol search with keyboard navigation
 //! and multi-symbol comparison functionality.
 //!
-//! # Example - Symbol Search
+//! # Example - Instrument Search
 //!
 //! ```no_run
-//! use egui_charts::model::Symbol;
+//! use egui_charts::model::Instrument;
 //! use egui_charts::ui::top_toolbar::SymbolSearchDialog;
 //!
 //! # fn update(ctx: &egui::Context) {
 //! let mut dialog = SymbolSearchDialog::new();
 //! let symbols = vec![
-//!     Symbol::new("BTCUSDT", "Bitcoin / Tether"),
-//!     Symbol::new("ETHUSDT", "Ethereum / Tether"),
+//!     Instrument::new("BTCUSDT").with_description("Bitcoin / Tether"),
+//!     Instrument::new("ETHUSDT").with_description("Ethereum / Tether"),
 //! ];
 //!
 //! // In your egui update loop
 //! if let Some(selected) = dialog.show(ctx, &symbols) {
-//!     println!("Selected: {}", selected.name);
+//!     println!("Selected: {}", selected.symbol);
 //! }
 //! # }
 //! ```
@@ -26,7 +26,7 @@
 //! # Example - Compare Symbols
 //!
 //! ```no_run
-//! use egui_charts::model::Symbol;
+//! use egui_charts::model::Instrument;
 //! use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 //!
 //! # fn update(ctx: &egui::Context) {
@@ -34,7 +34,7 @@
 //! compare.open();
 //!
 //! // The symbols your data source offers
-//! let symbols = vec![Symbol::new("ETHUSDT", "Ethereum / Tether")];
+//! let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 //! match compare.show(ctx, &symbols) {
 //!     CompareAction::AddSymbol(sym) => println!("Add: {}", sym),
 //!     CompareAction::RemoveSymbol(sym) => println!("Remove: {}", sym),
@@ -46,14 +46,14 @@
 use crate::localization as l10n;
 mod service;
 
-use crate::ext::UiExt;
 use crate::icons::icons;
-use crate::model::{Symbol, SymbolType};
+use crate::model::{Instrument, SymbolType};
 use crate::services::{Storage, SymbolSearch};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
 use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::{Color32, Context, Pos2, Response, RichText, Sense, Ui, Vec2};
@@ -61,7 +61,7 @@ use service::Search;
 use std::sync::Arc;
 
 // =============================================================================
-// Symbol Search Dialog
+// Instrument Search Dialog
 // =============================================================================
 
 #[derive(Clone, Copy, PartialEq)]
@@ -130,7 +130,7 @@ impl Default for SymbolSearchConfig {
     }
 }
 
-/// Symbol search dialog with keyboard navigation
+/// Instrument search dialog with keyboard navigation
 ///
 /// A modal dialog for searching and selecting symbols. Features:
 /// - Real-time filtering as you type
@@ -141,7 +141,7 @@ impl Default for SymbolSearchConfig {
 /// # Example
 ///
 /// ```no_run
-/// use egui_charts::model::Symbol;
+/// use egui_charts::model::Instrument;
 /// use egui_charts::ui::top_toolbar::{SymbolSearchConfig, SymbolSearchDialog};
 ///
 /// # fn update(ctx: &egui::Context) {
@@ -155,10 +155,10 @@ impl Default for SymbolSearchConfig {
 /// dialog.open();
 ///
 /// // In your egui update loop
-/// let symbols = vec![Symbol::new("BTCUSDT", "Bitcoin")];
+/// let symbols = vec![Instrument::new("BTCUSDT").with_description("Bitcoin")];
 /// if let Some(symbol) = dialog.show(ctx, &symbols) {
 ///     // User selected a symbol
-///     println!("Switching to: {}", symbol.name);
+///     println!("Switching to: {}", symbol.symbol);
 /// }
 /// # }
 /// ```
@@ -167,7 +167,7 @@ pub struct SymbolSearchDialog {
     focus_search: bool,
     search_query: String,
     sel_idx: usize,
-    filtered_symbols: Vec<Symbol>,
+    filtered_symbols: Vec<Instrument>,
     category: Category,
     recent_symbols: Vec<String>,
     config: SymbolSearchConfig,
@@ -231,7 +231,7 @@ impl SymbolSearchDialog {
     }
 
     /// Records an instrument opened outside this dialog in the recent list.
-    pub fn record_symbol(&mut self, symbol: &Symbol) {
+    pub fn record_symbol(&mut self, symbol: &Instrument) {
         self.search.record(symbol);
     }
 
@@ -280,7 +280,7 @@ impl SymbolSearchDialog {
     ///
     /// # Returns
     ///
-    /// * `Some(Symbol)` - The symbol selected by the user
+    /// * `Some(Instrument)` - The symbol selected by the user
     /// * `None` - Dialog closed without selection or still searching
     ///
     /// # Keyboard Shortcuts
@@ -292,21 +292,21 @@ impl SymbolSearchDialog {
     /// # Example
     ///
     /// ```no_run
-    /// # use egui_charts::model::Symbol;
+    /// # use egui_charts::model::Instrument;
     /// # use egui_charts::ui::top_toolbar::SymbolSearchDialog;
     /// # fn update(ctx: &egui::Context, dialog: &mut SymbolSearchDialog) {
     /// let symbols = vec![
-    ///     Symbol::new("BTCUSDT", "Bitcoin / Tether"),
-    ///     Symbol::new("ETHUSDT", "Ethereum / Tether"),
+    ///     Instrument::new("BTCUSDT").with_description("Bitcoin / Tether"),
+    ///     Instrument::new("ETHUSDT").with_description("Ethereum / Tether"),
     /// ];
     ///
     /// if let Some(symbol) = dialog.show(ctx, &symbols) {
-    ///     println!("User selected: {}", symbol.name);
+    ///     println!("User selected: {}", symbol.symbol);
     /// }
     /// # }
     /// ```
-    #[must_use = "Symbol selection should be handled"]
-    pub fn show(&mut self, ctx: &Context, all_symbols: &[Symbol]) -> Option<Symbol> {
+    #[must_use = "Instrument selection should be handled"]
+    pub fn show(&mut self, ctx: &Context, all_symbols: &[Instrument]) -> Option<Instrument> {
         self.search.poll(ctx);
         if self.search.has_recents() {
             self.recent_symbols = self.search.recent_names();
@@ -546,7 +546,7 @@ impl SymbolSearchDialog {
         sel_symbol
     }
 
-    fn refresh_results(&mut self, ctx: &Context, all_symbols: &[Symbol]) {
+    fn refresh_results(&mut self, ctx: &Context, all_symbols: &[Instrument]) {
         if self.search.connected() {
             if self.search_query.is_empty()
                 || self.search_query.chars().count() >= self.config.min_search_len
@@ -570,7 +570,7 @@ impl SymbolSearchDialog {
         }
     }
 
-    fn update_filtered_symbols(&mut self, all_symbols: &[Symbol]) {
+    fn update_filtered_symbols(&mut self, all_symbols: &[Instrument]) {
         if !self.search_query.is_empty() && self.search_query.len() < self.config.min_search_len {
             self.filtered_symbols.clear();
             return;
@@ -582,8 +582,13 @@ impl SymbolSearchDialog {
             .iter()
             .filter(|symbol| {
                 (self.category.0.is_none() || symbol.symbol_type == self.category.0)
-                    && (symbol.name.to_lowercase().contains(&query_lower)
-                        || symbol.display_name.to_lowercase().contains(&query_lower))
+                    && (symbol.symbol.to_lowercase().contains(&query_lower)
+                        || symbol
+                            .description
+                            .as_deref()
+                            .unwrap_or(&symbol.symbol)
+                            .to_lowercase()
+                            .contains(&query_lower))
             })
             .collect();
 
@@ -591,7 +596,7 @@ impl SymbolSearchDialog {
             filtered.sort_by_key(|symbol| {
                 self.recent_symbols
                     .iter()
-                    .position(|name| name == &symbol.name)
+                    .position(|name| name == &symbol.symbol)
                     .unwrap_or(usize::MAX)
             });
         }
@@ -605,13 +610,17 @@ impl SymbolSearchDialog {
             .min(self.filtered_symbols.len().saturating_sub(1));
     }
 
-    fn render_symbol_item(&self, ui: &mut Ui, symbol: &Symbol, is_sel: bool) -> Response {
+    fn render_symbol_item(&self, ui: &mut Ui, symbol: &Instrument, is_sel: bool) -> Response {
         let theme = ui.active_theme();
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
         crate::styles::focus::draw_focus_ring(ui, &response, 4.0);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::ListBoxOption, response.enabled(), &symbol.name)
+            egui::WidgetInfo::labeled(
+                egui::Role::ListBoxOption,
+                response.enabled(),
+                &symbol.symbol,
+            )
         });
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(is_sel));
@@ -624,7 +633,7 @@ impl SymbolSearchDialog {
             .map(|kind| kind.to_string())
             .unwrap_or_default();
         let exchange = if self.config.show_exchange {
-            symbol.exchange.as_str()
+            symbol.exchange.as_deref().unwrap_or_default()
         } else {
             ""
         };
@@ -638,7 +647,7 @@ impl SymbolSearchDialog {
                             .map(|kind| kind.to_string())
                             .unwrap_or_default()
                     } else if self.config.show_exchange {
-                        symbol.exchange.clone()
+                        symbol.exchange.clone().unwrap_or_default()
                     } else {
                         String::new()
                     };
@@ -684,7 +693,7 @@ impl SymbolSearchDialog {
         let left = rect.left() + 8.0;
         let width = (exchange_right - exchange_width - 16.0 - left).max(0.0);
         let name = egui::WidgetText::from(
-            RichText::new(&symbol.name)
+            RichText::new(&symbol.symbol)
                 .size(13.0)
                 .strong()
                 .color(theme.ui.text),
@@ -704,7 +713,7 @@ impl SymbolSearchDialog {
             .galley(Pos2::new(left, top), name, theme.ui.text);
         if self.config.show_description {
             let description = egui::WidgetText::from(
-                RichText::new(&symbol.display_name)
+                RichText::new(symbol.description.as_deref().unwrap_or(&symbol.symbol))
                     .size(11.0)
                     .color(theme.ui.text_secondary),
             )
@@ -729,10 +738,10 @@ impl SymbolSearchDialog {
 // Compare Symbols Dialog
 // =============================================================================
 
-/// Symbol information for comparison
+/// Instrument information for comparison
 #[derive(Debug, Clone)]
 pub struct CompareSymbol {
-    /// Symbol ticker
+    /// Instrument ticker
     pub symbol: String,
     /// Full name/desc
     pub name: String,
@@ -816,6 +825,7 @@ impl CompareSymbolsConfig {
 
 /// Action from compare symbols dialog
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum CompareAction {
     /// No action
     None,
@@ -840,14 +850,14 @@ pub enum CompareAction {
 /// # Example
 ///
 /// ```no_run
-/// use egui_charts::model::Symbol;
+/// use egui_charts::model::Instrument;
 /// use egui_charts::ui::top_toolbar::{CompareAction, CompareSymbolsDialog};
 ///
 /// # fn update(ctx: &egui::Context) {
 /// let mut compare = CompareSymbolsDialog::new();
 /// compare.open();
 ///
-/// let symbols = vec![Symbol::new("ETHUSDT", "Ethereum / Tether")];
+/// let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 /// match compare.show(ctx, &symbols) {
 ///     CompareAction::AddSymbol(sym) => {
 ///         // Add symbol to chart overlay
@@ -914,7 +924,7 @@ impl CompareSymbolsDialog {
     }
 
     /// Show the dialog, suggesting `symbols`: the symbols the host's data source offers
-    pub fn show(&mut self, ctx: &egui::Context, symbols: &[Symbol]) -> CompareAction {
+    pub fn show(&mut self, ctx: &egui::Context, symbols: &[Instrument]) -> CompareAction {
         let mut action = CompareAction::None;
         self.search.poll(ctx);
 
@@ -949,7 +959,7 @@ impl CompareSymbolsDialog {
     fn draw_content(
         &mut self,
         ui: &mut Ui,
-        symbols: &[Symbol],
+        symbols: &[Instrument],
         config: &CompareSymbolsConfig,
     ) -> CompareAction {
         let mut action = CompareAction::None;
@@ -1042,11 +1052,18 @@ impl CompareSymbolsDialog {
                 let query = self.search_query.to_lowercase();
                 for symbol in symbols.iter().filter(|symbol| {
                     self.search.connected()
-                        || symbol.name.to_lowercase().contains(&query)
-                        || symbol.display_name.to_lowercase().contains(&query)
+                        || symbol.symbol.to_lowercase().contains(&query)
+                        || symbol
+                            .description
+                            .as_deref()
+                            .unwrap_or(&symbol.symbol)
+                            .to_lowercase()
+                            .contains(&query)
                 }) {
                     next_page |= ui.clip_rect().contains(ui.cursor().min)
-                        && symbols.last().is_some_and(|last| last.name == symbol.name);
+                        && symbols
+                            .last()
+                            .is_some_and(|last| last.symbol == symbol.symbol);
                     if let Some(a) = self.draw_symbol_item(ui, symbol, config) {
                         action = a;
                     }
@@ -1062,13 +1079,13 @@ impl CompareSymbolsDialog {
     fn draw_symbol_item(
         &self,
         ui: &mut Ui,
-        symbol: &Symbol,
+        symbol: &Instrument,
         config: &CompareSymbolsConfig,
     ) -> Option<CompareAction> {
         let is_compared = self
             .compared_symbols
             .iter()
-            .any(|s| s.symbol == symbol.name);
+            .any(|s| s.symbol == symbol.symbol);
 
         let desired_size = Vec2::new(ui.available_width(), 56.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
@@ -1076,7 +1093,7 @@ impl CompareSymbolsDialog {
             egui::WidgetInfo::labeled(
                 egui::Role::ListBoxOption,
                 response.enabled() && !is_compared,
-                &symbol.name,
+                &symbol.symbol,
             )
         });
         ui.ctx()
@@ -1103,11 +1120,11 @@ impl CompareSymbolsDialog {
             );
         }
 
-        // Symbol
+        // Instrument
         ui.painter().text(
             Pos2::new(rect.min.x + 40.0, rect.center().y - 10.0),
             egui::Align2::LEFT_CENTER,
-            &symbol.name,
+            &symbol.symbol,
             egui::FontId::proportional(16.0),
             config.text_color,
         );
@@ -1116,13 +1133,13 @@ impl CompareSymbolsDialog {
         ui.painter().text(
             Pos2::new(rect.min.x + 40.0, rect.center().y + 10.0),
             egui::Align2::LEFT_CENTER,
-            &symbol.display_name,
+            symbol.description.as_deref().unwrap_or(&symbol.symbol),
             egui::FontId::proportional(12.0),
             config.muted_color,
         );
 
         if response.clicked() && !is_compared {
-            return Some(CompareAction::AddSymbol(symbol.name.clone()));
+            return Some(CompareAction::AddSymbol(symbol.symbol.clone()));
         }
 
         None
@@ -1137,12 +1154,12 @@ impl CompareSymbolsDialog {
 mod tests {
     use super::*;
 
-    fn create_test_symbols() -> Vec<Symbol> {
+    fn create_test_symbols() -> Vec<Instrument> {
         vec![
-            Symbol::new("BTCUSDT", "Bitcoin / Tether"),
-            Symbol::new("ETHUSDT", "Ethereum / Tether"),
-            Symbol::new("AAPL", "Apple Inc."),
-            Symbol::new("TSLA", "Tesla Inc."),
+            Instrument::new("BTCUSDT").with_description("Bitcoin / Tether"),
+            Instrument::new("ETHUSDT").with_description("Ethereum / Tether"),
+            Instrument::new("AAPL").with_description("Apple Inc."),
+            Instrument::new("TSLA").with_description("Tesla Inc."),
         ]
     }
 
@@ -1256,7 +1273,7 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let symbols: Vec<_> = (0..20)
-                .map(|i| Symbol::new(format!("S{i}"), "Sample"))
+                .map(|i| Instrument::new(format!("S{i}")).with_description("Sample"))
                 .collect();
             let mut dialog = SymbolSearchDialog::new();
             ctx.run_ui(Default::default(), |ui| {
@@ -1316,7 +1333,7 @@ mod tests {
                 "{visible:?}"
             );
             let picked = frame(vec![key(egui::Key::Enter, true)]).0.unwrap();
-            assert_eq!(picked.name, "S18");
+            assert_eq!(picked.symbol, "S18");
             dialog.open();
             ctx.run_ui(
                 egui::RawInput {
@@ -1337,12 +1354,12 @@ mod tests {
         let symbols: Vec<_> = create_test_symbols()
             .into_iter()
             .map(|symbol| {
-                let kind = if symbol.name.ends_with("USDT") {
+                let kind = if symbol.symbol.ends_with("USDT") {
                     SymbolType::Crypto
                 } else {
                     SymbolType::Stock
                 };
-                symbol.with_market("Test", kind)
+                symbol.with_exchange("Test").with_symbol_type(kind)
             })
             .collect();
         for (query, category, recents, limit, expected) in [
@@ -1382,7 +1399,7 @@ mod tests {
                 dialog
                     .filtered_symbols
                     .iter()
-                    .map(|s| s.name.as_str())
+                    .map(|s| s.symbol.as_str())
                     .collect::<Vec<_>>(),
                 expected,
                 "{query:?} / {category:?}"
@@ -1399,7 +1416,7 @@ mod tests {
         dialog.update_filtered_symbols(&symbols);
 
         assert_eq!(dialog.filtered_symbols.len(), 1);
-        assert_eq!(dialog.filtered_symbols[0].name, "AAPL");
+        assert_eq!(dialog.filtered_symbols[0].symbol, "AAPL");
     }
 
     #[test]
@@ -1410,7 +1427,7 @@ mod tests {
             dialog.search_query = query.to_string();
             dialog.update_filtered_symbols(&symbols);
             assert_eq!(dialog.filtered_symbols.len(), 1);
-            assert_eq!(dialog.filtered_symbols[0].name, expected);
+            assert_eq!(dialog.filtered_symbols[0].symbol, expected);
 
             let ctx = Context::default();
             let mut compare = CompareSymbolsDialog::new();
@@ -1426,7 +1443,7 @@ mod tests {
                     egui::Shape::Text(text)
                         if symbols
                             .iter()
-                            .any(|symbol| symbol.name == text.galley.text()) =>
+                            .any(|symbol| symbol.symbol == text.galley.text()) =>
                     {
                         Some(text.galley.text())
                     }

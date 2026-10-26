@@ -3,13 +3,13 @@
 //! Provides the visibility flyout rows and name dialog for saving
 //! and loading drawing templates.
 
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::drawing_toolbar::DrawingTemplate;
 use crate::ui::drawing_toolbar::DrawingToolbarAction;
 use crate::ui::drawing_toolbar::submenu_builder::SubmenuBuilder;
+use crate::ui_kit::ext::UiExt;
 use egui::{Rect, Ui};
 
 /// Drawing template rows and save dialog.

@@ -8,8 +8,9 @@
 
 use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument};
+use crate::scales::StudyFormat;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyFormat, StudyTable};
+use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyTable};
 use chrono::{Datelike, Days, Months, NaiveDate};
 use egui::Color32;
 
@@ -104,7 +105,7 @@ impl Indicator for Performance {
         PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Line,
             visible: false,
         }

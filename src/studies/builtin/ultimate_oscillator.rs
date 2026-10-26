@@ -178,7 +178,7 @@ impl Indicator for UltimateOscillator {
         false // UO is a separate oscillator pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1
     }
 

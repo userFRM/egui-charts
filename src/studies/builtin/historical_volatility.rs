@@ -133,8 +133,8 @@ impl Indicator for HistoricalVolatility {
         trading_days: number("Trading days", 0.0, f64::MAX)
     ; {});
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Percent
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Percent
     }
 
     fn name(&self) -> &str {

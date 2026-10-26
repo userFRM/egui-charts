@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 use chrono::{TimeDelta, Utc};
 use egui::{Pos2, RawInput, Rect, vec2};
 use egui_charts::ChartBuilder;
-use egui_charts::chart::selection::SeriesId;
 use egui_charts::data::{
     Datafeed, DepthHistory, DepthHistoryConfig, HistoryPage, HistoryRequest, Reply, Sink,
     Subscription, SubscriptionId,
 };
-use egui_charts::model::{Instrument, Level1Quote, OrderBook, Tick, Timeframe, TradeSide};
+use egui_charts::model::{Instrument, Level1Quote, OrderBook, OrderSide, Tick, Timeframe};
+use egui_charts::widget::SeriesId;
 
 #[expect(dead_code, reason = "this bench reports only the frame time")]
 mod frame;
@@ -159,9 +159,9 @@ fn run(name: &str, cadence: TimeDelta, seconds: usize) {
             let ticks = (random % 5) as i64 - 2;
             price += ticks;
             let side = if ticks >= 0 {
-                TradeSide::Buy
+                OrderSide::Buy
             } else {
-                TradeSide::Sell
+                OrderSide::Sell
             };
             let size = (1 + random % 20) as f64;
             let trade = Tick::new(now, price as f64 * TICK_SIZE, size, Some(side));

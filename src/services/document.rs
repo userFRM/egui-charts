@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub(crate) enum Received {
     /// The document as stored, or `None` when there is none.
     Loaded(Option<String>),
+    /// The exact document acknowledged by a successful write.
+    Saved(String),
     /// A read failed, or the first of a run of failed writes. The message names the document.
     Failed(String),
 }
@@ -22,7 +24,7 @@ pub(crate) struct StoredDocument {
     inbox: Arc<Inbox>,
     /// `None` while reading, then whether it may be written.
     writable: Option<bool>,
-    writing: bool,
+    writing: Option<String>,
     waiting: Option<String>,
     /// Whether the last write failed, so that a run of failures is reported once.
     failing: bool,
@@ -38,7 +40,7 @@ impl StoredDocument {
             name: name.to_owned(),
             inbox,
             writable: None,
-            writing: false,
+            writing: None,
             waiting: None,
             failing: false,
         }
@@ -62,12 +64,24 @@ impl StoredDocument {
         if self.writable != Some(true) {
             return;
         }
-        if self.writing {
+        if self.writing.as_ref() == Some(&document) {
+            self.waiting = None;
+            return;
+        }
+        if self.waiting.as_ref() == Some(&document) {
+            return;
+        }
+        if self.writing.is_some() {
             self.waiting = Some(document);
         } else {
-            self.writing = true;
+            self.writing = Some(document.clone());
             storage.save(self.kind, &self.name, document, self.inbox.reply(1));
         }
+    }
+
+    /// Whether an unconfirmed write could still replace the stored document.
+    pub(crate) fn saving(&self) -> bool {
+        self.writing.is_some()
     }
 
     /// Takes the answers that arrived, sends the document waiting for them and wakes the UI on
@@ -106,12 +120,15 @@ impl StoredDocument {
                     }
                     continue;
                 }
-                self.writing = false;
+                let document = self.writing.take().expect("document save in flight");
                 let answer = *answer
                     .downcast::<Result<(), FeedError>>()
                     .expect("document save");
                 match answer {
-                    Ok(()) => self.failing = false,
+                    Ok(()) => {
+                        self.failing = false;
+                        received.push(Received::Saved(document));
+                    }
                     Err(error) if !self.failing => {
                         self.failing = true;
                         received.push(Received::Failed(format!(
@@ -122,7 +139,7 @@ impl StoredDocument {
                     Err(_) => {}
                 }
             }
-            if !self.writing
+            if self.writing.is_none()
                 && let Some(document) = self.waiting.take()
             {
                 self.save(storage, document);

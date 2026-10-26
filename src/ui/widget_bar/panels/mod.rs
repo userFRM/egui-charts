@@ -39,7 +39,7 @@ mod tests {
         Datafeed, FeedError, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, Reply,
         ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow,
     };
-    use crate::model::{Quote, Tick, TradeSide};
+    use crate::model::{OrderSide, Quote, Tick};
     use crate::theme::{Theme, apply_to_egui};
 
     struct Feed;
@@ -91,7 +91,7 @@ mod tests {
                         "2026-10-23T12:34:56Z".parse().unwrap(),
                         123456789.12,
                         123456.0,
-                        Some(TradeSide::Buy),
+                        Some(OrderSide::Buy),
                     ));
                     trades.filters = vec![
                         TradeSizeFilter {

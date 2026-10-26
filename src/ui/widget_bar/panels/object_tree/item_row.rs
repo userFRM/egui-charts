@@ -13,8 +13,8 @@ use super::config::ObjectTreeConfig;
 use super::context_menu::render_item_menu;
 use super::state::ObjectTreeState;
 use super::types::{SourceItem, SourceType};
-use crate::ext::UiExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 
 /// Render a single item row in the object tree
 pub fn render_item_row(
@@ -455,7 +455,7 @@ fn render_properties(
 
             // Line style
             ui.hint_label("Style");
-            ui.label(l10n::text(ui.ctx(), props.line_style.as_str()));
+            ui.label(l10n::text(ui.ctx(), props.line_style.name()));
             ui.end_row();
 
             // Transparency

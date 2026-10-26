@@ -95,7 +95,7 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
         crate::studies::PlotStyle {
             color: self.colors[line.min(self.colors.len() - 1)],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: if OSCILLATOR {
                 crate::studies::PlotType::Histogram
             } else {
@@ -105,8 +105,8 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
         }
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Fixed(4)
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(4)
     }
 
     fn name(&self) -> &str {
@@ -155,7 +155,7 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if colors.len() >= self.line_cnt() {
+        if colors.len() >= self.line_count() {
             self.colors = colors;
         }
     }
@@ -176,7 +176,7 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
         Box::new(self.clone())
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         if OSCILLATOR { 1 } else { 2 }
     }
 

@@ -56,7 +56,7 @@ pub(crate) struct FeedLink {
     depth_history: Option<DepthHistory>,
     depth_complete: bool,
     heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
-    study_inputs: Vec<(crate::studies::OrderFlowInput, u64)>,
+    study_inputs: Vec<(crate::data::OrderFlowInput, u64)>,
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
@@ -531,7 +531,7 @@ impl Chart {
             });
         }
 
-        let mut inputs: Vec<crate::studies::OrderFlowInput> = Vec::new();
+        let mut inputs: Vec<crate::data::OrderFlowInput> = Vec::new();
         for study in self.studies.indicators() {
             if let Some(input) = study.order_flow_input()
                 && !inputs.iter().any(|old| input.same_source(old))
@@ -1304,7 +1304,7 @@ mod tests {
     #[test]
     fn executions_link_existing_tape_fills_without_counting_twice() {
         use crate::data::{OrderEvent, RestingOrder};
-        use crate::model::TradeSide::{Buy, Sell};
+        use crate::model::OrderSide::{Buy, Sell};
         for (timeframe, separate_frames) in [
             (Timeframe::Min1, false),
             (Timeframe::Min1, true),
@@ -2409,7 +2409,7 @@ mod tests {
             Some(0.0),
             "adding another study preserves the idle clock"
         );
-        let band = crate::studies::OrderFlowInput::new(crate::studies::OrderFlowKind::BookSize {
+        let band = crate::data::OrderFlowInput::new(crate::data::OrderFlowKind::BookSize {
             levels: 10,
             distance: 0.3,
         });

@@ -12,7 +12,7 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
 use super::types::DataWindowInfo;
-use crate::ext::UiExt;
+use crate::ui_kit::ext::UiExt;
 
 impl DataWindowInfo {
     /// Populates the readout from the hovered rendered bar, falling back to the latest bar with a
@@ -229,7 +229,7 @@ fn format_volume(volume: f64) -> String {
         return "\u{2014}".to_string();
     }
 
-    crate::studies::StudyFormat::Volume.format(volume, None)
+    crate::scales::StudyFormat::Volume.format(volume, None)
 }
 
 #[cfg(test)]
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_format_volume() {
-        use crate::studies::StudyFormat::*;
+        use crate::scales::StudyFormat::*;
         for (format, value, precision, expected) in [
             (Volume, 1_500_000_000.0, None, "1.50B"),
             (Volume, 2_500_000.0, None, "2.50M"),

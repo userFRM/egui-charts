@@ -3,13 +3,14 @@
 //! A compact popup menu for quick chart configuration changes (chart type,
 //! grid visibility, scale mode, and label options).
 
-use super::{config::ChartSettings, types::ScaleMode};
+use super::config::ChartSettings;
 use crate::config::ChartConfig;
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::model::ChartType;
+use crate::scales::PriceScaleMode;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::ext::UiExt;
 use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 
 // ============================================================================
@@ -208,12 +209,12 @@ impl SettingsMenu {
 
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Auto,
+                self.settings.scale_mode == PriceScaleMode::Normal,
                 l10n::text(ui.ctx(), "Auto Scale"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Auto;
+            self.settings.scale_mode = PriceScaleMode::Normal;
         }
 
         ui.checkbox(
@@ -228,21 +229,21 @@ impl SettingsMenu {
 
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Percentage,
+                self.settings.scale_mode == PriceScaleMode::Percentage,
                 l10n::text(ui.ctx(), "Percentage"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Percentage;
+            self.settings.scale_mode = PriceScaleMode::Percentage;
         }
         if ui
             .selectable_label(
-                self.settings.scale_mode == ScaleMode::Logarithmic,
+                self.settings.scale_mode == PriceScaleMode::Logarithmic,
                 l10n::text(ui.ctx(), "Log Scale"),
             )
             .clicked()
         {
-            self.settings.scale_mode = ScaleMode::Logarithmic;
+            self.settings.scale_mode = PriceScaleMode::Logarithmic;
         }
         ui.separator();
     }

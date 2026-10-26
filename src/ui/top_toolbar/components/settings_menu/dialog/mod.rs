@@ -7,12 +7,10 @@
 
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
+use crate::widget::settings::ChartSettingsState;
 mod tabs;
 
-use super::{
-    actions::SettingsAction, config::SettingsDialogConfig, data::ChartSettingsState,
-    types::SettingsTab,
-};
+use super::{actions::SettingsAction, config::SettingsDialogConfig, types::SettingsTab};
 use crate::icons::icons as embedded_icons;
 use crate::services::StoreKind;
 use crate::theme::Theme;
@@ -276,7 +274,6 @@ impl SettingsDialog {
                     *color = themed;
                 }
             }
-            settings.sync_legacy_fields();
         }
 
         action
@@ -364,7 +361,6 @@ impl SettingsDialog {
                 }
             });
         if ok {
-            self.settings.sync_legacy_fields();
             action = SettingsAction::Apply(self.settings.clone());
             self.is_open = false;
         } else if cancel {
@@ -485,7 +481,6 @@ impl SettingsDialog {
                 .clicked();
             let cancel = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
             if save {
-                self.settings.sync_legacy_fields();
                 match self.templates.save(&name, self.settings.clone()) {
                     Ok(()) => {
                         self.template_name = name.clone();
@@ -535,7 +530,6 @@ impl SettingsDialog {
                 )
                 .clicked()
         {
-            self.settings.sync_legacy_fields();
             match self
                 .templates
                 .save(&self.template_name, self.settings.clone())
@@ -717,7 +711,7 @@ mod tests {
 
     #[test]
     fn grid_colour_pickers_follow_the_visible_directions() {
-        use super::super::GridLinesMode;
+        use crate::widget::settings::GridLinesMode;
         for theme in [Theme::light(), Theme::dark()] {
             for (mode, horizontal, vertical) in [
                 (GridLinesMode::None, false, false),
@@ -758,7 +752,7 @@ mod tests {
                 settings.chart_basic_styles.background_color = configured;
                 settings.margins.top_percent = 12.5;
                 settings.margins.bottom_percent = 7.5;
-                settings.sync_legacy_fields();
+
                 dialog.open(settings.clone());
                 assert_eq!(dialog.margin_top_str, "12.5");
                 assert_eq!(dialog.margin_bottom_str, "7.5");
@@ -849,7 +843,6 @@ mod tests {
                         configured
                     };
                     assert_eq!(saved.chart_basic_styles.background_color, expected);
-                    assert_eq!(saved.background_color, expected);
                     assert_eq!(
                         saved.chart_basic_styles.background_gradient_top,
                         Theme::light().chart.bg

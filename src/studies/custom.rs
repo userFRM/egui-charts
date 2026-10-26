@@ -62,10 +62,10 @@ pub struct CustomIndicator {
     values: IndicatorValues,
     colors: Vec<Color32>,
     is_overlay: bool,
-    line_cnt: usize,
+    line_count: usize,
     line_names: Vec<String>,
     visible: bool,
-    value_format: Option<super::StudyFormat>,
+    value_format: Option<crate::scales::StudyFormat>,
     scale: Option<super::StudyScale>,
     plot_types: Vec<super::PlotType>,
     offsets: Vec<isize>,
@@ -96,7 +96,7 @@ impl CustomIndicator {
             values: IndicatorValues::new(),
             colors: vec![palette::YELLOW], // Yellow default
             is_overlay: true,
-            line_cnt: 1,
+            line_count: 1,
             visible: true,
             value_format: None,
             scale: None,
@@ -158,13 +158,13 @@ impl CustomIndicator {
     }
 
     /// Set the number of output lines (must match the closure's output).
-    pub fn with_line_cnt(mut self, count: usize) -> Self {
-        self.line_cnt = count;
+    pub fn with_line_count(mut self, count: usize) -> Self {
+        self.line_count = count;
         self
     }
 
     /// Set the units used by every readout of this study.
-    pub fn with_value_format(mut self, format: super::StudyFormat) -> Self {
+    pub fn with_value_format(mut self, format: crate::scales::StudyFormat) -> Self {
         self.value_format = Some(format);
         self
     }
@@ -228,11 +228,11 @@ impl Indicator for CustomIndicator {
         Ok(())
     }
 
-    fn value_format(&self) -> super::StudyFormat {
+    fn value_format(&self) -> crate::scales::StudyFormat {
         self.value_format.unwrap_or(if self.is_overlay {
-            super::StudyFormat::Price
+            crate::scales::StudyFormat::Price
         } else {
-            super::StudyFormat::Fixed(2)
+            crate::scales::StudyFormat::Fixed(2)
         })
     }
 
@@ -248,7 +248,7 @@ impl Indicator for CustomIndicator {
         super::PlotStyle {
             color: self.colors.get(line).copied().unwrap_or(Color32::WHITE),
             width: 1.0,
-            pattern: super::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: self.plot_types.get(line).copied().unwrap_or_default(),
             visible: true,
         }
@@ -302,8 +302,8 @@ impl Indicator for CustomIndicator {
         self.is_overlay
     }
 
-    fn line_cnt(&self) -> usize {
-        self.line_cnt
+    fn line_count(&self) -> usize {
+        self.line_count
     }
 
     fn line_names(&self) -> Vec<String> {

@@ -21,6 +21,7 @@ use crate::drawings::DrawingToolType;
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DrawingToolbarAction {
     /// No action taken
     None,

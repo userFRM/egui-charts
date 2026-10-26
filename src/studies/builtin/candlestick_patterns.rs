@@ -663,7 +663,7 @@ impl Indicator for CandlestickPatterns {
         crate::studies::PlotStyle {
             color: self.colors[line.min(2)],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: match line {
                 0 => crate::studies::PlotType::TriangleUp,
                 1 => crate::studies::PlotType::TriangleDown,

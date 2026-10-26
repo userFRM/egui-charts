@@ -29,11 +29,11 @@
 //! # }
 //! ```
 
-use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_frame, title_row};
+use crate::ui_kit::ext::UiExt;
 use egui::{Context, Id, Key, Modifiers, RichText};
 use std::path::PathBuf;
 
@@ -114,7 +114,7 @@ pub struct ExportConfig {
     /// Export format (PNG, CSV or Clipboard)
     pub format: ExportFormat,
     /// Size, header and background options for PNG and clipboard exports.
-    pub image: crate::widget::export::ImageExportOptions,
+    pub image: crate::widget::ImageExportOptions,
 }
 
 impl Default for ExportConfig {

@@ -112,7 +112,7 @@ impl Indicator for ChopZone {
         crate::studies::PlotStyle {
             color: self.colors[0],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
@@ -134,8 +134,8 @@ impl Indicator for ChopZone {
         Some(self.colors[band])
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Fixed(0)
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(0)
     }
 
     fn name(&self) -> &str {

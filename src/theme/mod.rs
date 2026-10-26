@@ -235,24 +235,22 @@ pub struct TextSizes {
 
 impl Default for TextSizes {
     fn default() -> Self {
-        use crate::styles::typography;
-
         Self {
-            micro: typography::MICRO,
-            marker: typography::TINY,
-            tiny: typography::XS,
-            small: typography::SM,
-            label: typography::SM_MD,
-            body: typography::MD,
-            title: typography::LG,
-            heading: typography::XXL,
-            dialog_title: typography::DIALOG_TITLE,
-            chart_title: typography::CHART_TITLE,
-            toolbar: typography::TOOLBAR,
-            ohlc: typography::OHLC,
-            axis: typography::AXIS,
-            price_tag: typography::PRICE_TAG,
-            bottom_bar: typography::BOTTOM_BAR,
+            micro: 8.0,
+            marker: 9.0,
+            dialog_title: 18.0,
+            tiny: 10.0,
+            small: 11.0,
+            label: 12.0,
+            body: 13.0,
+            title: 14.0,
+            heading: 16.0,
+            chart_title: 16.0,
+            toolbar: 14.0,
+            ohlc: 13.0,
+            axis: 12.0,
+            price_tag: 12.0,
+            bottom_bar: 14.0,
         }
     }
 }
@@ -406,30 +404,6 @@ impl Theme {
             );
         }
         self
-    }
-
-    /// Apply this theme's background, grid, axis text and candle colours to `config`.
-    ///
-    /// Only the configuration changes. A chart paints its legend, quote boxes, labels and
-    /// overlays from its own theme, which [`ChartBuilder::with_theme`](crate::ChartBuilder::with_theme)
-    /// keeps for that chart, so switch a chart's theme with
-    /// [`Chart::set_theme`](crate::Chart::set_theme) or
-    /// [`Chart::set_theme_override`](crate::Chart::set_theme_override), which apply these
-    /// colours too.
-    pub fn apply_to_config(
-        &self,
-        mut config: crate::config::ChartConfig,
-    ) -> crate::config::ChartConfig {
-        config.background_color = self.chart.bg;
-        config.grid_color = self.chart.grid_line;
-        config.text_color = self.chart.axis_text;
-        config.bullish_color = self.chart.candle_up;
-        config.bearish_color = self.chart.candle_down;
-        config.bullish_border_color = Some(self.chart.candle_up);
-        config.bearish_border_color = Some(self.chart.candle_down);
-        config.bullish_wick_color = Some(self.chart.candle_up);
-        config.bearish_wick_color = Some(self.chart.candle_down);
-        config
     }
 }
 

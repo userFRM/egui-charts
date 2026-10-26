@@ -204,7 +204,7 @@ impl Indicator for Stochastic {
         false // Stochastic is drawn in separate pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         2 // %K and %D
     }
 

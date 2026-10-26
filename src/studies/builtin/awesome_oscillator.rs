@@ -92,7 +92,7 @@ impl Indicator for AwesomeOscillator {
         crate::studies::PlotStyle {
             color: self.positive_color,
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
@@ -108,8 +108,8 @@ impl Indicator for AwesomeOscillator {
         })
     }
 
-    fn value_format(&self) -> crate::studies::StudyFormat {
-        crate::studies::StudyFormat::Price
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
     }
 
     fn name(&self) -> &str {
@@ -175,7 +175,7 @@ impl Indicator for AwesomeOscillator {
         false // AO is a separate histogram pane
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         1 // Single histogram
     }
 

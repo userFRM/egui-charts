@@ -3,7 +3,7 @@
 use super::{Screenshot, ScreenshotTarget};
 use eframe::egui_glow::Painter;
 use eframe::glow::{self, HasContext as _};
-use egui_charts::widget::export::ChartImage;
+use egui_charts::widget::ChartImage;
 use std::sync::{Arc, mpsc};
 
 pub(super) fn render_image(

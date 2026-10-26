@@ -8,7 +8,6 @@
 
 use super::categories::cursors::CursorType;
 use crate::drawings::DrawingToolType;
-use crate::ext::UiExt;
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
@@ -17,6 +16,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
 use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::ext::UiExt;
 use egui::{Color32, Id, Key, Modifiers, Popup, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::collections::HashSet;
 

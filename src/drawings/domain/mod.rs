@@ -9,9 +9,9 @@
 //! - [`DrawingToolType`] -- enum of all drawing tool types with interaction
 //!   mode, display name, and serialization support.
 //! - [`DrawingInteractionMode`] -- how mouse input maps to point capture.
-//! - Options types: [`LineStyle`], [`ArrowStyle`], [`FontWeight`],
+//! - Options types: [`LineStyle`](crate::model::LineStyle), [`ArrowStyle`], [`FontWeight`],
 //!   [`HandlePos`], [`TimeframeVisibility`], [`DrawingOptions`],
-//!   [`FibonacciConfig`], [`FibonacciLevel`], [`VolumeProfileConfig`],
+//!   [`FibonacciConfig`], [`FibonacciLevel`], [`VolumeProfileConfig`](crate::data::VolumeProfileConfig),
 //!   [`RegressionTrendConfig`], [`PositionSize`].
 //!
 //! The only external dependency is `egui` (for `Pos2` and `Color32` in
@@ -29,8 +29,8 @@ pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
 pub use gann::GannConfig;
 pub use options::{
-    ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos, LineStyle,
-    PositionSize, ProfileDisplay, RegressionTrendConfig, TimeframeVisibility, VolumeProfileConfig,
+    ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
+    PositionSize, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;

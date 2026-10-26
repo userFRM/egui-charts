@@ -138,7 +138,7 @@ impl Indicator for WilliamsFractals {
                 self.down_color
             },
             width: 2.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: if line == 0 {
                 crate::studies::PlotType::TriangleUp
             } else {

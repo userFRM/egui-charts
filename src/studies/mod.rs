@@ -25,8 +25,8 @@
 //!
 //! | Sub-module | Purpose |
 //! |---|---|
-//! | `builtin` | *(feature `studies`)* All built-in indicators ([`SMA`], [`EMA`], [`RSI`], [`MACD`], [`BollingerBands`], ...) |
-//! | [`factory`] | *(feature `studies`)* [`IndicatorFactory`] -- dynamic creation of indicators by name |
+//! | `builtin` | *(feature `studies`)* All built-in indicators (`SMA`, `EMA`, `RSI`, `MACD`, `BollingerBands`, ...) |
+//! | `factory` | *(feature `studies`)* `IndicatorFactory` -- dynamic creation of indicators by name |
 //! | `indicator_trait` | The core [`Indicator`] trait and [`IndicatorValue`] enum |
 //! | `custom` | [`CustomIndicator`] -- define indicators at runtime with closures |
 //!
@@ -65,10 +65,8 @@ pub mod factory;
 mod format;
 pub mod helpers;
 mod indicator_trait;
-mod order_flow;
 pub mod palette;
-pub use format::{StudyFormat, StudyScale};
-pub use order_flow::{OrderFlowInput, OrderFlowKind};
+pub use format::StudyScale;
 mod inputs;
 mod metric;
 pub use inputs::{InputKind, InputValue, StudyInput, StudySource};
@@ -79,14 +77,10 @@ mod settings;
 pub(crate) mod table;
 pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use projection::StudyProjection;
-pub use settings::{ConfiguredStudy, PlotPattern, PlotStyle, PlotType, StudySettings};
+pub use settings::{ConfiguredStudy, PlotStyle, PlotType, StudySettings};
 pub use table::{StudyCell, StudyTable};
-mod volume_profile;
-pub use volume_profile::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
 mod values;
 pub use values::IndicatorValues;
-#[cfg(any(feature = "studies", feature = "drawings"))]
-pub(crate) mod math;
 #[cfg(all(test, feature = "studies"))]
 mod reference;
 mod stepper;
@@ -103,6 +97,15 @@ pub use indicator_trait::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
     StudyPane,
 };
+
+mod chart_state;
+pub use chart_state::{ChartState, ZoomState};
+
+#[cfg(feature = "studies")]
+mod template;
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use template::StudyTemplate;
 
 use crate::model::Bar;
 

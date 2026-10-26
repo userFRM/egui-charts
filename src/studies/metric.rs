@@ -1,8 +1,10 @@
 //! Pane study for a scalar metric published by the host's data source.
 
-use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest, StudyFormat};
+use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
+
 use crate::data::MetricSeries;
 use crate::model::Bar;
+use crate::scales::StudyFormat;
 use crate::studies::palette;
 use egui::Color32;
 
@@ -56,7 +58,7 @@ impl Indicator for MetricStudy {
         super::PlotStyle {
             color: self.color,
             width: 1.0,
-            pattern: super::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: super::PlotType::StepLine,
             visible: true,
         }

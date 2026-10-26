@@ -215,7 +215,7 @@ impl Indicator for KeltnerChannels {
         true // Keltner is drawn on main chart
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3 // Middle, Upper, Lower
     }
 

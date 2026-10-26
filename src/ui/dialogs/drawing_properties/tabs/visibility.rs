@@ -4,9 +4,9 @@ use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use egui::Ui;
 
-use crate::ext::UiExt;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
+use crate::ui_kit::ext::UiExt;
 
 /// Available timeframes, named as `Timeframe::as_str` names them for the chart's interval label
 const TIMEFRAMES: &[&str] = &[

@@ -1,13 +1,11 @@
 //! Time anchors behind editable chart coordinates.
 
-use super::{
-    Chart,
-    sync::{index_at, time_at},
-};
+use super::Chart;
 use crate::drawings::persistence::{
     DrawingStorage, SaveError, SkippedDrawing, drawing_to_stored, stored_to_drawing,
 };
 use crate::drawings::{ChartPoint, Drawing, DrawingManager};
+use crate::model::{index_at, time_at};
 
 impl Chart {
     /// UTC time behind a drawing anchor, retaining fractional and repeated-time positions.

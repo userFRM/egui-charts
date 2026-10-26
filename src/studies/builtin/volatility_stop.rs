@@ -91,7 +91,7 @@ impl Indicator for VolatilityStop {
         crate::studies::PlotStyle {
             color: self.colors[0],
             width: 1.0,
-            pattern: crate::studies::PlotPattern::Solid,
+            pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Crosses,
             visible: true,
         }

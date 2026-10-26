@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Category of a host-supplied time-axis event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum EventKind {
     /// Company earnings announcement.
     Earnings,

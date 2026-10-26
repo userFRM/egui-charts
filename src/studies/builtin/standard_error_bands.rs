@@ -147,7 +147,7 @@ impl Indicator for StandardErrorBands {
         true
     }
 
-    fn line_cnt(&self) -> usize {
+    fn line_count(&self) -> usize {
         3
     }
 
