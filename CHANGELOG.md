@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+- Two-point drawings accept successive clicks with a live preview as well as dragging. Drag and freehand anchors retain the original press, including its snapping, and freehand strokes include the first movement and release. Holding Shift constrains rectangle previews and completed drawings to a square in screen points. Escape cancels unfinished placement. ([#956](https://github.com/userFRM/egui-charts/issues/956), [#957](https://github.com/userFRM/egui-charts/issues/957), [#958](https://github.com/userFRM/egui-charts/issues/958))
+
 ### Added
 
 - The demo quick search runs a sample backtest on completed synthetic bars, marks equity at their closes and opens the strategy report below the chart. Reports can be replaced or cleared; selecting a trade restores its symbol and interval, scrolls to its bars and highlights its span. Entry and exit markers share the signals service with the API samples, including in newly added chart slots. Trades CSV is saved or downloaded by the host. Strategy execution, market data and storage remain host-owned. ([#225](https://github.com/userFRM/egui-charts/issues/225))

@@ -59,7 +59,7 @@ impl DrawingToolType {
             | Self::Tweet
             | Self::Idea => DrawingInteractionMode::SingleClick,
 
-            // Drag-to-draw tools
+            // Two-point tools also accept press-drag-release.
             Self::Rect
             | Self::Circle
             | Self::Ellipse
@@ -84,7 +84,7 @@ impl DrawingToolType {
             | Self::TimeCycles
             | Self::SineLine
             | Self::Callout
-            | Self::Arrow => DrawingInteractionMode::DragToDraw,
+            | Self::Arrow => DrawingInteractionMode::ClickClick,
 
             // Continuous drawing tools
             Self::Brush | Self::Highlighter => DrawingInteractionMode::ContinuousDraw,
