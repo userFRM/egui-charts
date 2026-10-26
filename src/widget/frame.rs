@@ -3666,7 +3666,8 @@ mod tests {
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
                 if expected {
-                    assert!(labels.contains(&"-10.00 (-8.33%)"));
+                    assert!(labels.contains(&"Time"));
+                    assert!(!labels.contains(&"Change"));
                     assert!(labels.contains(&"Vol"));
                     let legend = labels
                         .iter()

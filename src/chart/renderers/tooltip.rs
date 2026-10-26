@@ -134,6 +134,8 @@ pub fn render_tooltip_with_options(
 
 /// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
 /// on the side away from the pointer, so it never covers the hovered bar.
+/// Held values use time, OHLC and total volume instead of the hover change row;
+/// optional study rows follow these values.
 pub fn render_floating_tooltip(
     painter: &Painter,
     hover_pos: Pos2,
@@ -161,7 +163,7 @@ pub fn render_floating_tooltip(
     };
     let mut rows = Vec::new();
 
-    if options.show_time {
+    if options.show_time || options.on_long_press {
         rows.push(("Time", scale.format_crosshair(candle.time, bar_seconds)));
     }
 
@@ -172,7 +174,7 @@ pub fn render_floating_tooltip(
         rows.push(("Close", price(candle.close)));
     }
 
-    if options.show_change {
+    if options.show_change && !options.on_long_press {
         let reference = previous_close.unwrap_or(candle.open);
         let change = candle.close - reference;
         let change_pct = percent_change(reference, candle.close);
@@ -645,6 +647,50 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
+
+    #[test]
+    fn held_values_show_time_ohlc_and_total_volume() {
+        for show_time in [false, true] {
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    HOVER,
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0)),
+                    &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
+                    None,
+                    &TooltipOptions {
+                        on_long_press: true,
+                        show_time,
+                        ..Default::default()
+                    },
+                    egui::Color32::GREEN,
+                    &crate::scales::TimeFormatterBuilder::new().build(),
+                    3600,
+                    &[],
+                    None,
+                    ValueFormatters::default(),
+                );
+            });
+            let shapes = output.shapes.clone();
+            output.drop_without_applying_deltas();
+            let text: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text.galley.text())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(text.len(), 12, "six label/value pairs: {text:?}");
+            assert_eq!(
+                text.iter().step_by(2).copied().collect::<Vec<_>>(),
+                ["Time", "Open", "High", "Low", "Close", "Vol"]
+            );
+        }
+    }
 
     #[test]
     fn study_readouts_fit_narrow_plots() {
