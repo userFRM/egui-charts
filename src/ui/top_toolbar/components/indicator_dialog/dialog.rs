@@ -13,6 +13,7 @@ use crate::localization as l10n;
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::filter::FilterWidget;
@@ -289,7 +290,6 @@ impl IndicatorDialog {
         let action = Modal::new("indicator_dialog", "Indicators")
             .width(config.width)
             .height(config.height)
-            .rounding(16.0)
             .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 self.draw_content(ui, &config, theme)
@@ -320,7 +320,7 @@ impl IndicatorDialog {
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
-                ui.style_mut().override_font_id = Some(FontId::proportional(16.0));
+                ui.style_mut().override_font_id = Some(FontId::proportional(theme.text.heading));
                 self.search.show(ui).response
             })
             .inner;
@@ -348,7 +348,7 @@ impl IndicatorDialog {
                 ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
                 ui.visuals_mut().selection.stroke.color = theme.ui.text;
                 for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
-                    ui.add_space(16.0);
+                    ui.add_space(theme.spacing.xxl);
                     ui.label(
                         RichText::new(l10n::text(
                             ui.ctx(),
@@ -358,10 +358,10 @@ impl IndicatorDialog {
                                 "BUILT-IN"
                             },
                         ))
-                        .size(11.0)
+                        .size(theme.text.small)
                         .color(theme.ui.text_secondary),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(theme.spacing.lg);
                     if SidebarTab::new(item.name(), category.get() == item)
                         .icon(item.icon())
                         .show(ui)
@@ -375,7 +375,7 @@ impl IndicatorDialog {
                 TabBar::new(IndicatorTab::all(), &mut self.active_tab)
                     .pills()
                     .show(ui);
-                ui.add_space(12.0);
+                ui.add_space(theme.spacing.xl);
                 action = self.draw_results(ui, config, theme);
             },
         );
@@ -461,7 +461,7 @@ impl IndicatorDialog {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 // Room above the first row and below the last for the focus ring.
-                let ring = DESIGN_TOKENS.spacing.xs;
+                let ring = theme.spacing.xs;
                 ui.add_space(ring);
                 for (i, indicator) in filtered.iter().enumerate() {
                     if let Some(a) = self.draw_indicator_item(ui, config, theme, indicator, i == 0)
@@ -501,7 +501,10 @@ impl IndicatorDialog {
         indicator: &IndicatorInfo,
         is_first: bool,
     ) -> Option<IndicatorDialogAction> {
-        let desired_size = Vec2::new(ui.available_width(), 32.0);
+        let desired_size = Vec2::new(
+            ui.available_width(),
+            32.0_f32.max(theme.text.title + 2.0 * theme.spacing.sm),
+        );
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
 
         let is_favorite = self.favorites.contains(&indicator.id);
@@ -544,13 +547,13 @@ impl IndicatorDialog {
         draw_focus_ring(ui, &response, theme.radius.md);
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
-        self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res, rect)
+        self.handle_item_clicks(indicator, is_favorite, enter, &response, &star_res)
     }
 
     /// The favourite toggle at the left of a row.
-    fn star_rect(row: Rect) -> Rect {
+    fn star_rect(ui: &Ui, row: Rect) -> Rect {
         Rect::from_min_size(
-            Pos2::new(row.min.x + DESIGN_TOKENS.spacing.sm, row.min.y),
+            Pos2::new(row.min.x + ui.active_theme().spacing.sm, row.min.y),
             Vec2::new(DESIGN_TOKENS.sizing.button_sm, row.height()),
         )
     }
@@ -561,7 +564,7 @@ impl IndicatorDialog {
         rect: Rect,
         is_favorite: bool,
     ) -> Response {
-        let star_rect = Self::star_rect(rect);
+        let star_rect = Self::star_rect(ui, rect);
         let star_res = ui.allocate_rect(star_rect, Sense::click());
         let tooltip = if is_favorite {
             "Remove from favorites"
@@ -597,7 +600,7 @@ impl IndicatorDialog {
         let x = rect.min.x + DESIGN_TOKENS.sizing.button_md;
         let mut job = LayoutJob::simple_singleline(
             l10n::text(ui.ctx(), indicator.name.clone()),
-            FontId::proportional(14.0),
+            FontId::proportional(ui.active_theme().text.title),
             text,
         );
         job.wrap = TextWrapping::truncate_at_width(right - x);
@@ -652,7 +655,6 @@ impl IndicatorDialog {
         enter: bool,
         response: &Response,
         star_res: &Response,
-        rect: Rect,
     ) -> Option<IndicatorDialogAction> {
         if star_res.clicked() {
             if is_favorite {
@@ -663,7 +665,9 @@ impl IndicatorDialog {
             return Some(IndicatorDialogAction::ToggleFavorite(indicator.id.clone()));
         }
 
-        let on_star = Self::star_rect(rect).contains(response.hover_pos().unwrap_or_default());
+        let on_star = star_res
+            .rect
+            .contains(response.hover_pos().unwrap_or_default());
         if response.clicked() && !on_star {
             let is_sel = self
                 .sel_indicator

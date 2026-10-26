@@ -1,7 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Acceleration Bands (Price Headley), a price envelope that widens on wide bars.
@@ -29,9 +29,9 @@ impl AccelerationBands {
             factor: clamp_param(factor, 0.0, f64::MAX),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Upper
-                DESIGN_TOKENS.semantic.extended.favorite_gold, // Amber - Middle
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Lower
+                palette::GREEN, // Green - Upper
+                palette::GOLD,  // Amber - Middle
+                palette::RED,   // Red - Lower
             ],
             visible: true,
         }

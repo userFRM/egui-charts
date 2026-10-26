@@ -50,7 +50,6 @@ use crate::ext::UiExt;
 use crate::icons::icons;
 use crate::model::{Symbol, SymbolType};
 use crate::services::{Storage, SymbolSearch};
-use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
@@ -1000,7 +999,7 @@ impl CompareSymbolsDialog {
                             ui.label(
                                 RichText::new(&symbol.name)
                                     .color(config.muted_color)
-                                    .size(typography::SM),
+                                    .size(ui.active_theme().text.small),
                             );
 
                             ui.right_aligned(|ui| {
@@ -1016,7 +1015,7 @@ impl CompareSymbolsDialog {
                         });
                     }
                 });
-            ui.separator_with_margin(DESIGN_TOKENS.spacing.lg);
+            ui.separator_with_margin(ui.active_theme().spacing.lg);
         }
 
         self.search.query(ui.ctx(), &self.search_query, None, 20);
@@ -1082,25 +1081,25 @@ impl CompareSymbolsDialog {
         });
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(is_compared));
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         // Background on hover
         if response.hovered() && !is_compared {
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, config.hover_color);
+                .rect_filled(rect, ui.active_theme().radius.md, config.hover_color);
         }
 
         // Checkmark if compared
         let indicator_pos = Pos2::new(rect.min.x + 12.0, rect.center().y);
         if is_compared {
             ui.painter()
-                .circle_filled(indicator_pos, 5.0, DESIGN_TOKENS.semantic.extended.success);
+                .circle_filled(indicator_pos, 5.0, ui.active_theme().ui.success);
             ui.painter().text(
                 indicator_pos,
                 egui::Align2::CENTER_CENTER,
                 l10n::text(ui.ctx(), "v"),
-                egui::FontId::proportional(typography::MICRO),
-                DESIGN_TOKENS.semantic.ui.text_light,
+                egui::FontId::proportional(ui.active_theme().text.micro),
+                ui.active_theme().ui.panel_bg,
             );
         }
 

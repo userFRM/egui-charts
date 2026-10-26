@@ -1,8 +1,8 @@
 //! Arithmetic mean of a price source over the bars currently visible on the chart.
 
 use crate::model::{Bar, PriceSource};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::ops::Range;
 
@@ -23,7 +23,7 @@ impl VisibleAveragePrice {
             source: PriceSource::Close,
             range: 0..usize::MAX,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info,
+            color: palette::BLUE,
             visible: true,
         }
     }

@@ -19,17 +19,6 @@
 use egui::{Color32, CornerRadius, Frame, InnerResponse, Margin, Ui, Visuals};
 
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
-
-/// Panel corner radius - sourced from DESIGN_TOKENS.rounding.sm
-fn panel_corner_radius() -> u8 {
-    DESIGN_TOKENS.rounding.sm as u8
-}
-
-/// Gap between panels - sourced from DESIGN_TOKENS.spacing.panel_gap
-fn panel_gap() -> i8 {
-    DESIGN_TOKENS.spacing.panel_gap as i8
-}
 
 /// Panel position in the layout
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +70,8 @@ pub struct StyledPanelFrame {
     position: PanelPosition,
     gap_color: Color32,
     panel_bg: Color32,
+    rounding: u8,
+    gap: i8,
 }
 
 impl StyledPanelFrame {
@@ -92,6 +83,8 @@ impl StyledPanelFrame {
             position: PanelPosition::Left,
             gap_color: visuals.faint_bg_color,
             panel_bg: visuals.panel_fill,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -103,6 +96,8 @@ impl StyledPanelFrame {
             position: PanelPosition::RightWidgetBar,
             gap_color: visuals.faint_bg_color,
             panel_bg: visuals.panel_fill,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -114,6 +109,8 @@ impl StyledPanelFrame {
             position: PanelPosition::RightContent,
             gap_color: visuals.faint_bg_color,
             panel_bg: visuals.panel_fill,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -125,6 +122,8 @@ impl StyledPanelFrame {
             position: PanelPosition::Top,
             gap_color: visuals.faint_bg_color,
             panel_bg: visuals.panel_fill,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -136,6 +135,8 @@ impl StyledPanelFrame {
             position: PanelPosition::Bottom,
             gap_color: visuals.faint_bg_color,
             panel_bg: visuals.panel_fill,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -147,6 +148,8 @@ impl StyledPanelFrame {
             position: PanelPosition::Chart,
             gap_color: visuals.faint_bg_color,
             panel_bg: chart_bg,
+            rounding: visuals.widgets.inactive.corner_radius.nw,
+            gap: crate::theme::Spacing::default().sm as i8,
         }
     }
 
@@ -175,20 +178,20 @@ impl StyledPanelFrame {
             // Left sidebar: right margin only (gap to chart)
             PanelPosition::Left => Margin {
                 left: 0,
-                right: panel_gap(),
+                right: self.gap,
                 top: 0, // NO top margin - toolbar provides gap via its bottom margin
                 bottom: 0,
             },
             // Right widget bar: left margin only (gap to chart)
             PanelPosition::RightWidgetBar => Margin {
-                left: panel_gap(),
+                left: self.gap,
                 right: 0,
                 top: 0, // NO top margin
                 bottom: 0,
             },
             // Right content panel: left margin only
             PanelPosition::RightContent => Margin {
-                left: panel_gap(),
+                left: self.gap,
                 right: 0,
                 top: 0, // NO top margin
                 bottom: 0,
@@ -198,13 +201,13 @@ impl StyledPanelFrame {
                 left: 0,
                 right: 0,
                 top: 0,
-                bottom: panel_gap(),
+                bottom: self.gap,
             },
             // Bottom panel: top margin for gap above
             PanelPosition::Bottom => Margin {
                 left: 0,
                 right: 0,
-                top: panel_gap(),
+                top: self.gap,
                 bottom: 0,
             },
             // Chart: no margins (gaps provided by surrounding panels)
@@ -222,20 +225,20 @@ impl StyledPanelFrame {
         let rounding = match self.position {
             PanelPosition::Left => CornerRadius {
                 nw: 0,
-                ne: panel_corner_radius(),
+                ne: self.rounding,
                 sw: 0,
                 se: 0,
             },
             PanelPosition::RightWidgetBar | PanelPosition::RightContent => CornerRadius {
-                nw: panel_corner_radius(),
+                nw: self.rounding,
                 ne: 0,
                 sw: 0,
                 se: 0,
             },
             PanelPosition::Top | PanelPosition::Bottom => CornerRadius::ZERO,
             PanelPosition::Chart => CornerRadius {
-                nw: panel_corner_radius(),
-                ne: panel_corner_radius(),
+                nw: self.rounding,
+                ne: self.rounding,
                 sw: 0,
                 se: 0,
             },
@@ -247,7 +250,10 @@ impl StyledPanelFrame {
     /// Show both outer and inner frames with content
     ///
     /// This is a convenience method that nests the frames correctly.
-    pub fn show<R>(self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+    pub fn show<R>(mut self, ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+        let theme = ui.active_theme();
+        self.rounding = theme.radius.sm as u8;
+        self.gap = theme.spacing.sm as i8;
         self.outer_frame()
             .show(ui, |ui| self.inner_frame().show(ui, content).inner)
     }

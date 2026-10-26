@@ -17,8 +17,8 @@
 
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Hull Moving Avg indicator
@@ -39,7 +39,7 @@ impl HMA {
         Self {
             period: period.max(2),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.deep_purple, // Deep Purple
+            color: palette::DEEP_PURPLE, // Deep Purple
             visible: true,
         }
     }

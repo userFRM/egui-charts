@@ -218,7 +218,7 @@ impl TextButton {
         let galley = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), self.text.clone()),
             font_id,
-            DESIGN_TOKENS.semantic.ui.text_light,
+            ui.active_theme().ui.text,
         );
         let text_width = galley.rect.width();
         let total_width = text_width + padding * 2.0;
@@ -390,7 +390,7 @@ impl PillButton<'_> {
             font_id,
             Color32::PLACEHOLDER,
         );
-        galley.size().x + 2.0 * DESIGN_TOKENS.spacing.xl
+        galley.size().x + 2.0 * ui.active_theme().spacing.xl
     }
 
     pub(crate) fn show(self, ui: &mut Ui) -> Response {
@@ -607,7 +607,7 @@ pub fn toolbar_tooltip(
         .frame(
             egui::Frame::new()
                 .fill(fill)
-                .corner_radius(3)
+                .corner_radius(response.ctx.active_theme().radius.sm)
                 .inner_margin(egui::Margin::symmetric(8, 3)),
         )
         .show(|ui| {
@@ -627,7 +627,7 @@ pub fn toolbar_tooltip(
                         }
                         egui::Frame::new()
                             .fill(Color32::from_gray(80))
-                            .corner_radius(2)
+                            .corner_radius(ui.active_theme().radius.xs)
                             .inner_margin(egui::Margin::symmetric(4, 0))
                             .show(ui, |ui| {
                                 ui.label(

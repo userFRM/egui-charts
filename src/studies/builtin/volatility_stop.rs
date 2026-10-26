@@ -29,9 +29,9 @@
 
 use super::clamp_param;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Volatility Stop: a trailing ATR stop that reverses with the trend.
@@ -68,10 +68,7 @@ impl VolatilityStop {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             uptrend: Vec::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.extended.teal,
-                DESIGN_TOKENS.semantic.extended.error,
-            ],
+            colors: [palette::TEAL, palette::RED],
             visible: true,
         }
     }

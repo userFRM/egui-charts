@@ -24,8 +24,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Aroon indicator
@@ -47,8 +47,8 @@ impl Aroon {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            up_color: DESIGN_TOKENS.semantic.extended.success,
-            down_color: DESIGN_TOKENS.semantic.extended.error,
+            up_color: palette::GREEN,
+            down_color: palette::RED,
             visible: true,
         }
     }

@@ -1,7 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Trend Intensity Index (TII), after M. H. Pee (Technical Analysis of Stocks & Commodities, June 2002).
@@ -24,7 +24,7 @@ impl TrendIntensityIndex {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.info, // Indigo/Blue
+            color: palette::BLUE, // Indigo/Blue
             visible: true,
         }
     }
@@ -163,7 +163,7 @@ impl Qstick {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.purple, // Purple
+            color: palette::PURPLE, // Purple
             visible: true,
         }
     }

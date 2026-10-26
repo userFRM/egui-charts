@@ -30,8 +30,8 @@
 //! the original does.
 
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::sync::Arc;
 
@@ -94,7 +94,7 @@ impl CustomIndicator {
             input_calculate_fn: None,
             inputs: Vec::new(),
             values: IndicatorValues::new(),
-            colors: vec![DESIGN_TOKENS.semantic.extended.caution], // Yellow default
+            colors: vec![palette::YELLOW], // Yellow default
             is_overlay: true,
             line_cnt: 1,
             visible: true,

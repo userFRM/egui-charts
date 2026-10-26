@@ -3,7 +3,7 @@
 use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest, StudyFormat};
 use crate::data::MetricSeries;
 use crate::model::Bar;
-use crate::tokens::DESIGN_TOKENS;
+use crate::studies::palette;
 use egui::Color32;
 
 /// A host metric, held by time on the chart's bars and drawn in an independent pane.
@@ -26,7 +26,7 @@ impl MetricStudy {
         Self {
             metric,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.accent,
+            color: palette::ACCENT,
             visible: true,
         }
     }

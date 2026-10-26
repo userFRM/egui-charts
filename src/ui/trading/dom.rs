@@ -738,7 +738,7 @@ impl Ladder {
                 let button = egui::Button::new(l10n::text(ui.ctx(), label))
                     .fill(Color32::TRANSPARENT)
                     .stroke(Stroke::new(1.0, theme.ui.border_control))
-                    .corner_radius(6.0);
+                    .corner_radius(ui.active_theme().radius.md);
                 let size = [ui.available_width(), 32.0];
                 ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, button))
                     .inner
@@ -772,7 +772,7 @@ impl Ladder {
                     egui::RichText::new(l10n::text(ui.ctx(), label)).color(Color32::WHITE),
                 )
                 .fill(side_fill(&theme, side))
-                .corner_radius(6.0);
+                .corner_radius(ui.active_theme().radius.md);
                 let request = order(side, OrderType::Market);
                 let enabled = market.capabilities.market && request.is_ok();
                 let size = [ui.available_width(), 36.0];

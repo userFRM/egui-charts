@@ -2,7 +2,6 @@
 
 use super::tabs::CoordinatesState;
 use crate::drawings::{Drawing, DrawingTemplate, LineStyle, TimeframeVisibility};
-use crate::tokens::DESIGN_TOKENS;
 use crate::widget::Chart;
 use egui::Color32;
 
@@ -85,7 +84,7 @@ impl Default for DrawingProps {
             tool_settings: None,
             coordinates: CoordinatesState::default(),
             save_as_default: false,
-            color: DESIGN_TOKENS.semantic.extended.accent,
+            color: crate::theme::Theme::default().ui.accent,
             line_width: 1.0,
             line_style: DrawingLineStyle::Solid,
             fill_color: None,

@@ -24,9 +24,9 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Stochastic Oscillator indicator
@@ -54,8 +54,8 @@ impl Stochastic {
             k_smooth: k_smooth.max(1),
             d_period: d_period.max(1),
             values: IndicatorValues::new(),
-            k_color: DESIGN_TOKENS.semantic.extended.info, // Blue
-            d_color: DESIGN_TOKENS.semantic.extended.warning, // Orange
+            k_color: palette::BLUE,   // Blue
+            d_color: palette::ORANGE, // Orange
             visible: true,
         }
     }
@@ -193,16 +193,8 @@ impl Indicator for Stochastic {
             height: None,
             range: Some((0.0, 100.0)),
             levels: vec![
-                (
-                    80.0,
-                    crate::tokens::DESIGN_TOKENS.semantic.extended.bearish,
-                    "Overbought",
-                ),
-                (
-                    20.0,
-                    crate::tokens::DESIGN_TOKENS.semantic.extended.bullish,
-                    "Oversold",
-                ),
+                (80.0, palette::DOWN, "Overbought"),
+                (20.0, palette::UP, "Oversold"),
             ],
             fill_between_levels: false,
         }

@@ -28,8 +28,8 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Woodies CCI: CCI 14 columns, CCI Turbo and CCI 14 lines in a separate pane.
@@ -49,13 +49,12 @@ pub struct WoodiesCCI {
 impl WoodiesCCI {
     /// Create the study with the turbo and trading CCI lengths (6 and 14 by convention).
     pub fn new(turbo_length: usize, cci_length: usize) -> Self {
-        let extended = &DESIGN_TOKENS.semantic.extended;
         Self {
             turbo_length: turbo_length.max(1),
             cci_length: cci_length.max(1),
             values: IndicatorValues::new(),
-            colors: vec![extended.success, extended.success, extended.error],
-            down_color: extended.error,
+            colors: vec![palette::GREEN, palette::GREEN, palette::RED],
+            down_color: palette::RED,
             visible: true,
         }
     }
@@ -170,7 +169,7 @@ impl Indicator for WoodiesCCI {
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
-        let gray = DESIGN_TOKENS.semantic.extended.gray;
+        let gray = palette::GRAY;
         crate::studies::StudyPane {
             height: None,
             range: None,
@@ -258,10 +257,7 @@ mod tests {
             .collect();
         let mut study = WoodiesCCI::new(2, 2);
         study.calculate(&bars);
-        let (g, r) = (
-            DESIGN_TOKENS.semantic.extended.success,
-            DESIGN_TOKENS.semantic.extended.error,
-        );
+        let (g, r) = (palette::GREEN, palette::RED);
         let expected = [
             None,
             Some(r),

@@ -8,7 +8,8 @@ use super::{DateRange, SessionType, TimeframeToolbarAction, TimeframeToolbarStat
 use crate::ext::UiExt;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::styles::{icons as icon_sizes, stroke, typography};
+use crate::styles::{icons as icon_sizes, stroke};
+use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::Control;
@@ -74,10 +75,10 @@ impl TimeframeToolbarConfig {
             },
             hover_bg: ui.btn_bg_hover,
             active_bg: ui.btn_bg_active,
-            font_size: typography::LG,
+            font_size: theme.text.bottom_bar,
             panel_height: DESIGN_TOKENS.sizing.toolbar.bottom_height,
-            btn_padding_h: DESIGN_TOKENS.spacing.md,
-            btn_padding_v: DESIGN_TOKENS.spacing.sm,
+            btn_padding_h: theme.spacing.md,
+            btn_padding_v: theme.spacing.sm,
         }
     }
 }
@@ -180,15 +181,15 @@ impl TimeframeToolbar {
                 .map(|range| self.range_btn_width(ui, range.label()))
                 .sum();
             let mut time_text = self.state.formatted_time();
-            let mut reserved = DESIGN_TOKENS.spacing.lg;
+            let mut reserved = ui.active_theme().spacing.lg;
             if !self.hidden.contains(&Control::TimeZone) {
-                reserved += self.text_btn_width(ui, &time_text) + DESIGN_TOKENS.spacing.lg;
+                reserved += self.text_btn_width(ui, &time_text) + ui.active_theme().spacing.lg;
             }
             if !self.hidden.contains(&Control::Session) {
                 reserved += self.text_btn_width(ui, self.state.session_type.label());
             }
             if !self.hidden.contains(&Control::DividendAdjustment) {
-                reserved += 2.0 * DESIGN_TOKENS.spacing.sm
+                reserved += 2.0 * ui.active_theme().spacing.sm
                     + stroke::HAIRLINE
                     + self.text_btn_width(ui, "ADJ");
             }
@@ -325,7 +326,7 @@ impl TimeframeToolbar {
         let font_id = FontId::proportional(self.config.font_size);
 
         let btn_width = self.range_btn_width(ui, text);
-        let btn_height = self.config.panel_height - DESIGN_TOKENS.spacing.sm;
+        let btn_height = self.config.panel_height - ui.active_theme().spacing.sm;
 
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(btn_width, btn_height), Sense::click());
@@ -340,7 +341,7 @@ impl TimeframeToolbar {
         // Draw background on hover/active
         if bg_color != Color32::TRANSPARENT {
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
+                .rect_filled(rect, ui.active_theme().radius.md, bg_color);
         }
 
         // Draw text
@@ -352,7 +353,7 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
         let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &translated_label)
@@ -377,7 +378,7 @@ impl TimeframeToolbar {
 
     fn text_btn(&self, ui: &mut Ui, text: &str, tooltip: &str, is_active: bool) -> Response {
         let font_id = FontId::proportional(self.config.font_size);
-        let btn_height = self.config.panel_height - DESIGN_TOKENS.spacing.sm;
+        let btn_height = self.config.panel_height - ui.active_theme().spacing.sm;
 
         let (rect, response) = ui.allocate_exact_size(
             Vec2::new(self.text_btn_width(ui, text), btn_height),
@@ -396,7 +397,7 @@ impl TimeframeToolbar {
         // Draw background
         if bg_color != Color32::TRANSPARENT {
             ui.painter()
-                .rect_filled(rect, DESIGN_TOKENS.rounding.md, bg_color);
+                .rect_filled(rect, ui.active_theme().radius.md, bg_color);
         }
 
         if is_active {
@@ -416,7 +417,7 @@ impl TimeframeToolbar {
             text_color,
         );
 
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
         let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -435,7 +436,7 @@ impl TimeframeToolbar {
         let icon_size = icon_sizes::LG;
         let btn_size = Vec2::new(
             DESIGN_TOKENS.sizing.button_md,
-            self.config.panel_height - DESIGN_TOKENS.spacing.sm,
+            self.config.panel_height - ui.active_theme().spacing.sm,
         );
         let (rect, response) = ui.allocate_exact_size(btn_size, Sense::click());
 
@@ -443,7 +444,7 @@ impl TimeframeToolbar {
         if self.state.date_picker_open || response.hovered() {
             ui.painter().rect_filled(
                 rect,
-                DESIGN_TOKENS.rounding.md,
+                ui.active_theme().radius.md,
                 if self.state.date_picker_open {
                     self.config.active_bg
                 } else {
@@ -467,7 +468,7 @@ impl TimeframeToolbar {
             .as_image_tinted(Vec2::splat(icon_size), icon_color)
             .paint_at(ui, icon_rect);
 
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
         let translated_label = l10n::text(ui.ctx(), tooltip);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -635,7 +636,7 @@ mod tests {
                     toolbar.state.formatted_time()
                 };
                 // The clock also has a trailing gap when it is the last control.
-                let padding = DESIGN_TOKENS.spacing.lg
+                let padding = crate::theme::Theme::default().spacing.lg
                     * if toolbar.hidden.contains(&Control::Session)
                         && toolbar.hidden.contains(&Control::DividendAdjustment)
                     {

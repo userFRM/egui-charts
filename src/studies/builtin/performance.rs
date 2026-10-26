@@ -8,8 +8,8 @@
 
 use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyFormat, StudyTable};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{Datelike, Days, Months, NaiveDate};
 use egui::Color32;
 
@@ -36,7 +36,7 @@ impl Performance {
                 columns: vec!["Period".into(), "Change".into()],
                 rows: Vec::new(),
             },
-            colors: [DESIGN_TOKENS.semantic.extended.info; 6],
+            colors: [palette::BLUE; 6],
             visible: true,
         }
     }

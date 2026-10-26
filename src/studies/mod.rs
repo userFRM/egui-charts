@@ -66,6 +66,7 @@ mod format;
 pub mod helpers;
 mod indicator_trait;
 mod order_flow;
+pub mod palette;
 pub use format::{StudyFormat, StudyScale};
 pub use order_flow::{OrderFlowInput, OrderFlowKind};
 mod inputs;

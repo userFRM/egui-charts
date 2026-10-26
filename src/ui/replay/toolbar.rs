@@ -133,7 +133,7 @@ impl<'a> ReplayToolbar<'a> {
     pub fn show(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
         let action = ui
             .horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = DESIGN_TOKENS.spacing.sm;
+                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.sm;
 
                 let mut action = None;
 
@@ -336,13 +336,13 @@ impl<'a> ReplayToolbar<'a> {
                 let (bg, fg) = (theme.chart.bg, theme.ui.accent);
 
                 // Background
-                painter.rect_filled(rect, DESIGN_TOKENS.rounding.xs, bg);
+                painter.rect_filled(rect, ui.active_theme().radius.xs, bg);
 
                 // Progress fill
                 let fill_width = rect.width() * pct;
                 let fill_rect =
                     egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
-                painter.rect_filled(fill_rect, DESIGN_TOKENS.rounding.xs, fg);
+                painter.rect_filled(fill_rect, ui.active_theme().radius.xs, fg);
             }
 
             // Beside the bar, never over the fill.

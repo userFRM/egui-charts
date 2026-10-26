@@ -36,9 +36,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::rolling_max;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Whether each value is a pivot: at least each of the `left` values before it and above each
@@ -90,8 +90,8 @@ impl PivotPointsHighLow {
             low_left: low_left.max(1),
             low_right: low_right.max(1),
             values: IndicatorValues::new(),
-            high_color: DESIGN_TOKENS.semantic.extended.text_secondary,
-            low_color: DESIGN_TOKENS.semantic.extended.text_secondary,
+            high_color: palette::MUTED,
+            low_color: palette::MUTED,
             visible: true,
         }
     }

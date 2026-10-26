@@ -6,7 +6,6 @@ use crate::data::inbox::Inbox;
 use crate::localization as l10n;
 use crate::services::{Storage, StoreKind};
 use crate::theme::ThemeExt;
-use crate::tokens::DESIGN_TOKENS;
 use crate::widget::SavedLayout;
 use egui::Ui;
 use std::collections::VecDeque;
@@ -367,7 +366,7 @@ impl LayoutMenu {
         if button.hovered() {
             ui.painter().rect_filled(
                 rect,
-                DESIGN_TOKENS.rounding.button,
+                ui.active_theme().radius.sm,
                 ui.visuals().widgets.hovered.bg_fill,
             );
         }
@@ -397,7 +396,7 @@ impl LayoutMenu {
         button.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &translated_label)
         });
-        crate::styles::focus::draw_focus_ring(ui, &button, DESIGN_TOKENS.rounding.button);
+        crate::styles::focus::draw_focus_ring(ui, &button, ui.active_theme().radius.sm);
         egui::Popup::menu(&button)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {

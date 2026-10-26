@@ -34,8 +34,8 @@
 
 use crate::model::session::local_time;
 use crate::model::{Bar, BarClock, TimezoneId};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{NaiveTime, Timelike};
 use egui::Color32;
 
@@ -83,9 +83,9 @@ impl TradingSessions {
             daily: false,
             values: IndicatorValues::new(),
             colors: [
-                tint(DESIGN_TOKENS.semantic.extended.info),
-                tint(DESIGN_TOKENS.semantic.extended.deep_orange),
-                tint(DESIGN_TOKENS.semantic.extended.success),
+                tint(palette::BLUE),
+                tint(palette::DEEP_ORANGE),
+                tint(palette::GREEN),
             ],
             visible: true,
         }

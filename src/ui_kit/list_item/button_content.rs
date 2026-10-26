@@ -210,7 +210,7 @@ impl<'a> ListItemContent for ButtonContent<'a> {
             // The fill covers the whole row, like the list item's own hover fill.
             if bg_color != Color32::TRANSPARENT {
                 ui.painter()
-                    .rect_filled(response.rect, DESIGN_TOKENS.rounding.sm, bg_color);
+                    .rect_filled(response.rect, ui.active_theme().radius.sm, bg_color);
             }
 
             let content_rect = context.rect;
@@ -227,7 +227,7 @@ impl<'a> ListItemContent for ButtonContent<'a> {
             // Draw label if present
             if let Some(label) = &self.label {
                 let text_pos = egui::pos2(
-                    content_rect.min.x + self.icon_size + DESIGN_TOKENS.spacing.sm,
+                    content_rect.min.x + self.icon_size + ui.active_theme().spacing.sm,
                     content_rect.center().y,
                 );
 

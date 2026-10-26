@@ -361,7 +361,7 @@ impl Trading {
             ui.set_height(TAB_HEIGHT);
             let tab = egui::Frame::new()
                 .fill(theme.ui.panel_bg)
-                .corner_radius(4)
+                .corner_radius(ui.active_theme().radius.sm)
                 .inner_margin(egui::Margin::symmetric(10, 4));
             tab.show(ui, |ui| {
                 ui.add(icons::CANDLESTICK.as_image_tinted(vec2(20.0, 20.0), theme.ui.text));
@@ -370,7 +370,10 @@ impl Trading {
                         .color(theme.ui.text),
                 );
                 if ui
-                    .add(egui::Button::new(l10n::text(ui.ctx(), "Trade")).corner_radius(4))
+                    .add(
+                        egui::Button::new(l10n::text(ui.ctx(), "Trade"))
+                            .corner_radius(ui.active_theme().radius.sm),
+                    )
                     .on_hover_text(l10n::text(ui.ctx(), "Open the order ticket"))
                     .clicked()
                 {

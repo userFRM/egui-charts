@@ -25,8 +25,8 @@
 use super::clamp_param;
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Keltner Channels indicator
@@ -55,9 +55,9 @@ impl KeltnerChannels {
             atr_period: atr_period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            upper_color: DESIGN_TOKENS.semantic.extended.pink, // Pink
-            middle_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
-            lower_color: DESIGN_TOKENS.semantic.extended.pink, // Pink
+            upper_color: palette::PINK,    // Pink
+            middle_color: palette::PURPLE, // Purple
+            lower_color: palette::PINK,    // Pink
             visible: true,
         }
     }

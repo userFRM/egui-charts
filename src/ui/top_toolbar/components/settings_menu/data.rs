@@ -2,7 +2,6 @@
 
 use super::types::{BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode};
 use crate::chart::PnlUnit;
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 // ============================================================================
@@ -23,12 +22,12 @@ pub struct CandleColorConfig {
 impl Default for CandleColorConfig {
     fn default() -> Self {
         Self {
-            body_up: DESIGN_TOKENS.semantic.extended.bullish,
-            body_down: DESIGN_TOKENS.semantic.extended.bearish,
-            border_up: DESIGN_TOKENS.semantic.extended.bullish,
-            border_down: DESIGN_TOKENS.semantic.extended.bearish,
-            wick_up: DESIGN_TOKENS.semantic.extended.bullish,
-            wick_down: DESIGN_TOKENS.semantic.extended.bearish,
+            body_up: crate::theme::Theme::default().chart.candle_up,
+            body_down: crate::theme::Theme::default().chart.candle_down,
+            border_up: crate::theme::Theme::default().chart.candle_up,
+            border_down: crate::theme::Theme::default().chart.candle_down,
+            wick_up: crate::theme::Theme::default().chart.candle_up,
+            wick_down: crate::theme::Theme::default().chart.candle_down,
         }
     }
 }
@@ -103,8 +102,8 @@ impl Default for GridLinesSettings {
     fn default() -> Self {
         Self {
             mode: GridLinesMode::Both,
-            horizontal_color: DESIGN_TOKENS.semantic.chart.grid_line,
-            vertical_color: DESIGN_TOKENS.semantic.chart.grid_line,
+            horizontal_color: crate::theme::Theme::default().chart.grid_line,
+            vertical_color: crate::theme::Theme::default().chart.grid_line,
         }
     }
 }
@@ -120,7 +119,7 @@ pub struct CrosshairSettings {
 impl Default for CrosshairSettings {
     fn default() -> Self {
         Self {
-            color: DESIGN_TOKENS.semantic.extended.chart_text_secondary,
+            color: crate::theme::Theme::default().chart.axis_text_secondary,
             line_width: 1.0,
             line_style: LineStyle::Dashed,
         }
@@ -171,10 +170,9 @@ impl Default for WatermarkSettings {
     fn default() -> Self {
         Self {
             mode: WatermarkMode::ReplayMode,
-            color: DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_text_muted
+            color: crate::theme::Theme::default()
+                .ui
+                .text_muted
                 .gamma_multiply(0.2), // ~20% opacity
         }
     }
@@ -191,7 +189,7 @@ pub struct ScalesAppearanceSettings {
 impl Default for ScalesAppearanceSettings {
     fn default() -> Self {
         Self {
-            text_color: DESIGN_TOKENS.semantic.extended.text_secondary,
+            text_color: crate::theme::Theme::default().ui.text_secondary,
             font_size: 12,
             lines_color: Color32::TRANSPARENT,
         }
@@ -373,7 +371,7 @@ impl Default for AlertsSettings {
         Self {
             show_alerts: true,
             show_alert_labels: true,
-            alert_color: DESIGN_TOKENS.semantic.indicators.ma, // Orange
+            alert_color: crate::studies::palette::ORANGE, // Orange
         }
     }
 }

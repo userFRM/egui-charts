@@ -17,7 +17,7 @@ use egui::Color32;
 /// indicators, drawing tools, alerts, modals, etc.
 #[derive(Clone, Debug)]
 pub struct SemanticTokens {
-    /// UI chrome colors (panels, buttons, text, borders) with light/dark variants.
+    /// Neutral engine fallback; UI chrome reads the applied theme.
     pub ui: UiSemanticTokens,
     /// Chart area colors (background, grid, candles, crosshair, volume).
     pub chart: ChartSemanticTokens,
@@ -27,50 +27,19 @@ pub struct SemanticTokens {
     pub footprint: FootprintSemanticTokens,
     pub indicators: IndicatorSemanticTokens,
     pub drawings: DrawingSemanticTokens,
-    /// Button variant colors.
-    pub buttons: ButtonSemanticTokens,
     /// Extended flat-access colors - replaces old theme::ui, theme::chart modules
     pub extended: ExtendedSemanticTokens,
-    /// Alert component colors
-    pub alert: AlertSemanticTokens,
-    /// Modal component colors
-    pub modal: ModalSemanticTokens,
-    /// Command palette colors
-    pub command_palette: CommandPaletteSemanticTokens,
     /// TPO (Market Profile) chart colors
     pub tpo: TpoSemanticTokens,
 }
 
-/// UI chrome colors for component defaults and fallbacks.
-///
-/// Theme presets own their complete palettes; these tokens retain only the
-/// panel, text, button, icon, border and accent values read by components.
+/// Neutral fallback still used by volume bubbles. UI chrome reads the applied theme.
 #[derive(Clone, Debug)]
 pub struct UiSemanticTokens {
-    pub panel_bg_light: Color32,
-    pub panel_bg_secondary_light: Color32,
-    pub text_light: Color32,
-    pub text_secondary_light: Color32,
-    pub text_muted_light: Color32,
-    pub border_light: Color32,
-    pub border_subtle_light: Color32,
+    /// Neutral default retained for engine volume bubbles.
     pub text_muted_dark: Color32,
+    /// Tooltip outline fallback when no theme has been applied.
     pub border_dark: Color32,
-    pub icon_light: Color32,
-    pub icon_hover_light: Color32,
-    pub icon_dark: Color32,
-    pub icon_hover_dark: Color32,
-    pub icon_active: Color32,
-    pub btn_bg_light: Color32,
-    pub btn_bg_hover_light: Color32,
-    pub btn_bg_active_light: Color32,
-    pub accent: Color32,
-    pub accent_hover: Color32,
-    pub success_light: Color32,
-    pub warning_light: Color32,
-    pub info_light: Color32,
-    pub success_dark: Color32,
-    pub error_dark: Color32,
 }
 
 /// Chart area color tokens for default and fallback rendering.
@@ -188,29 +157,6 @@ pub struct DrawingSemanticTokens {
     pub fib_100: Color32,
 }
 
-/// Button variant colors for primary, secondary and danger buttons.
-///
-/// Background and foreground defaults, with hover and active colors for danger buttons.
-#[derive(Clone, Debug)]
-pub struct ButtonSemanticTokens {
-    /// Primary button background (high emphasis, accent-colored).
-    pub primary_bg: Color32,
-    /// Primary button foreground (text/icon, typically inverse of background).
-    pub primary_fg: Color32,
-    /// Secondary button background (medium emphasis).
-    pub secondary_bg: Color32,
-    /// Secondary button foreground.
-    pub secondary_fg: Color32,
-    /// Danger button background (destructive actions).
-    pub danger_bg: Color32,
-    /// Danger button background when hovered.
-    pub danger_bg_hover: Color32,
-    /// Danger button background when pressed.
-    pub danger_bg_active: Color32,
-    /// Danger button foreground.
-    pub danger_fg: Color32,
-}
-
 /// Extended semantic tokens providing flat access to commonly used colors.
 ///
 /// This is a convenience collection that gathers the most frequently accessed
@@ -295,51 +241,4 @@ pub struct ExtendedSemanticTokens {
     pub bullish: Color32,
     /// Bearish (down) trading color.
     pub bearish: Color32,
-}
-
-/// Colors for inline alert/banner components (info, success, warning, error).
-#[derive(Clone, Debug)]
-pub struct AlertSemanticTokens {
-    /// Info alert background.
-    pub info_bg: Color32,
-    /// Info alert border.
-    pub info_border: Color32,
-    /// Info alert icon color.
-    pub info_icon: Color32,
-    /// Success alert background.
-    pub success_bg: Color32,
-    /// Success alert border.
-    pub success_border: Color32,
-    /// Success alert icon color.
-    pub success_icon: Color32,
-    /// Warning alert background.
-    pub warning_bg: Color32,
-    /// Warning alert border.
-    pub warning_border: Color32,
-    /// Warning alert icon color.
-    pub warning_icon: Color32,
-    /// Error alert background.
-    pub error_bg: Color32,
-    /// Error alert border.
-    pub error_border: Color32,
-    /// Error alert icon color.
-    pub error_icon: Color32,
-}
-
-/// Colors for modal dialog overlays.
-#[derive(Clone, Debug)]
-pub struct ModalSemanticTokens {
-    /// Semi-transparent backdrop overlay behind the modal.
-    pub overlay_bg: Color32,
-}
-
-/// Colors for the command palette (Ctrl+K / Cmd+K) popup.
-#[derive(Clone, Debug)]
-pub struct CommandPaletteSemanticTokens {
-    /// Result item background when hovered.
-    pub item_hover: Color32,
-    /// Result item background when selected (keyboard navigation).
-    pub item_selected: Color32,
-    /// Keyboard shortcut text color.
-    pub shortcut_text: Color32,
 }

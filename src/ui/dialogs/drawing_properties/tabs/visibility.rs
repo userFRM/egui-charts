@@ -1,10 +1,10 @@
 //! Visibility tab - timeframe visibility settings.
 
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use egui::Ui;
 
 use crate::ext::UiExt;
-use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
 
@@ -32,7 +32,7 @@ impl VisibilityTab {
 
             FormGrid::new("timeframes_grid")
                 .columns(3)
-                .spacing(DESIGN_TOKENS.spacing.lg, DESIGN_TOKENS.spacing.sm)
+                .spacing(ui.active_theme().spacing.lg, ui.active_theme().spacing.sm)
                 .show(ui, |ui| {
                     for (i, tf) in TIMEFRAMES.iter().enumerate() {
                         let mut is_visible = props.visible_timeframes.contains(&tf.to_string());

@@ -8,7 +8,7 @@ use crate::config::ChartConfig;
 use crate::ext::UiExt;
 use crate::localization as l10n;
 use crate::model::ChartType;
-use crate::styles::typography;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Context, Id, Pos2, Rect, Response, Ui};
 
@@ -84,7 +84,7 @@ impl SettingsMenu {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &translated_label)
         });
-        crate::styles::focus::draw_focus_ring(ui, &response, DESIGN_TOKENS.rounding.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
 
         let visuals = ui.style().interact(&response);
         let bg_color = if response.hovered() {
@@ -94,12 +94,12 @@ impl SettingsMenu {
         };
 
         ui.painter()
-            .rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, bg_color);
+            .rect_filled(btn_rect, ui.active_theme().radius.md, bg_color);
         ui.painter().text(
             btn_rect.center(),
             Align2::CENTER_CENTER,
             l10n::text(ui.ctx(), "S"),
-            egui::FontId::proportional(typography::TITLE),
+            egui::FontId::proportional(ui.active_theme().text.dialog_title),
             visuals.text_color(),
         );
 

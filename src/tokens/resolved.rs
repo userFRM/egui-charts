@@ -1,9 +1,7 @@
 //! The root [`DesignTokens`] struct and its spacing scale.
 
 use super::semantic::SemanticTokens;
-use super::sizing::{
-    LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens, TypographyTokens,
-};
+use super::sizing::{LayoutTokens, RoundingTokens, ShadowTokens, SizingTokens, StrokeTokens};
 
 /// The root design tokens structure -- single source of truth for all styling primitives.
 ///
@@ -16,7 +14,6 @@ pub struct DesignTokens {
     pub spacing: SpacingTokens,
     pub sizing: SizingTokens,
     pub rounding: RoundingTokens,
-    pub typography: TypographyTokens,
     pub stroke: StrokeTokens,
     pub shadow: ShadowTokens,
     pub layout: LayoutTokens,

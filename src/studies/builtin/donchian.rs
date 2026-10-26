@@ -24,9 +24,9 @@
 
 use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Donchian Channels indicator
@@ -49,9 +49,9 @@ impl DonchianChannels {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
-            upper_color: DESIGN_TOKENS.semantic.extended.info, // Blue
-            middle_color: DESIGN_TOKENS.semantic.extended.purple, // Purple
-            lower_color: DESIGN_TOKENS.semantic.extended.info, // Blue
+            upper_color: palette::BLUE,    // Blue
+            middle_color: palette::PURPLE, // Purple
+            lower_color: palette::BLUE,    // Blue
             visible: true,
         }
     }

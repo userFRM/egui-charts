@@ -1,8 +1,8 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Signal state for Elder Impulse
@@ -46,9 +46,9 @@ impl ElderImpulseSystem {
             macd_signal: macd_signal.max(1),
             values: IndicatorValues::new(),
             colors: vec![
-                DESIGN_TOKENS.semantic.extended.success, // Green - Bullish
-                DESIGN_TOKENS.semantic.extended.error,   // Red - Bearish
-                DESIGN_TOKENS.semantic.extended.info,    // Blue - Neutral
+                palette::GREEN, // Green - Bullish
+                palette::RED,   // Red - Bearish
+                palette::BLUE,  // Blue - Neutral
             ],
             visible: true,
         }

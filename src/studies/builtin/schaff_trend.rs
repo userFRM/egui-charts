@@ -1,9 +1,9 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::stepper::{rolling_max, rolling_min};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Schaff Trend Cycle (STC)
@@ -30,7 +30,7 @@ impl SchaffTrendCycle {
             macd_long: 50,
             cycle: 10,
             values: IndicatorValues::new(),
-            color: DESIGN_TOKENS.semantic.extended.cyan,
+            color: palette::CYAN,
             visible: true,
         }
     }

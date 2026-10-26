@@ -37,9 +37,9 @@
 
 use super::clamp_param;
 use crate::model::{Bar, Session, SessionWindow, Timeframe, TimezoneId};
+use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Offset, TimeZone, Utc};
 use egui::Color32;
 
@@ -156,7 +156,7 @@ impl VolumeWeightedAvgPrice {
             shared: None,
             daily: true,
             timeframe: None,
-            colors: vec![DESIGN_TOKENS.semantic.extended.favorite_gold], // Amber
+            colors: vec![palette::GOLD], // Amber
             visible: true,
             anchor: VwapAnchor::Session,
             time_zone: TimezoneId::utc(),

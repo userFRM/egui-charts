@@ -43,8 +43,8 @@
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::over_finite_bars;
 use crate::model::{Bar, Instrument, Timeframe};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// The level formulas used by [`PivotPoints`].
@@ -111,20 +111,19 @@ pub struct PivotPoints {
 impl PivotPoints {
     /// Traditional pivots, timeframe Auto, for the last 15 periods.
     pub fn new() -> Self {
-        let t = &DESIGN_TOKENS.semantic.extended;
         // Pivot amber, resistances red and supports green, darker further out.
         let colors = vec![
-            t.favorite_gold,
-            t.error,
-            t.success,
-            t.error_dark,
-            t.success_dark,
-            t.error_darker,
-            t.success_darker,
-            t.error_darker,
-            t.success_darker,
-            t.error_darker,
-            t.success_darker,
+            palette::GOLD,
+            palette::RED,
+            palette::GREEN,
+            palette::DARK_RED,
+            palette::DARK_GREEN,
+            palette::DEEP_RED,
+            palette::DEEP_GREEN,
+            palette::DEEP_RED,
+            palette::DEEP_GREEN,
+            palette::DEEP_RED,
+            palette::DEEP_GREEN,
         ];
         Self {
             method: PivotMethod::Traditional,

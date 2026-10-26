@@ -89,8 +89,8 @@
 
 use crate::model::Bar;
 use crate::studies::helpers;
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// How [`CandlestickPatterns`] decides whether a bar is in a downtrend or an uptrend.
@@ -571,11 +571,7 @@ impl CandlestickPatterns {
             patterns: [true; PATTERNS.len()],
             found: Vec::new(),
             values: IndicatorValues::new(),
-            colors: [
-                DESIGN_TOKENS.semantic.extended.info,
-                DESIGN_TOKENS.semantic.extended.error,
-                DESIGN_TOKENS.semantic.extended.gray,
-            ],
+            colors: [palette::BLUE, palette::RED, palette::GRAY],
             visible: true,
         }
     }

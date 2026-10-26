@@ -41,6 +41,7 @@
 //! # });
 //! ```
 
+use crate::theme::ThemeExt;
 mod button_content;
 mod content;
 mod label_content;
@@ -98,12 +99,12 @@ impl ListItem {
             // Draw background
             if bg_color != Color32::TRANSPARENT {
                 ui.painter()
-                    .rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg_color);
+                    .rect_filled(rect, ui.active_theme().radius.sm, bg_color);
             }
 
             // Create content context
             let content_context = ContentContext {
-                rect: rect.shrink2(Vec2::new(DESIGN_TOKENS.spacing.lg, 0.0)),
+                rect: rect.shrink2(Vec2::new(ui.active_theme().spacing.lg, 0.0)),
                 bg_color,
                 selected: self.selected,
                 hovered: response.hovered(),
@@ -131,8 +132,8 @@ impl ListItem {
             ui,
             &response
                 .clone()
-                .with_new_rect(rect.shrink(DESIGN_TOKENS.spacing.xs)),
-            DESIGN_TOKENS.rounding.sm - DESIGN_TOKENS.spacing.xs,
+                .with_new_rect(rect.shrink(ui.active_theme().spacing.xs)),
+            ui.active_theme().radius.sm - ui.active_theme().spacing.xs,
         );
 
         // Handle selection on click

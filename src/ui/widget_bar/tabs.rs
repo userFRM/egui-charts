@@ -4,7 +4,8 @@
 
 use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
-use crate::styles::{icons, stroke, typography};
+use crate::styles::{icons, stroke};
+use crate::theme::ThemeExt;
 use crate::theme::{Theme, follow_active_theme, theme_derived};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -173,13 +174,13 @@ impl RightPanelTabs {
             Stroke::new(stroke::HAIRLINE, self.config.border_color),
         );
 
-        let mut y = rect.min.y + DESIGN_TOKENS.spacing.lg;
+        let mut y = rect.min.y + ui.active_theme().spacing.lg;
 
         // Draw each tab button
         for tab in &self.available_tabs {
             let is_active = *tab == self.active_tab;
             let btn_rect = Rect::from_min_size(
-                Pos2::new(rect.min.x + DESIGN_TOKENS.spacing.sm, y),
+                Pos2::new(rect.min.x + ui.active_theme().spacing.sm, y),
                 Vec2::new(self.config.tab_button_size, self.config.tab_button_size),
             );
 
@@ -191,7 +192,7 @@ impl RightPanelTabs {
             });
             ui.ctx()
                 .accesskit_node_builder(btn_res.id, |node| node.set_selected(is_active));
-            crate::styles::focus::draw_focus_ring(ui, &btn_res, DESIGN_TOKENS.rounding.md);
+            crate::styles::focus::draw_focus_ring(ui, &btn_res, ui.active_theme().radius.md);
             let is_hovered = btn_res.hovered();
             let is_pressed = btn_res.is_pointer_button_down_on();
 
@@ -199,7 +200,7 @@ impl RightPanelTabs {
             if is_active {
                 painter.rect_filled(
                     btn_rect,
-                    DESIGN_TOKENS.rounding.md,
+                    ui.active_theme().radius.md,
                     self.config.active_tab_bg,
                 );
                 // Active indicator on left edge
@@ -215,9 +216,13 @@ impl RightPanelTabs {
                     self.config.active_icon_color,
                 );
             } else if is_pressed {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.config.pressed_bg);
+                painter.rect_filled(
+                    btn_rect,
+                    ui.active_theme().radius.md,
+                    self.config.pressed_bg,
+                );
             } else if is_hovered {
-                painter.rect_filled(btn_rect, DESIGN_TOKENS.rounding.md, self.config.hover_bg);
+                painter.rect_filled(btn_rect, ui.active_theme().radius.md, self.config.hover_bg);
             }
 
             // Draw icon
@@ -245,7 +250,7 @@ impl RightPanelTabs {
                 btn_res.on_hover_text(l10n::text(ui.ctx(), tab.label()));
             }
 
-            y += self.config.tab_button_size + DESIGN_TOKENS.spacing.sm;
+            y += self.config.tab_button_size + ui.active_theme().spacing.sm;
         }
 
         action
@@ -274,12 +279,12 @@ impl RightPanelTabs {
         // Tab title
         let title_galley = painter.layout_no_wrap(
             l10n::text(ui.ctx(), self.active_tab.label()),
-            egui::FontId::proportional(typography::SM),
+            egui::FontId::proportional(ui.active_theme().text.small),
             ui.visuals().text_color(),
         );
         painter.galley(
             Pos2::new(
-                rect.min.x + DESIGN_TOKENS.spacing.xl,
+                rect.min.x + ui.active_theme().spacing.xl,
                 rect.center().y - title_galley.size().y / 2.0,
             ),
             title_galley,

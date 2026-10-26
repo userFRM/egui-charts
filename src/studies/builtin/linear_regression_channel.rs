@@ -1,8 +1,8 @@
 use super::clamp_param;
 use crate::model::{Bar, PriceSource};
 use crate::studies::math::{LinearFit, Moments};
+use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
-use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use std::borrow::Cow;
 
@@ -33,11 +33,7 @@ impl LinearRegressionChannel {
             period: period.max(2),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
-            colors: vec![
-                DESIGN_TOKENS.semantic.indicators.bb_upper,
-                DESIGN_TOKENS.semantic.indicators.bb_middle,
-                DESIGN_TOKENS.semantic.indicators.bb_lower,
-            ],
+            colors: vec![palette::ACCENT, palette::BB_MIDDLE, palette::ACCENT],
             visible: true,
             source: PriceSource::Close,
             extend: false,
