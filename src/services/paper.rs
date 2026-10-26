@@ -224,20 +224,29 @@ impl State {
                 modify: true,
             },
         );
-        let open: f64 = self
-            .positions
-            .values()
-            .filter_map(|p| p.unrealized_pnl)
-            .sum();
-        let margin: f64 = self.positions.values().filter_map(|p| p.margin).sum();
+        let (equity, margin) = self.equity_and_margin(terms);
         let (orders_margin, commissions) = self.reservations(terms, None);
-        let equity = self.balance + open;
         account.equity = Some(equity);
         account.realized_pnl = Some(self.balance - terms.initial);
         account.margin = Some(margin);
         account.orders_margin = Some(orders_margin);
         account.available_funds = Some(equity - margin - orders_margin - commissions);
         AccountEvent::Account(account)
+    }
+
+    fn equity_and_margin(&self, terms: &PaperAccount) -> (f64, f64) {
+        let mut equity = self.balance;
+        let mut margin = 0.0;
+        for position in self.positions.values() {
+            let price = self
+                .last
+                .get(&position.symbol)
+                .copied()
+                .unwrap_or(position.average_price);
+            equity += (price - position.average_price) * position.quantity;
+            margin += position.quantity.abs() * price.abs() / terms.leverage;
+        }
+        (equity, margin)
     }
 
     fn reservations(&self, terms: &PaperAccount, replacing: Option<&OrderId>) -> (f64, f64) {
@@ -296,17 +305,7 @@ impl State {
         if immediate && after.abs() < held.abs() {
             return Ok(());
         }
-        let mut equity = self.balance;
-        let mut margin = 0.0;
-        for position in self.positions.values() {
-            let price = self
-                .last
-                .get(&position.symbol)
-                .copied()
-                .unwrap_or(position.average_price);
-            equity += (price - position.average_price) * position.quantity;
-            margin += position.quantity.abs() * price.abs() / terms.leverage;
-        }
+        let (equity, mut margin) = self.equity_and_margin(terms);
         let price = match request.order_type {
             _ if immediate => last,
             OrderType::Market => last,
@@ -1154,6 +1153,31 @@ mod tests {
         .unwrap();
         assert_eq!(paper.lock().positions["A"].quantity, 11.0);
         assert_eq!(paper.lock().positions["A"].average_price, 90.0);
+
+        // Rejections during matching must report equity and margin at the new mark too.
+        let paper = PaperAccount::new("USD", 1_000.0);
+        paper.set_price("A", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("A", OrderSide::Buy, 5.0, OrderType::Market),
+        )
+        .unwrap();
+        place(
+            &paper,
+            OrderRequest::new("A", OrderSide::Buy, 4.0, OrderType::Stop(110.0)),
+        )
+        .unwrap();
+        let inbox = Arc::new(Inbox::default());
+        let (_listener, events) = Listener::new(&inbox, 2);
+        paper.connect(events);
+        inbox.drain();
+        paper.set_price("A", 200.0);
+        for (_, event) in inbox.drain().answers {
+            if let AccountEvent::Account(account) = *event.downcast::<AccountEvent>().unwrap() {
+                assert_eq!(account.equity, Some(1_500.0));
+                assert_eq!(account.margin, Some(1_000.0));
+            }
+        }
     }
 
     #[test]
