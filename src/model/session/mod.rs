@@ -19,36 +19,8 @@ mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
 
-use crate::model::{Bar, TimezoneId};
-use chrono::{
-    DateTime, Datelike, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
-    Weekday,
-};
-
-/// Local fields, falling back to UTC only beyond the representable date range.
-pub(crate) fn local_time<T: TimeZone>(zone: T, time: DateTime<Utc>) -> NaiveDateTime {
-    time.naive_utc()
-        .checked_add_offset(zone.offset_from_utc_datetime(&time.naive_utc()).fix())
-        .unwrap_or(time.naive_utc())
-}
-
-/// The first instant of a repeated wall time; a skipped time opens at the clock jump.
-pub(crate) fn local_instant<T: TimeZone>(
-    zone: T,
-    mut local: NaiveDateTime,
-) -> Option<DateTime<Utc>> {
-    if let Some(time) = zone.from_local_datetime(&local).earliest() {
-        return Some(time.to_utc());
-    }
-    local = local.with_nanosecond(0)?;
-    for _ in 0..=24 * 60 * 60 {
-        local = local.checked_add_signed(Duration::seconds(1))?;
-        if let Some(time) = zone.from_local_datetime(&local).earliest() {
-            return Some(time.to_utc());
-        }
-    }
-    None
-}
+use crate::model::{Bar, TimezoneId, local_instant, local_time};
+use chrono::{DateTime, Datelike, Duration, NaiveTime, Utc, Weekday};
 
 /// Trait for defining trading session boundaries.
 ///
