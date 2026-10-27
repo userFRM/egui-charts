@@ -67,6 +67,8 @@ pub enum ObjectTreeAction {
     MoveUp(usize),
     /// Move object down one level
     MoveDown(usize),
+    /// Move a drawing to a pane
+    MoveToPane(usize, crate::widget::PaneId),
 
     // === Navigation ===
     /// Zoom to object on chart (focus view)
@@ -117,6 +119,7 @@ impl ObjectTreeAction {
                 | Self::SendToBack(_)
                 | Self::MoveUp(_)
                 | Self::MoveDown(_)
+                | Self::MoveToPane(_, _)
                 | Self::RemoveIndicator(_)
                 | Self::RemoveAllDrawings
                 | Self::RemoveAllIndicators

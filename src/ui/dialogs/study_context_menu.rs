@@ -92,6 +92,30 @@ pub enum PaneTarget {
     Main,
 }
 
+/// The panes of `chart` other than the price pane and `current`, by their stable ids, with
+/// titles naming their first series or study.
+pub(crate) fn other_panes(chart: &Chart, current: Option<PaneId>) -> Vec<(PaneId, String)> {
+    chart
+        .panes()
+        .into_iter()
+        .filter(|other| *other != PaneId::MAIN && Some(*other) != current)
+        .map(|other| {
+            let title = chart.pane_series(other).first().map_or("empty", |member| {
+                chart.indicators().find(|(id, _)| id == member).map_or_else(
+                    || {
+                        chart
+                            .series()
+                            .find(|(id, _)| id == member)
+                            .map_or("Series", |(_, options)| options.name.as_str())
+                    },
+                    |(_, study)| study.name(),
+                )
+            });
+            (other, format!("{title} pane"))
+        })
+        .collect()
+}
+
 /// The study context menu of [`ChartMenus`](crate::ui::context_menu::ChartMenus), with the
 /// study's state taken when it opened.
 #[derive(Default)]
@@ -175,26 +199,7 @@ impl StudyContextMenu {
         } else {
             "left"
         };
-        let pane = chart.series_pane(id);
-        self.panes = chart
-            .panes()
-            .into_iter()
-            .filter(|other| *other != PaneId::MAIN && Some(*other) != pane)
-            .map(|other| {
-                let title = chart.pane_series(other).first().map_or("empty", |member| {
-                    chart.indicators().find(|(id, _)| id == member).map_or_else(
-                        || {
-                            chart
-                                .series()
-                                .find(|(id, _)| id == member)
-                                .map_or("Series", |(_, options)| options.name.as_str())
-                        },
-                        |(_, study)| study.name(),
-                    )
-                });
-                (other, format!("{title} pane"))
-            })
-            .collect();
+        self.panes = other_panes(chart, chart.series_pane(id));
         self.has_interval = chart.timeframe().is_some();
     }
 

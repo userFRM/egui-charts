@@ -182,6 +182,14 @@ impl AlertsPanel {
             }
             AlertEvent::Remove(id) => self.alerts.retain(|a| a.id.as_ref() != Some(&id)),
             AlertEvent::Clear => self.alerts.clear(),
+            AlertEvent::TriggeredForSymbol {
+                id,
+                symbol,
+                time,
+                price,
+            } => {
+                self.record_trigger(id, symbol, time, price, toasts);
+            }
             AlertEvent::Triggered { id, time, price } => {
                 let symbol = self
                     .alerts
@@ -189,22 +197,33 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                toasts.info(format!(
-                    "Alert triggered: {}",
-                    if symbol.is_empty() { &id.0 } else { &symbol }
-                ));
-                let extra = toasts.len().saturating_sub(5);
-                toasts.toasts_mut().drain(..extra);
-                self.log.push_back(AlertTrigger {
-                    id,
-                    symbol,
-                    time,
-                    price: price.filter(|p| p.is_finite()),
-                });
-                if self.log.len() > 10_000 {
-                    self.log.pop_front();
-                }
+                self.record_trigger(id, symbol, time, price, toasts);
             }
+        }
+    }
+
+    fn record_trigger(
+        &mut self,
+        id: AlertId,
+        symbol: String,
+        time: DateTime<Utc>,
+        price: Option<f64>,
+        toasts: &mut Toasts,
+    ) {
+        toasts.info(format!(
+            "Alert triggered: {}",
+            if symbol.is_empty() { &id.0 } else { &symbol }
+        ));
+        let extra = toasts.len().saturating_sub(5);
+        toasts.toasts_mut().drain(..extra);
+        self.log.push_back(AlertTrigger {
+            id,
+            symbol,
+            time,
+            price: price.filter(|p| p.is_finite()),
+        });
+        if self.log.len() > 10_000 {
+            self.log.pop_front();
         }
     }
 

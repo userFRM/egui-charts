@@ -11,6 +11,7 @@ use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
 use crate::ui_kit::list_item::ListItem;
+use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::Ui;
 
 use super::{
@@ -20,7 +21,7 @@ use super::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
-        timeframe_selector::{TimeframeAction, TimeframeSelector},
+        timeframe_selector::{self, TimeframeAction, TimeframeSelector},
     },
     config::TopToolbarConfig,
     state::TopToolbarState,
@@ -168,6 +169,23 @@ impl Slot {
     }
 }
 
+/// A page of the indicator templates menu.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum TemplatesPage {
+    #[default]
+    Indicators,
+    Templates,
+}
+
+impl TabLabel for TemplatesPage {
+    fn tab_label(&self) -> &str {
+        match self {
+            Self::Indicators => "Indicators",
+            Self::Templates => "Templates",
+        }
+    }
+}
+
 /// Top toolbar widget
 pub struct TopToolbar {
     /// Display and layout options for this component.
@@ -186,6 +204,11 @@ pub struct TopToolbar {
     host_hidden: HashSet<Control>,
     /// Host-supplied saved indicator sets as (id, name), in display order.
     pub indicator_templates: Vec<(String, String)>,
+    /// Host-supplied favourite studies as (factory name, display name), in display order,
+    /// such as the starred studies of an
+    /// [`IndicatorDialog`](super::components::IndicatorDialog).
+    pub favorite_indicators: Vec<(String, String)>,
+    templates_page: TemplatesPage,
     /// Host buttons and dropdowns in registration order, placed before the host action slot.
     pub host_entries: Vec<super::ToolbarEntry>,
     /// Host call to action as (id, label), drawn as a filled pill at the right end after the host
@@ -204,6 +227,8 @@ impl Default for TopToolbar {
             chart_grid_selector: ChartGridSelector::default(),
             host_hidden: HashSet::new(),
             indicator_templates: Vec::new(),
+            favorite_indicators: Vec::new(),
+            templates_page: TemplatesPage::default(),
             host_entries: Vec::new(),
             call_to_action: None,
         }
@@ -491,6 +516,7 @@ impl TopToolbar {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
                     *action = TopToolbarAction::IntervalSelected(tf);
                 }
+                self.show_favorite_intervals(ui, action);
                 return;
             }
             S::ChartType => {
@@ -614,34 +640,93 @@ impl TopToolbar {
         }
     }
 
-    fn show_indicator_templates(&self, ui: &mut Ui, action: &mut TopToolbarAction) {
+    /// A one-click button for each starred interval the source serves, in the interval menu's
+    /// order; the current interval's button is shown pressed.
+    fn show_favorite_intervals(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
+        let theme = ui.active_theme();
+        let selector = &mut self.timeframe_selector;
+        for tf in selector.preferences().favorites {
+            if !selector.supports(tf) {
+                continue;
+            }
+            let label = timeframe_selector::display(tf);
+            let text = ui.painter().layout_no_wrap(
+                l10n::text(ui.ctx(), &label),
+                egui::FontId::proportional(theme.text.title),
+                egui::Color32::PLACEHOLDER,
+            );
+            let button = Trigger {
+                icon: None,
+                label,
+                name: timeframe_selector::display_long(tf),
+                // Whole points, so the strip still ends where whole-pixel scrolling can reach.
+                min_width: (text.size().x + 2.0 * theme.spacing.lg).ceil(),
+                filled: false,
+            };
+            if button.show(ui, tf == selector.current).clicked() {
+                selector.current = tf;
+                *action = TopToolbarAction::IntervalSelected(tf);
+            }
+        }
+    }
+
+    /// Favourite studies to add and saved templates to apply, on two pages.
+    fn show_indicator_templates(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
+        use crate::ui_kit::{EmptyState, list_item::LabelContent};
         ui.set_width(296.0);
+        TabBar::new(
+            &[TemplatesPage::Indicators, TemplatesPage::Templates],
+            &mut self.templates_page,
+        )
+        .show(ui);
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-        if ListItem::new()
-            .height(40.0)
-            .show_with_icon(ui, "Save indicator template", &embedded_icons::PLUS)
-            .clicked()
-        {
-            *action = TopToolbarAction::SaveIndicatorTemplate;
-            ui.close();
+        let (entries, empty) = match self.templates_page {
+            TemplatesPage::Indicators => (
+                &self.favorite_indicators,
+                EmptyState::new("No favorite indicators added yet")
+                    .icon(&embedded_icons::STAR_EMPTY)
+                    .description("Star an indicator in the Indicators dialog to keep it here."),
+            ),
+            TemplatesPage::Templates => {
+                if ListItem::new()
+                    .height(40.0)
+                    .show_with_icon(ui, "Save indicator template", &embedded_icons::PLUS)
+                    .clicked()
+                {
+                    *action = TopToolbarAction::SaveIndicatorTemplate;
+                    ui.close();
+                }
+                (
+                    &self.indicator_templates,
+                    EmptyState::new("No templates saved yet").description(
+                        "Save the chart's indicators as a template to apply them in one click.",
+                    ),
+                )
+            }
+        };
+        if entries.is_empty() {
+            empty.show(ui);
+            return;
         }
-        if !self.indicator_templates.is_empty() {
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for (id, name) in &self.indicator_templates {
-                        if ListItem::new()
-                            .height(32.0)
-                            .show(ui, crate::ui_kit::list_item::LabelContent::new(name))
-                            .clicked()
-                        {
-                            *action = TopToolbarAction::ApplyIndicatorTemplate(id.clone());
-                            ui.close();
-                        }
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for (id, name) in entries {
+                    if ListItem::new()
+                        .height(32.0)
+                        .show(ui, LabelContent::new(name))
+                        .clicked()
+                    {
+                        *action = match self.templates_page {
+                            TemplatesPage::Indicators => TopToolbarAction::AddIndicator(id.clone()),
+                            TemplatesPage::Templates => {
+                                TopToolbarAction::ApplyIndicatorTemplate(id.clone())
+                            }
+                        };
+                        ui.close();
                     }
-                });
-        }
+                }
+            });
     }
 
     fn symbol_trigger(symbol: &str) -> Trigger<'static> {
@@ -1004,6 +1089,12 @@ mod tests {
                         "Symbol search",
                         "Compare symbols",
                         "1 hour",
+                        "1 minute",
+                        "5 minutes",
+                        "15 minutes",
+                        "1 hour",
+                        "4 hours",
+                        "1 day",
                         "Candles",
                         "Indicators",
                         "Indicator templates",
@@ -1033,6 +1124,7 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.enable_accesskit();
             for (slot, label, expected) in [
                 (
                     S::QuickSearch,
@@ -1074,6 +1166,11 @@ mod tests {
                 ),
                 (
                     S::Templates,
+                    "Simple Moving Average",
+                    TopToolbarAction::AddIndicator("SMA".into()),
+                ),
+                (
+                    S::Templates,
                     "Save indicator template",
                     TopToolbarAction::SaveIndicatorTemplate,
                 ),
@@ -1097,6 +1194,16 @@ mod tests {
                 toolbar
                     .indicator_templates
                     .push(("custom-id".into(), "My studies".into()));
+                toolbar
+                    .favorite_indicators
+                    .push(("SMA".into(), "Simple Moving Average".into()));
+                if matches!(
+                    expected,
+                    TopToolbarAction::SaveIndicatorTemplate
+                        | TopToolbarAction::ApplyIndicatorTemplate(_)
+                ) {
+                    toolbar.templates_page = TemplatesPage::Templates;
+                }
                 let mut frame = |events| {
                     let mut action = TopToolbarAction::None;
                     let mut rect = Rect::NOTHING;
@@ -1125,6 +1232,24 @@ mod tests {
                             )),
                             _ => None,
                         })
+                        // Icon-only choices, such as the layout diagrams, by their accessible names.
+                        .chain(
+                            output
+                                .platform_output
+                                .accesskit_update
+                                .iter()
+                                .flat_map(|update| &update.nodes)
+                                .filter_map(|(_, node)| {
+                                    let bounds = node.bounds()?;
+                                    Some((
+                                        node.label()?.to_owned(),
+                                        pos2(
+                                            ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                                            ((bounds.y0 + bounds.y1) / 2.0) as f32,
+                                        ),
+                                    ))
+                                }),
+                        )
                         .collect();
                     output.drop_without_applying_deltas();
                     (action, rect, labels)
@@ -1244,6 +1369,12 @@ mod tests {
             (
                 |t| t.state.can_trade = false,
                 &[TopToolbarAction::ToggleTrading],
+            ),
+            (
+                |t| {
+                    t.timeframe_selector.favorites.remove(&Timeframe::Min5);
+                },
+                &[TopToolbarAction::IntervalSelected(Timeframe::Min5)],
             ),
         ];
         let ctx = egui::Context::default();

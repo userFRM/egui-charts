@@ -1,6 +1,6 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
-use super::{Bar, DemoApp, LiveFeed, SeriesId, SessionType, Timeframe, panel_frame};
+use super::{Bar, DemoApp, LiveFeed, SeriesId, Timeframe, panel_frame};
 use egui_charts::model::{
     Direction, OrderSide, Signal, SignalId, SignalShape, StrategyExit, StrategyReport,
     StrategyTrade,
@@ -120,16 +120,6 @@ impl DemoApp {
                 }
                 if self.state.timeframe != trade.timeframe {
                     self.switch_timeframe(trade.timeframe);
-                }
-                if self.timeframe_toolbar.state.session_type != SessionType::Full24x7
-                    && !self
-                        .chart
-                        .bars(SeriesId::MAIN)
-                        .iter()
-                        .any(|bar| bar.time == trade.entry_time)
-                {
-                    self.timeframe_toolbar.set_session(SessionType::Full24x7);
-                    self.regenerate_bars();
                 }
                 self.chart.scroll_to_time(trade.entry_time);
                 self.strategy_trade = Some(trade.trade_index);

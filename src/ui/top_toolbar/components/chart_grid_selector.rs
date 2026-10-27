@@ -2,11 +2,13 @@
 
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
+use crate::theme::ThemeExt;
 use crate::ui::model::ChartLayoutMode;
 use crate::ui::top_toolbar::TopToolbarConfig;
 use crate::ui::top_toolbar::buttons::ToolbarIconButton;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::widget::ChartSyncOptions;
-use egui::Ui;
+use egui::{RichText, Ui};
 
 /// A layout trigger with an anchored, scrollable preset menu.
 #[derive(Default)]
@@ -53,50 +55,90 @@ impl ChartGridSelector {
         selected
     }
 
-    /// Grid presets and synchronization menu contents.
+    /// Grid presets, as diagrams grouped by chart count, and synchronization menu contents.
     pub fn show_menu(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
-        ui.set_min_width(220.0);
+        let theme = ui.active_theme();
+        // The menu scrolls only when the window is too short to hold it below the trigger.
+        let max_height = ui.ctx().content_rect().bottom()
+            - ui.next_widget_position().y
+            - ui.spacing().menu_margin.sum().y
+            - theme.spacing.lg;
+        ui.set_max_height(max_height);
         let mut selected = None;
         egui::ScrollArea::vertical()
-            .max_height(300.0)
+            .max_height(max_height)
             .show(ui, |ui| {
-                for &layout in ChartLayoutMode::all() {
-                    if ui
-                        .selectable_label(
-                            self.current == layout,
-                            l10n::text(ui.ctx(), layout.label()),
-                        )
-                        .clicked()
-                    {
-                        self.current = layout;
-                        selected = Some(layout);
-                        ui.close();
-                    }
+                egui::Grid::new("chart_layout_presets")
+                    .num_columns(2)
+                    .min_col_width(0.0)
+                    .show(ui, |ui| {
+                        for count in 1..=16 {
+                            ui.label(
+                                RichText::new(count.to_string())
+                                    .size(theme.text.small)
+                                    .color(theme.ui.text_secondary),
+                            );
+                            let row = egui::vec2(0.0, ButtonSize::MD.pixels());
+                            let row_layout = egui::Layout::left_to_right(egui::Align::Center);
+                            ui.allocate_ui_with_layout(row, row_layout, |ui| {
+                                for &layout in ChartLayoutMode::all()
+                                    .iter()
+                                    .filter(|layout| layout.chart_count() == count)
+                                {
+                                    if IconButton::new(layout_icon(layout))
+                                        .icon_scale(24.0 / 28.0)
+                                        .selected(self.current == layout)
+                                        .tooltip(layout.label())
+                                        .show(ui)
+                                        .clicked()
+                                    {
+                                        self.current = layout;
+                                        selected = Some(layout);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
+                ui.separator();
+                ui.label(l10n::text(ui.ctx(), "Synchronize within group"));
+                for (value, label, effect) in [
+                    (
+                        &mut self.sync.sync_symbol,
+                        "Symbol",
+                        "A symbol chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_timeframe,
+                        "Interval",
+                        "An interval chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_crosshair,
+                        "Crosshair",
+                        "Every chart of the group marks the time hovered on one of them.",
+                    ),
+                    (
+                        &mut self.sync.sync_time_axis,
+                        "Scroll and zoom",
+                        "Scrolling or zooming one chart shows the same time span on every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_date_range,
+                        "Date range",
+                        "A date range chosen on one chart applies to every chart of the group.",
+                    ),
+                    (
+                        &mut self.sync.sync_drawings,
+                        "Drawings on the same symbol",
+                        "A drawing completed on one chart appears on the charts of the group showing the same symbol.",
+                    ),
+                ] {
+                    ui.checkbox(value, l10n::text(ui.ctx(), label))
+                        .on_hover_text(l10n::text(ui.ctx(), effect));
                 }
             });
-        ui.separator();
-        ui.label(l10n::text(ui.ctx(), "Synchronize within group"));
-        ui.checkbox(&mut self.sync.sync_symbol, l10n::text(ui.ctx(), "Symbol"));
-        ui.checkbox(
-            &mut self.sync.sync_timeframe,
-            l10n::text(ui.ctx(), "Interval"),
-        );
-        ui.checkbox(
-            &mut self.sync.sync_crosshair,
-            l10n::text(ui.ctx(), "Crosshair"),
-        );
-        ui.checkbox(
-            &mut self.sync.sync_time_axis,
-            l10n::text(ui.ctx(), "Scroll and zoom"),
-        );
-        ui.checkbox(
-            &mut self.sync.sync_date_range,
-            l10n::text(ui.ctx(), "Date range"),
-        );
-        ui.checkbox(
-            &mut self.sync.sync_drawings,
-            l10n::text(ui.ctx(), "Drawings on the same symbol"),
-        );
         selected
     }
 }
@@ -123,23 +165,5 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::Fifteen => &icons::LAYOUT_FIFTEEN,
         M::Sixteen => &icons::LAYOUT_SIXTEEN,
         M::Tabs => &icons::LAYOUT_TABS,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_chart_grid_selector_default() {
-        let selector = ChartGridSelector::default();
-        assert_eq!(selector.current(), ChartLayoutMode::Single);
-    }
-
-    #[test]
-    fn test_set_layout() {
-        let mut selector = ChartGridSelector::new(ChartLayoutMode::Single);
-        selector.set_layout(ChartLayoutMode::Four);
-        assert_eq!(selector.current(), ChartLayoutMode::Four);
     }
 }

@@ -7,7 +7,8 @@ use crate::studies::Indicator;
 pub enum IndicatorDialogAction {
     /// No action
     None,
-    /// Add this study, created through the dialog's factory with the parameters set in the dialog
+    /// Add this study, created through the dialog's factory with its default inputs and any
+    /// source the dialog was opened with
     AddIndicator(Box<dyn Indicator>),
     /// Toggle favorite status
     ToggleFavorite(String),
