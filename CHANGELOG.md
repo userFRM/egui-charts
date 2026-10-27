@@ -316,6 +316,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Session volume profiles keep their histogram visible when the session opens before the viewport, retaining the whole session's executed volumes and their proportions. ([#967](https://github.com/userFRM/egui-charts/issues/967))
 - Broker comparisons keep long names on one line and values inside their columns, with full text available on hover, so host-supplied descriptions cannot overlap other brokers or misalign their Connect buttons. ([#1003](https://github.com/userFRM/egui-charts/issues/1003))
 - Financial charts retain period labels for zero-only and unavailable rows, treat non-finite host values as unavailable and scale finite gains and losses without overflowing their range. ([#1002](https://github.com/userFRM/egui-charts/issues/1002))
 - Built-in studies, including KST, Ichimoku and Parabolic SAR, update changed bars and appends without recalculating unaffected history. Retrospective studies refresh affected pivots, legs and calendar periods. Migration: direct callers of `Indicator::update_data` must pass `from = 0` when a requested history changes; nonzero `from` reuses requested histories. The chart supplies this invalidation. ([#946](https://github.com/userFRM/egui-charts/issues/946))
