@@ -78,6 +78,7 @@ struct ColorPickerStates {
     crosshair: ColorPickerState,
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
+    scales_lines: ColorPickerState,
     alert: ColorPickerState,
     symbol_value: ColorPickerState,
     study_value: ColorPickerState,
@@ -134,6 +135,7 @@ impl SettingsDialog {
                 crosshair: ColorPickerState::new(settings.crosshair.color),
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
+                scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
                 symbol_value: ColorPickerState::new(
                     settings
@@ -207,6 +209,7 @@ impl SettingsDialog {
         self.color_picker_states.crosshair.sel_color = self.settings.crosshair.color;
         self.color_picker_states.watermark.sel_color = self.settings.watermark.color;
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
+        self.color_picker_states.scales_lines.sel_color = self.settings.scales_appearance.lines_color;
 
         self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
         self.color_picker_states.symbol_value.sel_color = self

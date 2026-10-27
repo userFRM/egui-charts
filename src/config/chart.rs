@@ -37,7 +37,8 @@ pub enum BackgroundStyle {
     },
 }
 
-/// When the chart shows its navigation buttons in the main pane.
+/// When the chart shows a group of buttons: its navigation buttons in the main pane, or the
+/// maximize and menu buttons of its panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NavigationButtons {
     /// Always show the buttons.
@@ -47,6 +48,11 @@ pub enum NavigationButtons {
     /// Hide the buttons (the default).
     #[default]
     Never,
+}
+
+/// Older saved configurations show the pane buttons while the pointer is over the pane.
+fn pane_buttons_on_hover() -> NavigationButtons {
+    NavigationButtons::OnHover
 }
 
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
@@ -248,6 +254,9 @@ pub struct ChartConfig {
     pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
+    /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
+    /// Default: None
+    pub axis_font_size: Option<f32>,
     /// Width of candlestick/bar bodies as a fraction of available space (0.0 to 1.0)
     pub candle_width: f32,
     /// Stroke width for candlestick wicks
@@ -358,6 +367,9 @@ pub struct ChartConfig {
     pub realtime_button_text_color: Color32,
     /// When to show the navigation buttons.
     pub navigation_buttons: NavigationButtons,
+    /// When to show the maximize and menu buttons of the panes.
+    #[serde(default = "pane_buttons_on_hover")]
+    pub pane_buttons: NavigationButtons,
     /// Whether to show session break vertical lines
     pub show_session_breaks: bool,
     /// Color for session break lines
@@ -443,6 +455,7 @@ impl Default for ChartConfig {
             vertical_grid_line_style: None,
             // Text color
             text_color: chart.axis_text,
+            axis_font_size: None,
             // Candle bodies leave room for the wider volume bars
             candle_width: 0.6,
             // Wick - thin crisp lines
@@ -503,6 +516,7 @@ impl Default for ChartConfig {
             realtime_button_hover_color: Color32::PLACEHOLDER,
             realtime_button_text_color: Color32::PLACEHOLDER,
             navigation_buttons: NavigationButtons::default(),
+            pane_buttons: pane_buttons_on_hover(),
             // Session breaks disabled by default
             show_session_breaks: false,
             session_break_color: chart.grid_line_major,

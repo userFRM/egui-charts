@@ -453,8 +453,15 @@ impl Chart {
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
-        let _theme_scope = theme
+        // Axis labels take their size from the theme's label text.
+        let scaled = self.config.axis_font_size.map(|size| {
+            let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
+            scaled.text.label = size;
+            scaled
+        });
+        let _theme_scope = scaled
             .as_ref()
+            .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
         let size = self.size;
         let show = |ui: &mut Ui| {

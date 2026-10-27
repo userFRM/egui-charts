@@ -348,6 +348,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The saved scale font size, axis line colour and pane button visibility apply: `ChartConfig::axis_font_size` sizes the price and time axis labels, the line colour draws the border of the main, added-series and study-pane price axes and the time axis, and `ChartConfig::pane_buttons` shows the pane maximize and menu buttons always, on hover or never, in maximized panes too. The settings dialog gains Lines, Font size and Pane buttons controls, and all three read back from the chart and survive snapshots and undo. `ChartConfig::left_axis_scale_mode` sets the main scale when the left axis carries it, as `right_axis_scale_mode` does on the right. Study pane menu buttons now show on hover by default, like the setting says. Migration: `ChartConfig` literals add `axis_font_size: None` and `pane_buttons: NavigationButtons::OnHover` or use defaults. ([#1060](https://github.com/userFRM/egui-charts/issues/1060))
+
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
 
 - `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))

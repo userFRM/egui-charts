@@ -1,6 +1,7 @@
 //! Pane placement, layout state and interaction controls.
 
 use super::{Chart, SeriesId};
+use crate::config::NavigationButtons;
 use crate::localization as l10n;
 use egui::{Color32, Pos2, Rect, Sense, Ui};
 
@@ -711,11 +712,22 @@ impl Chart {
         });
     }
 
+    /// Whether the buttons of the pane drawn in `rect` show, by the configured visibility.
+    fn pane_buttons_visible(&self, ui: &Ui, rect: Rect) -> bool {
+        match self.config.pane_buttons {
+            NavigationButtons::Always => true,
+            NavigationButtons::OnHover => {
+                ui.rect_contains_pointer(rect) || egui::Popup::is_any_open(ui.ctx())
+            }
+            NavigationButtons::Never => false,
+        }
+    }
+
     pub(super) fn main_pane_actions(&mut self, ui: &mut Ui, rect: Rect, plot: Rect) {
         if rect.height() < 48.0 {
             return;
         }
-        let hovered = ui.rect_contains_pointer(rect);
+        let hovered = self.pane_buttons_visible(ui, rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
         if self.has_panes() {
             self.pane_maximize_button(ui, PaneId::MAIN, rect, plot);
@@ -725,7 +737,7 @@ impl Chart {
             .into_iter()
             .filter(|id| *id != SeriesId::MAIN)
             .collect();
-        if movable.is_empty() || !(hovered || egui::Popup::is_any_open(ui.ctx())) {
+        if movable.is_empty() || !hovered {
             return;
         }
         let button = Rect::from_min_size(
@@ -783,7 +795,7 @@ impl Chart {
     }
 
     fn pane_maximize_button(&mut self, ui: &mut Ui, id: PaneId, rect: Rect, plot: Rect) {
-        if rect.height() < 24.0 {
+        if rect.height() < 24.0 || self.config.pane_buttons == NavigationButtons::Never {
             return;
         }
         let button = Rect::from_min_size(
@@ -801,7 +813,11 @@ impl Chart {
                     "Maximize pane"
                 },
             ));
-        if response.hovered() || maximized || ui.rect_contains_pointer(rect) {
+        if self.config.pane_buttons == NavigationButtons::Always
+            || response.hovered()
+            || maximized
+            || ui.rect_contains_pointer(rect)
+        {
             let color = ui.visuals().text_color();
             let icon = button.shrink(5.0);
             if maximized {
@@ -837,6 +853,9 @@ impl Chart {
         collapsed: bool,
     ) {
         self.pane_maximize_button(ui, id, rect, plot);
+        if !self.pane_buttons_visible(ui, rect) {
+            return;
+        }
         let button = Rect::from_min_size(
             Pos2::new(plot.right() - 42.0, rect.top() + 2.0),
             egui::vec2(20.0, 20.0),
