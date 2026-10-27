@@ -434,3 +434,53 @@ pub(super) fn heatmap() -> Vec<egui_charts::ui::widget_bar::MarketHeatmapEntry> 
         })
         .collect()
 }
+
+/// Synthetic financials for the catalog's stocks: five fiscal years scaled from the catalog price,
+/// one of them a loss, and dividends from the third year. Other symbols have none.
+pub(super) fn financials(symbol: &str) -> Option<egui_charts::ui::financials::CompanyFinancials> {
+    use egui_charts::ui::financials::{CompanyFinancials, FinancialPage};
+    let spec = DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+        .filter(|spec| !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic"))?;
+    let growth = 1.0 + (spec.seed % 7) as f64 / 40.0;
+    let margin = 0.08 + (spec.seed % 5) as f64 / 50.0;
+    let revenue: Vec<f64> = (0..5)
+        .map(|year| spec.start_price * 4.0e8 * growth.powi(year))
+        .collect();
+    let net: Vec<f64> = revenue
+        .iter()
+        .enumerate()
+        .map(|(year, revenue)| revenue * if year == 1 { -0.04 } else { margin })
+        .collect();
+    let shares = 1.5e11 / spec.start_price;
+    let of = |values: &[f64], scale: f64| values.iter().map(|v| Some(v * scale)).collect();
+    let years: Vec<String> = (2021..=2025).map(|year| format!("FY {year}")).collect();
+    let income = FinancialPage::new("Income statement", years.clone())
+        .with_row("Total revenue", of(&revenue, 1.0))
+        .with_row("Gross profit", of(&revenue, 0.42))
+        .with_row("Net income", of(&net, 1.0))
+        .with_row("Diluted EPS", of(&net, 1.0 / shares));
+    let balance = FinancialPage::new("Balance sheet", years.clone())
+        .with_row("Total assets", of(&revenue, 1.3))
+        .with_row("Total liabilities", of(&revenue, 0.8))
+        .with_row("Total equity", of(&revenue, 0.5));
+    let statistics = FinancialPage::new("Statistics", years)
+        .with_row(
+            "Net margin %",
+            net.iter()
+                .zip(&revenue)
+                .map(|(n, r)| Some(n / r * 100.0))
+                .collect(),
+        )
+        .with_row(
+            "Dividends per share",
+            (0..5)
+                .map(|year| (year >= 2).then_some(0.2 * year as f64))
+                .collect(),
+        );
+    Some(CompanyFinancials::new(
+        Some("USD".to_owned()),
+        vec![income, balance, statistics],
+    ))
+}

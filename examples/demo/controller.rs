@@ -152,9 +152,33 @@ fn example_brokers() -> Vec<egui_charts::ui::trading::BrokerTile> {
         tile.rating = Some(rating);
         tile.featured = featured;
         tile.description = format!("{name} is an example tile: a host lists its brokers here.");
+        tile.facts = broker_facts(id);
         tile
     })
     .collect()
+}
+
+/// The comparison rows of a broker in the picker: the demo paper account's terms, and made-up
+/// ones for the example tiles, one of which gives no leverage.
+fn broker_facts(id: &str) -> Vec<(String, egui_charts::ui::trading::BrokerFact)> {
+    use egui_charts::ui::trading::BrokerFact::{Supported, Value};
+    let (commission, leverage, stocks, futures, crypto) = match id {
+        egui_charts::ui::trading::BrokerTile::PAPER => ("None", Some("10:1"), true, true, true),
+        "example-stocks" => ("0.005 USD per share", Some("4:1"), true, false, false),
+        "example-futures" => ("1.25 USD per contract", Some("20:1"), false, true, false),
+        _ => ("0.10% per trade", None, false, false, true),
+    };
+    let mut facts = vec![("Commission".to_owned(), Value(commission.to_owned()))];
+    facts.extend(leverage.map(|leverage| ("Leverage".to_owned(), Value(leverage.to_owned()))));
+    for (label, supported) in [
+        ("Stocks", stocks),
+        ("Futures", futures),
+        ("Crypto", crypto),
+        ("Bracket orders", id != "example-crypto"),
+    ] {
+        facts.push((label.to_owned(), Supported(supported)));
+    }
+    facts
 }
 
 /// Which right-hand side panel is open, if any.
@@ -285,11 +309,7 @@ pub struct DemoApp {
     live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
-    footprint: Option<egui_charts::data::Footprint>,
-    footprint_scale: Option<(f32, f32)>,
     liquidity_heatmap: bool,
-    profile_ranges: Option<egui_charts::studies::TradeProfileRanges>,
-    feed_before_footprint: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
     /// The latest crosshair payload of the active chart, from which the data window reads.
@@ -373,6 +393,8 @@ pub struct DemoApp {
     time_and_sales: TimeAndSalesPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
+    /// The chart symbol's financials, shown in place of the chart while they are open.
+    financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
@@ -519,11 +541,7 @@ impl DemoApp {
             layout_tabs: vec![LayoutTab::unnamed()],
             layout_tab: 0,
             colour_drag: false,
-            footprint: None,
-            footprint_scale: None,
             liquidity_heatmap: false,
-            profile_ranges: None,
-            feed_before_footprint: false,
             menus,
             last_chart_click: None,
             crosshair: None,
@@ -584,7 +602,11 @@ impl DemoApp {
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
             ),
-            broker_picker: egui_charts::ui::trading::BrokerPicker::new(example_brokers()),
+            broker_picker: {
+                let mut picker = egui_charts::ui::trading::BrokerPicker::new(example_brokers());
+                picker.tiles[0].facts = broker_facts(egui_charts::ui::trading::BrokerTile::PAPER);
+                picker
+            },
             account_panel: AccountPanelSize::Normal,
             paper_reset: false,
             watchlist: WatchlistPanel::new(
@@ -603,6 +625,7 @@ impl DemoApp {
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
+            financials: None,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             calendar: CalendarPanel::new(),
@@ -847,9 +870,6 @@ impl DemoApp {
         let clock = self.chart.bar_clock();
         self.bars = self.live.snapshot(tf, clock, self.chart.extended_hours());
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
-        if self.footprint.is_some() {
-            self.rebuild_footprint();
-        }
         self.chart.set_instrument(Some(self.live.instrument()));
         self.chart
             .set_legend_statuses(&[egui_charts::widget::LegendStatus {
@@ -1361,25 +1381,7 @@ impl DemoApp {
                 let mut panel_action = None;
                 let mut widget_action = None;
                 let mut show_help = false;
-                let mut footprint_enabled = self.footprint.is_some();
                 let mut heatmap_enabled = self.liquidity_heatmap;
-                let mut profiles_enabled = self.profile_ranges.is_some();
-                let mut profile_ranges = self.profile_ranges.clone();
-                let profile_split = self
-                    .last_chart_click
-                    .as_ref()
-                    .filter(|click| click.series == SeriesId::MAIN)
-                    .and_then(|click| click.bar.as_ref())
-                    .map(|bar| self.chart.bar_clock().bar_open(bar.time));
-                let profile_index = profile_split
-                    .and_then(|time| {
-                        profile_ranges
-                            .as_ref()?
-                            .ranges()
-                            .iter()
-                            .position(|range| range.contains(&time))
-                    })
-                    .unwrap_or(0);
                 let mut paused = self.live.paused();
                 let action = self.top_toolbar.show_with_slots(
                     ui,
@@ -1392,25 +1394,9 @@ impl DemoApp {
                                 .show(ui);
                         egui::Popup::menu(&response).show(|ui| {
                             ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
-                            ui.checkbox(&mut footprint_enabled, "Footprint (synthetic)")
-                                .on_hover_text("Pause the feed to inspect the footprint sample");
-                            ui.add_enabled_ui(self.footprint.is_some(), |ui| {
-                                ui.checkbox(&mut profiles_enabled, "Trade profile (synthetic)");
-                                if let Some(ranges) = &mut profile_ranges {
-                                    egui_charts::ui::trade_profile_menu(
-                                        ui,
-                                        ranges,
-                                        profile_index,
-                                        profile_split,
-                                    );
-                                }
+                            ui.add_enabled(self.replay.is_none(), |ui: &mut egui::Ui| {
+                                ui.checkbox(&mut paused, "Pause synthetic feed")
                             });
-                            ui.add_enabled(
-                                self.replay.is_none() && self.footprint.is_none(),
-                                |ui: &mut egui::Ui| {
-                                    ui.checkbox(&mut paused, "Pause synthetic feed")
-                                },
-                            );
                             if ui.ctx().content_rect().width() < 600.0 {
                                 ui.separator();
                                 for (label, panel) in [
@@ -1479,45 +1465,6 @@ impl DemoApp {
                     self.chart
                         .set_volume_bubbles(heatmap_enabled.then(Default::default));
                 }
-                if footprint_enabled != self.footprint.is_some() {
-                    if footprint_enabled {
-                        self.feed_before_footprint = self.live.paused();
-                        self.live.set_paused(true);
-                        self.chart.set_feed_paused(true);
-                        self.footprint_scale = Some(self.chart.get_time_scale_state());
-                        self.rebuild_footprint();
-                        if self.footprint.is_some() {
-                            self.chart.apply_synced_time_scale(100.0, 0.0);
-                        }
-                    } else {
-                        self.footprint = None;
-                        self.restore_feed_after_footprint();
-                        if let Some((spacing, offset)) = self.footprint_scale.take() {
-                            self.chart.apply_synced_time_scale(spacing, offset);
-                        }
-                    }
-                }
-                if !profiles_enabled || self.footprint.is_none() {
-                    profile_ranges = None;
-                } else if profile_ranges.is_none() {
-                    let bars = self.chart.bars(SeriesId::MAIN);
-                    if let (Some(first), Some(last)) = (
-                        bars.get(self.chart.get_chart_mapping().start_idx),
-                        bars.last(),
-                    ) {
-                        let span = self
-                            .chart
-                            .timeframe()
-                            .unwrap_or_default()
-                            .duration_ms()
-                            .max(1);
-                        profile_ranges = egui_charts::studies::TradeProfileRanges::new(vec![
-                            first.time..last.time + chrono::TimeDelta::milliseconds(span),
-                        ])
-                        .ok();
-                    }
-                }
-                self.profile_ranges = profile_ranges;
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
             });
@@ -2156,6 +2103,20 @@ impl DemoApp {
         }
         self.symbol_details
             .set_average_volume(self.live.daily_volume().1);
+        // Open financials follow the chart's symbol.
+        if self.symbol_details.take_financials_request()
+            || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
+        {
+            let title = (self.chart.instrument())
+                .and_then(|instrument| instrument.description.clone())
+                .unwrap_or_else(|| chart_symbol.clone());
+            let panel = egui_charts::ui::financials::FinancialsPanel::new(
+                title,
+                feeds::financials(&chart_symbol),
+            );
+            self.open_panel = None;
+            self.financials = Some((chart_symbol.clone(), panel));
+        }
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
@@ -2463,44 +2424,17 @@ impl DemoApp {
         }
     }
 
-    fn restore_feed_after_footprint(&mut self) {
-        self.chart.set_feed_paused(self.replay.is_some());
-        if self.replay.is_none() {
-            self.live.set_paused(self.feed_before_footprint);
-        }
-    }
-
-    fn rebuild_footprint(&mut self) {
-        self.profile_ranges = None;
-        let bars = self.chart.bars(SeriesId::MAIN);
-        let step = if bars.last().is_some_and(|bar| bar.close.abs() >= 100.0) {
-            0.05
-        } else {
-            0.0001
-        };
-        let mut clock = egui_charts::model::BarClock::new(self.state.timeframe);
-        if let Some(zone) = self.chart.chart_options().time_scale.timezone.to_tz() {
-            clock = clock.with_timezone(zone);
-        }
-        let mut flow = egui_charts::data::Footprint::new(clock, step, 1)
-            .expect("fixture has a positive price step");
-        for trade in crate::sampledata::synthetic_trades(bars) {
-            flow.push(&trade)
-                .expect("fixture executions are finite and chronological");
-        }
-        if flow.bars().len() == bars.len() {
-            self.footprint = Some(flow);
-        } else {
-            self.footprint = None;
-            self.restore_feed_after_footprint();
-            if let Some((spacing, offset)) = self.footprint_scale.take() {
-                self.chart.apply_synced_time_scale(spacing, offset);
-            }
-            self.notify("Footprint example needs one source bar per selected interval");
-        }
-    }
-
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if let Some((_, financials)) = &mut self.financials {
+            let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
+            let back = egui::CentralPanel::default()
+                .frame(frame)
+                .show(ui, |ui| financials.show(ui));
+            if back.inner {
+                self.financials = None;
+            }
+            return;
+        }
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
@@ -2509,41 +2443,10 @@ impl DemoApp {
                 {
                     Self::show_pointer_readout(ui, pointer);
                 }
-                if let Some(flow) = &self.footprint {
-                    let config = egui_charts::chart::overlays::FootprintConfig {
-                        text_color: self.theme.ui.text,
-                        neutral_color: self.theme.ui.text,
-                        ask_color: self.chart.config().bullish_color,
-                        bid_color: self.chart.config().bearish_color,
-                        ..Default::default()
-                    };
-                    self.chart.show_footprint(ui, flow, &config);
-                    if let Some(ranges) = &self.profile_ranges {
-                        let profiles = egui_charts::studies::trade_profiles(flow, ranges);
-                        egui_charts::chart::overlays::render_trade_profiles(
-                            ui.painter(),
-                            &self.chart.get_chart_mapping(),
-                            self.chart.bars(SeriesId::MAIN),
-                            &profiles,
-                            flow.price_step(),
-                            &config,
-                        );
-                    }
-                    if self.chart.chart_type().is_time_independent() {
-                        ui.painter().text(
-                            self.chart.get_rendered_price_rect().center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Footprint requires a time-based chart",
-                            egui::FontId::proportional(14.0),
-                            self.theme.ui.text,
-                        );
-                    }
-                } else {
-                    let mut charts: Vec<_> =
-                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
-                    charts.insert(self.layout_slot, &mut self.chart);
-                    self.layout.show(ui, &mut charts);
-                }
+                let mut charts: Vec<_> =
+                    self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                charts.insert(self.layout_slot, &mut self.chart);
+                self.layout.show(ui, &mut charts);
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts {
@@ -3317,7 +3220,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_click_selects_research_and_the_profile_to_split() {
+    fn chart_click_selects_research_and_the_replay_start() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = DemoApp::new(&cc);
@@ -3368,60 +3271,6 @@ mod tests {
         assert!(
             message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
             "{message}"
-        );
-        app.rebuild_footprint();
-        let bars = app.chart.bars(SeriesId::MAIN);
-        let start = bars[0].time;
-        let middle = bars[index - 2].time;
-        let end = bars.last().unwrap().time + chrono::TimeDelta::minutes(1);
-        app.profile_ranges = Some(
-            egui_charts::studies::TradeProfileRanges::new(vec![start..middle, middle..end])
-                .unwrap(),
-        );
-        let menu = egui::pos2(24.0, 20.0);
-        for pressed in [true, false] {
-            frame(
-                &mut app,
-                vec![
-                    egui::Event::PointerMoved(menu),
-                    egui::Event::PointerButton {
-                        pos: menu,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-        }
-        let shapes = frame(&mut app, vec![]);
-        let split = shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text)
-                    if text.galley.text() == "Split profile at selected bar" =>
-                {
-                    Some(text.pos + text.galley.size() / 2.0)
-                }
-                _ => None,
-            })
-            .unwrap();
-        for pressed in [true, false] {
-            frame(
-                &mut app,
-                vec![
-                    egui::Event::PointerMoved(split),
-                    egui::Event::PointerButton {
-                        pos: split,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-        }
-        assert_eq!(
-            app.profile_ranges.as_ref().unwrap().ranges(),
-            &[start..middle, middle..time, time..end]
         );
         app.replay_selecting = true;
         let index = index - 3;

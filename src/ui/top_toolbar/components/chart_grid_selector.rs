@@ -167,3 +167,21 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::Tabs => &icons::LAYOUT_TABS,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chart_grid_selector_default() {
+        let selector = ChartGridSelector::default();
+        assert_eq!(selector.current(), ChartLayoutMode::Single);
+    }
+
+    #[test]
+    fn test_set_layout() {
+        let mut selector = ChartGridSelector::new(ChartLayoutMode::Single);
+        selector.set_layout(ChartLayoutMode::Four);
+        assert_eq!(selector.current(), ChartLayoutMode::Four);
+    }
+}

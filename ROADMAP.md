@@ -39,6 +39,8 @@ Each item is marked as complete, partial, or missing.
 
 #### Advanced
 - [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); period, ticks per row, value area and extended-hours split set in the Symbol tab, periods at least the bar interval, sessions following the chart's exchange sessions or calendar days, profiles built over the whole sessions of the visible bars, adjacent sessions merged or a composite built through `ChartTypeParams::tpo_composites`, at most about 1,000 rows, bars with a non-finite price skipped
+- [x] **Volume Footprint**: Bid and ask volume at each price of every bar, summed from the trades the feed sends on the instrument's tick, while the feed streams; bars before the first held trade draw as candles
+- [x] **Session Volume Profile**: Volume at each price of every session of the visible bars, from the same trades, with point of control, value area, developing point of control and volume nodes; needs the `studies` feature
 
 ### Pan / Zoom
 - [x] Mouse wheel zoom (centered on cursor)
@@ -538,7 +540,7 @@ The ui_kit components are generic building blocks:
 ## Feature Gap Summary
 
 ### What's built
-- 19 of 19 chart types render
+- 21 of 21 chart types render
 - Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
 - `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
 - 177 registered indicators with calculation code
@@ -548,7 +550,6 @@ The ui_kit components are generic building blocks:
 - Data validation, configuration
 
 ### What needs work (P1: core functionality gaps)
-- [ ] Add a Volume Footprint chart type driven by bid/ask data
 - [ ] Add indicator-specific rendering (histograms, filled clouds, dot plots)
 - [ ] Build multi-pane layout manager (`PaneManager`)
 

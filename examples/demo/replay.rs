@@ -21,11 +21,7 @@ impl DemoApp {
         if self.chart.bars(SeriesId::MAIN).is_empty() {
             return;
         }
-        self.live_was_paused = if self.footprint.is_some() {
-            self.feed_before_footprint
-        } else {
-            self.live.paused()
-        };
+        self.live_was_paused = self.live.paused();
         self.live.set_paused(true);
         self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
         self.replay_interval = self.state.timeframe;
@@ -66,9 +62,8 @@ impl DemoApp {
                 extra.chart.set_replay_time(None);
             }
             self.replay_slots.clear();
-            self.chart.set_feed_paused(self.footprint.is_some());
-            self.live
-                .set_paused(self.footprint.is_some() || self.live_was_paused);
+            self.chart.set_feed_paused(false);
+            self.live.set_paused(self.live_was_paused);
             self.state.replay_active = false;
             self.replay_control.hide_control();
         }
