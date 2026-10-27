@@ -811,7 +811,7 @@ Terminal,"News, calendar and social","Earnings, dividends and splits marked on t
 Terminal,"News, calendar and social",Economic calendar,done,host,src/ui/widget_bar/panels/calendar.rs
 Terminal,"News, calendar and social",Economic events on the chart,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Ideas and community feed,missing,host,
-Terminal,"News, calendar and social",News Flow,partial,host,src/ui/widget_bar/panels/news.rs
+Terminal,"News, calendar and social",Filtered headline stream,partial,host,src/ui/widget_bar/panels/news.rs
 Terminal,"News, calendar and social",News alerts,missing,host,
 Terminal,"News, calendar and social",News headlines marked on the chart time scale,done,host,src/model/time_scale_event.rs;src/widget/marks.rs;src/widget/frame.rs;src/chart/renderers/markers.rs
 Terminal,"News, calendar and social",Private chats,partial,host,src/services/chats.rs;src/ui/widget_bar/panels/chats.rs
