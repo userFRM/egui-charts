@@ -764,6 +764,39 @@ mod tests {
         assert!(!study.is_overlay());
         assert_eq!(study.value_format(), StudyFormat::Percent);
         assert_eq!(study.data_requests()[0].metric.as_deref(), Some("funding"));
+        use egui_kittest::{Harness, kittest::Queryable};
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [640.0, 800.0, 1440.0] {
+                dialog.open();
+                *dialog.search.query_mut() = "Funding rate".into();
+                let style = theme.clone();
+                let mut added = false;
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(width, 640.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &style);
+                    })
+                    .build_ui(|ui| {
+                        if let IndicatorDialogAction::AddIndicator(study) =
+                            dialog.show(ui.ctx(), &theme)
+                        {
+                            assert_eq!(study.name(), "Funding rate");
+                            added = true;
+                        }
+                    });
+                harness.run();
+                let row = harness.get_by_role_and_label(Role::ListBoxOption, "Funding rate");
+                assert!(
+                    harness.ctx.content_rect().contains_rect(row.rect()),
+                    "width {width}"
+                );
+                row.click();
+                harness.run();
+                drop(harness);
+                assert!(added, "width {width}");
+            }
+        }
         dialog.set_metric_source(None, "CURRENT");
         assert!(dialog.add("Metric: funding").is_none());
         assert!(dialog.add("SMA").is_some());
@@ -1109,6 +1142,46 @@ mod tests {
             };
             assert_eq!(study.name(), "SMA", "{name}");
         }
+    }
+
+    /// Each study is added with the parameters the factory creates it with until the user
+    /// changes them.
+    #[test]
+    fn each_study_is_added_with_its_own_defaults() {
+        use crate::model::Bar;
+        use chrono::{TimeZone, Utc};
+        let bars: Vec<Bar> = (0..300)
+            .map(|i: i64| {
+                let x = i as f64;
+                let close = 100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0;
+                let open = close - (x * 0.7).sin() * 1.5;
+                Bar {
+                    time: Utc.timestamp_opt(i * 3_600, 0).unwrap(),
+                    open,
+                    high: close.max(open) + 0.5 + (x * 0.3).sin().abs(),
+                    low: close.min(open) - 0.5 - (x * 0.5).cos().abs(),
+                    close,
+                    volume: 1_000.0 + ((i * 37) % 211) as f64 * 9.0,
+                    colors: None,
+                    payload: None,
+                }
+            })
+            .collect();
+        let factory = IndicatorFactory::new();
+        let mut dialog = IndicatorDialog::new();
+        let mut differ = Vec::new();
+        for info in dialog.indicators.clone() {
+            let Some(IndicatorDialogAction::AddIndicator(mut added)) = dialog.add(&info.id) else {
+                panic!("{} is added", info.id);
+            };
+            let mut default = factory.create(&info.id).unwrap();
+            added.calculate(&bars);
+            default.calculate(&bars);
+            if format!("{:?}", added.values()) != format!("{:?}", default.values()) {
+                differ.push(info.id);
+            }
+        }
+        assert!(differ.is_empty(), "added with other parameters: {differ:?}");
     }
 
     #[test]
