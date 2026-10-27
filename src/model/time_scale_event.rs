@@ -17,6 +17,8 @@ pub enum EventKind {
     Economic,
     /// News headline.
     News,
+    /// Trading idea published by the host.
+    Idea,
 }
 
 impl EventKind {
@@ -28,6 +30,7 @@ impl EventKind {
             Self::Split => "S",
             Self::Economic => "Ec",
             Self::News => "N",
+            Self::Idea => "I",
         }
     }
 }
@@ -57,10 +60,17 @@ pub struct EventVisibility {
     pub show_splits: bool,
     /// Show earnings announcements.
     pub show_earnings: bool,
+    /// Draw a dashed vertical break at each earnings announcement.
+    pub show_earnings_breaks: bool,
     /// Show economic releases.
     pub show_economic_events: bool,
     /// Show news headlines.
     pub show_news: bool,
+    /// Ask the host to raise a notification for each news headline it supplies. The host owns
+    /// delivery; the chart does not read this.
+    pub show_news_notifications: bool,
+    /// Show trading ideas the host supplies.
+    pub show_ideas: bool,
 }
 
 impl Default for EventVisibility {
@@ -69,8 +79,11 @@ impl Default for EventVisibility {
             show_dividends: true,
             show_splits: true,
             show_earnings: false,
+            show_earnings_breaks: false,
             show_economic_events: false,
             show_news: true,
+            show_news_notifications: false,
+            show_ideas: true,
         }
     }
 }
@@ -84,6 +97,7 @@ impl EventVisibility {
             EventKind::Earnings => self.show_earnings,
             EventKind::Economic => self.show_economic_events,
             EventKind::News => self.show_news,
+            EventKind::Idea => self.show_ideas,
         }
     }
 }

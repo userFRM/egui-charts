@@ -516,6 +516,8 @@ pub mod icons {
     pub const SETTINGS_SCALES_LINES: Icon = crate::icon_from_path!("ui/scales-lines.svg");
     /// Settings canvas SVG icon.
     pub const SETTINGS_CANVAS: Icon = crate::icon_from_path!("ui/canvas.svg");
+    /// Settings trading SVG icon: a buy and a sell arrow.
+    pub const SETTINGS_TRADING: Icon = crate::icon_from_path!("ui/trading.svg");
     /// Settings events SVG icon.
     pub const SETTINGS_EVENTS: Icon = crate::icon_from_path!("ui/events.svg");
 

@@ -8,7 +8,7 @@ use super::helpers::{
 };
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
-use crate::model::{Bar, BarsStyle};
+use crate::model::{Bar, BarsStyle, CandlesStyle};
 use crate::scales::PriceMap;
 use egui::{Color32, Pos2, Rect};
 
@@ -18,6 +18,7 @@ pub(super) fn render_candles(
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -25,11 +26,17 @@ pub(super) fn render_candles(
     max_volume: f64,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
+    style: &CandlesStyle,
 ) {
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let params = BarRenderParams::new(x, bar_width, wick_width);
-        renderers::render_candle(price_ctx, bar, price_scale, colors, &params);
+        let rising = if style.color_by_previous_close {
+            !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
+        } else {
+            bar.is_bullish()
+        };
+        renderers::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
 
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
@@ -364,6 +371,96 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert_eq!(columns, spans);
+        }
+    }
+
+    /// The second candle closes at 25 below its open of 30, but above the first close of 20:
+    /// it falls by its own open and rises against the previous close. Hidden parts draw nothing.
+    #[test]
+    fn candles_draw_their_visible_parts_in_the_chosen_direction() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bars = [
+            Bar::new(time, 10.0, 22.0, 8.0, 20.0, 0.0),
+            Bar::new(time, 30.0, 32.0, 24.0, 25.0, 0.0),
+        ];
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let (up, down) = (Color32::GREEN, Color32::RED);
+        let shown = CandlesStyle::default();
+        for (style, bodies, wicks) in [
+            (shown, vec![up, down], vec![up, down]),
+            (
+                CandlesStyle {
+                    color_by_previous_close: true,
+                    ..shown
+                },
+                vec![up, up],
+                vec![up, up],
+            ),
+            (
+                CandlesStyle {
+                    body_visible: false,
+                    ..shown
+                },
+                vec![],
+                vec![up, down],
+            ),
+            (
+                CandlesStyle {
+                    wick_visible: false,
+                    ..shown
+                },
+                vec![up, down],
+                vec![],
+            ),
+        ] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_candles(
+                    &context,
+                    &context,
+                    &map,
+                    &colors,
+                    &bars,
+                    &bars,
+                    0,
+                    10.0,
+                    1.0,
+                    false,
+                    0.0,
+                    0.0,
+                    |i, _| 25.0 + i as f32 * 50.0,
+                    &style,
+                );
+            });
+            let (mut drawn_bodies, mut drawn_wicks) = (vec![], vec![]);
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Rect(body) => drawn_bodies.push(body.fill),
+                    Shape::LineSegment { stroke, .. } => drawn_wicks.push(stroke.color),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!((drawn_bodies, drawn_wicks), (bodies, wicks), "{style:?}");
         }
     }
 }

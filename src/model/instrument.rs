@@ -101,6 +101,8 @@ pub struct Instrument {
     pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD".
     pub currency: Option<String>,
+    /// Host-supplied price unit, such as "USD/barrel"; no conversion is performed.
+    pub unit: Option<String>,
     /// Exchange time zone.
     pub time_zone: Option<TimezoneId>,
     /// Regular trading hours, in exchange time.
@@ -134,6 +136,7 @@ impl Instrument {
             price_decimals: None,
             volume_decimals: None,
             currency: None,
+            unit: None,
             time_zone: None,
             session: None,
             native_timeframes: None,
@@ -145,6 +148,12 @@ impl Instrument {
     /// Sets [`description`](Self::description).
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Sets the price [`unit`](Self::unit).
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
         self
     }
 

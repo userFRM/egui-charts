@@ -9,10 +9,20 @@
 
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
-use egui::{Align, Align2, Context, Frame, Layout, RichText, Ui, UiBuilder, UiStackInfo, Vec2};
+use egui::{
+    Align, Align2, Color32, Context, Frame, Layout, Response, RichText, Stroke, Ui, UiBuilder,
+    UiStackInfo, Vec2,
+};
 
 use crate::icons::icons;
-use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
+use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
+
+/// Height of the footer's action buttons.
+const FOOTER_BUTTON_HEIGHT: f32 = 34.0;
+
+/// Minimum width of a short footer action such as Ok.
+const FOOTER_BUTTON_MIN_WIDTH: f32 = 44.0;
 
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
@@ -178,7 +188,8 @@ pub(crate) fn title_row(ui: &mut Ui, title: &str, closable: bool) -> bool {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), title))
                     .strong()
-                    .size(ui.active_theme().text.title),
+                    .size(ui.active_theme().text.dialog_title)
+                    .variation("wght", 600.0),
             );
             closable
                 && ui
@@ -278,7 +289,9 @@ impl DialogFooter {
             left_content(ui);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = ui.active_theme().spacing.lg;
+                let theme = ui.active_theme();
+                ui.spacing_mut().item_spacing.x = theme.spacing.lg;
+                ui.spacing_mut().button_padding.x = theme.spacing.xl + theme.spacing.xs;
                 let font = egui::TextStyle::Button.resolve(ui.style());
                 let width = std::iter::once(&self.primary_label)
                     .chain(self.secondary_label.iter())
@@ -287,35 +300,51 @@ impl DialogFooter {
                             .layout_no_wrap(
                                 l10n::text(ui.ctx(), label.clone()),
                                 font.clone(),
-                                egui::Color32::PLACEHOLDER,
+                                Color32::PLACEHOLDER,
                             )
                             .size()
                             .x
-                            + 2.0 * ui.active_theme().spacing.xl)
-                            .max(ButtonSize::MD.pixels())
+                            + 2.0 * ui.spacing().button_padding.x)
+                            .max(FOOTER_BUTTON_MIN_WIDTH)
                     })
                     .sum::<f32>()
                     + if self.secondary_label.is_some() {
-                        ui.active_theme().spacing.lg
+                        theme.spacing.lg
                     } else {
                         0.0
                     };
                 ui.allocate_ui_with_layout(
-                    Vec2::new(width, ButtonSize::MD.pixels()),
+                    Vec2::new(width, FOOTER_BUTTON_HEIGHT),
                     Layout::left_to_right(Align::Center),
                     |ui| {
-                        let secondary_clicked = self
-                            .secondary_label
-                            .as_ref()
-                            .is_some_and(|label| Button::new(label).outlined().show(ui).clicked());
-                        let primary =
-                            Button::new(&self.primary_label).enabled(self.primary_enabled);
-                        let primary = if self.danger {
-                            primary.danger()
+                        let colors = &theme.ui;
+                        let outline = ui.visuals().widgets.inactive.fg_stroke.color;
+                        let secondary_clicked =
+                            self.secondary_label.as_ref().is_some_and(|label| {
+                                let hover = ui.visuals().widgets.hovered.bg_fill;
+                                let fill = [Color32::TRANSPARENT, hover, hover];
+                                let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, outline);
+                                footer_button(ui, label, fill, outline, stroke).clicked()
+                            });
+                        let (fill, text) = if self.danger {
+                            let fill = [
+                                colors.danger_bg,
+                                colors.danger_bg_hover,
+                                colors.danger_bg_active,
+                            ];
+                            (fill, colors.danger_text)
                         } else {
-                            primary.primary()
+                            // The text colour rather than the accent, so the confirming action
+                            // has the strongest contrast in the dialog in every theme.
+                            let fill = [colors.text, colors.text_secondary, colors.text_muted];
+                            (fill, colors.panel_bg)
                         };
-                        let primary_clicked = primary.show(ui).clicked();
+                        let primary_clicked = ui
+                            .add_enabled_ui(self.primary_enabled, |ui| {
+                                footer_button(ui, &self.primary_label, fill, text, Stroke::NONE)
+                            })
+                            .inner
+                            .clicked();
 
                         (primary_clicked, secondary_clicked)
                     },
@@ -335,6 +364,37 @@ impl DialogFooter {
             secondary,
         )
     }
+}
+
+/// A footer action button: `fill` at rest, hovered and pressed, with `text` and `stroke`.
+fn footer_button(
+    ui: &mut Ui,
+    label: &str,
+    fill: [Color32; 3],
+    text: Color32,
+    stroke: Stroke,
+) -> Response {
+    let radius = ui.active_theme().radius.md;
+    ui.scope(|ui| {
+        let widgets = &mut ui.visuals_mut().widgets;
+        for (visuals, fill) in [
+            (&mut widgets.inactive, fill[0]),
+            (&mut widgets.hovered, fill[1]),
+            (&mut widgets.active, fill[2]),
+        ] {
+            visuals.weak_bg_fill = fill;
+            visuals.bg_stroke = stroke;
+            visuals.fg_stroke.color = text;
+        }
+        let response = ui.add(
+            egui::Button::new(l10n::text(ui.ctx(), label))
+                .corner_radius(radius)
+                .min_size(Vec2::new(FOOTER_BUTTON_MIN_WIDTH, FOOTER_BUTTON_HEIGHT)),
+        );
+        crate::styles::focus::draw_focus_ring(ui, &response, radius);
+        response
+    })
+    .inner
 }
 
 #[cfg(test)]
@@ -446,7 +506,7 @@ mod tests {
             "the window moved after its first visible frame"
         );
         let inner_bottom = second.0.bottom() - ctx.active_theme().spacing.xxl;
-        assert!((second.1.top() + ButtonSize::MD.pixels() - inner_bottom).abs() <= 1.5);
+        assert!((second.1.top() + FOOTER_BUTTON_HEIGHT - inner_bottom).abs() <= 1.5);
     }
 
     #[test]

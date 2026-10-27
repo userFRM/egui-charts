@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Scales and lines settings expose currency and unit headers, scale-mode and price-action visibility, a numeric price-to-bar ratio lock, label overlap policy, and symbol, study and extended-session value colours and visibility. Units come from host metadata without converting data. ([#993](https://github.com/userFRM/egui-charts/issues/993))
+
+- Alert settings filter active levels and set trigger notification lifetime. Inactive levels can be shown dimmed; the existing local sound controls apply the selected volume. ([#995](https://github.com/userFRM/egui-charts/issues/995))
+
+- Event settings independently show earnings badges and dashed earnings breaks, news badges and host news notifications, and supplied ideas. The demo delivers enabled headlines through its notification service and suppresses repeated requests while they remain in its recent log. Economic-event visibility is preserved. ([#996](https://github.com/userFRM/egui-charts/issues/996))
+
+- Symbol settings independently hide candle bodies, borders and wicks, colour candles by the previous close, and request dividend-adjusted history from the host. Candle borders draw inside the body; older saved settings retain borderless defaults. Status line settings show the supplied logo and last day change and set the study legend backdrop opacity, including studies in separate panes. Zero opacity hides the backdrop. ([#992](https://github.com/userFRM/egui-charts/issues/992))
+
+- Alert expiry uses separate date and 24-hour time fields in `AlertDialog::timezone` (UTC by default), with a No expiry choice. Invalid or past times block saving; skipped local times are rejected and newly entered repeated times use their first occurrence. ([#981](https://github.com/userFRM/egui-charts/issues/981))
+
 - `ChartType::VolumeFootprint` and `ChartType::SessionVolumeProfile` draw the bid and ask volume at each price of every bar, and the volume at each price of every session of the visible bars with its point of control, value area and developing point of control. Both are summed from the trades the feed sends and keep up with them while it streams. They need a time-based interval and the instrument's tick size; unsupported intervals and bars before the first held trade draw as candles, and the session profile needs the `studies` feature. The chart type menu lists them around Time Price Opportunity, followed by Heikin Ashi, Renko, Line break, Kagi, Point & Figure and Range, with 13 point gaps between its groups. The demo drops its synthetic footprint and trade profile menu items, which paused the feed, for the chart types. ([#967](https://github.com/userFRM/egui-charts/issues/967))
 - The broker picker's compare button shows brokers side by side, two at first, with an Add broker control for other offered brokers and a Connect button under each. `BrokerTile::facts` supplies their rows, such as pricing, leverage and features, as `BrokerFact::Value` or `BrokerFact::Supported`. Each label gets one row across the brokers; a broker without it shows a dash read as not available, unlike the cross of an unsupported feature. The demo gives its brokers example facts. ([#1003](https://github.com/userFRM/egui-charts/issues/1003))
 - `ui::financials::FinancialsPanel` shows a company's host-supplied `CompanyFinancials` in place of the chart: a pill per `FinancialPage`, a column chart of the chosen row over the page's periods and the table of all its rows, with a Back to chart button, and a message when the host has no figures. The symbol details panel's More menu offers Financials, which `SymbolDetailsPanel::take_financials_request` reports. The demo opens synthetic statements and statistics for its stocks. ([#1002](https://github.com/userFRM/egui-charts/issues/1002))
@@ -328,6 +338,8 @@ All notable changes to this project are documented in this file. The format is b
 - `ToolbarState::lock_all` and `ToolbarState::hide_drawings`, `hide_indicators`, `hide_positions` and `hide_orders` hold what the Lock button and the Hide menu show: the lock button is filled with a closed padlock while `lock_all` is set, and the Hide menu checks each hidden group. The bar sets them from the clicks it reports; a host that changes the chart's state elsewhere sets them too. Migration: struct literals of `ToolbarState` set the five fields or use `..ToolbarState::default()`.
 
 ### Fixed
+
+- Saving an alert with unchanged expiry fields preserves its exact saved instant, including seconds and the later occurrence of a repeated local time when clocks go back. Edited date/time fields still resolve in the explicit entry zone and validate before saving. ([#981](https://github.com/userFRM/egui-charts/issues/981))
 
 - Session volume profiles keep their histogram visible when the session opens before the viewport, retaining the whole session's executed volumes and their proportions. ([#967](https://github.com/userFRM/egui-charts/issues/967))
 - Broker comparisons keep long names on one line and values inside their columns, with full text available on hover, so host-supplied descriptions cannot overlap other brokers or misalign their Connect buttons. ([#1003](https://github.com/userFRM/egui-charts/issues/1003))
@@ -942,6 +954,16 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.
+
+- `EventVisibility` struct literals add `show_earnings_breaks`, `show_news_notifications` and `show_ideas` or end with `..Default::default()`; saved visibility without them takes the defaults.
+
+- `chart::render_alert_levels` takes `active_only` after `labels`; pass `true` to keep drawing only active alerts. `AlertsSettings` literals add `show_active_only` and `notification_seconds` or use `..Default::default()`; older saved settings take defaults. Hosts apply lifetime through `AlertsPanel::set_notification_seconds`; sound playback uses the existing host audio path.
+
+- `ChartTypeStyles`, `CandleColorConfig`, `StatusLineOptions` and `ChartSettingsState` gain the requested candle, status and dividend fields. Struct literals add the fields or use `..Default::default()`; older saved settings take defaults. `chart::render_candle` takes the rising/falling direction after the bar and `&CandlesStyle` last; pass `bar.is_bullish()` and `&CandlesStyle::default()` for the previous drawing behaviour.
+
+- Chart settings use seven tab pictograms, a 206 point sidebar with 40 point rows, neutral selection and an undimmed backdrop. Shared dialog titles use semibold 20 point text, and footer actions are at least 44 by 34 points with a primary fill in the theme text colour. ([#991](https://github.com/userFRM/egui-charts/issues/991))
 
 - The chart layout menu shows arrangement diagrams grouped by chart count from 1 through 16, including available alternatives, and highlights the active arrangement. Hover labels name each arrangement and explain synchronization effects. Short windows scroll the menu. ([#997](https://github.com/userFRM/egui-charts/issues/997))
 

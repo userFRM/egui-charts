@@ -341,7 +341,22 @@ impl DemoNotifications {
     pub(super) fn notify(&self, title: impl Into<String>, symbol: Option<&str>) {
         let mut entry = Notification::new(Utc::now(), title);
         entry.symbol = symbol.map(str::to_owned);
+        self.publish(entry);
+    }
+
+    /// Keep supplied headlines quiet on repeated viewport requests.
+    pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
+        let mut entry = Notification::new(event.time, &event.title);
+        entry.body = event.details.clone();
+        entry.symbol = Some(symbol.into());
+        self.publish(entry);
+    }
+
+    fn publish(&self, entry: Notification) {
         let mut state = self.0.lock().unwrap();
+        if state.0.contains(&entry) {
+            return;
+        }
         if let Some(events) = &state.1 {
             events.push(entry.clone());
         }

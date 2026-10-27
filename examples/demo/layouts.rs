@@ -118,6 +118,10 @@ impl DemoApp {
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
             bars: chart.bars(SeriesId::MAIN).to_vec(),
             samples: self.api_samples,
+            notifications: source
+                .event_visibility()
+                .show_news_notifications
+                .then(|| self.notification_host.clone()),
         })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
@@ -655,8 +659,12 @@ impl DemoApp {
             }
         }
         self.refresh_active_chart();
-        self.settings_state =
-            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
+        self.settings_state = egui_charts::widget::settings::ChartSettingsState {
+            alerts: self.settings_state.alerts.clone(),
+            trading: self.trading.display.clone(),
+            adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
+            ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
+        };
     }
 
     /// The settings the demo keeps between sessions.
