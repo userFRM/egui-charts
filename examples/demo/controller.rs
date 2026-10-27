@@ -1576,6 +1576,15 @@ impl DemoApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
+            TopToolbarAction::AddIndicator(name) => {
+                if let Some(study) = self.indicator_dialog.factory().create(&name) {
+                    self.chart.begin_user_action();
+                    let inputs = study_input_summary(study.as_ref());
+                    let id = self.chart.add_indicator(study);
+                    self.chart.set_indicator_inputs(id, inputs);
+                    self.chart.end_user_action();
+                }
+            }
             TopToolbarAction::SaveIndicatorTemplate => {
                 self.study_templates.open(self.current_study_template());
             }

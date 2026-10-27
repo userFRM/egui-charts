@@ -181,6 +181,17 @@ impl IndicatorDialog {
         }
     }
 
+    /// The studies the dialog lists, sorted by display name, including the feed's metrics.
+    pub fn indicators(&self) -> &[IndicatorInfo] {
+        &self.indicators
+    }
+
+    /// The factory that creates the listed studies, for a host that adds one by its id
+    /// outside the dialog.
+    pub fn factory(&self) -> &IndicatorFactory {
+        &self.factory
+    }
+
     /// Set a custom dialog configuration; its `TRANSPARENT` colours follow the theme
     pub fn with_config(mut self, config: IndicatorDialogConfig) -> Self {
         self.config = config;
