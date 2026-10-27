@@ -610,8 +610,11 @@ impl SettingsDialog {
             (&mut events.show_dividends, "Dividends"),
             (&mut events.show_splits, "Splits"),
             (&mut events.show_earnings, "Earnings"),
+            (&mut events.show_earnings_breaks, "Earnings breaks"),
             (&mut events.show_economic_events, "Economic events"),
             (&mut events.show_news, "News"),
+            (&mut events.show_news_notifications, "News notifications"),
+            (&mut events.show_ideas, "Ideas"),
         ] {
             styled_checkbox(ui, value, label, theme.ui.text);
         }

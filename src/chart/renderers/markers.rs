@@ -135,6 +135,33 @@ pub(crate) fn render_change_mark(painter: &Painter, pos: Pos2, up: bool, color: 
     ));
 }
 
+/// Draws a dashed vertical rule across `coords` at each time, placed as [`render_event_band`]
+/// places its badges, in the badge colour.
+pub(crate) fn render_event_breaks(
+    ui: &egui::Ui,
+    times: &[chrono::DateTime<chrono::Utc>],
+    visible_data: &[Bar],
+    coords: &ChartMapping,
+) {
+    let painter = ui.painter().with_clip_rect(coords.rect);
+    let stroke = Stroke::new(1.0, DESIGN_TOKENS.semantic.extended.info);
+    for &time in times {
+        let Some(at) = crate::model::index_at(visible_data, time) else {
+            continue;
+        };
+        let x = coords.idx_to_x(coords.start_idx) + at.ceil() as f32 * coords.bar_spacing;
+        painter.extend(Shape::dashed_line(
+            &[
+                Pos2::new(x, coords.rect.top()),
+                Pos2::new(x, coords.rect.bottom()),
+            ],
+            stroke,
+            4.0,
+            4.0,
+        ));
+    }
+}
+
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
 /// An event between bars uses the first bar at or after its time; whitespace extrapolates the
 /// nearest bar interval. Colliding badges stack upward. Returns the clicked event ID;

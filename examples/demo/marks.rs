@@ -117,12 +117,13 @@ impl Marks for DemoMarks {
                 i % 40 == 0 && bar.time >= request.from && bar.time <= request.to
             })
         {
-            let kind = match (index / 40) % 5 {
+            let kind = match (index / 40) % 6 {
                 0 => EventKind::Dividend,
                 1 => EventKind::Split,
                 2 => EventKind::Earnings,
                 3 => EventKind::Economic,
-                _ => EventKind::News,
+                4 => EventKind::News,
+                _ => EventKind::Idea,
             };
             page.events.push(TimeScaleEvent {
                 id: format!("demo-event-{index}"),

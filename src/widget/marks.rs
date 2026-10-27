@@ -321,6 +321,7 @@ mod tests {
             EventKind::Earnings,
             EventKind::Economic,
             EventKind::News,
+            EventKind::Idea,
         ];
         chart.set_time_scale_events(
             kinds
@@ -341,13 +342,17 @@ mod tests {
                 #[cfg(not(feature = "studies"))]
                 continue;
             }
-            for selected in [None, Some(0), Some(1), Some(2), Some(3), Some(4), None] {
+            for selected in [None, Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), None] {
                 let visibility = EventVisibility {
                     show_dividends: selected == Some(0),
                     show_splits: selected == Some(1),
                     show_earnings: selected == Some(2),
+                    // Breaks follow their own switch, not the earnings badge.
+                    show_earnings_breaks: selected == Some(1),
                     show_economic_events: selected == Some(3),
                     show_news: selected == Some(4),
+                    show_news_notifications: false,
+                    show_ideas: selected == Some(5),
                 };
                 #[cfg(feature = "ui")]
                 {
@@ -369,7 +374,14 @@ mod tests {
                         "{kind:?}"
                     );
                 }
-                assert_eq!(chart.time_scale_events.len(), 5);
+                let info = crate::tokens::DESIGN_TOKENS.semantic.extended.info;
+                assert_eq!(
+                    shapes.iter().any(|s| matches!(s, Shape::LineSegment { points, stroke }
+                        if points[0].x == points[1].x && stroke.color == info)),
+                    selected == Some(1),
+                    "earnings break"
+                );
+                assert_eq!(chart.time_scale_events.len(), kinds.len());
                 if separate_pane && selected.is_some() {
                     let badge = shapes
                         .iter()

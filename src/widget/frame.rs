@@ -535,11 +535,17 @@ impl Chart {
             if let Some(source) = source_marks {
                 events.extend_from_slice(&source.time_scale_marks);
             }
+            let mut breaks = Vec::new();
             for event in self
                 .time_scale_events
                 .iter()
                 .chain(source_marks.into_iter().flat_map(|p| &p.events))
             {
+                if event.kind == crate::model::EventKind::Earnings
+                    && self.event_visibility.show_earnings_breaks
+                {
+                    breaks.push(event.time);
+                }
                 if self.event_visibility.shows(event.kind) {
                     events.push(
                         crate::model::Marker::event(event.time, event.kind.label())
@@ -548,6 +554,7 @@ impl Chart {
                     );
                 }
             }
+            renderers::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
             if let Some(id) =
                 renderers::render_event_band(ui, &events, self.state.shown(), &coords, baseline)
             {

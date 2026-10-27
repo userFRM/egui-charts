@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The Events settings tab separates earnings badges from earnings breaks, a dashed vertical line at each earnings event (`EventVisibility::show_earnings_breaks`). It adds News notifications (`show_news_notifications`), which the host reads before raising a notification for a headline it supplies, and shows or hides host-supplied ideas, the new `EventKind::Idea` badged "I" (`show_ideas`).
+
 - The Alerts settings tab adds Show active alerts only and the number of seconds a trigger notification stays on screen (`AlertsSettings::show_active_only`, `notification_seconds`). With `active_only` unset, `chart::render_alert_levels` draws triggered, disabled and expired alerts dimmed. `AlertsPanel::set_notification_seconds` sets the lifetime of trigger notifications, five seconds by default.
 
 - The Symbol settings tab switches candle bodies, borders and wicks on and off independently and can colour candles by the previous close. `ChartTypeStyles::candles` holds the body and wick visibility and the colouring as a `CandlesStyle`; borders follow `ChartConfig::candle_border_width` and are now drawn inside the body. Adjust data for dividends sets `ChartSettingsState::adjust_for_dividends`, which the host applies by reloading adjusted history, as the demo does. The Status line tab shows or hides the legend logo (`ChartConfig::show_legend_badge`) and the change of the last close from the previous session close (`show_last_day_change`), and sets the opacity of the backdrop behind study legend rows (`show_indicator_backdrop`, `indicator_backdrop_opacity`).
@@ -873,6 +875,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `EventVisibility` struct literals add `show_earnings_breaks`, `show_news_notifications` and `show_ideas` or end with `..Default::default()`; saved visibility without them takes the defaults.
 
 - `chart::render_alert_levels` takes `active_only` after `labels`; pass `true` to keep drawing only active alerts. `AlertsSettings` struct literals add `show_active_only` and `notification_seconds` or end with `..Default::default()`; saved settings without them take the defaults.
 
