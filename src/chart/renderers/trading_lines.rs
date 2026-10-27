@@ -71,11 +71,14 @@ pub enum TradingLabelAlignment {
 impl TradingLabelAlignment {
     fn left(self, rect: Rect, width: f32, inset: f32) -> f32 {
         let left = rect.left() + 8.0;
-        let right = (rect.right() - inset - width).max(left);
+        let right = rect.right() - inset - width;
+        if right < left {
+            return right;
+        }
         match self {
             Self::Left => left,
             Self::Center => (rect.center().x - width / 2.0).clamp(left, right),
-            Self::Right => rect.right() - inset - width,
+            Self::Right => right,
         }
     }
 }
@@ -485,17 +488,18 @@ fn show_position(
     let reverse = options.close && options.reverse;
     let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
     let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
-    let (left, right) = match options.label_alignment {
-        TradingLabelAlignment::Right => {
-            let right = mapping.rect.right() - inset;
-            // Preserve the rounding at the edge where the reverse button moves to another row.
-            let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
-            (left, right)
-        }
-        alignment => {
-            let left = alignment.left(mapping.rect, label_width, inset);
-            (left, left + label_width)
-        }
+    let (left, right) = if options.label_alignment == TradingLabelAlignment::Right
+        || label_width > mapping.rect.width() - 16.0
+    {
+        let right = mapping.rect.right() - inset;
+        // Preserve the rounding at the edge where the reverse button moves to another row.
+        let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
+        (left, right)
+    } else {
+        let left = options
+            .label_alignment
+            .left(mapping.rect, label_width, inset);
+        (left, left + label_width)
     };
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
     render_price_line(

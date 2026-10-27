@@ -1585,15 +1585,11 @@ impl DemoApp {
             }
             TopToolbarAction::TakeScreenshot
             | TopToolbarAction::CopyImage
-            | TopToolbarAction::OpenImage
-            | TopToolbarAction::Publish => {
+            | TopToolbarAction::OpenImage => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                // The demo has no sharing service, so a published image goes to the clipboard.
                 let target = match action {
-                    TopToolbarAction::CopyImage | TopToolbarAction::Publish => {
-                        ScreenshotTarget::Clipboard
-                    }
+                    TopToolbarAction::CopyImage => ScreenshotTarget::Clipboard,
                     TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
                     _ => ScreenshotTarget::File(None),
                 };
@@ -3125,7 +3121,7 @@ fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
     std::fs::write(&path, png).map_err(|error| error.to_string())?;
-    ctx.open_url(egui::OpenUrl::new_tab(format!("file://{}", path.display())));
+    ctx.open_url(egui::OpenUrl::new_tab(path.to_string_lossy()));
     Ok("Image opened in viewer".into())
 }
 
@@ -4501,14 +4497,14 @@ mod tests {
                         egui::OutputCommand::OpenUrl(url) =>
                             !copy
                                 && url.new_tab
-                                && url.url.starts_with("file://")
+                                && std::path::Path::new(&url.url).is_absolute()
                                 && url.url.ends_with(".png"),
                         _ => false,
                     })
             );
             for command in &output.platform_output.commands {
                 if let egui::OutputCommand::OpenUrl(url) = command {
-                    std::fs::remove_file(url.url.strip_prefix("file://").unwrap()).unwrap();
+                    std::fs::remove_file(&url.url).unwrap();
                 }
             }
             output.drop_without_applying_deltas();

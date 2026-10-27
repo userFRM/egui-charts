@@ -1304,9 +1304,13 @@ mod tests {
     /// Line gestures wait for the actual confirmation button and send one broker call.
     #[test]
     fn line_changes_wait_for_confirmation_and_send_one_call() {
+        use crate::chart::TradingLabelAlignment::{Center, Left, Right};
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
-            for width in [800.0, 320.0, 260.0] {
+            for (width, alignment) in [800.0, 320.0, 260.0]
+                .into_iter()
+                .flat_map(|width| [Left, Center, Right].map(|alignment| (width, alignment)))
+            {
                 for instant in [false, true] {
                     for (operation, edge, handle) in [
                         ("Cancel order", false, false),
@@ -1334,6 +1338,7 @@ mod tests {
                         let mut trading = Trading::default();
                         trading.set_service(broker.clone());
                         trading.display.instant_orders = instant;
+                        trading.display.label_alignment = alignment;
                         let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                         chart.symbol = "SYM".into();
                         if edge {
@@ -1378,6 +1383,13 @@ mod tests {
                                         text.galley.text().to_owned(),
                                         text.galley.rect.translate(text.pos.to_vec2()),
                                     )),
+                                    egui::Shape::Rect(rect)
+                                        if rect.rect.size() == egui::vec2(22.0, 22.0)
+                                            && rect.stroke.width == 1.0
+                                            && rect.stroke.color == theme.chart.candle_down =>
+                                    {
+                                        Some(("Reverse position".into(), rect.rect))
+                                    }
                                     _ => None,
                                 })
                                 .collect();
@@ -1432,19 +1444,19 @@ mod tests {
                         let x = match operation {
                             "Modify order" if handle => mapping.rect.right() - 42.0,
                             "Modify order" => find(texts.clone(), "Limit").unwrap().center().x,
-                            "Reverse position" => take_profit.left() - 30.2,
                             "Place take profit" => take_profit.center().x,
                             "Place stop loss" => {
-                                find(texts, "SL").expect("an SL button").center().x
+                                find(texts.clone(), "SL").expect("an SL button").center().x
                             }
                             _ => close.x,
                         };
-                        let start =
-                            if operation == "Reverse position" && x - 11.0 < mapping.rect.left() {
-                                egui::pos2(take_profit.left() - 6.0 + 11.0, y + 26.0)
-                            } else {
-                                egui::pos2(x, y)
-                            };
+                        let start = if operation == "Reverse position" {
+                            find(texts.clone(), "Reverse position")
+                                .expect("reverse button")
+                                .center()
+                        } else {
+                            egui::pos2(x, y)
+                        };
                         assert!(mapping.rect.contains(start), "{operation} at {width}");
                         frame(
                             &mut trading,
@@ -1472,7 +1484,8 @@ mod tests {
                         if !instant {
                             assert!(
                                 trading.pending.is_some(),
-                                "{operation} at {width}, handle={handle}, instant={instant}"
+                                "{operation} at {width}, {alignment:?}, handle={handle}, instant={instant}, start={start:?}, TP={take_profit:?}, pane={:?}",
+                                mapping.rect
                             );
                             assert!(broker.placed.lock().unwrap().is_empty());
                             assert!(broker.cancelled.lock().unwrap().is_empty());
