@@ -171,7 +171,7 @@ mod tests {
                 let at = |labels: &[(String, Pos2)], name: &str| {
                     labels.iter().find(|(label, _)| label == name).unwrap().1
                 };
-                let interval = at(&labels, "1D");
+                let interval = at(&labels, "D");
                 // Starred intervals can push the host actions past the window at any width.
                 frame(vec![Event::PointerMoved(Pos2::new(150.0, interval.y))]);
                 frame(vec![Event::MouseWheel {
