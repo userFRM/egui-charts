@@ -326,7 +326,7 @@ pub struct DemoApp {
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
-    timeframe_toolbar: TimeframeToolbar,
+    pub(crate) timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
 
     // Dialogs (each owns its open/closed state).
@@ -370,7 +370,7 @@ pub struct DemoApp {
     data_window_expanded: bool,
 
     // Host-owned session-only alerts, shown through the library service connection.
-    alerts: AlertsPanel,
+    pub(crate) alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
     audio: audio::AudioPlayer,
     alert_monitors: std::collections::HashMap<
@@ -381,7 +381,7 @@ pub struct DemoApp {
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
     pub(crate) trading: egui_charts::ui::trading::Trading,
-    paper: Arc<egui_charts::services::PaperAccount>,
+    pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
     // The account settings ask whether to reset the paper account.
@@ -451,6 +451,14 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
 
 impl DemoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_at(cc, chrono::Utc::now(), false)
+    }
+
+    pub(crate) fn new_at(
+        cc: &eframe::CreationContext<'_>,
+        now: chrono::DateTime<chrono::Utc>,
+        paused: bool,
+    ) -> Self {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
@@ -479,7 +487,8 @@ impl DemoApp {
         options.time_scale.right_offset_pixels = Some(65.0 - 6.1 * 0.5 - 1.0);
         options.time_scale.time_visible = true;
         options.time_scale.seconds_visible = true;
-        let live = Arc::new(LiveFeed::new(symbol, chrono::Utc::now()));
+        let live = Arc::new(LiveFeed::new(symbol, now));
+        live.set_paused(paused);
         let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
@@ -2281,6 +2290,18 @@ impl DemoApp {
         }
     }
 
+    /// Advance the sample clock explicitly while preparing a paused session.
+    #[allow(dead_code, reason = "used by the documentation captures")]
+    pub(crate) fn advance_sample_to(&mut self, time: chrono::DateTime<chrono::Utc>) {
+        self.live.set_paused(false);
+        let mut cursor = self.live.now();
+        while cursor < time {
+            cursor = (cursor + chrono::Duration::seconds(1)).min(time);
+            self.live.advance(cursor);
+        }
+        self.live.set_paused(true);
+    }
+
     /// Connects the paper account and opens its panel, as its tile in the broker picker does.
     pub(crate) fn connect_paper(&mut self) {
         self.trading.set_service(self.paper.clone());
@@ -2294,7 +2315,9 @@ impl DemoApp {
         use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
 
         match self.broker_picker.show(ui.ctx()) {
-            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => self.connect_paper(),
+            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
+                self.connect_paper()
+            }
             Some(BrokerPickerAction::Connect(_)) => {
                 self.notify("Example brokers have no account behind them in this demo");
             }
@@ -3185,6 +3208,31 @@ mod tests {
     use egui_charts::model::LineStyle;
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    #[test]
+    fn advancing_a_paused_sample_keeps_intermediate_bars() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let start = "2026-10-27T19:29:50Z".parse().unwrap();
+        let mut app = DemoApp::new_at(&cc, start, true);
+        let end = start + chrono::Duration::minutes(3);
+        app.advance_sample_to(end);
+        assert!(app.live.paused());
+        assert_eq!(app.live.now(), end);
+        let bars = app.live.snapshot(
+            Timeframe::Min1,
+            egui_charts::model::BarClock::new(Timeframe::Min1),
+            app.chart.extended_hours(),
+        );
+        let added: Vec<_> = bars.iter().filter(|bar| bar.time > start).collect();
+        assert_eq!(added.len(), 3);
+        assert!(added.iter().all(|bar| bar.volume > 0.0));
+        assert!(
+            added
+                .windows(2)
+                .all(|pair| pair[1].time - pair[0].time == chrono::Duration::minutes(1))
+        );
+    }
 
     #[test]
     fn replay_prices_fill_the_connected_paper_account() {
