@@ -233,7 +233,6 @@ impl Chart {
             self.history.edits += 1;
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
-            self.config.lock_price_to_bar_ratio = false;
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -1297,6 +1296,7 @@ mod tests {
 
     /// Changing symbols fits the new prices, with or without a feed. Repeating a symbol,
     /// replacing its bars or reloading its feed preserves the user's manual range.
+    /// Initial ratio-lock configuration still applies to the first frame of supplied bars.
     #[test]
     fn symbol_changes_reset_manual_price_scaling() {
         for with_feed in [false, true] {
@@ -1305,14 +1305,22 @@ mod tests {
                 let mut chart = if with_feed {
                     fed(&feed, Some("A"))
                 } else {
-                    ChartBuilder::new().with_symbol("A").build()
+                    let mut chart = ChartBuilder::new()
+                        .with_config(crate::config::ChartConfig {
+                            lock_price_to_bar_ratio: locked,
+                            ..Default::default()
+                        })
+                        .with_symbol("A")
+                        .build();
+                    chart.set_data(SeriesId::MAIN, bars(6));
+                    chart
                 };
                 let mut frames = Frames::new();
                 frames.run(&mut chart);
                 if with_feed {
                     feed.page().send(page(bars(6), true));
                 } else {
-                    chart.set_data(SeriesId::MAIN, bars(6));
+                    assert_eq!(chart.state.price_scale().bar_ratio_locked(), locked);
                 }
                 frames.run(&mut chart);
                 chart.price_scale_mut().set_range(80.0, 120.0);
