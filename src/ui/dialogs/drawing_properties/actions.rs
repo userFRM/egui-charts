@@ -171,6 +171,7 @@ impl DrawingProps {
                     drawing.fib_config = settings.fib_config.clone();
                     drawing.pitchfork = settings.pitchfork.clone();
                     drawing.gann = settings.gann.clone();
+                    drawing.ghost_feed = settings.ghost_feed;
                     drawing.position_size = settings.position_size;
                     drawing.position_sizing = settings.position_sizing;
                     drawing.volume_profile = settings.volume_profile;
@@ -239,6 +240,11 @@ impl DrawingProps {
                     .any(|v| !v.is_finite() || *v <= 0.0)
             }) {
                 return Err("Gann fan and arc ratios must be positive and finite");
+            }
+            if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
+                return Err(
+                    "Ghost feed spacing must be positive and wick nonnegative, both finite",
+                );
             }
             if !settings.position_sizing.is_valid() {
                 return Err(

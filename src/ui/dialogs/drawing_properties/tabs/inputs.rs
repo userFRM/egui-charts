@@ -29,6 +29,7 @@ impl InputsTab {
                 | Tool::GannBox
                 | Tool::GannSquare
                 | Tool::GannFixed
+                | Tool::GhostFeed
                 | Tool::LongPos
                 | Tool::ShortPos
                 | Tool::FixedRangeVolumeProfile
@@ -114,6 +115,22 @@ impl InputsTab {
                 }
                 if config != original {
                     drawing.gann = Some(config);
+                }
+            }
+            Tool::GhostFeed => {
+                let mut config = drawing.ghost_feed.unwrap_or_default();
+                let original = config;
+                FormGrid::new("ghost_feed_inputs").show(ui, |ui| {
+                    number(
+                        ui,
+                        "Candle spacing (bars)",
+                        &mut config.spacing,
+                        0.1..=100.0,
+                    );
+                    number(ui, "Wick (fraction of range)", &mut config.wick, 0.0..=1.0);
+                });
+                if config != original {
+                    drawing.ghost_feed = Some(config);
                 }
             }
             Tool::LongPos | Tool::ShortPos => {

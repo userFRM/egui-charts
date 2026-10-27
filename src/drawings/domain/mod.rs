@@ -7,6 +7,7 @@
 mod coordinates;
 mod drawing;
 mod gann;
+mod ghost_feed;
 mod options;
 mod pitchfork;
 mod template;
@@ -15,6 +16,8 @@ pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeEr
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
 pub use gann::{GannConfig, GannFanDirection};
+pub(crate) use ghost_feed::GhostCandleScreen;
+pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
     PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
