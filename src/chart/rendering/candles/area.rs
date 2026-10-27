@@ -11,10 +11,9 @@ use super::line::{draw_bar_line, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::model::{
-    AreaStyle, Bar, BaselineLevel, BaselineStyle, LinePlotStyle, LineStyle, PriceSource,
+    AreaStyle, Bar, BaselineLevel, BaselineStyle, HlcAreaStyle, LinePlotStyle, LineStyle,
+    PriceSource,
 };
-
-const HLC_AREA_ALPHA: u8 = 30;
 
 pub(super) fn render_area(
     painter: &Painter,
@@ -82,6 +81,7 @@ pub(super) fn render_hlc_area(
     idx_to_coord: impl Fn(usize, f32) -> f32,
     bullish_color: Color32,
     bearish_color: Color32,
+    style: &HlcAreaStyle,
     price_source: PriceSource,
 ) {
     if visible_data.is_empty() {
@@ -98,11 +98,18 @@ pub(super) fn render_hlc_area(
         price_source,
     );
 
-    draw_hlc_fill(painter, visible_data, &points, bullish_color, bearish_color);
+    draw_hlc_fill(
+        painter,
+        visible_data,
+        &points,
+        bullish_color,
+        bearish_color,
+        style.fill_opacity,
+    );
     let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
     let close_line = LinePlotStyle {
         color: bullish_color,
-        width: DESIGN_TOKENS.stroke.thick,
+        width: style.line_width,
         style: LineStyle::Solid,
         ..Default::default()
     };
@@ -280,8 +287,11 @@ fn draw_hlc_fill(
     points: &[HlcPoint],
     bullish: Color32,
     bearish: Color32,
+    opacity: f32,
 ) {
-    let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), HLC_AREA_ALPHA);
+    // `as u8` saturates and maps NaN to 0.
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
     let (up, down) = (tint(bullish), tint(bearish));
 
     // Both quads are convex: high >= close >= low at both ends of a segment.
@@ -659,6 +669,80 @@ mod tests {
                 let expected = (115.0 * (1.0 - fraction)).round() as u8;
                 assert_eq!(vertex.color.a(), expected, "{top} {relative} {inverted}");
             }
+        }
+    }
+
+    /// The fills take the style's opacity as an alpha of 0 to 255 and the close line its width;
+    /// opacities outside 0 to 1 are clamped, a non-finite opacity draws no fill, and a
+    /// non-positive width hides the line.
+    #[test]
+    fn hlc_area_fill_opacity_and_close_line_width_follow_the_style() {
+        use crate::scales::{PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let bars: Vec<_> = (0..2)
+            .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 60.0, 40.0, 55.0, 1.0))
+            .collect();
+        for (fill_opacity, line_width, alphas, widths) in [
+            (HlcAreaStyle::default().fill_opacity, 2.0, vec![30, 30], vec![2.0]),
+            (0.5, 4.0, vec![128, 128], vec![4.0]),
+            (2.0, 1.0, vec![255, 255], vec![1.0]),
+            (f32::NAN, 0.0, vec![], vec![]),
+        ] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_hlc_area(
+                    &painter,
+                    &context,
+                    &bars,
+                    0,
+                    false,
+                    0.0,
+                    &colors,
+                    &map,
+                    0.0,
+                    |i, _| 10.0 + i as f32 * 50.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                    &HlcAreaStyle {
+                        fill_opacity,
+                        line_width,
+                    },
+                    PriceSource::Close,
+                );
+            });
+            let mut fills = Vec::new();
+            let mut lines = Vec::new();
+            for shape in &output.shapes {
+                if let Shape::Path(path) = &shape.shape {
+                    if path.fill != Color32::TRANSPARENT {
+                        fills.push(path.fill.a());
+                    } else if path.stroke.width > 0.0 {
+                        lines.push(path.stroke.width);
+                    }
+                }
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(fills, alphas, "{fill_opacity}");
+            assert_eq!(lines, widths, "{line_width}");
         }
     }
 }

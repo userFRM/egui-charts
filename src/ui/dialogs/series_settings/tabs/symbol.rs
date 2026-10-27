@@ -53,6 +53,26 @@ impl SymbolTab {
                     Self::fill_row(ui, "Top fill", &mut styles.area.top_fill);
                     Self::fill_row(ui, "Bottom fill", &mut styles.area.bottom_fill);
                 }
+                ChartType::HlcArea => {
+                    let label = ui.label(l10n::text(ui.ctx(), "Fill opacity"));
+                    ui.add(
+                        egui::DragValue::new(&mut styles.hlc_area.fill_opacity)
+                            .range(0.0..=1.0)
+                            .speed(0.01),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Line width"));
+                    ui.add(
+                        egui::DragValue::new(&mut styles.hlc_area.line_width)
+                            .range(0.0..=10.0)
+                            .speed(0.1)
+                            .suffix(l10n::text(ui.ctx(), " pt")),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                    Self::candle_colors_section(ui, settings);
+                }
                 ChartType::Baseline => {
                     ui.label(l10n::text(ui.ctx(), "Above base"));
                     ui.end_row();

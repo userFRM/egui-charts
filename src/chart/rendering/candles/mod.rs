@@ -281,6 +281,7 @@ pub fn render_chart_type(
                 &idx_to_coord,
                 params.bullish_color(),
                 params.bearish_color(),
+                &params.type_params.styles.hlc_area,
                 params.price_source(),
             );
         }

@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The HLC area chart's fill opacity and close line width are set through `ChartTypeStyles::hlc_area` and the series settings Symbol tab, and persist with the chart type parameters. Defaults keep the former look; opacities outside 0 to 1 are clamped and a non-positive width hides the line. Migration: `ChartTypeStyles` literals add `hlc_area: HlcAreaStyle::default()` or use `..Default::default()`. ([#1103](https://github.com/userFRM/egui-charts/issues/1103))
+
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 
 - The snapshot menu offers Download image, Copy image and Open in new tab. Hosts with publishing enable `TopToolbarState::can_publish_image` and handle Copy link, Post image and Publish through their service. The demo copies images or opens them in a browser tab or native viewer. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
