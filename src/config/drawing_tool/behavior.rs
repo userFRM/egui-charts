@@ -59,7 +59,7 @@ impl DrawingToolType {
             | Self::Tweet
             | Self::Idea => DrawingInteractionMode::SingleClick,
 
-            // Drag-to-draw tools
+            // Drag-to-draw tools also accept two successive clicks.
             Self::Rect
             | Self::Circle
             | Self::Ellipse

@@ -23,10 +23,9 @@
 //! stoch_rsi.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -38,9 +37,21 @@ pub struct StochasticRSI {
     smooth_k: usize,
     smooth_d: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     k_color: Color32,
     d_color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<f64>,
+    count: usize,
+    gain: f64,
+    loss: f64,
+    rsi: std::collections::VecDeque<f64>,
+    k: std::collections::VecDeque<f64>,
+    d: std::collections::VecDeque<f64>,
 }
 
 impl StochasticRSI {
@@ -58,6 +69,7 @@ impl StochasticRSI {
             smooth_k: smooth_k.max(1),
             smooth_d: smooth_d.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             k_color: palette::BLUE,
             d_color: palette::RED,
             visible: true,
@@ -74,116 +86,6 @@ impl StochasticRSI {
         self.k_color = k_color;
         self.d_color = d_color;
         self
-    }
-
-    /// Calculate RSI values
-    fn calculate_rsi(data: &[Bar], period: usize) -> Vec<f64> {
-        let mut rsi = vec![f64::NAN; data.len()];
-        if data.len() < period + 1 {
-            return rsi;
-        }
-
-        let mut gains = vec![0.0; data.len()];
-        let mut losses = vec![0.0; data.len()];
-
-        // Calculate gains and losses
-        for i in 1..data.len() {
-            let change = data[i].close - data[i - 1].close;
-            if change > 0.0 {
-                gains[i] = change;
-            } else {
-                losses[i] = -change;
-            }
-        }
-
-        // First avg
-        let mut avg_gain: f64 = gains[1..=period].iter().sum::<f64>() / period as f64;
-        let mut avg_loss: f64 = losses[1..=period].iter().sum::<f64>() / period as f64;
-
-        if avg_loss.abs() < 1e-10 {
-            rsi[period] = 100.0;
-        } else {
-            let rs = avg_gain / avg_loss;
-            rsi[period] = 100.0 - (100.0 / (1.0 + rs));
-        }
-
-        // Subsequent values using Wilder's smoothing
-        for i in (period + 1)..data.len() {
-            avg_gain = (avg_gain * (period - 1) as f64 + gains[i]) / period as f64;
-            avg_loss = (avg_loss * (period - 1) as f64 + losses[i]) / period as f64;
-
-            if avg_loss.abs() < 1e-10 {
-                rsi[i] = 100.0;
-            } else {
-                let rs = avg_gain / avg_loss;
-                rsi[i] = 100.0 - (100.0 / (1.0 + rs));
-            }
-        }
-
-        rsi
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        let min_period = self
-            .rsi_period
-            .saturating_add(self.stoch_period)
-            .saturating_add(self.smooth_k)
-            .saturating_add(self.smooth_d)
-            .saturating_sub(2);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Step 1: Calculate RSI
-        let rsi = Self::calculate_rsi(data, self.rsi_period);
-
-        // Step 2: Calculate Stochastic of RSI
-        let mut stoch_rsi = vec![f64::NAN; data.len()];
-        for i in (self.rsi_period + self.stoch_period - 1)..data.len() {
-            let start = i + 1 - self.stoch_period;
-            let mut min_rsi = f64::INFINITY;
-            let mut max_rsi = f64::NEG_INFINITY;
-
-            for j in start..=i {
-                if !rsi[j].is_nan() {
-                    min_rsi = min_rsi.min(rsi[j]);
-                    max_rsi = max_rsi.max(rsi[j]);
-                }
-            }
-
-            if (max_rsi - min_rsi).abs() < 1e-10 {
-                stoch_rsi[i] = 0.5; // Middle when range is zero
-            } else {
-                stoch_rsi[i] = (rsi[i] - min_rsi) / (max_rsi - min_rsi);
-            }
-        }
-
-        let k_line = helpers::sma(&stoch_rsi, self.smooth_k);
-        let d_line = helpers::sma(&k_line, self.smooth_d);
-
-        // Build output
-        for i in 0..data.len() {
-            if k_line[i].is_nan() || d_line[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push_lines(&[
-                    k_line[i] * 100.0, // Scale to 0-100
-                    d_line[i] * 100.0,
-                ]);
-            }
-        }
-
-        values
     }
 }
 
@@ -217,7 +119,81 @@ impl Indicator for StochasticRSI {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let Some(previous) = state.previous.replace(bar.close) else {
+                    return IndicatorValue::None;
+                };
+                let change = bar.close - previous;
+                state.count += 1;
+                let gain = change.max(0.0);
+                let loss = (-change).max(0.0);
+                if state.count <= self.rsi_period {
+                    state.gain += gain;
+                    state.loss += loss;
+                    if state.count < self.rsi_period {
+                        return IndicatorValue::None;
+                    }
+                    state.gain /= self.rsi_period as f64;
+                    state.loss /= self.rsi_period as f64;
+                } else {
+                    state.gain =
+                        (state.gain * (self.rsi_period - 1) as f64 + gain) / self.rsi_period as f64;
+                    state.loss =
+                        (state.loss * (self.rsi_period - 1) as f64 + loss) / self.rsi_period as f64;
+                }
+                let rsi = if state.loss.abs() < 1e-10 {
+                    100.0
+                } else {
+                    100.0 - 100.0 / (1.0 + state.gain / state.loss)
+                };
+                state.rsi.push_back(rsi);
+                if state.rsi.len() > self.stoch_period {
+                    state.rsi.pop_front();
+                }
+                if state.rsi.len() < self.stoch_period {
+                    return IndicatorValue::None;
+                }
+                let low = state.rsi.iter().copied().fold(f64::INFINITY, f64::min);
+                let high = state.rsi.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let stoch = if (high - low).abs() < 1e-10 {
+                    0.5
+                } else {
+                    (rsi - low) / (high - low)
+                };
+                state.k.push_back(stoch);
+                if state.k.len() > self.smooth_k {
+                    state.k.pop_front();
+                }
+                if state.k.len() < self.smooth_k {
+                    return IndicatorValue::None;
+                }
+                let k = state.k.iter().sum::<f64>() / self.smooth_k as f64;
+                state.d.push_back(k);
+                if state.d.len() > self.smooth_d {
+                    state.d.pop_front();
+                }
+                if state.d.len() < self.smooth_d {
+                    return IndicatorValue::None;
+                }
+                let d = state.d.iter().sum::<f64>() / self.smooth_d as f64;
+                if k.is_nan() || d.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![k * 100.0, d * 100.0])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

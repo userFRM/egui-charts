@@ -1,7 +1,7 @@
 use super::clamp_param;
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -13,8 +13,18 @@ pub struct AccumulationSwingIndex {
     /// Limit move (typically high value for stocks, actual limit for futures)
     limit_move: f64,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    bars: usize,
+    count: usize,
+    first: Option<usize>,
+    previous: Option<Bar>,
+    total: f64,
 }
 
 impl AccumulationSwingIndex {
@@ -24,6 +34,7 @@ impl AccumulationSwingIndex {
         Self {
             limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::UP, // Teal
             visible: true,
         }
@@ -64,29 +75,6 @@ impl AccumulationSwingIndex {
 
         50.0 * ((c - cy) + 0.5 * (c - o) + 0.25 * (cy - oy)) / r * (k / limit)
     }
-
-    /// The values over `data`, every bar of which has a finite open, high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let mut cumulative = 0.0;
-        values.push(IndicatorValue::Single(0.0)); // First bar
-
-        for i in 1..data.len() {
-            let si = Self::calculate_swing_idx(&data[i], &data[i - 1], self.limit_move);
-            cumulative += si;
-            values.push(IndicatorValue::Single(cumulative));
-        }
-
-        values
-    }
 }
 
 impl Default for AccumulationSwingIndex {
@@ -109,13 +97,43 @@ impl Indicator for AccumulationSwingIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bars;
+                state.bars += 1;
+                if !([bar.open, bar.high, bar.low, bar.close]
+                    .iter()
+                    .all(|x| x.is_finite()))
+                {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                if let Some(previous) = &state.previous {
+                    state.total += Self::calculate_swing_idx(bar, previous, self.limit_move);
+                }
+                state.first.get_or_insert(index);
+                state.previous = Some(bar.clone());
+                IndicatorValue::Single(state.total)
+            });
+        // The batch definition reveals the initial zero only once a second usable bar exists.
+        if let Some(first) = self.stepper.state().first {
+            self.values.set(
+                first,
+                if self.stepper.state().count < 2 {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(0.0)
+                },
+            );
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

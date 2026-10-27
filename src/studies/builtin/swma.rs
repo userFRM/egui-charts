@@ -23,6 +23,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -67,6 +68,37 @@ impl SWMA {
     }
 }
 
+impl SWMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        // SWMA requires 4 bars min
+        if data.len() < 4 {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // First 3 bars have no value
+        for _ in 0..3 {
+            values.push(IndicatorValue::None);
+        }
+
+        // Calculate SWMA for remaining bars
+        for i in 3..data.len() {
+            let p1 = data[i - 3].close;
+            let p2 = data[i - 2].close;
+            let p3 = data[i - 1].close;
+            let p4 = data[i].close;
+
+            let swma = Self::swma_val(p1, p2, p3, p4);
+            values.push(IndicatorValue::Single(swma));
+        }
+        values
+    }
+}
+
 impl Indicator for SWMA {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -83,31 +115,23 @@ impl Indicator for SWMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        // SWMA requires 4 bars min
-        if data.len() < 4 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(3),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        // First 3 bars have no value
-        for _ in 0..3 {
-            self.values.push(IndicatorValue::None);
-        }
-
-        // Calculate SWMA for remaining bars
-        for i in 3..data.len() {
-            let p1 = data[i - 3].close;
-            let p2 = data[i - 2].close;
-            let p3 = data[i - 1].close;
-            let p4 = data[i].close;
-
-            let swma = Self::swma_val(p1, p2, p3, p4);
-            self.values.push(IndicatorValue::Single(swma));
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

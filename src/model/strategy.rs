@@ -446,6 +446,9 @@ impl StrategyReport {
             if let Some(previous) = start.checked_sub(1).and_then(|i| bars.get(i)) {
                 let close = match self.timeframe {
                     Timeframe::Month1 => previous.time.checked_add_months(chrono::Months::new(1)),
+                    Timeframe::Months(count) => previous
+                        .time
+                        .checked_add_months(chrono::Months::new(count.get())),
                     tf if tf.is_trade_based() => bars.get(start).map(|b| b.time),
                     tf => previous.time.checked_add_signed(tf.duration()),
                 };
@@ -1120,6 +1123,7 @@ mod tests {
         for (timeframe, entry) in [
             (Timeframe::Ms500, TimeDelta::milliseconds(250)),
             (Timeframe::Month1, TimeDelta::days(30)),
+            ("3month".parse().unwrap(), TimeDelta::days(90)),
             (
                 Timeframe::Ticks(std::num::NonZeroU64::new(10).unwrap()),
                 TimeDelta::minutes(30),

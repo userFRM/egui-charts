@@ -35,6 +35,7 @@
 use crate::model::session::local_time;
 use crate::model::{Bar, BarClock, TimezoneId};
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValues};
 use chrono::{NaiveTime, Timelike};
 use egui::Color32;
@@ -120,6 +121,35 @@ impl TradingSessions {
     }
 }
 
+impl TradingSessions {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::missing(data.len());
+        if !data.is_empty() {
+            // Every bar holds a value for each of the three plots, even a hidden one.
+            values.set_value(2, 0, f64::NAN);
+        }
+        if self.daily {
+            return values;
+        }
+        for slot in (0..3).filter(|&slot| self.show[slot]) {
+            let (start, end) = (self.start[slot] as u32 * 60, self.end[slot] as u32 * 60);
+            let zone = &self.zones[slot];
+            for (i, bar) in data.iter().enumerate() {
+                let second = local_time(zone.clone(), bar.time).num_seconds_from_midnight();
+                let inside = match start.cmp(&end) {
+                    std::cmp::Ordering::Less => (start..end).contains(&second),
+                    std::cmp::Ordering::Greater => second >= start || second < end,
+                    std::cmp::Ordering::Equal => true,
+                };
+                if inside {
+                    values.set_value(slot, i, 1.0);
+                }
+            }
+        }
+        values
+    }
+}
+
 impl Default for TradingSessions {
     fn default() -> Self {
         Self::new()
@@ -162,29 +192,23 @@ impl Indicator for TradingSessions {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = IndicatorValues::missing(data.len());
-        if !data.is_empty() {
-            // Every bar holds a value for each of the three plots, even a hidden one.
-            self.values.set_value(2, 0, f64::NAN);
-        }
-        if self.daily {
-            return;
-        }
-        for slot in (0..3).filter(|&slot| self.show[slot]) {
-            let (start, end) = (self.start[slot] as u32 * 60, self.end[slot] as u32 * 60);
-            let zone = &self.zones[slot];
-            for (i, bar) in data.iter().enumerate() {
-                let second = local_time(zone.clone(), bar.time).num_seconds_from_midnight();
-                let inside = match start.cmp(&end) {
-                    std::cmp::Ordering::Less => (start..end).contains(&second),
-                    std::cmp::Ordering::Greater => second >= start || second < end,
-                    std::cmp::Ordering::Equal => true,
-                };
-                if inside {
-                    self.values.set_value(slot, i, 1.0);
-                }
-            }
-        }
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {

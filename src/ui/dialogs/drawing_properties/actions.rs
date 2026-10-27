@@ -172,6 +172,7 @@ impl DrawingProps {
                     drawing.pitchfork = settings.pitchfork.clone();
                     drawing.gann = settings.gann.clone();
                     drawing.position_size = settings.position_size;
+                    drawing.position_sizing = settings.position_sizing;
                     drawing.volume_profile = settings.volume_profile;
                     drawing.regression_trend = settings.regression_trend;
                     drawing.channel_midline = settings.channel_midline;
@@ -230,6 +231,11 @@ impl DrawingProps {
                     .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
             }) {
                 return Err("Gann divisions must be between 0 and 1");
+            }
+            if !settings.position_sizing.is_valid() {
+                return Err(
+                    "Position economics must be positive and finite; quantity step cannot be negative",
+                );
             }
             if let Some(size) = settings.position_size
                 && size.quantity(1.0, 0.0).is_none()

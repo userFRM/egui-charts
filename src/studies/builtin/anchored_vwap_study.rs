@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -10,6 +11,7 @@ use egui::Color32;
 pub struct AnchoredVWAP {
     anchor_bar: usize,
     values: IndicatorValues,
+    stepper: Stepper<(usize, f64, f64)>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -20,6 +22,7 @@ impl AnchoredVWAP {
         Self {
             anchor_bar,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![palette::YELLOW],
             visible: true,
         }
@@ -57,38 +60,34 @@ impl Indicator for AnchoredVWAP {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.0;
+                state.0 += 1;
+                if index < self.anchor_bar
+                    || ![bar.high, bar.low, bar.close, bar.volume]
+                        .iter()
+                        .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                let price = Self::typical_price(bar);
+                state.1 += price * bar.volume;
+                state.2 += bar.volume;
+                IndicatorValue::Single(if state.2.abs() < 1e-10 {
+                    price
+                } else {
+                    state.1 / state.2
+                })
+            });
+    }
 
-        let mut cum_tp_vol = 0.0_f64;
-        let mut cum_vol = 0.0_f64;
-
-        for i in 0..data.len() {
-            // A bar with a non-finite price or volume has no value and adds nothing, so the
-            // anchor stays at the same bar index.
-            let b = &data[i];
-            let usable = [b.high, b.low, b.close, b.volume]
-                .iter()
-                .all(|x| x.is_finite());
-            if i < self.anchor_bar || !usable {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let tp = Self::typical_price(&data[i]);
-            cum_tp_vol += tp * data[i].volume;
-            cum_vol += data[i].volume;
-
-            if cum_vol.abs() < 1e-10 {
-                self.values.push(IndicatorValue::Single(tp));
-            } else {
-                let vwap = cum_tp_vol / cum_vol;
-                self.values.push(IndicatorValue::Single(vwap));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

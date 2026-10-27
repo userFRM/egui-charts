@@ -60,6 +60,11 @@ pub struct TooltipOptions {
     /// Show volume
     pub show_volume: bool,
 
+    /// Include volume study plot details in held values, in addition to total volume.
+    /// Other study values and hover readouts retain their existing visibility.
+    #[serde(default)]
+    pub show_volume_details: bool,
+
     /// Show price change (absolute and percentage)
     pub show_change: bool,
 
@@ -111,6 +116,7 @@ impl Default for TooltipOptions {
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,
+            show_volume_details: false,
             show_change: true,
             show_time: true,
             show_indicators: true,
