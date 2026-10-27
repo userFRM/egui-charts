@@ -149,7 +149,7 @@ impl SettingsStore {
         if wait > 0.0 {
             ctx.request_repaint_after(Duration::from_secs_f64(wait));
         } else {
-            self.flush(current);
+            self.document.save(&*self.storage, current.to_json());
         }
         None
     }
@@ -157,8 +157,16 @@ impl SettingsStore {
     /// Writes `current` now if it differs from the stored settings, such as when the
     /// application exits.
     pub fn flush(&mut self, current: &UserSettings) {
+        if self
+            .written
+            .as_ref()
+            .is_some_and(|written| written != current || self.document.saving())
+        {
+            self.changed = None;
+            self.document.save(&*self.storage, current.to_json());
+        }
         if self.written.is_some() {
-            for received in self.document.receive(&*self.storage) {
+            for received in self.document.flush(&*self.storage) {
                 match received {
                     Received::Failed(error) => self.error = Some(error),
                     Received::Saved(document) => {
@@ -168,14 +176,6 @@ impl SettingsStore {
                     Received::Loaded(_) => {}
                 }
             }
-        }
-        if self
-            .written
-            .as_ref()
-            .is_some_and(|written| written != current || self.document.saving())
-        {
-            self.changed = None;
-            self.document.save(&*self.storage, current.to_json());
         }
     }
 

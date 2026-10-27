@@ -2,14 +2,15 @@
 //!
 //! Use these values to select the dialog's section or group studies in a host picker.
 
-/// Indicator tabs in the dialog sidebar
+/// The pages of the built-in studies, chosen above the results. A page is offered while the
+/// dialog's factory registers studies for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorTab {
     /// Technical indicators (SMA, RSI, MACD, etc.)
     Indicators,
-    /// Indicator profiles (saved combinations)
+    /// Volume and time price profiles, in [`IndicatorFactory::PROFILES`](crate::studies::IndicatorFactory::PROFILES)
     Profiles,
-    /// Chart patterns (head-and-shoulders, triangles, etc.)
+    /// Pattern detectors, in [`IndicatorFactory::PATTERNS`](crate::studies::IndicatorFactory::PATTERNS)
     Patterns,
 }
 
@@ -39,14 +40,17 @@ impl crate::ui_kit::tab_bar::TabLabel for IndicatorTab {
     }
 }
 
-/// Indicator categories for filtering the indicator list
+/// Indicator categories for filtering the indicator list. The sidebar always offers
+/// favourites; other categories appear while the factory registers studies for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorCategory {
     /// User-favorited indicators
     Favorites,
+    /// The user's own studies, in [`IndicatorFactory::PERSONAL`](crate::studies::IndicatorFactory::PERSONAL)
+    MyScripts,
     /// Built-in platform indicators
     BuiltIns,
-    /// Community-contributed indicators
+    /// Community-contributed indicators, in [`IndicatorFactory::COMMUNITY`](crate::studies::IndicatorFactory::COMMUNITY)
     Community,
     /// Premium/paid indicators
     Premium,
@@ -57,6 +61,7 @@ impl IndicatorCategory {
     pub fn all() -> &'static [IndicatorCategory] {
         &[
             IndicatorCategory::Favorites,
+            IndicatorCategory::MyScripts,
             IndicatorCategory::BuiltIns,
             IndicatorCategory::Community,
             IndicatorCategory::Premium,
@@ -67,6 +72,7 @@ impl IndicatorCategory {
     pub fn name(&self) -> &'static str {
         match self {
             IndicatorCategory::Favorites => "Favorites",
+            IndicatorCategory::MyScripts => "My scripts",
             IndicatorCategory::BuiltIns => "Built-ins",
             IndicatorCategory::Community => "Community",
             IndicatorCategory::Premium => "Premium",
@@ -78,6 +84,7 @@ impl IndicatorCategory {
         use crate::icons::icons as embedded_icons;
         match self {
             IndicatorCategory::Favorites => &embedded_icons::STAR_EMPTY,
+            IndicatorCategory::MyScripts => &embedded_icons::CODE,
             IndicatorCategory::BuiltIns => &embedded_icons::INDICATORS,
             IndicatorCategory::Community => &embedded_icons::USERS,
             IndicatorCategory::Premium => &embedded_icons::CROWN,

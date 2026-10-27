@@ -9,15 +9,15 @@ use std::sync::Arc;
 
 pub(super) struct DrawingStore {
     // Only attaching storage links the drawing readers and writers into an application.
-    sync: fn(&mut Chart, &egui::Context),
+    sync: fn(&mut Chart, Option<&egui::Context>),
     save: fn(&mut Chart),
     storage: Arc<dyn Storage>,
     /// The active document and inactive documents with retained drawings or edits.
     documents: HashMap<String, StoredDocument>,
     /// Drawings read for a symbol that was no longer shown when they arrived.
     loaded: HashMap<String, String>,
-    /// The chart's drawing edit count when the shown symbol's drawings were last saved.
-    saved: u64,
+    /// The chart's drawing edit count last captured in a document, which may still be dirty.
+    captured: u64,
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
     pending: HashMap<String, (DrawingStorage, bool)>,
     error: Option<String>,
@@ -57,21 +57,45 @@ impl Chart {
     /// by the symbol. The drawings of a symbol are read when it is first shown and, when a
     /// document holds some, replace the chart's drawings and undo history; they are written after
     /// every drawing edit made through chart history (every user edit, undo and redo) and when
-    /// the symbol changes.
+    /// the symbol changes. Failed writes retain the latest document and retry after one second
+    /// of input time; [`Self::flush_stored_drawings`] retries immediately.
     /// Drawings that could not all be read are never written over. Charts that show the same
     /// symbol write the same document, so share their drawings through
     /// [`ChartLayout`](super::ChartLayout) drawing sync or give storage to one of them.
+    /// Per-drawing storage notifications are disabled and cleared. To consume them alongside
+    /// automatic storage, call `chart.drawings_mut().set_sync_enabled(true)` after attaching it.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.drawings.set_sync_enabled(false);
+        for (manager, _) in self.symbol_drawings.values_mut() {
+            manager.set_sync_enabled(false);
+        }
         self.drawing_store = Some(DrawingStore {
             sync: Self::poll_stored_drawings,
             save: Self::write_stored_drawings,
             storage,
             documents: HashMap::new(),
             loaded: HashMap::new(),
-            saved: self.history.drawing_edits,
+            captured: self.history.drawing_edits,
             pending: HashMap::new(),
             error: None,
         });
+    }
+
+    /// Captures current drawing edits and retries failed writes for every symbol immediately.
+    /// Available replies are processed, but asynchronous storage is not awaited. Returns `true`
+    /// once all captured edits are acknowledged. Keep rendering or call again to finish delayed
+    /// reads and writes; inspect [`Self::take_storage_error`] for failures.
+    pub fn flush_stored_drawings(&mut self) -> bool {
+        if let Some(sync) = self.drawing_store.as_ref().map(|store| store.sync) {
+            sync(self, None);
+            // An inline load can submit a write whose acknowledgement is already available.
+            sync(self, None);
+        }
+        self.drawing_store.as_ref().is_none_or(|store| {
+            store.pending.is_empty()
+                && store.captured == self.history.drawing_edits
+                && store.documents.values().all(StoredDocument::flushed)
+        })
     }
 
     /// The error of a failed read or write of drawings since the last call, to show to the
@@ -83,11 +107,11 @@ impl Chart {
     /// Reads the shown symbol's drawings when it is first shown and saves edited drawings.
     pub(super) fn sync_stored_drawings(&mut self, ctx: &egui::Context) {
         if let Some(store) = &self.drawing_store {
-            (store.sync)(self, ctx);
+            (store.sync)(self, Some(ctx));
         }
     }
 
-    fn poll_stored_drawings(&mut self, ctx: &egui::Context) {
+    fn poll_stored_drawings(&mut self, ctx: Option<&egui::Context>) {
         self.save_stored_drawings();
         let symbol = self.symbol.clone();
         let Some(store) = &mut self.drawing_store else {
@@ -98,7 +122,11 @@ impl Chart {
             store.documents.insert(symbol.clone(), document);
         }
         for (name, document) in &mut store.documents {
-            for received in document.poll(&*store.storage, ctx) {
+            let received = match ctx {
+                Some(ctx) => document.poll(&*store.storage, ctx),
+                None => document.flush(&*store.storage),
+            };
+            for received in received {
                 match received {
                     Received::Loaded(json) => {
                         let read = json.as_deref().map(DrawingStorage::from_json).transpose();
@@ -208,13 +236,12 @@ impl Chart {
             || self
                 .drawing_store
                 .as_ref()
-                .is_none_or(|store| store.saved == edits)
+                .is_none_or(|store| store.captured == edits)
         {
             return;
         }
         let drawings = self.save_drawings();
         let store = self.drawing_store.as_mut().expect("drawing storage");
-        store.saved = edits;
         let document = store
             .documents
             .entry(self.symbol.clone())
@@ -228,9 +255,13 @@ impl Chart {
                     .get(&self.symbol)
                     .is_none_or(|(_, merge)| *merge);
                 store.pending.insert(self.symbol.clone(), (drawings, merge));
+                store.captured = edits;
             }
             Ok(drawings) => match drawings.to_json() {
-                Ok(json) => document.save(&*store.storage, json),
+                Ok(json) => {
+                    document.save(&*store.storage, json);
+                    store.captured = edits;
+                }
                 Err(error) => store.error = Some(format!("Could not save drawings: {error}")),
             },
             Err(error) => store.error = Some(format!("Could not save drawings: {error}")),
@@ -307,6 +338,62 @@ mod tests {
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn automatic_storage_does_not_fill_the_notification_queue() {
+        let host = Arc::new(Host::default());
+        let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+            Utc.timestamp_opt(0, 0).unwrap(),
+            100.0,
+            101.0,
+            99.0,
+            100.0,
+            1.0,
+        )]));
+        chart.set_symbol("A");
+        chart.set_storage(host.clone());
+        let ctx = egui::Context::default();
+        chart.sync_stored_drawings(&ctx);
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(0.0, 100.0)];
+        let id = chart.user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
+        for i in 0..10_000 {
+            chart.user_action(|chart| {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.chart_points[0].price = 100.0 + (i % 2) as f64;
+                })
+            });
+            assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
+            if i % 100 == 0 {
+                chart.sync_stored_drawings(&ctx);
+            }
+        }
+        assert!(chart.flush_stored_drawings());
+        let json = host.documents.lock().unwrap()["A"].clone();
+        assert_eq!(
+            DrawingStorage::from_json(&json).unwrap().0.drawings()[0].points[0].price,
+            101.0
+        );
+        for symbol in ["B", "A"] {
+            chart.set_symbol(symbol);
+            assert!(!chart.drawings.sync_enabled);
+            chart.sync_stored_drawings(&ctx);
+            assert!(
+                !chart.drawings.sync_enabled,
+                "loading keeps notifications disabled"
+            );
+        }
+        chart.drawings_mut().set_sync_enabled(true);
+        for symbol in ["B", "A"] {
+            chart.set_symbol(symbol);
+            assert!(chart.drawings.sync_enabled);
+            chart.sync_stored_drawings(&ctx);
+            assert!(
+                chart.drawings.sync_enabled,
+                "loading preserves the host's opt-in"
+            );
         }
     }
 
@@ -415,6 +502,10 @@ mod tests {
         frame(&mut chart);
         chart.user_action(|chart| chart.drawings_mut().clear_all());
         chart.set_symbol("away");
+        assert!(
+            !chart.flush_stored_drawings(),
+            "a delayed write is not acknowledged"
+        );
         assert!(!chart.forget_symbol("SAVING"));
         for _ in 0..2 {
             for reply in std::mem::take(&mut *host.writes.lock().unwrap()) {
@@ -422,6 +513,7 @@ mod tests {
             }
             frame(&mut chart);
         }
+        assert!(chart.flush_stored_drawings());
         assert!(chart.forget_symbol("SAVING"));
         let (saved, skipped) =
             DrawingStorage::from_json(&host.documents.lock().unwrap()["SAVING"]).unwrap();
@@ -459,6 +551,41 @@ mod tests {
         frame(&mut restarted);
         assert!(restarted.take_storage_error().is_none());
         assert_eq!(restarted.drawings().drawings.len(), 3);
+
+        // Recovery without another edit must save the latest failed document.
+        assert!(restarted.drawing_store.as_ref().unwrap().documents["C"].saving());
+        host.fail_writes.store(false, Ordering::Relaxed);
+        ctx.run_ui(
+            egui::RawInput {
+                time: Some(ctx.input(|input| input.time) + 2.0),
+                ..Default::default()
+            },
+            |ui| {
+                restarted.show(ui);
+            },
+        )
+        .drop_without_applying_deltas();
+        let json = host.documents.lock().unwrap()["C"].clone();
+        let (saved, skipped) = DrawingStorage::from_json(&json).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(saved.drawings().len(), 3);
+        assert!(!restarted.drawing_store.as_ref().unwrap().documents["C"].saving());
+
+        // An explicit flush retries immediately, even without another frame.
+        host.fail_writes.store(true, Ordering::Relaxed);
+        draw(&mut restarted);
+        assert!(!restarted.flush_stored_drawings());
+        host.fail_writes.store(false, Ordering::Relaxed);
+        assert!(
+            !restarted.flush_stored_drawings(),
+            "unreadable B still prevents a complete flush"
+        );
+        assert!(!restarted.drawing_store.as_ref().unwrap().documents["C"].saving());
+        let json = host.documents.lock().unwrap()["C"].clone();
+        assert_eq!(
+            DrawingStorage::from_json(&json).unwrap().0.drawings().len(),
+            4
+        );
 
         // A late read must preserve edits, including after switching away from the symbol.
         host.fail_writes.store(false, Ordering::Relaxed);

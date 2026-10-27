@@ -109,6 +109,13 @@ impl DemoApp {
             .keys()
             .map(|name| (name.clone(), name.clone()))
             .collect();
+        let dialog = &self.indicator_dialog;
+        self.top_toolbar.favorite_indicators = dialog
+            .indicators()
+            .iter()
+            .filter(|info| dialog.favorites.contains(&info.id))
+            .map(|info| (info.id.clone(), info.name.clone()))
+            .collect();
         self.drawing_toolbar.state.templates = self
             .drawing_templates
             .templates

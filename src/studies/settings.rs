@@ -106,6 +106,102 @@ pub struct StudySettings {
     pub interval_range: StudyIntervalRange,
 }
 
+/// An owned settings and input snapshot without calculated study data.
+/// Used by chart history; restoring it requires recalculation on the current bars.
+#[derive(Clone)]
+pub struct StudySettingsSnapshot {
+    inputs: Vec<(String, InputValue)>,
+    settings: StudySettings,
+    timeframe: Option<Timeframe>,
+    colors: Vec<Color32>,
+    visible: bool,
+    overlay: Option<bool>,
+    scale: Option<super::StudyScale>,
+    source: Option<super::StudySource>,
+    inherited_overlay: bool,
+    inherited_scale: super::StudyScale,
+    inherited_source: Option<super::StudySource>,
+    calculation_symbol: String,
+    calculation_timeframe: Option<Timeframe>,
+    wait_for_close: bool,
+    offset: i32,
+}
+
+impl PartialEq for StudySettingsSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.inputs == other.inputs
+            && self.settings == other.settings
+            && self.colors == other.colors
+            && self.visible == other.visible
+            && self.overlay.unwrap_or(self.inherited_overlay)
+                == other.overlay.unwrap_or(other.inherited_overlay)
+            && self.scale.unwrap_or(self.inherited_scale)
+                == other.scale.unwrap_or(other.inherited_scale)
+            && self.source.or(self.inherited_source) == other.source.or(other.inherited_source)
+            && self.calculation_symbol == other.calculation_symbol
+            && self.calculation_timeframe == other.calculation_timeframe
+            && self.wait_for_close == other.wait_for_close
+            && self.offset == other.offset
+    }
+}
+
+impl StudySettingsSnapshot {
+    /// Capture declared inputs and presentation with the global visibility toggle.
+    /// `visible` precedes any interval filtering performed by [`Indicator::is_visible`].
+    pub fn capture(study: &(impl Indicator + ?Sized), visible: bool) -> Self {
+        Self {
+            inputs: study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect(),
+            settings: study.settings(),
+            timeframe: None,
+            colors: study.colors(),
+            visible,
+            overlay: Some(study.is_overlay()),
+            scale: Some(study.scale()),
+            source: None,
+            inherited_overlay: study.is_overlay(),
+            inherited_scale: study.scale(),
+            inherited_source: study.source(),
+            calculation_symbol: String::new(),
+            calculation_timeframe: None,
+            wait_for_close: true,
+            offset: 0,
+        }
+    }
+
+    pub(super) fn restore(
+        &self,
+        study: &mut (impl Indicator + ?Sized),
+    ) -> Result<(), &'static str> {
+        let current = study.inputs();
+        let inputs: Vec<_> = self
+            .inputs
+            .iter()
+            .filter(|(id, value)| {
+                !current
+                    .iter()
+                    .any(|input| input.id == *id && input.value == *value)
+            })
+            .cloned()
+            .collect();
+        if !inputs.is_empty() || study.settings() != self.settings {
+            study.apply_settings(&inputs, self.settings.clone())?;
+        }
+        study.set_colors(self.colors.clone());
+        study.set_visible(self.visible);
+        if let Some(overlay) = self.overlay {
+            study.set_overlay(overlay);
+        }
+        if let Some(scale) = self.scale {
+            study.set_scale(scale);
+        }
+        Ok(())
+    }
+}
+
 /// A study with editable presentation, used automatically by the chart.
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
 #[derive(Clone)]
@@ -512,6 +608,62 @@ impl Indicator for ConfiguredStudy {
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study.fills()
+    }
+    fn snapshot_settings(&self) -> StudySettingsSnapshot {
+        let mut snapshot =
+            StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
+        snapshot.settings = self.settings.clone();
+        snapshot.timeframe = self.timeframe;
+        snapshot.overlay = self.overlay;
+        snapshot.scale = self.scale;
+        snapshot.source = self.source;
+        snapshot.calculation_symbol = self.calculation_symbol.clone();
+        snapshot.calculation_timeframe = self.calculation_timeframe;
+        snapshot.wait_for_close = self.wait_for_close;
+        snapshot.offset = self.offset;
+        snapshot
+    }
+    fn restore_settings(&mut self, snapshot: &StudySettingsSnapshot) -> Result<(), &'static str> {
+        let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
+        while !inputs.is_empty() {
+            let remaining = inputs.len();
+            let mut error = "invalid study input";
+            // An input can change another input's accepted range.
+            inputs.retain(|(id, value)| {
+                if self
+                    .study
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == *id && input.value == *value)
+                {
+                    return false;
+                }
+                if let Err(message) = self.study.set_input(id, value.clone()) {
+                    error = message;
+                    true
+                } else {
+                    false
+                }
+            });
+            if inputs.len() == remaining {
+                return Err(error);
+            }
+        }
+        self.study.set_colors(snapshot.colors.clone());
+        self.study.set_visible(snapshot.visible);
+        self.settings = snapshot.settings.clone();
+        self.timeframe = snapshot.timeframe;
+        self.overlay = snapshot.overlay;
+        self.scale = snapshot.scale;
+        self.scale_mapping = None;
+        self.source = snapshot.source;
+        self.calculation_symbol = snapshot.calculation_symbol.clone();
+        self.calculation_timeframe = snapshot.calculation_timeframe;
+        self.wait_for_close = snapshot.wait_for_close;
+        self.offset = snapshot.offset;
+        self.aligned = None;
+        self.aligned_bars.clear();
+        Ok(())
     }
     fn settings(&self) -> StudySettings {
         self.settings.clone()

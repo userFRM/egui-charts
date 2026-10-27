@@ -4490,12 +4490,16 @@ mod tests {
                 );
             }
             if chart.volume_formatter.is_some() {
+                // The fallback volume row combines its prefix and value in one text shape.
                 let labels = painted
                     .iter()
                     .filter(|shape| {
                         matches!(shape,
-                            Shape::Text(text) if text.galley.text() == "label price"
-                                && text.pos.x < chart.last_rendered_price_rect.center().x
+                            Shape::Text(text) if text.pos.x < chart.last_rendered_price_rect.center().x
+                                && text.galley.job.sections.iter().any(|section| {
+                                    &text.galley.job.text[section.byte_range.start.0..section.byte_range.end.0]
+                                        == "label price"
+                                })
                         )
                     })
                     .count();

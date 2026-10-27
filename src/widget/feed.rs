@@ -213,6 +213,7 @@ impl Chart {
                 self.drawings.end_drag_handle();
                 self.drawings.deselect();
                 let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+                next.0.set_sync_enabled(self.drawings.sync_enabled);
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
@@ -1912,10 +1913,10 @@ mod tests {
             events.push(button(start - egui::vec2(400.0, 0.0), false));
             play(chart, frames, events);
         };
-        let home_key = |chart: &mut Chart, frames: &mut Frames| {
+        let end_key = |chart: &mut Chart, frames: &mut Frames| {
             let centre = chart.last_rendered_price_rect.center();
-            let home = egui::Event::Key {
-                key: egui::Key::Home,
+            let end = egui::Event::Key {
+                key: egui::Key::End,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
@@ -1925,7 +1926,7 @@ mod tests {
             play(
                 chart,
                 frames,
-                [&click[..], &[button(centre, false), home]].concat(),
+                [&click[..], &[button(centre, false), end]].concat(),
             );
         };
         let box_zoom = |chart: &mut Chart, _: &mut Frames| {
@@ -1934,12 +1935,8 @@ mod tests {
             let end = rect.right_bottom() - egui::vec2(10.0, 10.0);
             assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
         };
-        let moves: [fn(&mut Chart, &mut Frames); 4] = [
-            |chart, _| chart.set_start_idx(600),
-            drag,
-            home_key,
-            box_zoom,
-        ];
+        let moves: [fn(&mut Chart, &mut Frames); 4] =
+            [|chart, _| chart.set_start_idx(600), drag, end_key, box_zoom];
         for (row, user_move) in moves.into_iter().enumerate() {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));

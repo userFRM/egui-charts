@@ -65,6 +65,15 @@ pub struct IndicatorFactory {
 impl IndicatorFactory {
     /// The category of every indicator added with [`register`](Self::register).
     pub const CUSTOM: &'static str = "Custom";
+    /// The category of the user's own studies, such as scripts the host compiles or imports;
+    /// a study browser lists them as the user's scripts.
+    pub const PERSONAL: &'static str = "Personal";
+    /// The category of studies the host obtains from other users.
+    pub const COMMUNITY: &'static str = "Community";
+    /// The category of the built-in volume and time price profiles.
+    pub const PROFILES: &'static str = "Profiles";
+    /// The category of the built-in pattern detectors.
+    pub const PATTERNS: &'static str = "Patterns";
 
     /// Create a factory with the built-in catalogue enabled by the current features.
     pub fn new() -> Self {
@@ -213,13 +222,6 @@ impl IndicatorFactory {
                 ChaikinMoneyFlow,
                 VolumeRateOfChange,
                 KlingerOscillator,
-                VolProfileVisible,
-                VolProfileFixed,
-                VolProfileSession,
-                VolProfilePeriodic,
-                VolProfileAnchored,
-                VolProfileAutoAnchored,
-                TimePriceOpportunity,
                 NetVolume,
                 VolumePriceTrend,
                 PriceVolumeTrendStudy,
@@ -230,6 +232,15 @@ impl IndicatorFactory {
                 ChaikinOscillator,
                 Volume24h,
                 RelativeVolumeAtTime,
+            ],
+            "Profiles" => [
+                VolProfileVisible,
+                VolProfileFixed,
+                VolProfileSession,
+                VolProfilePeriodic,
+                VolProfileAnchored,
+                VolProfileAutoAnchored,
+                TimePriceOpportunity,
             ],
             "Support and resistance" => [
                 PivotPoints,
@@ -320,8 +331,24 @@ impl IndicatorFactory {
     where
         F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
     {
+        self.register_in(Self::CUSTOM, name, constructor);
+    }
+
+    /// Register a named indicator constructor in `category`, such as [`PERSONAL`](Self::PERSONAL)
+    /// for a script the user imported, [`COMMUNITY`](Self::COMMUNITY) or
+    /// [`PROFILES`](Self::PROFILES).
+    ///
+    /// If a constructor with the same name already exists it is replaced.
+    pub fn register_in<F>(
+        &mut self,
+        category: &'static str,
+        name: impl Into<String>,
+        constructor: F,
+    ) where
+        F: Fn() -> Box<dyn Indicator> + Send + Sync + 'static,
+    {
         self.constructors
-            .insert(name.into(), (Self::CUSTOM, Box::new(constructor)));
+            .insert(name.into(), (category, Box::new(constructor)));
     }
 
     /// Create an indicator by its registered name, or `None` if not found.

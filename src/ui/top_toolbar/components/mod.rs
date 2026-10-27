@@ -22,7 +22,7 @@ pub use chart_type_selector::{
 // From indicator_dialog
 pub use indicator_dialog::{
     IndicatorCategory, IndicatorDialog, IndicatorDialogAction, IndicatorDialogConfig,
-    IndicatorInfo, IndicatorParams, IndicatorTab,
+    IndicatorInfo, IndicatorTab,
 };
 
 // From chart_grid_selector
@@ -41,8 +41,8 @@ pub use settings_menu::{
 
 // From symbol_search
 pub use symbol_search::{
-    CompareAction, CompareSymbol, CompareSymbolsConfig, CompareSymbolsDialog, SymbolSearchConfig,
-    SymbolSearchDialog,
+    CompareAction, ComparePlacement, CompareSymbol, CompareSymbolsConfig, CompareSymbolsDialog,
+    SymbolSearchConfig, SymbolSearchDialog,
 };
 
 // From timeframe_selector
