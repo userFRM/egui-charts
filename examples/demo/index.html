@@ -6,8 +6,9 @@
     <title>egui-charts | Live Demo</title>
     <script>
         // Read the same settings document as DemoStorage before the loading screen paints.
+        let theme;
         try {
-            let theme = localStorage.getItem('dark_theme');
+            theme = localStorage.getItem('dark_theme');
             theme = theme === 'true' ? 'dark' : theme === 'false' ? 'light' : null;
             const documents = localStorage.getItem('templates') || '';
             const entry = documents.match(/"Settings\/settings"\s*:\s*("(?:\\.|[^"\\])*")/);
@@ -17,12 +18,12 @@
                     escape === "\\'" ? "'" : code ?
                         JSON.stringify(String.fromCodePoint(parseInt(code, 16))).slice(1, -1) : escape);
                 const document = JSON.parse(JSON.parse(encoded));
-                if (document.version === 1) theme = document.settings.theme;
+                if (document.version === 1) theme = document.theme;
             }
-            if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
         } catch (_) {
-            // Unavailable or unreadable storage leaves the system appearance in control.
+            // Unreadable settings keep the legacy choice or system appearance.
         }
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
     </script>
     <style>
         :root { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }

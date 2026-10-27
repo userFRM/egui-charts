@@ -3660,6 +3660,10 @@ mod tests {
                     ctx.run_ui(
                         egui::RawInput {
                             system_theme: Some(system),
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(393.0, 852.0),
+                            )),
                             ..Default::default()
                         },
                         |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
