@@ -47,7 +47,8 @@ pub struct FinancialPage {
 pub struct FinancialRow {
     /// The row's name, such as "Total revenue".
     pub name: String,
-    /// One value per period of the page; `None` where the company reported none.
+    /// One value per period of the page; `None` where the company reported none. Non-finite
+    /// values are shown as unavailable.
     pub values: Vec<Option<f64>>,
 }
 
@@ -180,7 +181,7 @@ impl FinancialsPanel {
 
 /// A value as the table and chart show it: thousands, millions and billions with a suffix.
 fn figure(value: Option<f64>) -> String {
-    value.map_or_else(
+    value.filter(|value| value.is_finite()).map_or_else(
         || "-".to_owned(),
         |value| StudyFormat::Volume.format(value, Some(2)),
     )
@@ -209,15 +210,21 @@ fn column_chart(ui: &mut Ui, page: &FinancialPage, row: &FinancialRow) {
             .take(page.periods.len())
             .flatten()
             .copied()
+            .filter(|value| value.is_finite())
     };
-    let high = values().fold(0.0_f64, f64::max);
+    let mut high = values().fold(0.0_f64, f64::max);
     let low = values().fold(0.0_f64, f64::min);
     if high == low {
-        return;
+        high = 1.0;
     }
     // Room for the name and the values above, and the periods below.
     let plot = Rect::from_min_max(rect.min + vec2(0.0, 40.0), rect.max - vec2(0.0, 20.0));
-    let y = |value: f64| plot.bottom() - ((value - low) / (high - low)) as f32 * plot.height();
+    // Normalize first so opposite finite extremes cannot overflow the range.
+    let scale = high.max(-low);
+    let y = |value: f64| {
+        plot.bottom()
+            - ((value / scale - low / scale) / (high / scale - low / scale)) as f32 * plot.height()
+    };
     let slot = plot.width() / page.periods.len() as f32;
     painter.hline(
         plot.x_range(),
@@ -233,7 +240,13 @@ fn column_chart(ui: &mut Ui, page: &FinancialPage, row: &FinancialRow) {
             font.clone(),
             theme.ui.text_secondary,
         );
-        let Some(value) = row.values.get(i).copied().flatten() else {
+        let Some(value) = row
+            .values
+            .get(i)
+            .copied()
+            .flatten()
+            .filter(|v| v.is_finite())
+        else {
             continue;
         };
         let column = Rect::from_two_pos(
@@ -334,4 +347,50 @@ fn table(
         }
     }
     clicked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zero and missing rows keep their period labels; only finite figures become columns,
+    /// measured from zero even when a row contains both gains and losses.
+    #[test]
+    fn financial_columns_keep_periods_and_scale_finite_signed_values() {
+        for (values, heights) in [
+            (vec![Some(0.0), Some(0.0)], vec![0.0, 0.0]),
+            (vec![None, None], vec![]),
+            (vec![Some(-2.0), Some(6.0)], vec![35.0, 105.0]),
+            (vec![Some(f64::NAN), Some(f64::INFINITY)], vec![]),
+            (vec![Some(-f64::MAX), Some(f64::MAX)], vec![70.0, 70.0]),
+        ] {
+            let page = FinancialPage::new("Income", vec!["FY 2024".into(), "FY 2025".into()])
+                .with_row("Profit", values.clone());
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                column_chart(ui, &page, &page.rows[0]);
+            });
+            output.textures_delta.clear();
+            for period in &page.periods {
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == period)
+                }), "missing {period} for {values:?}");
+            }
+            let actual: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Rect(rect) = &shape.shape {
+                        assert!(rect.rect.is_finite(), "{values:?}");
+                        Some(rect.rect.height())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(actual, heights, "{values:?}");
+        }
+        assert_eq!(figure(Some(f64::NAN)), "-");
+        assert_eq!(figure(Some(f64::INFINITY)), "-");
+    }
 }
