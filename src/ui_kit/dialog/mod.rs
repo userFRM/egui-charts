@@ -316,15 +316,19 @@ impl DialogFooter {
                     |ui| {
                         let colors = &theme.ui;
                         let outline = ui.visuals().widgets.inactive.fg_stroke.color;
-                        let secondary_clicked = self.secondary_label.as_ref().is_some_and(|label| {
-                            let hover = ui.visuals().widgets.hovered.bg_fill;
-                            let fill = [Color32::TRANSPARENT, hover, hover];
-                            let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, outline);
-                            footer_button(ui, label, fill, outline, stroke).clicked()
-                        });
+                        let secondary_clicked =
+                            self.secondary_label.as_ref().is_some_and(|label| {
+                                let hover = ui.visuals().widgets.hovered.bg_fill;
+                                let fill = [Color32::TRANSPARENT, hover, hover];
+                                let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, outline);
+                                footer_button(ui, label, fill, outline, stroke).clicked()
+                            });
                         let (fill, text) = if self.danger {
-                            let fill =
-                                [colors.danger_bg, colors.danger_bg_hover, colors.danger_bg_active];
+                            let fill = [
+                                colors.danger_bg,
+                                colors.danger_bg_hover,
+                                colors.danger_bg_active,
+                            ];
                             (fill, colors.danger_text)
                         } else {
                             // The text colour rather than the accent, so the confirming action
@@ -368,13 +372,16 @@ fn footer_button(
     stroke: Stroke,
 ) -> Response {
     // The fill follows the button's state on the previous frame; egui repaints when it changes.
-    let state = ui.ctx().read_response(ui.next_auto_id()).map_or(0, |response| {
-        if response.is_pointer_button_down_on() {
-            2
-        } else {
-            usize::from(response.hovered())
-        }
-    });
+    let state = ui
+        .ctx()
+        .read_response(ui.next_auto_id())
+        .map_or(0, |response| {
+            if response.is_pointer_button_down_on() {
+                2
+            } else {
+                usize::from(response.hovered())
+            }
+        });
     let radius = ui.active_theme().radius.md;
     let response = ui.add(
         egui::Button::new(RichText::new(l10n::text(ui.ctx(), label)).color(text))

@@ -158,10 +158,12 @@ impl<'a> SidebarTab<'a> {
         if self.is_active {
             format.coords.push("wght", 600.0);
         }
-        let galley = ui.painter().layout_job(egui::text::LayoutJob::single_section(
-            translated_label,
-            format,
-        ));
+        let galley = ui
+            .painter()
+            .layout_job(egui::text::LayoutJob::single_section(
+                translated_label,
+                format,
+            ));
         let label_pos = Pos2::new(
             icon_x + icon_size + theme.spacing.sm,
             rect.center().y - galley.size().y / 2.0,

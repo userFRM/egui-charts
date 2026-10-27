@@ -28,7 +28,11 @@ pub fn render_alert_levels<'a>(
     {
         let Some(id) = &alert.id else { continue };
         let active = alert.status == AlertStatus::Active;
-        let color = if active { color } else { color.gamma_multiply(0.5) };
+        let color = if active {
+            color
+        } else {
+            color.gamma_multiply(0.5)
+        };
         let rules = std::iter::once((&alert.source, &alert.condition)).chain(
             alert
                 .additional_conditions

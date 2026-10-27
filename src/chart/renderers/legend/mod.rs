@@ -403,11 +403,9 @@ impl<'a> Legend<'a> {
             action
         });
 
-        layout.backdrop = self
-            .study_backdrop
-            .map_or(Color32::TRANSPARENT, |opacity| {
-                theme.chart.bg.gamma_multiply(opacity)
-            });
+        layout.backdrop = self.study_backdrop.map_or(Color32::TRANSPARENT, |opacity| {
+            theme.chart.bg.gamma_multiply(opacity)
+        });
         let mut study_settings = None;
         let collapsed = ui
             .ctx()

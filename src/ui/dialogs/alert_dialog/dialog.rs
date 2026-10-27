@@ -839,12 +839,36 @@ mod tests {
         let east_of_utc = |hours: i32| TimezoneId::fixed_offset(hours * 3600).unwrap();
         for (zone, fields, expected) in [
             (utc(), None, Ok(None)),
-            (utc(), Some(("2026-03-08", "02:30")), Ok(Some(at(2026, 3, 8, 2, 30)))),
-            (east_of_utc(-5), Some(("2026-03-08", "02:30")), Ok(Some(at(2026, 3, 8, 7, 30)))),
-            (east_of_utc(9), Some(("2026-03-08", "02:30")), Ok(Some(at(2026, 3, 7, 17, 30)))),
-            (utc(), Some(("08/03/2026", "02:30")), Err("Enter the expiry date as YYYY-MM-DD")),
-            (utc(), Some(("2026-03-08", "2:30 pm")), Err("Enter the expiry time as HH:MM")),
-            (utc(), Some(("2025-12-31", "23:59")), Err("Choose an expiry after the current time")),
+            (
+                utc(),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 8, 2, 30))),
+            ),
+            (
+                east_of_utc(-5),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 8, 7, 30))),
+            ),
+            (
+                east_of_utc(9),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 7, 17, 30))),
+            ),
+            (
+                utc(),
+                Some(("08/03/2026", "02:30")),
+                Err("Enter the expiry date as YYYY-MM-DD"),
+            ),
+            (
+                utc(),
+                Some(("2026-03-08", "2:30 pm")),
+                Err("Enter the expiry time as HH:MM"),
+            ),
+            (
+                utc(),
+                Some(("2025-12-31", "23:59")),
+                Err("Choose an expiry after the current time"),
+            ),
         ] {
             check(zone, fields, expected);
         }
@@ -854,7 +878,10 @@ mod tests {
             // Clocks went from 02:00 to 03:00 on 8 March 2026, and on 1 November 2026 from
             // 02:00 daylight time (UTC-4) back to 01:00 standard time (UTC-5).
             for (fields, expected) in [
-                (("2026-03-08", "02:30"), Err("The expiry time is skipped when clocks go forward")),
+                (
+                    ("2026-03-08", "02:30"),
+                    Err("The expiry time is skipped when clocks go forward"),
+                ),
                 (("2026-11-01", "01:30"), Ok(Some(at(2026, 11, 1, 5, 30)))),
                 (("2026-07-04", "11:45"), Ok(Some(at(2026, 7, 4, 15, 45)))),
             ] {

@@ -928,7 +928,9 @@ impl SettingsDialog {
             ui.spacing_mut().interact_size.y = 32.0;
             ui.add_enabled_ui(*shown, |ui| {
                 ui.label_inputs_by(checkbox.id, |ui| {
-                    for (color, picker, id) in [(up, up_picker, up_id), (down, down_picker, down_id)] {
+                    for (color, picker, id) in
+                        [(up, up_picker, up_id), (down, down_picker, down_id)]
+                    {
                         if let Some(picked) = ColorPicker::new(picker, id).show(ui).inner {
                             *color = picked;
                         }

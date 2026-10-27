@@ -342,7 +342,16 @@ mod tests {
                 #[cfg(not(feature = "studies"))]
                 continue;
             }
-            for selected in [None, Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), None] {
+            for selected in [
+                None,
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                None,
+            ] {
                 let visibility = EventVisibility {
                     show_dividends: selected == Some(0),
                     show_splits: selected == Some(1),
@@ -376,7 +385,9 @@ mod tests {
                 }
                 let info = crate::tokens::DESIGN_TOKENS.semantic.extended.info;
                 assert_eq!(
-                    shapes.iter().any(|s| matches!(s, Shape::LineSegment { points, stroke }
+                    shapes
+                        .iter()
+                        .any(|s| matches!(s, Shape::LineSegment { points, stroke }
                         if points[0].x == points[1].x && stroke.color == info)),
                     selected == Some(1),
                     "earnings break"
