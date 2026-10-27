@@ -17,7 +17,7 @@ pub mod types;
 // Public re-exports
 pub use actions::IndicatorDialogAction;
 pub use config::IndicatorDialogConfig;
-pub use data::{IndicatorInfo, IndicatorParams, IndicatorPreferences};
+pub use data::{IndicatorInfo, IndicatorPreferences};
 pub use dialog::IndicatorDialog;
 pub use templates::{IndicatorTemplateAction, IndicatorTemplatePanel, IndicatorTemplateState};
 pub use types::{IndicatorCategory, IndicatorTab};

@@ -172,18 +172,17 @@ mod tests {
                     labels.iter().find(|(label, _)| label == name).unwrap().1
                 };
                 let interval = at(&labels, "1D");
-                if width < 1440.0 {
-                    frame(vec![Event::PointerMoved(Pos2::new(150.0, interval.y))]);
-                    frame(vec![Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: Vec2::new(-2000.0, 0.0),
-                        phase: egui::TouchPhase::Move,
-                        source: egui::MouseWheelSource::Wheel,
-                        modifiers: Default::default(),
-                    }]);
-                    for _ in 0..30 {
-                        frame(vec![]);
-                    }
+                // Starred intervals can push the host actions past the window at any width.
+                frame(vec![Event::PointerMoved(Pos2::new(150.0, interval.y))]);
+                frame(vec![Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(-2000.0, 0.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: Default::default(),
+                }]);
+                for _ in 0..30 {
+                    frame(vec![]);
                 }
                 let (_, labels) = frame(vec![]);
                 let research = at(&labels, "Research");

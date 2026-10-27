@@ -104,14 +104,48 @@ mod tests {
     fn tools_are_found_by_category_and_search() {
         let repo = InMemoryToolsRepository::new();
         let cases = [
-            (DrawingToolType::TrendLine, "Lines", "trend"),
-            (DrawingToolType::FibonacciRetracement, "Fibonacci", "FIB"),
+            (DrawingToolType::TrendLine, "Lines", "Lines", "trend"),
+            (
+                DrawingToolType::FibonacciRetracement,
+                "Fibonacci",
+                "Fibonacci",
+                "FIB",
+            ),
+            (
+                DrawingToolType::Table,
+                "Text/Annotations",
+                "Annotations",
+                "table",
+            ),
+            (
+                DrawingToolType::Image,
+                "Text/Annotations",
+                "Content",
+                "image",
+            ),
+            (
+                DrawingToolType::Tweet,
+                "Text/Annotations",
+                "Content",
+                "tweet",
+            ),
+            (DrawingToolType::Idea, "Text/Annotations", "Content", "idea"),
+            (
+                DrawingToolType::GhostFeed,
+                "Projection",
+                "Projection",
+                "ghost",
+            ),
         ];
-        for (tool, category, query) in cases {
+        for (tool, category, command_category, query) in cases {
             assert_eq!(
                 repo.get_tool_category(tool).as_deref(),
                 Some(category),
                 "{tool:?}"
+            );
+            assert!(
+                DrawingToolType::by_category(command_category).contains(&tool),
+                "{tool:?} missing from command search"
             );
             let listed = repo
                 .get_category_tools(category)

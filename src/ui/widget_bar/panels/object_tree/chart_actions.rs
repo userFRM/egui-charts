@@ -123,6 +123,13 @@ impl ObjectTreePanel {
                     duplicate(chart, source);
                 }
             }
+            ObjectTreeAction::MoveToPane(id, pane) => {
+                if !sources.iter().any(|s| s.id == *id && s.is_drawing())
+                    || !chart.move_drawing_to_pane(*id, *pane)
+                {
+                    return false;
+                }
+            }
             ObjectTreeAction::BringToFront(id)
             | ObjectTreeAction::SendToBack(id)
             | ObjectTreeAction::MoveUp(id)

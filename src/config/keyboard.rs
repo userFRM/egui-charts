@@ -87,8 +87,10 @@ pub enum KeyboardAction {
     PageDown,
 
     // Reset/Fit
-    /// Scroll to real-time / latest data (Home, End)
+    /// Scroll to real-time / latest data (Alt+Shift+Right, End)
     ScrollToRealTime,
+    /// Scroll the oldest bar to the left edge, keeping the zoom (Alt+Shift+Left, Home)
+    ScrollToFirstBar,
     /// Fit content to visible range
     FitContent,
     /// Reset zoom to default
@@ -154,6 +156,12 @@ pub enum KeyboardAction {
     OpenSymbolSearch,
     /// Save layout
     SaveLayout,
+    /// Open a saved layout (.)
+    OpenLayout,
+    /// Show the data window (Alt+D)
+    OpenDataWindow,
+    /// Switch between the regular and extended trading sessions (Alt+Shift+E)
+    ToggleSession,
     /// Show keyboard shortcuts help (?)
     ShowKeyboardHelp,
 
@@ -227,6 +235,7 @@ impl KeyboardAction {
             Self::PageUp => "Zoom in more",
             Self::PageDown => "Zoom out more",
             Self::ScrollToRealTime => "Jump to latest",
+            Self::ScrollToFirstBar => "Jump to first bar",
             Self::FitContent => "Fit to screen",
             Self::ResetZoom => "Reset zoom",
             Self::ResetChart => "Reset chart",
@@ -253,6 +262,9 @@ impl KeyboardAction {
             Self::OpenIndicatorSearch => "Open indicators",
             Self::OpenSymbolSearch => "Symbol search",
             Self::SaveLayout => "Save layout",
+            Self::OpenLayout => "Open layout",
+            Self::OpenDataWindow => "Data window",
+            Self::ToggleSession => "Switch session",
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
@@ -294,7 +306,28 @@ impl KeyboardAction {
             }
             Self::PageUp => const { &[key(Key::PageUp)] },
             Self::PageDown => const { &[key(Key::PageDown)] },
-            Self::ScrollToRealTime => const { &[key(Key::Home), key(Key::End)] },
+            Self::ScrollToRealTime => {
+                const {
+                    &[
+                        KeyboardShortcut::new(
+                            Modifiers::ALT.plus(Modifiers::SHIFT),
+                            Key::ArrowRight,
+                        ),
+                        key(Key::End),
+                    ]
+                }
+            }
+            Self::ScrollToFirstBar => {
+                const {
+                    &[
+                        KeyboardShortcut::new(
+                            Modifiers::ALT.plus(Modifiers::SHIFT),
+                            Key::ArrowLeft,
+                        ),
+                        key(Key::Home),
+                    ]
+                }
+            }
 
             Self::ResetChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::R)] },
 
@@ -309,6 +342,16 @@ impl KeyboardAction {
             Self::GoToDate => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::G)] },
             Self::Snapshot => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::S)] },
             Self::SaveLayout => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::S)] },
+            Self::OpenLayout => const { &[key(Key::Period)] },
+            Self::OpenDataWindow => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::D)] },
+            Self::ToggleSession => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::E,
+                    )]
+                }
+            }
             Self::Undo => const { &[KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)] },
             Self::Redo => {
                 const {
@@ -378,7 +421,8 @@ impl KeyboardAction {
             Self::ZoomOut => "- / Ctrl+Down",
             Self::PageUp => "Page Up",
             Self::PageDown => "Page Down",
-            Self::ScrollToRealTime => "Home / End",
+            Self::ScrollToRealTime => "Alt+Shift+Right / End",
+            Self::ScrollToFirstBar => "Alt+Shift+Left / Home",
             Self::ResetChart => "Alt+R",
             Self::ToggleLogScale => "Alt+L",
             Self::TogglePercentageScale => "Alt+P",
@@ -394,6 +438,9 @@ impl KeyboardAction {
             Self::GoToDate => "Alt+G",
             Self::Snapshot => "Alt+S",
             Self::SaveLayout => "Ctrl+S",
+            Self::OpenLayout => ".",
+            Self::OpenDataWindow => "Alt+D",
+            Self::ToggleSession => "Alt+Shift+E",
             Self::MaximizeChart => "Alt+Enter",
             Self::DeleteSelectedDrawing => "Del / Backspace",
             Self::Cancel => "Esc",
@@ -430,11 +477,13 @@ impl KeyboardAction {
                 "View",
                 vec![
                     Self::ScrollToRealTime,
+                    Self::ScrollToFirstBar,
                     Self::FitContent,
                     Self::ResetChart,
                     Self::ToggleLogScale,
                     Self::TogglePercentageScale,
                     Self::InvertScale,
+                    Self::ToggleSession,
                 ],
             ),
             (
@@ -468,6 +517,8 @@ impl KeyboardAction {
                     Self::GoToDate,
                     Self::Snapshot,
                     Self::SaveLayout,
+                    Self::OpenLayout,
+                    Self::OpenDataWindow,
                     Self::MaximizeChart,
                     Self::CycleChartFocus,
                     Self::CycleChartFocusBack,

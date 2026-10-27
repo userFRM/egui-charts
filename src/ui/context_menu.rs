@@ -1081,13 +1081,7 @@ impl ChartMenus {
                     self.series.open(pos, id);
                 }
                 RightClickTarget::Drawing { drawing_id, pos } => {
-                    let drawings = &chart.drawings().drawings;
-                    if let Some(drawing) = drawings.iter().find(|d| d.id == drawing_id) {
-                        let type_name = drawing.tool_type.as_str();
-                        self.drawing
-                            .set_context(type_name, drawing.locked, drawing.visible);
-                    }
-                    self.drawing.open(pos, drawing_id);
+                    self.drawing.open_on(chart, pos, drawing_id);
                 }
                 RightClickTarget::Background { pos, price } => {
                     self.chart.set_indicator_cnt(chart.indicators().count());
