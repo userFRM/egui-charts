@@ -700,7 +700,12 @@ mod tests {
             .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 60.0, 40.0, 55.0, 1.0))
             .collect();
         for (fill_opacity, line_width, alphas, widths) in [
-            (HlcAreaStyle::default().fill_opacity, 2.0, vec![30, 30], vec![2.0]),
+            (
+                HlcAreaStyle::default().fill_opacity,
+                2.0,
+                vec![30, 30],
+                vec![2.0],
+            ),
             (0.5, 4.0, vec![128, 128], vec![4.0]),
             (2.0, 1.0, vec![255, 255], vec![1.0]),
             (f32::NAN, 0.0, vec![], vec![]),

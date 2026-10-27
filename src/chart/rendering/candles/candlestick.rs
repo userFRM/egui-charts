@@ -283,7 +283,11 @@ pub(super) fn render_volume_candles(
         // A zero or missing volume leaves a body as thin as the wick; without any visible
         // volume every body keeps the full bar width.
         let volume_ratio = if max_volume.is_finite() && max_volume > 0.0 {
-            let volume = if bar.volume.is_finite() { bar.volume } else { 0.0 };
+            let volume = if bar.volume.is_finite() {
+                bar.volume
+            } else {
+                0.0
+            };
             (volume / max_volume).clamp(0.0, 1.0) as f32
         } else {
             1.0
