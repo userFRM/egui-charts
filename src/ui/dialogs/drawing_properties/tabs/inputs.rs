@@ -119,6 +119,34 @@ impl InputsTab {
                             number(ui, "Risk (%)", percent, f64::MIN_POSITIVE..=100.0);
                         }
                     }
+                    let sizing = &mut drawing.position_sizing;
+                    number(
+                        ui,
+                        "Point value",
+                        &mut sizing.point_value,
+                        f64::MIN_POSITIVE..=f64::MAX,
+                    );
+                    number(
+                        ui,
+                        "Lot size",
+                        &mut sizing.lot_size,
+                        f64::MIN_POSITIVE..=f64::MAX,
+                    );
+                    let label = ui.label(l10n::text(ui.ctx(), "Quantity step"));
+                    ui.add(
+                        egui::DragValue::new(&mut sizing.quantity_step)
+                            .range(0.0..=f64::MAX)
+                            .speed(0.001)
+                            .custom_formatter(|value, _| value.to_string()),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
+                    number(
+                        ui,
+                        "Leverage",
+                        &mut sizing.leverage,
+                        f64::MIN_POSITIVE..=f64::MAX,
+                    );
                 });
                 if size != original {
                     drawing.position_size = Some(size);

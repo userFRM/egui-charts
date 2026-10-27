@@ -12,6 +12,7 @@ pub struct VisibleAveragePrice {
     source: PriceSource,
     range: Range<usize>,
     values: IndicatorValues,
+    mean: Option<f64>,
     color: Color32,
     visible: bool,
 }
@@ -23,6 +24,7 @@ impl VisibleAveragePrice {
             source: PriceSource::Close,
             range: 0..usize::MAX,
             values: IndicatorValues::new(),
+            mean: None,
             color: palette::BLUE,
             visible: true,
         }
@@ -65,12 +67,30 @@ impl Indicator for VisibleAveragePrice {
             count += 1.0;
             mean = mean * ((count - 1.0) / count) + value / count;
         }
+        self.mean = (count != 0.0).then_some(mean);
         if count != 0.0 {
             for (i, bar) in data.iter().enumerate() {
                 if price(bar).is_finite() {
                     self.values.set_value(0, i, mean);
                 }
             }
+        }
+    }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let start = from.min(self.values.len()).min(data.len());
+        if start < self.range.end || from == 0 {
+            // A changed visible price moves the average on every bar carrying that level.
+            self.calculate(data);
+            return;
+        }
+        self.values.truncate(start);
+        for bar in &data[start..] {
+            let price = self.source.compute(bar.open, bar.high, bar.low, bar.close);
+            self.values.push_lines(&[if price.is_finite() {
+                self.mean.unwrap_or(f64::NAN)
+            } else {
+                f64::NAN
+            }]);
         }
     }
     fn values(&self) -> &IndicatorValues {

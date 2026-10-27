@@ -19,10 +19,10 @@
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
-use super::over_finite_bars;
 use crate::model::{Bar, Instrument, PriceSource};
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Time Weighted Average Price, restarted at each anchor period.
@@ -37,8 +37,19 @@ pub struct TimeWeightedAvgPrice {
     source: PriceSource,
     days: ExchangeDays,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    intraday: bool,
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous_date: Option<chrono::NaiveDate>,
+    intraday: bool,
+    period: Option<(i32, u32)>,
+    sum: f64,
+    count: f64,
 }
 
 impl TimeWeightedAvgPrice {
@@ -49,6 +60,8 @@ impl TimeWeightedAvgPrice {
             source: PriceSource::OHLC4,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            intraday: false,
             colors: vec![palette::BLUE],
             visible: true,
         }
@@ -64,26 +77,6 @@ impl TimeWeightedAvgPrice {
     pub fn with_source(mut self, source: PriceSource) -> Self {
         self.source = source;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite source.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        let (mut period, mut sum, mut count) = (None, 0.0, 0.0);
-        for (bar, day) in data.iter().zip(self.days.of(data)) {
-            let key = Some(self.anchor.key(day));
-            if key != period {
-                (period, sum, count) = (key, 0.0, 0.0);
-            }
-            sum += self.price(bar);
-            count += 1.0;
-            values.push_lines(&[sum / count]);
-        }
-        values
-    }
-
-    fn price(&self, bar: &Bar) -> f64 {
-        self.source.compute(bar.open, bar.high, bar.low, bar.close)
     }
 }
 
@@ -112,11 +105,39 @@ impl Indicator for TimeWeightedAvgPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| self.price(b).is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], mut from: usize) {
+        loop {
+            self.stepper
+                .run(data, from, &mut self.values, |state, bar| {
+                    let price = self.source.compute(bar.open, bar.high, bar.low, bar.close);
+                    if !price.is_finite() {
+                        return IndicatorValue::None;
+                    }
+                    let date = bar.time.date_naive();
+                    state.intraday |= state.previous_date == Some(date);
+                    state.previous_date = Some(date);
+                    let key = Some(self.anchor.key(self.days.day(bar, !self.intraday)));
+                    if key != state.period {
+                        (state.period, state.sum, state.count) = (key, 0.0, 0.0);
+                    }
+                    state.sum += price;
+                    state.count += 1.0;
+                    IndicatorValue::Single(state.sum / state.count)
+                });
+            if self.intraday == self.stepper.state().intraday {
+                break;
+            }
+            // Switching the inferred interval changes the exchange dates of earlier bars too.
+            self.intraday = self.stepper.state().intraday;
+            from = 0;
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {

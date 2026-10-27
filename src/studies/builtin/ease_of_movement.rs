@@ -1,6 +1,7 @@
 use super::{clamp_param, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -109,11 +110,31 @@ impl Indicator for EaseOfMovement {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(self.period, |b| {
+                b.high.is_finite() && b.low.is_finite() && b.volume.is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| b.high.is_finite() && b.low.is_finite() && b.volume.is_finite(),
+                    |data| self.compute(data),
+                )
+            },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -1,6 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -12,6 +13,7 @@ pub struct ForceIndex {
     /// EMA period for smoothing (typically 13)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(Option<f64>, Smoothing)>,
     color: Color32,
     visible: bool,
 }
@@ -22,6 +24,7 @@ impl ForceIndex {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::UP, // Teal
             visible: true,
         }
@@ -31,41 +34,6 @@ impl ForceIndex {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate raw force index: (Close - PrevClose) * Volume
-        let mut raw_force = Vec::with_capacity(data.len());
-        raw_force.push(f64::NAN); // First bar has no previous
-
-        for i in 1..data.len() {
-            let force = (data[i].close - data[i - 1].close) * data[i].volume;
-            raw_force.push(force);
-        }
-
-        // Apply EMA smoothing
-        let smoothed = crate::studies::helpers::ema_sma(&raw_force, self.period);
-
-        // Store results
-        for value in smoothed {
-            if value.is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push(IndicatorValue::Single(value));
-            }
-        }
-
-        values
     }
 }
 
@@ -96,11 +64,29 @@ impl Indicator for ForceIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let raw = state
+                    .0
+                    .map_or(f64::NAN, |previous| (bar.close - previous) * bar.volume);
+                state.0 = Some(bar.close);
+                IndicatorValue::Single(state.1.next(
+                    raw,
+                    self.period,
+                    2.0 / (self.period as f64 + 1.0),
+                ))
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -116,7 +116,10 @@ pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
         return Vec::new();
     }
     let mut builder = RenkoBuilder::new(brick_size, config.source);
-    for bar in &bars[work_start(bars, brick_size, config.source)..] {
+    for bar in bars[work_start(bars, brick_size, config.source)..]
+        .iter()
+        .filter(|bar| !bar.is_whitespace())
+    {
         builder.push(bar);
     }
     builder.elements()
@@ -243,18 +246,24 @@ impl PriceBuilder for RenkoBuilder {
 /// `i` costs its close-to-close move in sizes plus 2; the returned bar only seeds the state.
 pub(crate) fn work_start(bars: &[Bar], size: f64, source: PriceBasedSource) -> usize {
     let mut total = 0.0;
-    for i in (1..bars.len()).rev() {
+    let mut priced = bars
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, bar)| !bar.is_whitespace());
+    let Some((mut i, mut bar)) = priced.next() else {
+        return 0;
+    };
+    for (previous_i, previous) in priced {
         let movement = match source {
-            PriceBasedSource::Close => (bars[i].close - bars[i - 1].close).abs(),
-            PriceBasedSource::HighLow => {
-                bars[i].high.max(bars[i - 1].high) - bars[i].low.min(bars[i - 1].low)
-            }
+            PriceBasedSource::Close => (bar.close - previous.close).abs(),
+            PriceBasedSource::HighLow => bar.high.max(previous.high) - bar.low.min(previous.low),
         };
-        // `max` counts no movement to or from a whitespace bar, whose prices are NaN.
         total += (movement / size).max(0.0) + 2.0;
         if total > super::MAX_WORK {
             return i;
         }
+        (i, bar) = (previous_i, previous);
     }
     0
 }

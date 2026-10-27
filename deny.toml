@@ -1,4 +1,15 @@
 # Check every target and feature, including example and test dependencies.
+[advisories]
+yanked = "deny"
+# Development/example-only accessibility dependencies still require zbus 5, even in
+# accesskit_unix 0.24.1. Remove these exceptions when that backend supports zbus 6.
+# These are maintenance notices, with no patched standalone releases.
+ignore = [
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.5 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5.15.1 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.15.1 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
+]
+
 [licenses]
 allow = [
     "0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",

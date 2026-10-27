@@ -26,10 +26,10 @@
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
-use super::over_finite_bars;
 use crate::model::{Bar, Instrument, PriceSource, Timeframe};
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// How [`VwapAutoAnchored`] finds its anchor bar.
@@ -77,8 +77,33 @@ pub struct VwapAutoAnchored {
     interval: Timeframe,
     days: ExchangeDays,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    intraday: bool,
+    shown_start: usize,
+    shown_indices: Vec<usize>,
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Point {
+    source: usize,
+    high: f64,
+    low: f64,
+    volume: f64,
+    price: f64,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    source: usize,
+    previous_date: Option<chrono::NaiveDate>,
+    intraday: bool,
+    period: Option<(i32, u32)>,
+    start: usize,
+    volume: f64,
+    weighted: f64,
+    candidates: std::collections::VecDeque<Point>,
 }
 
 impl VwapAutoAnchored {
@@ -91,6 +116,10 @@ impl VwapAutoAnchored {
             interval: Timeframe::Min1,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            intraday: false,
+            shown_start: 0,
+            shown_indices: Vec::new(),
             colors: vec![palette::YELLOW],
             visible: true,
         }
@@ -115,67 +144,25 @@ impl VwapAutoAnchored {
         self
     }
 
-    fn price(&self, bar: &Bar) -> f64 {
-        self.source.compute(bar.open, bar.high, bar.low, bar.close)
-    }
-
-    /// The first bar of the last period in `data`.
-    fn period_start(&self, data: &[Bar], period: AnchorPeriod) -> usize {
-        let keys: Vec<_> = self
-            .days
-            .of(data)
-            .into_iter()
-            .map(|day| period.key(day))
-            .collect();
-        keys.iter()
-            .rposition(|key| Some(key) != keys.last())
-            .map_or(0, |i| i + 1)
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let window = data.len().saturating_sub(self.length);
-        // `max_by` keeps the last of equal bars: the most recent.
-        let extreme = |key: fn(&Bar) -> f64| {
-            (window..data.len()).max_by(|&a, &b| key(&data[a]).total_cmp(&key(&data[b])))
-        };
+    fn period(&self) -> Option<AnchorPeriod> {
         let day = Timeframe::Day1.duration_ms();
-        let start = match self.anchor {
-            AutoAnchor::Auto => {
-                let period = match self.interval.duration_ms() {
-                    ms if ms < day => AnchorPeriod::Session,
-                    ms if ms <= day => AnchorPeriod::Month,
-                    ms if ms <= 10 * day => AnchorPeriod::Quarter,
-                    ms if ms <= 60 * day => AnchorPeriod::Year,
-                    _ => AnchorPeriod::Decade,
-                };
-                Some(self.period_start(data, period))
-            }
-            AutoAnchor::HighestHigh => extreme(|b| b.high),
-            AutoAnchor::LowestLow => extreme(|b| -b.low),
-            AutoAnchor::HighestVolume => extreme(|b| b.volume),
-            AutoAnchor::Session => Some(self.period_start(data, AnchorPeriod::Session)),
-            AutoAnchor::Week => Some(self.period_start(data, AnchorPeriod::Week)),
-            AutoAnchor::Month => Some(self.period_start(data, AnchorPeriod::Month)),
-            AutoAnchor::Quarter => Some(self.period_start(data, AnchorPeriod::Quarter)),
-            AutoAnchor::Year => Some(self.period_start(data, AnchorPeriod::Year)),
-            AutoAnchor::Decade => Some(self.period_start(data, AnchorPeriod::Decade)),
-            AutoAnchor::Century => Some(self.period_start(data, AnchorPeriod::Century)),
-        };
-        let mut values = IndicatorValues::missing(data.len());
-        let (mut volume, mut weighted) = (0.0, 0.0);
-        for (i, bar) in data.iter().enumerate().skip(start.unwrap_or(data.len())) {
-            let price = self.price(bar);
-            volume += bar.volume;
-            weighted += price * bar.volume;
-            let vwap = if volume.abs() < 1e-10 {
-                price
-            } else {
-                weighted / volume
-            };
-            values.set_value(0, i, vwap);
-        }
-        values
+        Some(match self.anchor {
+            AutoAnchor::Auto => match self.interval.duration_ms() {
+                ms if ms < day => AnchorPeriod::Session,
+                ms if ms <= day => AnchorPeriod::Month,
+                ms if ms <= 10 * day => AnchorPeriod::Quarter,
+                ms if ms <= 60 * day => AnchorPeriod::Year,
+                _ => AnchorPeriod::Decade,
+            },
+            AutoAnchor::Session => AnchorPeriod::Session,
+            AutoAnchor::Week => AnchorPeriod::Week,
+            AutoAnchor::Month => AnchorPeriod::Month,
+            AutoAnchor::Quarter => AnchorPeriod::Quarter,
+            AutoAnchor::Year => AnchorPeriod::Year,
+            AutoAnchor::Decade => AnchorPeriod::Decade,
+            AutoAnchor::Century => AnchorPeriod::Century,
+            _ => return None,
+        })
     }
 }
 
@@ -201,16 +188,135 @@ impl Indicator for VwapAutoAnchored {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                self.price(b).is_finite()
-                    && b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.volume.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], mut from: usize) {
+        let period = self.period();
+        let price_source = self.source;
+        let usable = |bar: &Bar| {
+            price_source
+                .compute(bar.open, bar.high, bar.low, bar.close)
+                .is_finite()
+                && bar.high.is_finite()
+                && bar.low.is_finite()
+                && bar.volume.is_finite()
+        };
+        let len = self.values.len();
+        if len == 0 || from < len - 1 || data.len() < len {
+            self.shown_start = 0;
+        }
+        loop {
+            self.stepper
+                .run(data, from, &mut self.values, |state, bar| {
+                    let source = state.source;
+                    state.source += 1;
+                    if !usable(bar) {
+                        return IndicatorValue::None;
+                    }
+                    let price = price_source.compute(bar.open, bar.high, bar.low, bar.close);
+                    let Some(period) = period else {
+                        state.candidates.push_back(Point {
+                            source,
+                            high: bar.high,
+                            low: bar.low,
+                            volume: bar.volume,
+                            price,
+                        });
+                        if state.candidates.len() > self.length {
+                            state.candidates.pop_front();
+                        }
+                        return IndicatorValue::None;
+                    };
+                    let date = bar.time.date_naive();
+                    state.intraday |= state.previous_date == Some(date);
+                    state.previous_date = Some(date);
+                    let key = Some(period.key(self.days.day(bar, !self.intraday)));
+                    if key != state.period {
+                        state.period = key;
+                        state.start = source;
+                        state.volume = 0.0;
+                        state.weighted = 0.0;
+                    }
+                    state.volume += bar.volume;
+                    state.weighted += price * bar.volume;
+                    IndicatorValue::Single(if state.volume.abs() < 1e-10 {
+                        price
+                    } else {
+                        state.weighted / state.volume
+                    })
+                });
+            if period.is_none() || self.intraday == self.stepper.state().intraday {
+                break;
+            }
+            self.intraday = self.stepper.state().intraday;
+            self.shown_start = 0;
+            from = 0;
+        }
+        if period.is_some() {
+            let start = self.stepper.state().start;
+            if start > self.shown_start {
+                for bar in self.shown_start..start {
+                    self.values.set(bar, IndicatorValue::None);
+                }
+            } else if start < self.shown_start {
+                // Withdrawing a new anchor period restores the previously visible line.
+                let (mut volume, mut weighted) = (0.0, 0.0);
+                for (i, bar) in data.iter().enumerate().take(self.shown_start).skip(start) {
+                    if !usable(bar) {
+                        continue;
+                    }
+                    let price = price_source.compute(bar.open, bar.high, bar.low, bar.close);
+                    volume += bar.volume;
+                    weighted += price * bar.volume;
+                    self.values.set_value(
+                        0,
+                        i,
+                        if volume.abs() < 1e-10 {
+                            price
+                        } else {
+                            weighted / volume
+                        },
+                    );
+                }
+            }
+            self.shown_start = start;
+        } else {
+            for &bar in &self.shown_indices {
+                if bar < self.values.len() {
+                    self.values.set(bar, IndicatorValue::None);
+                }
+            }
+            self.shown_indices.clear();
+            let candidates = &self.stepper.state().candidates;
+            let key = |point: &Point| match self.anchor {
+                AutoAnchor::HighestHigh => point.high,
+                AutoAnchor::LowestLow => -point.low,
+                _ => point.volume,
+            };
+            let start = (0..candidates.len())
+                .max_by(|&a, &b| key(&candidates[a]).total_cmp(&key(&candidates[b])))
+                .unwrap_or(candidates.len());
+            let (mut volume, mut weighted) = (0.0, 0.0);
+            for point in candidates.iter().skip(start) {
+                volume += point.volume;
+                weighted += point.price * point.volume;
+                self.values.set_value(
+                    0,
+                    point.source,
+                    if volume.abs() < 1e-10 {
+                        point.price
+                    } else {
+                        weighted / volume
+                    },
+                );
+                self.shown_indices.push(point.source);
+            }
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn set_timeframe(&mut self, timeframe: Timeframe) {

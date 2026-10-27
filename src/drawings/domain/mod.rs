@@ -17,7 +17,7 @@ pub use drawing::Drawing;
 pub use gann::GannConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
-    PositionSize, RegressionTrendConfig, TimeframeVisibility,
+    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;

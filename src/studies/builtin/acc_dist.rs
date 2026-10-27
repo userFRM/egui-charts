@@ -22,9 +22,9 @@
 //! ad.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -32,6 +32,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct AccumulationDistribution {
     values: IndicatorValues,
+    stepper: Stepper<f64>,
     color: Color32,
     visible: bool,
 }
@@ -41,6 +42,7 @@ impl AccumulationDistribution {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::BLUE, // Blue
             visible: true,
         }
@@ -50,38 +52,6 @@ impl AccumulationDistribution {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low, close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        let mut ad = 0.0;
-
-        for bar in data {
-            let high_low = bar.high - bar.low;
-
-            if high_low > 0.0 {
-                // Money Flow Multiplier: ((Close - Low) - (High - Close)) / (High - Low)
-                // Simplifies to: (2 * Close - High - Low) / (High - Low)
-                let mfm = (2.0 * bar.close - bar.high - bar.low) / high_low;
-
-                // Money Flow Volume
-                let mfv = mfm * bar.volume;
-
-                // Cumulative A/D
-                ad += mfv;
-            }
-            // If high == low (doji), no change to A/D
-
-            values.push(IndicatorValue::Single(ad));
-        }
-
-        values
     }
 }
 
@@ -105,16 +75,29 @@ impl Indicator for AccumulationDistribution {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.close.is_finite()
-                    && b.volume.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close, bar.volume]
+                    .iter()
+                    .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                let range = bar.high - bar.low;
+                if range > 0.0 {
+                    let multiplier = (2.0 * bar.close - bar.high - bar.low) / range;
+                    *state += multiplier * bar.volume;
+                }
+                IndicatorValue::Single(*state)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -67,7 +67,10 @@ impl Indicator for BollingerBars {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let from = from.min(self.values.len()).min(data.len());
-        self.candles.retain(|candle| candle.bars.start < from);
+        self.candles.truncate(
+            self.candles
+                .partition_point(|candle| candle.bars.start < from),
+        );
         self.values.truncate(from);
         // Every bar has all three columns, so an all-up series still reports three lines.
         self.values

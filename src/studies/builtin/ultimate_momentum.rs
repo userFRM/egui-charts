@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -53,6 +54,40 @@ impl Default for UltimateMomentum {
     }
 }
 
+impl UltimateMomentum {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.long_period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Get closes
+        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
+
+        for i in 0..data.len() {
+            let roc_short = Self::calculate_roc(&closes, self.short_period, i);
+            let roc_medium = Self::calculate_roc(&closes, self.medium_period, i);
+            let roc_long = Self::calculate_roc(&closes, self.long_period, i);
+
+            match (roc_short, roc_medium, roc_long) {
+                (Some(s), Some(m), Some(l)) => {
+                    // Weighted combination: more weight to longer periods
+                    let momentum = (s * 1.0 + m * 2.0 + l * 3.0) / 6.0;
+                    values.push(IndicatorValue::Single(momentum));
+                }
+                _ => {
+                    values.push(IndicatorValue::None);
+                }
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for UltimateMomentum {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -75,34 +110,29 @@ impl Indicator for UltimateMomentum {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.long_period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| {
+                from.saturating_sub(
+                    self.short_period
+                        .max(self.medium_period)
+                        .max(self.long_period),
+                )
+            },
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        // Get closes
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        for i in 0..data.len() {
-            let roc_short = Self::calculate_roc(&closes, self.short_period, i);
-            let roc_medium = Self::calculate_roc(&closes, self.medium_period, i);
-            let roc_long = Self::calculate_roc(&closes, self.long_period, i);
-
-            match (roc_short, roc_medium, roc_long) {
-                (Some(s), Some(m), Some(l)) => {
-                    // Weighted combination: more weight to longer periods
-                    let momentum = (s * 1.0 + m * 2.0 + l * 3.0) / 6.0;
-                    self.values.push(IndicatorValue::Single(momentum));
-                }
-                _ => {
-                    self.values.push(IndicatorValue::None);
-                }
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

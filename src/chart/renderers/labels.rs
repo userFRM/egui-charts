@@ -317,7 +317,7 @@ fn time_to_idx(
     i0 as f64 + frac * (i1 as f64 - i0 as f64)
 }
 
-/// Paints time grid lines from the same calendar marks as the axis labels.
+/// Paints time grid lines from the axis marks and an optional price grid, batching matching styles.
 pub(crate) fn render_time_grid(
     context: &RenderContext,
     marks: &[TickMark],
@@ -325,6 +325,7 @@ pub(crate) fn render_time_grid(
     coords: &ChartMapping,
     color: Color32,
     style: crate::model::LineStyle,
+    horizontal: Option<(Color32, crate::model::LineStyle)>,
 ) {
     let lines = marks.iter().filter_map(|mark| {
         let index = time_to_idx(mark.time, points);
@@ -337,6 +338,31 @@ pub(crate) fn render_time_grid(
             Pos2::new(x, context.rect.bottom()),
         ])
     });
+    let price_marks = horizontal.map(|_| coords.price.marks()).unwrap_or_default();
+    let price_lines = price_marks.iter().map(|mark| {
+        [
+            Pos2::new(context.rect.left(), mark.y_coord),
+            Pos2::new(context.rect.right(), mark.y_coord),
+        ]
+    });
+    if let Some((price_color, price_style)) = horizontal {
+        if price_color == color && price_style == style {
+            // One grid mesh avoids copying it again when tessellation grows for the other axis.
+            crate::chart::rendering::grid::render_grid_lines(
+                context.painter,
+                price_lines.chain(lines),
+                color,
+                style,
+            );
+            return;
+        }
+        crate::chart::rendering::grid::render_grid_lines(
+            context.painter,
+            price_lines,
+            price_color,
+            price_style,
+        );
+    }
     crate::chart::rendering::grid::render_grid_lines(context.painter, lines, color, style);
 }
 
@@ -449,6 +475,110 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{DateTime, TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
+
+    #[test]
+    fn combined_grid_preserves_geometry_and_independent_styles() {
+        use super::{ChartMapping, RenderContext, render_time_grid};
+        use crate::model::LineStyle;
+        use crate::scales::{
+            PriceMap, PriceRange, PriceTransform, TickMark, TickMarkType, TickMarkWeight,
+        };
+        use egui::{Color32, LayerId, Mesh, Painter, RawInput, vec2};
+
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 240.0));
+        let price_rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 180.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(100.0, 200.0),
+            price_rect.top(),
+            price_rect.bottom(),
+            false,
+        );
+        let coords = ChartMapping::new(price_rect, 6.0, 0, 60, 0.0, price);
+        let points = [
+            (DateTime::<Utc>::UNIX_EPOCH, 0),
+            (
+                DateTime::<Utc>::UNIX_EPOCH + chrono::Duration::minutes(60),
+                60,
+            ),
+        ];
+        let marks: Vec<_> = [0, 20, 40, 60]
+            .map(|index| TickMark {
+                time: DateTime::<Utc>::UNIX_EPOCH + chrono::Duration::minutes(index as i64),
+                mark_type: TickMarkType::Time,
+                weight: TickMarkWeight::MINUTE,
+                label: String::new(),
+                index,
+                bold: false,
+            })
+            .into();
+        let red = Color32::from_rgba_unmultiplied(255, 0, 0, 80);
+        for scale in [1.0, 1.25, 2.0] {
+            for (horizontal, vertical, color) in [
+                (LineStyle::Dotted, LineStyle::Dotted, red),
+                (LineStyle::SparseDotted, LineStyle::SparseDotted, red),
+                (LineStyle::Solid, LineStyle::Solid, red),
+                (LineStyle::Dashed, LineStyle::LargeDashed, red),
+                (LineStyle::Dotted, LineStyle::Dotted, Color32::BLUE),
+            ] {
+                let render = |combined: bool| {
+                    let ctx = Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |_| {
+                            let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                            if !combined {
+                                crate::chart::rendering::render_grid(
+                                    &painter, price_rect, &price, red, horizontal,
+                                );
+                            }
+                            render_time_grid(
+                                &RenderContext::new(&painter, rect),
+                                &marks,
+                                &points,
+                                &coords,
+                                color,
+                                vertical,
+                                combined.then_some((red, horizontal)),
+                            );
+                        },
+                    );
+                    if combined
+                        && horizontal == LineStyle::Dotted
+                        && vertical == horizontal
+                        && color == red
+                    {
+                        assert_eq!(
+                            output
+                                .shapes
+                                .iter()
+                                .filter(|shape| matches!(shape.shape, Shape::Mesh(_)))
+                                .count(),
+                            1
+                        );
+                    }
+                    let mut mesh = Mesh::default();
+                    for primitive in ctx.tessellate(output.shapes.clone(), output.pixels_per_point)
+                    {
+                        if let egui::epaint::Primitive::Mesh(part) = primitive.primitive {
+                            mesh.append(part);
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                    mesh
+                };
+                let combined = render(true);
+                let separate = render(false);
+                assert!(!combined.is_empty());
+                assert_eq!(combined.vertices, separate.vertices);
+                assert_eq!(combined.indices, separate.indices);
+            }
+        }
+    }
 
     #[cfg(feature = "studies")]
     #[test]
