@@ -5,7 +5,6 @@ import { historySvg, treemapSvg } from '../../lib/progress-svg';
 
 const total = counts(features);
 const snapshots = history();
-const dateLabel = (date: string) => date.slice(0, 10);
 ---
 
 <StarlightPage frontmatter={{
@@ -17,8 +16,8 @@ const dateLabel = (date: string) => date.slice(0, 10);
 }}>
   <div class="progress">
     <div class="badges" aria-label="Share of features done">
-      <a href="#areas"><img src="./overall.svg" alt={`Overall: ${percentage(features)}% done`} width="123" height="20" /></a>
-      {areas.map((area) => <a href={`#${slug(area)}`}><img src={`./${slug(area)}.svg`} alt={`${area}: ${percentage(features.filter((row) => row.area === area))}% done`} width={area.length * 7 + 74} height="20" /></a>)}
+      <a href="#areas"><img src="./overall.svg" alt={`Overall: ${percentage(features)}% done`} /></a>
+      {areas.map((area) => <a href={`#${slug(area)}`}><img src={`./${slug(area)}.svg`} alt={`${area}: ${percentage(features.filter((row) => row.area === area))}% done`} /></a>)}
     </div>
     <p class="intro">
       <strong>{total.done} of {total.total} features done.</strong>
@@ -56,7 +55,7 @@ const dateLabel = (date: string) => date.slice(0, 10);
           <div class="history-table"><table>
             <thead><tr><th>Date</th><th>Commit</th><th>Done</th><th>Partial</th><th>Missing</th></tr></thead>
             <tbody>{snapshots.map((point) => <tr>
-              <td><time datetime={point.date}>{dateLabel(point.date)}</time></td>
+              <td><time datetime={point.date}>{point.date.slice(0, 10)}</time></td>
               <td><a href={`https://github.com/userFRM/egui-charts/commit/${point.commit}`}>{point.commit.slice(0, 8)}</a></td>
               <td>{point.done}</td><td>{point.partial}</td><td>{point.missing}</td>
             </tr>)}</tbody>

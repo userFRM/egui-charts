@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Terminal', 'Builder API'] as const;
 export const statuses = ['done', 'partial', 'missing'] as const;
-export type Status = typeof statuses[number];
+type Status = typeof statuses[number];
 export type Feature = {
   area: typeof areas[number];
   group: string;
@@ -75,7 +75,7 @@ export function history() {
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Lay out positive weights in rows chosen to minimise the worst cell aspect ratio. */
-export function squarify(weights: number[], box: Box): Box[] {
+function squarify(weights: number[], box: Box): Box[] {
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   if (!weights.length) return [];
   if (weights.some((weight) => !Number.isFinite(weight) || weight <= 0) ||
