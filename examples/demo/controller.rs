@@ -299,6 +299,8 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
+    /// No explicit choice follows the system appearance without saving its current value.
+    theme_choice: Option<bool>,
 
     // Persistent toolbars.
     top_toolbar: TopToolbar,
@@ -427,9 +429,15 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let dark = cc
+        let theme_choice = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, "dark_theme"))
+            .and_then(|storage| eframe::get_value(storage, "dark_theme"));
+        let dark = theme_choice
+            .or_else(|| {
+                cc.egui_ctx
+                    .system_theme()
+                    .map(|theme| theme == egui::Theme::Dark)
+            })
             .unwrap_or(false);
         let theme = if dark { Theme::dark() } else { Theme::light() };
         let timeframe = Timeframe::Min1;
@@ -534,6 +542,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             theme,
+            theme_choice,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             timeframe_toolbar,
@@ -1181,6 +1190,7 @@ impl eframe::App for DemoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.update_theme(&ctx);
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
@@ -3623,28 +3633,78 @@ mod tests {
     #[test]
     fn theme_selection_survives_restart_and_initializes_the_chart() {
         use eframe::App;
-        let ctx = egui::Context::default();
-        let mut storage = AppStorage::default();
-        for dark in [true, false] {
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let mut app = DemoApp::new(&cc);
-            app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
-            assert_eq!(app.theme.dark, dark);
-            app.save(&mut storage);
-            drop(app);
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let restored = DemoApp::new(&cc);
-            assert_eq!(restored.theme.dark, dark);
-            assert_eq!(
-                restored.chart.config().background_color,
-                restored.theme.chart.bg
-            );
-            assert_eq!(
-                restored.chart.config().bearish_color,
-                restored.theme.chart.candle_down
-            );
+        for initial in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            let ctx = egui::Context::default();
+            ctx.run_ui(
+                egui::RawInput {
+                    system_theme: initial,
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .drop_without_applying_deltas();
+            let mut storage = AppStorage::default();
+            for explicit in [false, true, true] {
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let mut app = DemoApp::new(&cc);
+                if !explicit {
+                    assert_eq!(app.theme.dark, initial == Some(egui::Theme::Dark));
+                }
+                if explicit {
+                    app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+                }
+                let choice = explicit.then_some(app.theme.dark);
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                for system in [egui::Theme::Dark, egui::Theme::Light, egui::Theme::Dark] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            system_theme: Some(system),
+                            ..Default::default()
+                        },
+                        |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                    )
+                    .drop_without_applying_deltas();
+                    let expected = if choice.unwrap_or(system == egui::Theme::Dark) {
+                        Theme::dark()
+                    } else {
+                        Theme::light()
+                    };
+                    assert_eq!(app.theme, expected);
+                    assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                    assert_eq!(
+                        app.extra_charts[0].chart.config().background_color,
+                        expected.chart.bg
+                    );
+                    assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
+                }
+                app.save(&mut storage);
+                drop(app);
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(egui::Theme::Light),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, choice.unwrap_or(false));
+                assert_eq!(
+                    restored.user_settings().theme,
+                    choice.map(|dark| if dark { "dark" } else { "light" }.into())
+                );
+                assert_eq!(
+                    restored.chart.config().background_color,
+                    restored.theme.chart.bg
+                );
+                assert_eq!(
+                    restored.chart.config().bearish_color,
+                    restored.theme.chart.candle_down
+                );
+            }
         }
     }
 

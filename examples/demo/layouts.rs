@@ -43,10 +43,22 @@ impl LayoutTab {
 
 impl DemoApp {
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
-        self.theme = if self.theme.dark {
-            egui_charts::theme::Theme::light()
-        } else {
+        self.theme_choice = Some(!self.theme.dark);
+        self.update_theme(ctx);
+    }
+
+    pub(super) fn update_theme(&mut self, ctx: &egui::Context) {
+        let dark = self
+            .theme_choice
+            .or_else(|| ctx.system_theme().map(|theme| theme == egui::Theme::Dark))
+            .unwrap_or(self.theme.dark);
+        if self.theme.dark == dark {
+            return;
+        }
+        self.theme = if dark {
             egui_charts::theme::Theme::dark()
+        } else {
+            egui_charts::theme::Theme::light()
         };
         let saved = self
             .layout_tabs
@@ -647,7 +659,9 @@ impl DemoApp {
     pub(super) fn user_settings(&self) -> UserSettings {
         let menu = &self.top_toolbar.layout_menu;
         UserSettings {
-            theme: Some(if self.theme.dark { "dark" } else { "light" }.into()),
+            theme: self
+                .theme_choice
+                .map(|dark| if dark { "dark" } else { "light" }.into()),
             symbol: Some(self.state.symbol.clone()),
             interval: Some(self.state.timeframe),
             drawing_favorites: self.drawing_toolbar.state.favorites.clone(),
@@ -661,12 +675,12 @@ impl DemoApp {
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
-        if settings
-            .theme
-            .is_some_and(|theme| (theme == "dark") != self.theme.dark)
-        {
-            self.toggle_theme(ctx);
-        }
+        self.theme_choice = match settings.theme.as_deref() {
+            Some("dark") => Some(true),
+            Some("light") => Some(false),
+            _ => None,
+        };
+        self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings
             .symbol

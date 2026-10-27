@@ -321,6 +321,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo follows the system light or dark appearance at startup and live until a theme is explicitly selected. Explicit choices remain saved between sessions, and the web loading screen uses the same saved choice or system appearance before the app starts. ([#1032](https://github.com/userFRM/egui-charts/issues/1032))
+
 - Study appearance and input edits keep settings snapshots in chart undo history instead of copying calculated columns. Undo and redo restore the saved inputs and presentation and recompute against current data; removed studies retain their original implementation. ([#944](https://github.com/userFRM/egui-charts/issues/944))
 
 - Drawing sync notifications coalesce per drawing and overflow after 1,024 actions into `DrawingSyncAction::ResyncRequired`. Hosts replace their stored set with the manager's saveable drawings, deleting absent records. Automatic storage disables notifications. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`; enabling requests a full replacement. ([#948](https://github.com/userFRM/egui-charts/issues/948))
