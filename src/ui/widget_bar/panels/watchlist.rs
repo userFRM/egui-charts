@@ -534,9 +534,11 @@ impl WatchlistPanel {
 
         let font = TextStyle::Body.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
+        // Each number column takes 23.5% of the row, which leaves the symbol column room for a
+        // six-letter name after its mark; the last column's own gap completes the right margin.
         let columns = |rect: egui::Rect| {
-            let right = rect.right() - 8.0;
-            let number = ((rect.width() - 18.0).max(0.0) * 0.24).min(96.0);
+            let right = rect.right() - 4.0;
+            let number = ((rect.width() - 18.0).max(0.0) * 0.235).min(96.0);
             let edges = [
                 rect.left() + 10.0,
                 right - 3.0 * number,
@@ -786,17 +788,18 @@ impl WatchlistPanel {
                                     .corner_radius(MARK_SIZE / 2.0)
                                     .paint_at(ui, mark),
                                 None => {
+                                    // Grey under white, apart from the hover and selection fills.
                                     painter.circle_filled(
                                         mark.center(),
                                         MARK_SIZE / 2.0,
-                                        theme.ui.btn_bg_active,
+                                        theme.ui.text_disabled,
                                     );
                                     painter.text(
                                         mark.center(),
                                         Align2::CENTER_CENTER,
                                         symbol.chars().next().unwrap_or(' ').to_uppercase(),
                                         FontId::proportional(MARK_SIZE / 2.0),
-                                        theme.ui.text_secondary,
+                                        Color32::WHITE,
                                     );
                                 }
                             }
