@@ -179,7 +179,13 @@ impl Drawing {
                 outline.lines = path(false);
                 outline.lines.extend(self.neckline().map(|(line, _)| line));
             }
-            T::TrianglePattern => outline.lines = path(true),
+            T::TrianglePattern => match patterns::triangle_boundaries(p, f32::INFINITY) {
+                Some((lines, _)) => {
+                    outline.lines = path(false);
+                    outline.lines.extend(lines);
+                }
+                None => outline.lines = path(p.len() == 3),
+            },
             T::Sector => {
                 let points = self.sector_points()?;
                 outline.lines = edges(&points);
