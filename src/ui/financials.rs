@@ -120,17 +120,6 @@ impl FinancialsPanel {
         let theme = ui.active_theme();
         let mut back = false;
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(&self.title)
-                    .size(theme.text.title + 2.0)
-                    .strong()
-                    .color(theme.ui.text),
-            );
-            ui.label(
-                RichText::new(l10n::text(ui.ctx(), "Financials"))
-                    .size(theme.text.title + 2.0)
-                    .color(theme.ui.text_secondary),
-            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 back = ui
                     .add(egui::Button::image_and_text(
@@ -138,6 +127,22 @@ impl FinancialsPanel {
                         l10n::text(ui.ctx(), "Back to chart"),
                     ))
                     .clicked();
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "Financials"))
+                        .size(theme.text.title + 2.0)
+                        .color(theme.ui.text_secondary),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&self.title)
+                            .size(theme.text.title + 2.0)
+                            .strong()
+                            .color(theme.ui.text),
+                    )
+                    .truncate()
+                    .halign(Align::Min),
+                )
+                .on_hover_text(&self.title);
             });
         });
         ui.add_space(theme.spacing.md);
@@ -156,21 +161,26 @@ impl FinancialsPanel {
             .collect();
         if names.len() > 1 {
             let mut active = names[self.page.min(names.len() - 1)];
-            if TabBar::new(&names, &mut active).pills().show(ui) {
+            let changed = egui::ScrollArea::horizontal()
+                .id_salt("financial_pages")
+                .show(ui, |ui| TabBar::new(&names, &mut active).pills().show(ui))
+                .inner;
+            if changed {
                 self.page = names.iter().position(|page| *page == active).unwrap_or(0);
                 self.charted = 0;
             }
             ui.add_space(theme.spacing.md);
         }
         let page = &financials.pages[self.page.min(financials.pages.len() - 1)];
-        if let Some(row) = page.rows.get(self.charted) {
-            column_chart(ui, page, row);
-        }
-        ui.add_space(theme.spacing.md);
         let currency = financials.currency.as_deref();
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_min_width(NAME_WIDTH + PERIOD_WIDTH * page.periods.len() as f32);
+                if let Some(row) = page.rows.get(self.charted) {
+                    column_chart(ui, page, row);
+                }
+                ui.add_space(theme.spacing.md);
                 if let Some(charted) = table(ui, page, currency, self.charted) {
                     self.charted = charted;
                 }
@@ -323,7 +333,8 @@ fn table(
             };
             ui.painter().rect_filled(rect, 0.0, fill);
         }
-        ui.painter().text(
+        let name_rect = Rect::from_min_max(rect.min, pos2(rect.left() + NAME_WIDTH, rect.bottom()));
+        ui.painter_at(name_rect).text(
             pos2(rect.left() + 8.0, rect.center().y),
             Align2::LEFT_CENTER,
             name,
@@ -392,5 +403,65 @@ mod tests {
         }
         assert_eq!(figure(Some(f64::NAN)), "-");
         assert_eq!(figure(Some(f64::INFINITY)), "-");
+    }
+
+    #[test]
+    fn financials_keep_controls_and_cells_inside_narrow_windows() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for width in [220.0, 280.0, 1000.0] {
+            for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                let data = CompanyFinancials::new(
+                    Some("USD".into()),
+                    vec![
+                        FinancialPage::new(
+                            "Income statement",
+                            vec!["FY 2024".into(), "FY 2025".into()],
+                        )
+                        .with_row(
+                            "A financial row name much wider than the name column",
+                            vec![Some(2.0), Some(3.0)],
+                        ),
+                        FinancialPage::new("Balance sheet", vec!["FY 2025".into()])
+                            .with_row("Assets", vec![Some(3.0)]),
+                        FinancialPage::new("Statistics", vec!["FY 2025".into()])
+                            .with_row("Margin", vec![Some(2.0)]),
+                    ],
+                );
+                let mut panel =
+                    FinancialsPanel::new("A company name wider than a narrow window", Some(data));
+                let mut used = Rect::NOTHING;
+                let mut harness = Harness::builder()
+                    .with_size(vec2(width, 300.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &theme);
+                    })
+                    .build_ui(|ui| {
+                        panel.show(ui);
+                        used = ui.min_rect();
+                    });
+                harness.run();
+                let back = harness.get_by_label("Back to chart").rect();
+                assert!(
+                    back.right() <= width && back.left() >= 0.0,
+                    "back at {width}: {back:?}"
+                );
+                let name = harness.output().shapes.iter().rev().find(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text().starts_with("A financial row name"))).unwrap();
+                assert!(
+                    name.clip_rect.width() <= NAME_WIDTH,
+                    "row names stay in their column"
+                );
+                drop(harness);
+                assert!(
+                    used.right() <= width,
+                    "view expanded beyond {width}: {used:?}"
+                );
+                assert!(
+                    used.bottom() <= 300.0,
+                    "table stays scrollable in short windows: {used:?}"
+                );
+            }
+        }
     }
 }
