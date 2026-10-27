@@ -5,25 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>egui-charts | Live Demo</title>
     <script>
-        // Read the same settings document as DemoStorage before the loading screen paints.
-        let theme;
+        // Only this key distinguishes a choice from palettes saved by earlier releases.
         try {
-            theme = localStorage.getItem('dark_theme');
-            theme = theme === 'true' ? 'dark' : theme === 'false' ? 'light' : null;
-            const documents = localStorage.getItem('templates') || '';
-            const entry = documents.match(/"Settings\/settings"\s*:\s*("(?:\\.|[^"\\])*")/);
-            if (entry) {
-                // eframe stores the string map as RON; JSON also decodes its standard escapes.
-                const encoded = entry[1].replace(/\\(?:'|u\{([0-9a-fA-F]+)\}|.)/g, (escape, code) =>
-                    escape === "\\'" ? "'" : code ?
-                        JSON.stringify(String.fromCodePoint(parseInt(code, 16))).slice(1, -1) : escape);
-                const document = JSON.parse(JSON.parse(encoded));
-                if (document.version === 1) theme = document.theme;
+            const theme = localStorage.getItem('theme_choice');
+            if (theme === 'true' || theme === 'false') {
+                document.documentElement.dataset.theme = theme === 'true' ? 'dark' : 'light';
             }
         } catch (_) {
-            // Unreadable settings keep the legacy choice or system appearance.
+            // Unreadable storage follows the system appearance.
         }
-        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
     </script>
     <style>
         :root { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }
@@ -65,7 +55,9 @@
         Loading egui-charts demo&hellip;
     </div>
     <canvas id="demo_canvas"></canvas>
-    <link data-trunk rel="rust" data-cargo-profile-release="wasm-release" data-wasm-opt="z" />
+    <link data-trunk rel="icon" href="../../docs/site/public/favicon.svg" />
+    <!-- Same-origin static page: integrity on the module preload adds nothing and makes browsers warn. -->
+    <link data-trunk rel="rust" data-cargo-profile-release="wasm-release" data-wasm-opt="z" data-integrity="none" />
     <!-- The module embeds egui's default fonts and Lucide icons; their licences are published next to this page. -->
     <link data-trunk rel="copy-file" href="LICENSE-fonts.txt" />
     <link data-trunk rel="copy-file" href="../../assets/icons/LICENSE-lucide.txt" />

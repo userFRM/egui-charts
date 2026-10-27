@@ -65,6 +65,11 @@ impl<B: PriceBuilder> Built<B> {
         self.elements.get(start..start + len).unwrap_or_default()
     }
 
+    /// The bars of the elements in the visible slots, as [`Self::shown`].
+    pub(super) fn shown_bars(&self, start: usize, len: usize) -> &[Bar] {
+        self.bars.get(start..start + len).unwrap_or_default()
+    }
+
     fn series(&self) -> (Arc<[Bar]>, bool) {
         (
             self.bars.clone(),
@@ -269,6 +274,56 @@ pub(super) fn range_bars(
         |bars| range_bar::work_start(bars, size),
         range_bar::RangeBar::to_bar,
     )
+}
+
+/// Range bars built from executions, kept until the executions, the range size or the replay
+/// cutoff change.
+#[derive(Default)]
+pub(crate) struct ExecutionRanges {
+    key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
+    built: Option<(Arc<[Bar]>, bool)>,
+}
+
+impl ExecutionRanges {
+    /// One bar per range bar of the trades before `cutoff` (all of them without one), and whether
+    /// older range bars were left out by the bar limit; `trades_revision` identifies `trades`.
+    /// `None` for an invalid range size or without a trade, when the range bars come from the
+    /// chart's OHLC bars.
+    pub(crate) fn bars<'a>(
+        &mut self,
+        params: &ChartTypeParams,
+        trades_revision: u64,
+        trades: impl Iterator<Item = &'a crate::model::Tick>,
+        cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<(Arc<[Bar]>, bool)> {
+        if params.invalid(ChartType::Range).is_some() {
+            *self = Self::default();
+            return None;
+        }
+        let key = (params.range_size, trades_revision, cutoff);
+        if self.key != Some(key) {
+            let mut builder = RangeBarBuilder::new(params.range_size);
+            for trade in trades.filter(|t| cutoff.is_none_or(|c| t.ts < c)) {
+                builder.push_tick(trade);
+            }
+            let bars: Arc<[Bar]> = builder
+                .elements()
+                .iter()
+                .map(range_bar::RangeBar::to_bar)
+                .collect();
+            self.built = (!bars.is_empty()).then(|| {
+                let trimmed = bars.len() >= range_bar::MAX_BARS;
+                (bars, trimmed)
+            });
+            self.key = Some(key);
+        }
+        self.built.clone()
+    }
+
+    /// Whether the last bars came from executions.
+    pub(crate) fn in_use(&self) -> bool {
+        self.built.is_some()
+    }
 }
 
 /// The element containing a loaded time. Columns include quiet bars up to the next column's
