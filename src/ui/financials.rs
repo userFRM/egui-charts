@@ -132,7 +132,8 @@ impl FinancialsPanel {
                         .size(theme.text.title + 2.0)
                         .color(theme.ui.text_secondary),
                 );
-                ui.add(
+                ui.add_sized(
+                    vec2(ui.available_width(), ui.spacing().interact_size.y),
                     egui::Label::new(
                         RichText::new(&self.title)
                             .size(theme.text.title + 2.0)

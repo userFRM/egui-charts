@@ -2059,6 +2059,7 @@ impl DemoApp {
                 title,
                 feeds::financials(&chart_symbol),
             );
+            self.open_panel = None;
             self.financials = Some((chart_symbol.clone(), panel));
         }
         let timezone = self.timeframe_toolbar.state.timezone.parse();
