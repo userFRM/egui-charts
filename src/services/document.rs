@@ -75,10 +75,7 @@ impl StoredDocument {
             self.waiting = None;
             return;
         }
-        if self.waiting.as_ref() == Some(&document) && self.writing.is_some() {
-            return;
-        }
-        if self.writing.is_some() {
+        if self.writing.is_some() || self.retry_at.is_some() {
             self.waiting = Some(document);
         } else {
             self.waiting = None;
@@ -121,6 +118,7 @@ impl StoredDocument {
         if self.writing.is_none()
             && let Some(document) = self.waiting.take()
         {
+            self.retry_at = None;
             self.save(storage, document);
             received.extend(self.receive(storage));
         }
@@ -215,7 +213,7 @@ mod tests {
 
     #[test]
     fn failed_writes_retain_the_latest_document_and_retry_once_per_second() {
-        for newer in [false, true] {
+        for (before_failure, after_failure) in [(false, false), (true, false), (false, true)] {
             let host = Host::default();
             let ctx = egui::Context::default();
             let mut document = StoredDocument::open(&host, StoreKind::Drawings, "A");
@@ -235,7 +233,7 @@ mod tests {
             };
             poll(&mut document, 9.0);
             document.save(&host, "first".into());
-            if newer {
+            if before_failure {
                 document.save(&host, "latest".into());
             }
             let (_, reply) = host.0.lock().unwrap().pop().unwrap();
@@ -246,6 +244,9 @@ mod tests {
             ));
             assert!(document.saving(), "a failed write is still dirty");
             assert!(host.0.lock().unwrap().is_empty());
+            if after_failure {
+                document.save(&host, "latest".into());
+            }
             poll(&mut document, 10.99);
             assert!(
                 host.0.lock().unwrap().is_empty(),
@@ -253,7 +254,14 @@ mod tests {
             );
             poll(&mut document, 11.0);
             let (json, reply) = host.0.lock().unwrap().pop().unwrap();
-            assert_eq!(json, if newer { "latest" } else { "first" });
+            assert_eq!(
+                json,
+                if before_failure || after_failure {
+                    "latest"
+                } else {
+                    "first"
+                }
+            );
             reply.send(Err(FeedError::Network("offline".into())));
             assert!(
                 poll(&mut document, 11.0).is_empty(),
