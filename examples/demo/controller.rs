@@ -270,6 +270,7 @@ const EXPORT_FORMATS: &[ExportFormat] = &[
 enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
+    NewTab,
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
@@ -1570,14 +1571,15 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            TopToolbarAction::TakeScreenshot | TopToolbarAction::Publish => {
+            TopToolbarAction::TakeScreenshot
+            | TopToolbarAction::CopyImage
+            | TopToolbarAction::OpenImage => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                // The demo has no sharing service, so a published image goes to the clipboard.
-                let target = if action == TopToolbarAction::Publish {
-                    ScreenshotTarget::Clipboard
-                } else {
-                    ScreenshotTarget::File(None)
+                let target = match action {
+                    TopToolbarAction::CopyImage => ScreenshotTarget::Clipboard,
+                    TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
+                    _ => ScreenshotTarget::File(None),
                 };
                 self.screenshot_requested = Some((target, {
                     let mut options = egui_charts::widget::ImageExportOptions::default();
@@ -2997,10 +2999,11 @@ impl DemoApp {
             return;
         };
         let result = self
-            .chart
-            .export_png(ctx, &options)
+            .trading
+            .export_png(&self.chart, ctx, &options)
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
+                ScreenshotTarget::NewTab => open_image(ctx, &png),
                 ScreenshotTarget::Clipboard => {
                     let image = image::load_from_memory(&png)
                         .map_err(|error| error.to_string())?
@@ -3056,6 +3059,50 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
+    let path = std::env::temp_dir().join(format!(
+        "egui-charts-image-{}.png",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    std::fs::write(&path, png).map_err(|error| error.to_string())?;
+    ctx.open_url(egui::OpenUrl::new_tab(path.to_string_lossy()));
+    Ok("Image opened in viewer".into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_image(_ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
+    use wasm_bindgen::{JsCast, closure::Closure};
+    use web_sys::{Blob, BlobPropertyBag, Url, js_sys};
+    let open = || -> Result<(), wasm_bindgen::JsValue> {
+        let window = web_sys::window()
+            .ok_or_else(|| wasm_bindgen::JsValue::from_str("No browser window"))?;
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(png));
+        let properties = BlobPropertyBag::new();
+        properties.set_type("image/png");
+        let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &properties)?;
+        let url = Url::create_object_url_with_blob(&blob)?;
+        let opened = window.open_with_url_and_target(&url, "_blank");
+        if !matches!(opened, Ok(Some(_))) {
+            Url::revoke_object_url(&url)?;
+            return Err(wasm_bindgen::JsValue::from_str(
+                "The browser blocked the image tab",
+            ));
+        }
+        // Leave time for the new tab to read the image before releasing its URL.
+        let release = Closure::once_into_js(move || {
+            let _ = Url::revoke_object_url(&url);
+        });
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            release.unchecked_ref(),
+            60_000,
+        )?;
+        Ok(())
+    };
+    open().map_err(|error| format!("Could not open image: {error:?}"))?;
+    Ok("Image opened in new tab".into())
+}
 
 #[cfg(target_arch = "wasm32")]
 fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> {
@@ -4402,6 +4449,35 @@ mod tests {
         }
         std::fs::remove_file(path).unwrap();
         assert_ne!(images[0], images[1]);
+        for action in [TopToolbarAction::CopyImage, TopToolbarAction::OpenImage] {
+            let copy = action == TopToolbarAction::CopyImage;
+            app.handle_top_toolbar(&ctx, action);
+            let (target, options) = app.screenshot_requested.as_mut().unwrap();
+            assert_eq!(matches!(target, ScreenshotTarget::Clipboard), copy);
+            options.size = [200, 120];
+            let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
+            assert!(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|command| match command {
+                        egui::OutputCommand::CopyImage(image) => copy && image.size == [200, 120],
+                        egui::OutputCommand::OpenUrl(url) =>
+                            !copy
+                                && url.new_tab
+                                && std::path::Path::new(&url.url).is_absolute()
+                                && url.url.ends_with(".png"),
+                        _ => false,
+                    })
+            );
+            for command in &output.platform_output.commands {
+                if let egui::OutputCommand::OpenUrl(url) = command {
+                    std::fs::remove_file(&url.url).unwrap();
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]

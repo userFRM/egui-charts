@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
+
+- The snapshot menu offers Download image, Copy image and Open in new tab. Hosts with publishing enable `TopToolbarState::can_publish_image` and handle Copy link, Post image and Publish through their service. The demo copies images or opens them in a browser tab or native viewer. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
+
+- The save menu offers Save layout, Download chart data, Create new layout and Open layout as 32-point rows, retaining rename, save-as, image export and autosave. The demo routes data download and layout opening through its existing handlers. Save and snapshot menus scroll in short windows. ([#1005](https://github.com/userFRM/egui-charts/issues/1005))
 - The object tree creates named folders from selected drawings, nests folders and moves selected drawings between folders or back to the root. Folder visibility and locking apply to all descendants as one undoable edit. Drawing folder paths persist with drawing identities, independently of host groups; hosts retain empty folders through `ObjectTreeState::folders`. Migration: `Drawing` and `SourceItem` literals add `folder: Vec::new()`; `ObjectTreeState` literals use `..Default::default()` for its folder and rendered-order state; copy `Drawing::folder` into live drawing rows. Older saved drawings start at the root. ([#978](https://github.com/userFRM/egui-charts/issues/978))
 
 - Scales and lines settings expose currency and unit headers, scale-mode and price-action visibility, a numeric price-to-bar ratio lock, label overlap policy, and symbol, study and extended-session value colours and visibility. Units come from host metadata without converting data. ([#993](https://github.com/userFRM/egui-charts/issues/993))
