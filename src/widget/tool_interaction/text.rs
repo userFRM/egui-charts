@@ -25,12 +25,20 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
             | DrawingToolType::Signpost
             | DrawingToolType::PriceLabel
             | DrawingToolType::PriceNote
+            | DrawingToolType::Table
+            | DrawingToolType::Image
+            | DrawingToolType::Tweet
+            | DrawingToolType::Idea
     ) {
         return;
     }
     manager.text_editor = Some(TextEditState {
         id,
-        draft: drawing.text.clone().unwrap_or_default(),
+        draft: if drawing.tool_type == DrawingToolType::Table {
+            drawing.table_text()
+        } else {
+            drawing.text.clone().unwrap_or_default()
+        },
         focus: true,
         opened_frame: None,
     });
@@ -55,7 +63,9 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     };
     let width = 260.0_f32.min(pane.width());
     pos.x = pos.x.min(pane.right() - width).max(pane.left());
-    let height = 160.0_f32.min(pane.height());
+    let table = drawing.tool_type == DrawingToolType::Table;
+    // A table editor shows about six rows of cells above its buttons.
+    let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
     let id = chart_id.with(("drawing_text", editor.id));
     let (cancel, commit) = ui.input_mut(|input| {
@@ -69,6 +79,12 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let opened_frame = *editor.opened_frame.get_or_insert(frame);
     let request_focus = std::mem::take(&mut editor.focus);
     let font_size = drawing.font_size;
+    let hint = match drawing.tool_type {
+        DrawingToolType::Image => "Image address (https://… or file://…)",
+        DrawingToolType::Tweet => "Author on the first line, then the post",
+        DrawingToolType::Idea => "Title on the first line, then the idea",
+        _ => "",
+    };
     let mut outside = false;
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -91,13 +107,18 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                 let field = egui::ScrollArea::vertical()
                     .max_height((height - 48.0).max(1.0))
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut editor.draft)
-                                .id(field_id)
-                                .font(egui::FontId::proportional(font_size))
-                                .desired_width((width - 16.0).max(1.0))
-                                .desired_rows(3),
-                        )
+                        if table {
+                            crate::drawings::Drawing::edit_table(ui, &mut editor.draft, field_id)
+                        } else {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut editor.draft)
+                                    .id(field_id)
+                                    .hint_text(l10n::text(ui.ctx(), hint))
+                                    .font(egui::FontId::proportional(font_size))
+                                    .desired_width((width - 16.0).max(1.0))
+                                    .desired_rows(3),
+                            )
+                        }
                     })
                     .inner;
                 if request_focus {
@@ -132,7 +153,16 @@ mod tests {
         use crate::drawings::{Drawing, DrawingManager};
         use egui::{Id, RawInput, Rect, vec2};
         for dark in [false, true] {
-            for width in [120.0, 320.0] {
+            for (tool, width) in [
+                DrawingToolType::TextLabel,
+                DrawingToolType::Table,
+                DrawingToolType::Image,
+                DrawingToolType::Tweet,
+                DrawingToolType::Idea,
+            ]
+            .into_iter()
+            .flat_map(|tool| [120.0, 320.0].map(|width| (tool, width)))
+            {
                 let ctx = Context::default();
                 ctx.set_visuals(if dark {
                     egui::Visuals::dark()
@@ -141,7 +171,7 @@ mod tests {
                 });
                 let pane = Rect::from_min_size(pos2(20.0, 20.0), vec2(width, 180.0));
                 let mut manager = DrawingManager::new();
-                let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+                let mut drawing = Drawing::new(7, tool);
                 drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
                 drawing.text = Some("Long draft\n".repeat(30));
                 manager.drawings.push(drawing);
@@ -172,7 +202,7 @@ mod tests {
                 let rect = Rect::from_min_size(area.left_top_pos(), area.size.unwrap());
                 assert!(
                     pane.expand(1.0).contains_rect(rect),
-                    "{width}, dark {dark}: {rect:?}"
+                    "{tool:?}, {width}, dark {dark}: {rect:?}"
                 );
                 let pos = rect.center_bottom() - vec2(0.0, 8.0);
                 for pressed in [true, false] {
@@ -198,7 +228,7 @@ mod tests {
         }
     }
 
-    /// Completing a text, note or callout focuses an inline field. Commit is one undoable
+    /// Completing an annotation focuses its inline editor. Commit is one undoable
     /// edit; double-click reopens it, and Escape discards the draft without deselecting.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
@@ -208,6 +238,10 @@ mod tests {
             DrawingToolType::Note,
             DrawingToolType::AnchoredNote,
             DrawingToolType::Callout,
+            DrawingToolType::Table,
+            DrawingToolType::Image,
+            DrawingToolType::Tweet,
+            DrawingToolType::Idea,
         ]
         .into_iter()
         .flat_map(|tool| [(tool, false), (tool, true)])
@@ -262,14 +296,22 @@ mod tests {
                 step(&mut chart, vec![button(from, false)]);
             }
             assert_eq!(chart.drawings().drawings.len(), 1, "{tool:?}");
-            step(
-                &mut chart,
-                vec![
-                    Event::Text("First".into()),
-                    key(Key::Enter, Modifiers::NONE),
-                    Event::Text("Second".into()),
-                ],
-            );
+            let expected = if tool == DrawingToolType::Table {
+                step(&mut chart, vec![Event::Text("First".into())]);
+                step(&mut chart, vec![key(Key::Tab, Modifiers::NONE)]);
+                step(&mut chart, vec![Event::Text("Second".into())]);
+                "First\tSecond\t\n\t\t\n\t\t\n\t\t"
+            } else {
+                step(
+                    &mut chart,
+                    vec![
+                        Event::Text("First".into()),
+                        key(Key::Enter, Modifiers::NONE),
+                        Event::Text("Second".into()),
+                    ],
+                );
+                "First\nSecond"
+            };
             if tool == DrawingToolType::Note {
                 let outside = pos2(700.0, 450.0);
                 step(
@@ -282,8 +324,15 @@ mod tests {
             }
             assert_eq!(
                 chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond"),
+                Some(expected),
                 "{tool:?}"
+            );
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            let mut restored = crate::Chart::new(crate::model::BarData::default());
+            restored.load_drawings(&saved).unwrap();
+            assert_eq!(
+                restored.drawings().drawings[0].text.as_deref(),
+                Some(expected)
             );
             assert!(chart.undo());
             assert_eq!(chart.drawings().drawings[0].text, None);
@@ -319,7 +368,7 @@ mod tests {
             step(&mut chart, vec![key(Key::Escape, Modifiers::NONE)]);
             assert_eq!(
                 chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond"),
+                Some(expected),
                 "{tool:?}"
             );
             assert_eq!(chart.drawings().sel_drawing(), Some(id), "{tool:?}");
@@ -340,10 +389,7 @@ mod tests {
                     key(Key::Enter, Modifiers::COMMAND),
                 ],
             );
-            assert_eq!(
-                chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond")
-            );
+            assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
         }
     }
 
