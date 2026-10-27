@@ -348,6 +348,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `Chart::restore` keeps the colours the user edited and lets the others follow the active theme, so a layout saved under a light theme no longer opens with a light chart under a dark one. `ChartSnapshot::palette` records the colours the configuration followed; layouts saved without it are compared with the built-in light and dark themes. Migration: `ChartSnapshot` literals add `palette: None`. ([#1163](https://github.com/userFRM/egui-charts/issues/1163))
 - Returning demo visitors follow the system appearance, including live changes, until they pick a theme. Palettes saved automatically by earlier releases are ignored without discarding other settings; new choices persist in the app and on the loading page. ([#1043](https://github.com/userFRM/egui-charts/issues/1043))
 - The interval toolbar starts without favourites and shows one button for the current interval. Starred intervals appear in menu order, followed by the last selected non-favourite and an icon-only menu trigger, without repeating an interval. Selecting a favourite retains the non-favourite button. Toolbar buttons abbreviate one day, week and month to `D`, `W` and `M`. ([#1041](https://github.com/userFRM/egui-charts/issues/1041))
 

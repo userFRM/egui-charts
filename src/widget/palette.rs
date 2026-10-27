@@ -6,38 +6,96 @@ use crate::theme::Theme;
 
 impl Chart {
     pub(super) fn follow_chart_theme(&mut self, theme: &Theme) {
-        if self.inherited_theme.as_ref() == Some(theme) {
+        if self.inherited_theme.as_ref() == Some(theme) && self.restored_palettes.is_empty() {
             return;
         }
-        let old = self
-            .inherited_theme
-            .as_ref()
-            .map_or_else(ChartConfig::default, |theme| {
-                ChartConfig::default().with_theme(theme)
-            });
-        let new = ChartConfig::default().with_theme(theme);
-        macro_rules! follow {
-            ($($field:ident),+ $(,)?) => { $(if self.config.$field == old.$field { self.config.$field = new.$field; })+ };
+        let mut old = std::mem::take(&mut self.restored_palettes);
+        if old.is_empty() {
+            old.push(self.followed_palette());
         }
-        follow!(
-            background_color,
-            grid_color,
-            text_color,
-            bullish_color,
-            bearish_color,
-            bullish_border_color,
-            bearish_border_color,
-            bullish_wick_color,
-            bearish_wick_color
+        follow_palette(
+            &mut self.config,
+            &old,
+            &ChartConfig::default().with_theme(theme),
         );
         self.inherited_theme = Some(theme.clone());
     }
+
+    /// The colours the chart's unedited fields follow.
+    pub(super) fn followed_palette(&self) -> ChartConfig {
+        self.inherited_theme
+            .as_ref()
+            .map_or_else(ChartConfig::default, |theme| {
+                ChartConfig::default().with_theme(theme)
+            })
+    }
+
+    /// Lets the colours of a restored configuration that still match the palette they were saved
+    /// with follow the active theme from the next frame. Layouts saved without that palette are
+    /// compared with both built-in themes.
+    pub(super) fn follow_restored_palette(&mut self, saved: Option<&ChartConfig>) {
+        self.restored_palettes = saved.map_or_else(
+            || {
+                [Theme::light(), Theme::dark()]
+                    .iter()
+                    .map(|theme| ChartConfig::default().with_theme(theme))
+                    .collect()
+            },
+            |saved| vec![saved.clone()],
+        );
+    }
+}
+
+/// Replaces every colour of `config` equal to the same colour of one of the `old` palettes by
+/// the one of `new`; the others were edited and stay.
+fn follow_palette(config: &mut ChartConfig, old: &[ChartConfig], new: &ChartConfig) {
+    macro_rules! follow {
+        ($($field:ident),+ $(,)?) => { $(if old.iter().any(|old| config.$field == old.$field) { config.$field = new.$field; })+ };
+    }
+    follow!(
+        background_color,
+        grid_color,
+        text_color,
+        bullish_color,
+        bearish_color,
+        bullish_border_color,
+        bearish_border_color,
+        bullish_wick_color,
+        bearish_wick_color
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use crate::theme::{Theme, apply_to_egui};
     use crate::widget::test_frames::{chart, frame};
+
+    #[test]
+    fn restored_snapshots_follow_the_active_palette_and_keep_edited_colours() {
+        let ctx = egui::Context::default();
+        apply_to_egui(&ctx, &Theme::light());
+        let mut saved = chart(&[100.0], &[110.0]);
+        frame(&ctx, &mut saved, 0.0, vec![]);
+        saved.config_mut().bearish_color = egui::Color32::RED;
+        let snapshot = saved.snapshot().unwrap();
+        apply_to_egui(&ctx, &Theme::dark());
+        let dark = Theme::dark();
+        // Layouts saved before the palette was recorded behave the same.
+        for with_palette in [true, false] {
+            let mut snapshot = snapshot.clone();
+            if !with_palette {
+                snapshot.palette = None;
+            }
+            let mut reopened = chart(&[100.0], &[110.0]);
+            frame(&ctx, &mut reopened, 1.0, vec![]);
+            reopened.restore(&snapshot).unwrap();
+            frame(&ctx, &mut reopened, 2.0, vec![]);
+            assert_eq!(reopened.config().background_color, dark.chart.bg);
+            assert_eq!(reopened.config().grid_color, dark.chart.grid_line);
+            assert_eq!(reopened.config().bullish_color, dark.chart.candle_up);
+            assert_eq!(reopened.config().bearish_color, egui::Color32::RED);
+        }
+    }
 
     #[test]
     fn context_palette_changes_reach_charts_and_keep_host_edits() {

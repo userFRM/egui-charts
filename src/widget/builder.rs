@@ -182,6 +182,7 @@ impl Chart {
             scale_settings_requested: false,
             theme_override: None,
             inherited_theme: None,
+            restored_palettes: Vec::new(),
             host_events: Default::default(),
             indicator_source_request: None,
             events: Vec::new(),
