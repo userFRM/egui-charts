@@ -8,7 +8,7 @@ use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::data::Footprint;
 use crate::localization as l10n;
-use crate::model::{MarkerZOrder, PriceLine};
+use crate::model::{ChartType, MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
@@ -535,11 +535,17 @@ impl Chart {
             if let Some(source) = source_marks {
                 events.extend_from_slice(&source.time_scale_marks);
             }
+            let mut breaks = Vec::new();
             for event in self
                 .time_scale_events
                 .iter()
                 .chain(source_marks.into_iter().flat_map(|p| &p.events))
             {
+                if event.kind == crate::model::EventKind::Earnings
+                    && self.event_visibility.show_earnings_breaks
+                {
+                    breaks.push(event.time);
+                }
                 if self.event_visibility.shows(event.kind) {
                     events.push(
                         crate::model::Marker::event(event.time, event.kind.label())
@@ -548,6 +554,7 @@ impl Chart {
                     );
                 }
             }
+            renderers::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
             if let Some(id) =
                 renderers::render_event_band(ui, &events, self.state.shown(), &coords, baseline)
             {
@@ -1702,7 +1709,7 @@ impl Chart {
                     );
                 } else {
                     // Share the renderer instantiation between ordinary and merged bars.
-                    let (data, params) = match &merged {
+                    let (mut data, params) = match &merged {
                         Some((merged, _)) => (
                             rendering::CandleDataContext {
                                 visible_data: &merged.bars[merged.start..],
@@ -1717,12 +1724,78 @@ impl Chart {
                             &render_params,
                         ),
                     };
+                    // Bars from the first execution on are drawn from executions, those before as
+                    // candles.
+                    let executions = self
+                        .feed_link
+                        .as_ref()
+                        .and_then(|link| link.footprint.as_ref())
+                        .filter(|_| time_based && self.replay.is_none())
+                        .map(|flow| {
+                            let first = flow.bars().keys().next();
+                            let candles = first.map_or(visible_data.len(), |first| {
+                                visible_data.partition_point(|bar| bar.time < *first)
+                            });
+                            (flow, candles)
+                        });
+                    if let Some((_, candles)) = executions {
+                        data.visible_data = &visible_data[..candles];
+                    }
                     rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
                         match &merged {
                             Some((merged, _)) => merged_x(merged, index, min_x),
                             None => idx_to_coord(index, min_x),
                         }
                     });
+                    if let Some((flow, candles)) = executions {
+                        if params.show_volume() {
+                            rendering::candles::volume::render_volume_bars(
+                                &clipped_volume_ctx,
+                                &visible_data[candles..],
+                                start_idx + candles,
+                                max_volume,
+                                &colors,
+                                chart_rect.min.x,
+                                idx_to_coord,
+                            );
+                        }
+                        let config = FootprintConfig {
+                            text_color: colors.text,
+                            neutral_color: colors.text,
+                            ask_color: colors.bullish,
+                            bid_color: colors.bearish,
+                            ..Default::default()
+                        };
+                        let mapping = self.get_chart_mapping();
+                        let bars = self.bars(super::SeriesId::MAIN);
+                        if self.chart_type == ChartType::VolumeFootprint {
+                            crate::chart::overlays::render_footprint(
+                                &clipped_painter,
+                                &mapping,
+                                bars,
+                                flow,
+                                &config,
+                            );
+                        }
+                        #[cfg(feature = "studies")]
+                        if self.chart_type == ChartType::SessionVolumeProfile
+                            && let Some(ranges) = session_ranges(
+                                bars,
+                                start_idx + candles..start_idx + visible_data.len(),
+                                &bar_clock,
+                            )
+                        {
+                            let profiles = crate::studies::trade_profiles(flow, &ranges);
+                            crate::chart::overlays::render_trade_profiles(
+                                &clipped_painter,
+                                &mapping,
+                                bars,
+                                &profiles,
+                                flow.price_step(),
+                                &config,
+                            );
+                        }
+                    }
                     if let Some((_, Some(volume))) = &merged {
                         rendering::candles::volume::render_volume_bars(
                             &clipped_volume_ctx,
@@ -1915,10 +1988,20 @@ impl Chart {
             price_rect.left()
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
-        let has_currency = self
+        let study_axis = crate::config::PriceAxisOptions {
+            show_study_values: self.config.show_indicator_last_val
+                && self.config.price_axis.show_study_values,
+            ..self.config.price_axis
+        };
+        let currency = self
             .instrument()
             .and_then(|instrument| instrument.currency.as_deref())
-            .is_some_and(|code| !code.is_empty());
+            .filter(|code| self.config.show_currency && !code.is_empty());
+        let unit = self
+            .instrument()
+            .and_then(|instrument| instrument.unit.as_deref())
+            .filter(|unit| self.config.show_unit && !unit.is_empty());
+        let has_currency = currency.is_some() || unit.is_some();
         let mut tags = Vec::new();
         if has_currency {
             tags.push(Some(Rect::from_min_size(
@@ -1959,21 +2042,29 @@ impl Chart {
                 }),
         );
 
+        // The previous session's close and the last close, for the previous close line and the
+        // legend's day change.
+        let session_closes = (self.config.show_symbol_prev_close
+            || self.config.show_prev_close_line
+            || self.config.show_last_day_change)
+            .then(|| {
+                let bars = &self.state.data().bars;
+                let last = crate::model::last_with_value(bars)?;
+                let index = bars
+                    .partition_point(|bar| {
+                        exchange_session.trading_date(bar.time)
+                            < exchange_session.trading_date(last.time)
+                    })
+                    .checked_sub(1)?;
+                crate::model::last_with_value(&bars[..=index])
+                    .map(|previous| (previous.close, last.close))
+            })
+            .flatten();
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
-            && let Some(last) = crate::model::last_with_value(&self.state.data().bars)
-            && let Some(index) = self
-                .state
-                .data()
-                .bars
-                .partition_point(|bar| {
-                    exchange_session.trading_date(bar.time)
-                        < exchange_session.trading_date(last.time)
-                })
-                .checked_sub(1)
-            && let Some(previous) = crate::model::last_with_value(&self.state.data().bars[..=index])
+            && let Some((previous_close, _)) = session_closes
         {
-            let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
+            let line = PriceLine::new(previous_close, ui.active_theme().ui.text_secondary)
                 .with_style(crate::model::LineStyle::Dotted)
                 .with_axis_label(self.config.show_symbol_prev_close)
                 .with_width(if self.config.show_prev_close_line {
@@ -1992,7 +2083,7 @@ impl Chart {
             );
             if self.config.show_symbol_prev_close {
                 pending_values.push((
-                    previous.close,
+                    previous_close,
                     rendering::axes::axis_label_colors(&line),
                     false,
                 ));
@@ -2063,8 +2154,8 @@ impl Chart {
                 &line,
                 self.session_quote
                     .as_ref()
-                    .filter(|_| show_price_axis)
-                    .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
+                    .filter(|_| show_price_axis && self.config.show_extended_session_price)
+                    .map(|quote| (quote, self.config.extended_session_price_color)),
                 (show_volume && show_price_axis && !cfg!(feature = "studies"))
                     .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
                 axis_edge,
@@ -2074,6 +2165,7 @@ impl Chart {
                 if has_currency { 24.0 } else { 0.0 },
                 price_formatter.as_deref(),
                 self.volume_formatter.as_deref(),
+                self.config.price_axis.allow_label_overlap,
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -2101,6 +2193,7 @@ impl Chart {
                         label,
                         *colors,
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     );
                     if *outlined && let Some(rect) = tag {
                         painter.rect_stroke(
@@ -2127,6 +2220,7 @@ impl Chart {
                         .label(map.transform().to_scale(value), 2, formatter.as_deref()),
                     colors,
                     &tags,
+                    self.config.price_axis.allow_label_overlap,
                 ));
             }
         }
@@ -2149,6 +2243,7 @@ impl Chart {
                         label.text,
                         (rendering::axes::tag_text_color(label.color), label.color),
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     ));
                 }
             }
@@ -2194,12 +2289,12 @@ impl Chart {
                         &[study.as_ref()],
                         &mapping,
                         axis,
-                        self.config.show_indicator_last_val,
+                        &study_axis,
                         None,
                     ));
             }
         }
-        if show_price_axis && self.config.show_indicator_last_val {
+        if show_price_axis && study_axis.show_study_values {
             for study in studies
                 .indicators()
                 .iter()
@@ -2224,6 +2319,7 @@ impl Chart {
                             study.as_ref(),
                             axis_edge,
                             &mut tags,
+                            &study_axis,
                         );
                     }
                     continue;
@@ -2241,6 +2337,7 @@ impl Chart {
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),
+                    &study_axis,
                 );
             }
         }
@@ -2327,6 +2424,7 @@ impl Chart {
                         label,
                         (egui::Color32::WHITE, color),
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     );
                     if quote && let Some(rect) = tag {
                         let badge = painter.layout_no_wrap(
@@ -2514,7 +2612,10 @@ impl Chart {
                     .collect();
                 legend.formatters = self.value_formatters();
                 legend.instrument = self.instrument();
-                legend.badge = self.legend_badge.clone();
+                legend.badge = self
+                    .legend_badge
+                    .clone()
+                    .filter(|_| self.config.show_legend_badge);
                 legend.statuses = &statuses;
                 legend.quote = self
                     .quote
@@ -2530,6 +2631,9 @@ impl Chart {
                 legend.show_indicator_titles = self.config.show_indicator_labels;
                 legend.show_indicator_inputs = self.config.show_indicator_inputs;
                 legend.show_indicator_values = self.config.show_indicator_last_val;
+                legend.day_change =
+                    session_closes.filter(|_| values && self.config.show_last_day_change);
+                legend.study_backdrop = self.config.indicator_backdrop_opacity;
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =
@@ -2838,10 +2942,11 @@ impl Chart {
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
         if show_price_axis {
-            if let Some((pos, tag)) = self
-                .axis_hover
-                .filter(|(pos, _)| price_rect.contains(*pos) && !volume_rect.contains(*pos))
-            {
+            if let Some((pos, tag)) = self.axis_hover.filter(|(pos, _)| {
+                self.config.show_plus_button
+                    && price_rect.contains(*pos)
+                    && !volume_rect.contains(*pos)
+            }) {
                 let price = if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
@@ -2888,21 +2993,27 @@ impl Chart {
             self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 8.0);
         }
 
-        if show_price_axis
-            && let Some(currency) = self
+        if show_price_axis && has_currency {
+            let currency = self
                 .instrument()
                 .and_then(|instrument| instrument.currency.as_deref())
-                .filter(|code| !code.is_empty())
-        {
-            let currency_width = painter
-                .layout_no_wrap(
-                    currency.to_owned(),
-                    rendering::axes::axis_font(ui.ctx()),
-                    colors.text,
-                )
+                .filter(|_| self.config.show_currency)
+                .unwrap_or("");
+            let unit = self
+                .instrument()
+                .and_then(|instrument| instrument.unit.as_deref())
+                .filter(|_| self.config.show_unit);
+
+            let header = match (currency.is_empty(), unit.filter(|unit| !unit.is_empty())) {
+                (false, Some(unit)) => format!("{currency} · {unit}"),
+                (true, Some(unit)) => unit.to_owned(),
+                _ => currency.to_owned(),
+            };
+            let header_width = painter
+                .layout_no_wrap(header, rendering::axes::axis_font(ui.ctx()), colors.text)
                 .size()
                 .x
-                + 26.0;
+                + if currency.is_empty() { 16.0 } else { 26.0 };
             let axis = Rect::from_min_max(
                 Pos2::new(
                     if self.config.show_right_axis {
@@ -2915,8 +3026,8 @@ impl Chart {
                 Pos2::new(axis_edge, price_rect.bottom()),
             );
             let (button, choice) =
-                renderers::render_axis_currency(ui, axis, currency, &self.currency_choices);
-            self.measured_axis_width = self.measured_axis_width.max(currency_width);
+                renderers::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
+            self.measured_axis_width = self.measured_axis_width.max(header_width);
             if choice.is_some() {
                 self.currency_choice = choice;
             }
@@ -2989,6 +3100,48 @@ impl Chart {
         self.record_host_click(ui, &response);
         shown
     }
+}
+
+/// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
+/// first bar to the next session's.
+#[cfg(feature = "studies")]
+fn session_ranges(
+    bars: &[crate::model::Bar],
+    shown: std::ops::Range<usize>,
+    clock: &crate::model::BarClock,
+) -> Option<crate::studies::TradeProfileRanges> {
+    use crate::model::SessionProvider;
+    let in_view = bars.get(shown.clone())?;
+    let (first, last) = (in_view.first()?, in_view.last()?);
+    let sessions = clock.sessions();
+    let starts: Vec<_> = std::iter::once(bars[..shown.start].partition_point(|bar| {
+        sessions
+            .session_break_between(&bar.time, &first.time)
+            .is_some()
+    }))
+    .chain(
+        sessions
+            .session_breaks(in_view)
+            .into_iter()
+            .map(|(i, _)| shown.start + i),
+    )
+    .collect();
+    let end = shown.end
+        + bars[shown.end..].partition_point(|bar| {
+            sessions
+                .session_break_between(&last.time, &bar.time)
+                .is_none()
+        });
+    let close = bars
+        .get(end)
+        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| bar.time);
+    let ends = starts.iter().skip(1).map(|&next| bars[next].time);
+    let ranges = starts
+        .iter()
+        .zip(ends.chain([close]))
+        .map(|(&start, end)| bars[start].time..end)
+        .collect();
+    crate::studies::TradeProfileRanges::new(ranges).ok()
 }
 
 #[cfg(test)]
@@ -3575,9 +3728,15 @@ mod tests {
     #[cfg(feature = "icons")]
     #[test]
     fn axis_buttons_route_without_scaling() {
-        for (settings, magnet) in [(false, false), (true, false), (false, true)] {
+        for (settings, magnet, enabled) in [
+            (false, false, true),
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_plus_button = enabled;
             if magnet {
                 chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
             }
@@ -3619,6 +3778,8 @@ mod tests {
             if settings {
                 assert!(chart.take_scale_settings_request());
                 assert!(!chart.take_scale_settings_request());
+            } else if !enabled {
+                assert!(chart.take_right_click().is_none());
             } else {
                 assert!(
                     matches!(chart.take_right_click(), Some(super::RightClickTarget::Background { price, .. }) if (price - expected_price).abs() < 0.001)
@@ -5124,6 +5285,23 @@ mod tests {
                 );
             }
         }
+        chart.config.show_scale_mode_buttons = false;
+        chart.config.navigation_buttons = Always;
+        let painted = shapes(&ctx, &mut chart, 20.0, Vec::new());
+        assert!(!painted.iter().any(|shape| matches!(shape, Shape::Text(text) if ["A", "log", "%"].contains(&text.galley.text()))));
+        ctx.run_ui(Default::default(), |ui| {
+            let plot = chart.last_rendered_price_rect;
+            let nav = chart.navigation_rect(ui, plot).unwrap();
+            let buttons =
+                chart.interact_navigation(ui, nav, plot, egui::Id::unique("hidden_navigation"));
+            assert!(
+                buttons[5..]
+                    .iter()
+                    .all(|button| !button.sense.is_focusable()),
+                "hidden scale controls must not receive keyboard focus"
+            );
+        })
+        .drop_without_applying_deltas();
     }
 
     /// A drag starting on a button belongs to that button even after leaving the row.
@@ -5180,6 +5358,32 @@ mod tests {
                 Some(ChartElementId::Series(SeriesId::MAIN))
             );
             assert!(chart.drawings.curr_drawing.is_none());
+        }
+    }
+
+    /// Session volume profiles sum whole sessions, from the first bar of a session that is only
+    /// partly shown up to the open of the next one, and the last session holds the live bar.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn session_ranges_cover_the_whole_sessions_shown() {
+        use crate::model::{Bar, BarClock, Timeframe};
+        let open = chrono::DateTime::parse_from_rfc3339("2026-01-05T20:00:00Z")
+            .unwrap()
+            .to_utc();
+        let hour = |h| open + chrono::TimeDelta::hours(h);
+        let bars: Vec<_> = (0..9)
+            .map(|h| Bar::new(hour(h), 1.0, 1.0, 1.0, 1.0, 1.0))
+            .collect();
+        let clock = BarClock::new(Timeframe::Hour1);
+        let max = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        for (shown, expected) in [
+            (2..5, Some(vec![hour(0)..hour(4), hour(4)..max])),
+            (0..2, Some(vec![hour(0)..hour(4)])),
+            (6..6, None),
+        ] {
+            let ranges = super::session_ranges(&bars, shown.clone(), &clock);
+            let ranges = ranges.map(|ranges| ranges.ranges().to_vec());
+            assert_eq!(ranges, expected, "{shown:?}");
         }
     }
 }

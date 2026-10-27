@@ -6,31 +6,6 @@
 
 use egui_charts::model::{Bar, Instrument, SymbolType};
 
-/// Deterministic executions inside each fixture bar's UTC slot. These are synthetic aggressors,
-/// independent of historical trades. Sizes sum to the fixture volume.
-pub fn synthetic_trades(bars: &[Bar]) -> Vec<egui_charts::model::Tick> {
-    use egui_charts::model::{OrderSide, Tick};
-    bars.iter()
-        .flat_map(|bar| {
-            (0..64).map(move |i| {
-                let fraction = ((i * 17) % 64) as f64 / 63.0;
-                let price = bar.low + (bar.high - bar.low) * fraction;
-                let side = if (i * 13 + bar.time.timestamp() as usize) % 11 < 6 {
-                    OrderSide::Buy
-                } else {
-                    OrderSide::Sell
-                };
-                Tick::new(
-                    bar.time + chrono::TimeDelta::microseconds(i as i64),
-                    price,
-                    bar.volume / 64.0,
-                    Some(side),
-                )
-            })
-        })
-        .collect()
-}
-
 /// A tradable instrument the demo knows how to render, including the seed and
 /// starting price used to synthesize its bars.
 pub struct DemoSymbol {
@@ -102,6 +77,20 @@ impl DemoSymbol {
                 start_price: 1.08,
                 seed: 53,
             },
+            DemoSymbol {
+                symbol: "ESZ2026",
+                company_name: "S&P 500 futures, December 2026",
+                exchange: "CME",
+                start_price: 5_100.0,
+                seed: 59,
+            },
+            DemoSymbol {
+                symbol: "ESH2027",
+                company_name: "S&P 500 futures, March 2027",
+                exchange: "CME",
+                start_price: 5_120.0,
+                seed: 61,
+            },
             // Neutral name for published screenshots: no real ticker with made-up prices.
             DemoSymbol {
                 symbol: "SAMPLE",
@@ -131,13 +120,18 @@ impl DemoSymbol {
                     "Crypto" => SymbolType::Crypto,
                     "Index" => SymbolType::Index,
                     "Forex" => SymbolType::Forex,
+                    "CME" => SymbolType::Futures,
                     "Synthetic" => SymbolType::Fund,
                     _ => SymbolType::Stock,
                 };
-                Instrument::new(s.symbol)
+                let mut instrument = Instrument::new(s.symbol)
                     .with_description(s.company_name)
                     .with_exchange(s.exchange)
-                    .with_symbol_type(kind)
+                    .with_symbol_type(kind);
+                if kind == SymbolType::Futures {
+                    instrument = instrument.with_root("ES");
+                }
+                instrument
             })
             .collect()
     }
@@ -231,7 +225,6 @@ pub fn visible_bars_for_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::model::{BarClock, Timeframe};
     use egui_charts::ui::timeframe_toolbar::{DateRange, SessionType};
 
     #[test]
@@ -276,21 +269,5 @@ mod tests {
             assert_eq!(visible_bars_for_range(range, &source), count);
         }
         assert_eq!(visible_bars_for_range(DateRange::All, &[]), 0);
-        for timeframe in Timeframe::all() {
-            let clock = BarClock::new(timeframe);
-            let mut bar = source[0].clone();
-            bar.time = clock.bar_open(bar.time);
-            let trades = synthetic_trades(&[bar.clone()]);
-            assert!(
-                trades
-                    .iter()
-                    .all(|trade| clock.same_bar(trade.ts, bar.time))
-            );
-            assert_eq!(
-                trades.iter().map(|trade| trade.size).sum::<f64>(),
-                bar.volume
-            );
-            assert!(trades.windows(2).all(|pair| pair[0].ts <= pair[1].ts));
-        }
     }
 }

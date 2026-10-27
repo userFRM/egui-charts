@@ -5,8 +5,9 @@ use egui::{Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 use crate::chart::coords::ChartMapping;
 use crate::model::{Alert, AlertCondition, AlertSource, AlertStatus};
 
-/// Draw active price thresholds and return a replacement alert after a drag.
+/// Draw price thresholds and return a replacement alert after a drag.
 /// Supply only alerts for this pane, resolving symbol or watchlist membership in the host.
+/// With `active_only` unset, triggered, disabled and expired alerts are drawn dimmed.
 /// Call after drawing the chart, then submit the result through the host's alerts service.
 /// Non-price sources require the host to resolve their own pane and coordinates.
 /// `format` supplies the instrument's precision and currency for labels.
@@ -16,15 +17,22 @@ pub fn render_alert_levels<'a>(
     alerts: impl IntoIterator<Item = &'a Alert>,
     color: Color32,
     labels: bool,
+    active_only: bool,
     format: impl Fn(f64) -> String,
 ) -> Option<Alert> {
     let mut changed = None;
     let painter = ui.painter().with_clip_rect(mapping.rect);
     for alert in alerts
         .into_iter()
-        .filter(|a| a.status == AlertStatus::Active)
+        .filter(|a| !active_only || a.status == AlertStatus::Active)
     {
         let Some(id) = &alert.id else { continue };
+        let active = alert.status == AlertStatus::Active;
+        let color = if active {
+            color
+        } else {
+            color.gamma_multiply(0.5)
+        };
         let rules = std::iter::once((&alert.source, &alert.condition)).chain(
             alert
                 .additional_conditions
@@ -112,7 +120,11 @@ pub fn render_alert_levels<'a>(
                     };
                     let text = format!("{name}  {}", format(value));
                     let font = FontId::proportional(12.0);
-                    let text_color = ui.visuals().text_color();
+                    let text_color = if active {
+                        ui.visuals().text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
                     let galley = painter.layout_no_wrap(text, font, text_color);
                     let label = Rect::from_min_size(
                         pos2(mapping.rect.left() + 8.0, y - galley.size().y - 4.0),
@@ -142,4 +154,80 @@ pub fn alert_shortcut_price(ui: &mut Ui, mapping: &ChartMapping) -> Option<f64> 
         return price.is_finite().then_some(price);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::AlertId;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::theme::Theme;
+
+    #[test]
+    fn inactive_levels_follow_the_filter_and_stay_dimmed() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for status in [
+                AlertStatus::Active,
+                AlertStatus::Triggered,
+                AlertStatus::Disabled,
+                AlertStatus::Expired,
+            ] {
+                let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(100.0));
+                alert.id = Some(AlertId("level".into()));
+                alert.status = status;
+                for active_only in [false, true] {
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        let rect = ui.max_rect();
+                        let map = ChartMapping::new(
+                            rect,
+                            6.0,
+                            0,
+                            0,
+                            0.0,
+                            PriceMap::new(
+                                PriceTransform::default(),
+                                PriceRange::new(90.0, 110.0),
+                                rect.top(),
+                                rect.bottom(),
+                                false,
+                            ),
+                        );
+                        render_alert_levels(
+                            ui,
+                            &map,
+                            [&alert],
+                            Color32::GOLD,
+                            true,
+                            active_only,
+                            |price| price.to_string(),
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let visible = !active_only || status == AlertStatus::Active;
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s.shape {
+                            egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                            _ => None,
+                        })
+                        .collect();
+                    let expected = if status == AlertStatus::Active {
+                        Color32::GOLD
+                    } else {
+                        Color32::GOLD.gamma_multiply(0.5)
+                    };
+                    assert_eq!(
+                        lines,
+                        if visible { vec![expected] } else { vec![] },
+                        "{status:?}, active_only={active_only}"
+                    );
+                    let label = shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(text) if text.galley.text() == "Alert  100"));
+                    assert_eq!(label, visible);
+                }
+            }
+        }
+    }
 }

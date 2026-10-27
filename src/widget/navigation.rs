@@ -23,8 +23,13 @@ impl Chart {
     /// The row's rect at the bottom of the main pane, or `None` when it does not fit in the pane.
     pub(super) fn navigation_rect(&self, ui: &Ui, chart_rect: Rect) -> Option<Rect> {
         let theme = ui.active_theme();
+        let count = if self.config.show_scale_mode_buttons {
+            8.0
+        } else {
+            5.0
+        };
         let size = Vec2::new(
-            8.0 * DESIGN_TOKENS.sizing.button_md + 9.0 * theme.spacing.sm,
+            count * DESIGN_TOKENS.sizing.button_md + (count + 1.0) * theme.spacing.sm,
             DESIGN_TOKENS.sizing.button_md + 2.0 * theme.spacing.sm,
         );
         (size.x <= chart_rect.width() && size.y + theme.spacing.lg <= chart_rect.height()).then(
@@ -73,10 +78,19 @@ impl Chart {
                 ),
                 Vec2::splat(button_size),
             );
+            let button_rect = if index >= 5 && !self.config.show_scale_mode_buttons {
+                Rect::from_min_size(rect.min, Vec2::ZERO)
+            } else {
+                button_rect
+            };
             let response = ui.interact(
                 button_rect,
                 chart_id.with(("navigation", index)),
-                Sense::click_and_drag(),
+                if index >= 5 && !self.config.show_scale_mode_buttons {
+                    Sense::hover()
+                } else {
+                    Sense::click_and_drag()
+                },
             );
             if response.clicked() {
                 self.begin_user_action();
@@ -177,6 +191,9 @@ impl Chart {
             ]
         };
         for (index, response) in buttons.into_iter().enumerate() {
+            if index >= 5 && !self.config.show_scale_mode_buttons {
+                continue;
+            }
             let active = selected[index];
             let visuals = ui.style().interact_selectable(&response, active);
             if active || response.hovered() || response.is_pointer_button_down_on() {
