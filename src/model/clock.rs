@@ -168,7 +168,8 @@ impl BarClock {
         match time {
             LocalResult::Single(time) => time,
             LocalResult::Ambiguous(first, second) => {
-                if second <= at {
+                // Calendar periods keep one open when midnight repeats.
+                if second <= at && self.timeframe.is_some_and(|tf| tf.duration_ms() < DAY_MS) {
                     second
                 } else {
                     first
@@ -315,81 +316,100 @@ mod tests {
             let clock = BarClock::new(timeframe);
             assert_eq!(clock.bar_open(t(at)), t(open), "{timeframe} at {at}");
         }
-        for (timeframe, at, open, next) in [
+        for (timeframe, at, open, next, zone) in [
             (
                 "3month".parse().unwrap(),
                 "2024-04-01T03:59:59Z",
                 "2024-01-01T05:00:00Z",
                 "2024-04-01T04:00:00Z",
+                "America/New_York",
             ),
             (
                 "3month".parse().unwrap(),
                 "2024-04-15T12:00:00Z",
                 "2024-04-01T04:00:00Z",
                 "2024-07-01T04:00:00Z",
+                "America/New_York",
             ),
             (
                 "2w".parse().unwrap(),
                 "2024-03-15T12:00:00Z",
                 "2024-03-04T05:00:00Z",
                 "2024-03-18T04:00:00Z",
+                "America/New_York",
             ),
             (
                 "123s".parse().unwrap(),
                 "2024-03-10T07:00:01Z",
                 "2024-03-10T07:00:00Z",
                 "2024-03-10T07:00:24Z",
+                "America/New_York",
             ),
             (
                 "45min".parse().unwrap(),
                 "2024-11-03T06:01:00Z",
                 "2024-11-03T06:00:00Z",
                 "2024-11-03T06:30:00Z",
+                "America/New_York",
             ),
             (
                 "45min".parse().unwrap(),
                 "2024-11-03T05:45:00Z",
                 "2024-11-03T05:30:00Z",
                 "2024-11-03T06:00:00Z",
+                "America/New_York",
             ),
             (
                 "7min".parse().unwrap(),
                 "2024-03-10T06:59:30Z",
                 "2024-03-10T06:59:00Z",
                 "2024-03-10T07:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour4,
                 "2024-03-10T07:30:00Z",
                 "2024-03-10T05:00:00Z",
                 "2024-03-10T08:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour4,
                 "2024-11-03T08:30:00Z",
                 "2024-11-03T04:00:00Z",
                 "2024-11-03T09:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour1,
                 "2024-11-03T05:30:00Z",
                 "2024-11-03T05:00:00Z",
                 "2024-11-03T06:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour1,
                 "2024-11-03T06:30:00Z",
                 "2024-11-03T06:00:00Z",
                 "2024-11-03T07:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Month1,
                 "2024-03-15T12:00:00Z",
                 "2024-03-01T05:00:00Z",
                 "2024-04-01T04:00:00Z",
+                "America/New_York",
+            ),
+            (
+                "2month".parse().unwrap(),
+                "2020-11-01T05:30:00Z",
+                "2020-11-01T04:00:00Z",
+                "2021-01-01T05:00:00Z",
+                "America/Havana",
             ),
         ] {
-            let Some(zone) = TimezoneId::named("America/New_York") else {
+            let Some(zone) = TimezoneId::named(zone) else {
                 continue;
             };
             let clock = BarClock::new(timeframe).with_timezone(zone);
