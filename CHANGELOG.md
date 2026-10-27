@@ -321,6 +321,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Changing symbols returns the main price scale to autoscaling, clears its price-to-bar ratio lock and discards the previous symbol's zoom history, so prices outside a manually fixed range remain visible. Repeating the symbol or replacing or reloading its data keeps manual scaling. ([#955](https://github.com/userFRM/egui-charts/issues/955))
+
 - Drawing sync notifications coalesce per drawing and overflow after 1,024 actions into `DrawingSyncAction::ResyncRequired`. Hosts replace their stored set with the manager's saveable drawings, deleting absent records. Automatic storage disables notifications. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`; enabling requests a full replacement. ([#948](https://github.com/userFRM/egui-charts/issues/948))
 
 - Drawing autosave retains failed documents until storage acknowledges them, retries after one second of input time, and keeps the latest edits through delayed writes and symbol changes. `Chart::flush_stored_drawings` retries immediately and reports whether captured edits are acknowledged; storage remains host-owned. ([#942](https://github.com/userFRM/egui-charts/issues/942))
