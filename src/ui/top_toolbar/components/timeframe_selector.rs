@@ -502,11 +502,6 @@ impl TimeframeSelector {
     pub fn show(&mut self, ui: &mut Ui) -> TimeframeAction {
         if !self.favorites.contains(&self.current) {
             self.last_non_favorite = Some(self.current);
-        } else if self
-            .last_non_favorite
-            .is_some_and(|tf| self.favorites.contains(&tf))
-        {
-            self.last_non_favorite = None;
         }
         let favorites: Vec<_> = PRESETS
             .iter()
@@ -523,7 +518,9 @@ impl TimeframeSelector {
             self.interval_button(ui, self.current)
                 .show(ui, self.is_open)
         } else {
-            let extra = self.last_non_favorite.filter(|tf| self.supports(*tf));
+            let extra = self
+                .last_non_favorite
+                .filter(|tf| !self.favorites.contains(tf) && self.supports(*tf));
             for tf in favorites.into_iter().chain(extra) {
                 if self
                     .interval_button(ui, tf)
