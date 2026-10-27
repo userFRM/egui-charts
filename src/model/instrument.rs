@@ -77,6 +77,12 @@ pub struct Instrument {
     pub description: Option<String>,
     /// Exchange or venue, such as "NASDAQ".
     pub exchange: Option<String>,
+    /// URI of the symbol's mark, such as a company logo, for egui's installed image loaders.
+    /// Symbol choosers show the symbol's initial while it is unknown, loading or unreadable.
+    pub logo: Option<String>,
+    /// URI of the exchange's mark, for egui's installed image loaders. Symbol search shows the
+    /// exchange name alone while it is unknown, loading or unreadable.
+    pub exchange_logo: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -112,6 +118,8 @@ impl Instrument {
             symbol: symbol.into(),
             description: None,
             exchange: None,
+            logo: None,
+            exchange_logo: None,
             symbol_type: None,
             tick_size: None,
             pip_size: None,
@@ -135,6 +143,18 @@ impl Instrument {
     /// Sets [`exchange`](Self::exchange).
     pub fn with_exchange(mut self, exchange: impl Into<String>) -> Self {
         self.exchange = Some(exchange.into());
+        self
+    }
+
+    /// Sets [`logo`](Self::logo).
+    pub fn with_logo(mut self, uri: impl Into<String>) -> Self {
+        self.logo = Some(uri.into());
+        self
+    }
+
+    /// Sets [`exchange_logo`](Self::exchange_logo).
+    pub fn with_exchange_logo(mut self, uri: impl Into<String>) -> Self {
+        self.exchange_logo = Some(uri.into());
         self
     }
 

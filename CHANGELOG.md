@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Symbol search opens 840 by 680 points, centred in the window and within smaller ones, and the symbol search and compare dialogs share a 20-point corner radius over a faint backdrop on light themes, #F1F1F1 over white; dark themes keep their scrim. Result rows stay 32 points tall and show the instrument's mark, or its initial, and its exchange's mark beside the exchange name. Category pills wrap onto further rows instead of scrolling out of view. `Instrument::logo` and `exchange_logo` carry the marks as image URIs for the host's installed image loaders, and `Modal::backdrop` overrides a modal's backdrop colour. ([#998](https://github.com/userFRM/egui-charts/issues/998), [#1012](https://github.com/userFRM/egui-charts/issues/1012))
+
 - Quick search opens with an empty, focused query and an instruction to type. Commands are listed, and the best match highlighted, only once the query matches them; Enter still runs the highlighted match. ([#1000](https://github.com/userFRM/egui-charts/issues/1000))
 
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))

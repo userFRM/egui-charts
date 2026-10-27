@@ -341,8 +341,9 @@ impl SymbolSearchDialog {
         let mut open = true;
         Modal::new("symbol_search", "")
             .width(840.0)
-            .height(480.0)
-            .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
+            .height(680.0)
+            .rounding(SEARCH_RADIUS)
+            .backdrop(search_backdrop(ctx))
             .show(ctx, &mut open, |ui| {
                 let translated_label = l10n::text(ui.ctx(), "Search symbols");
                 ui.response().widget_info(|| {
@@ -424,17 +425,13 @@ impl SymbolSearchDialog {
                 if !categories.contains(&self.category) {
                     self.category = Category(None);
                 }
-                egui::ScrollArea::horizontal()
-                    .id_salt("symbol_categories")
-                    .show(ui, |ui| {
-                        if TabBar::new(&categories, &mut self.category)
-                            .pills()
-                            .show(ui)
-                        {
-                            self.sel_idx = 0;
-                            self.refresh_results(ctx, all_symbols);
-                        }
-                    });
+                if TabBar::new(&categories, &mut self.category)
+                    .pills()
+                    .show(ui)
+                {
+                    self.sel_idx = 0;
+                    self.refresh_results(ctx, all_symbols);
+                }
                 ui.add_space(4.0);
 
                 self.search.status(ui);
@@ -627,7 +624,20 @@ impl SymbolSearchDialog {
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
-        let right = rect.right() - 8.0;
+        let mut right = rect.right() - 8.0;
+        // The exchange mark column exists once any row has one, so the other columns line up.
+        if self
+            .filtered_symbols
+            .iter()
+            .any(|symbol| symbol.exchange_logo.is_some())
+        {
+            let mark = egui::Rect::from_min_max(
+                Pos2::new(right - 20.0, rect.center().y - 10.0),
+                Pos2::new(right, rect.center().y + 10.0),
+            );
+            paint_image(ui, symbol.exchange_logo.as_deref(), mark);
+            right = mark.left() - 12.0;
+        }
         let kind = symbol
             .symbol_type
             .map(|kind| kind.to_string())
@@ -690,7 +700,12 @@ impl SymbolSearchDialog {
                 theme.ui.text_secondary,
             );
         }
-        let left = rect.left() + 8.0;
+        let mark = egui::Rect::from_center_size(
+            Pos2::new(rect.left() + 20.0, rect.center().y),
+            Vec2::splat(24.0),
+        );
+        paint_symbol_mark(ui, symbol, mark);
+        let left = mark.right() + 12.0;
         let width = (exchange_right - exchange_width - 16.0 - left).max(0.0);
         let name = egui::WidgetText::from(
             RichText::new(&symbol.symbol)
@@ -732,6 +747,69 @@ impl SymbolSearchDialog {
 
         response
     }
+}
+
+/// Corner radius of the symbol search and comparison dialogs.
+const SEARCH_RADIUS: f32 = 20.0;
+
+/// The backdrop of the search dialogs: a faint veil, #F1F1F1 over white, on light themes, and the
+/// theme's modal overlay on dark ones.
+fn search_backdrop(ctx: &Context) -> Color32 {
+    let theme = ctx.active_theme();
+    if theme.dark {
+        theme.ui.modal_overlay
+    } else {
+        Color32::from_black_alpha(14)
+    }
+}
+
+/// Paints the image at `uri` into `rect` as a circle. Returns `false`, painting nothing, without
+/// a URI or while the image is loading or unreadable.
+fn paint_image(ui: &Ui, uri: Option<&str>, rect: egui::Rect) -> bool {
+    let Some(uri) = uri else {
+        return false;
+    };
+    let pixels = (rect.size() * ui.ctx().pixels_per_point()).round();
+    let size = egui::SizeHint::Size {
+        width: pixels.x as u32,
+        height: pixels.y as u32,
+        maintain_aspect_ratio: true,
+    };
+    match ui
+        .ctx()
+        .try_load_texture(uri, egui::TextureOptions::LINEAR, size)
+    {
+        Ok(egui::load::TexturePoll::Ready { texture }) => {
+            egui::Image::from_texture(texture)
+                .corner_radius(rect.width() / 2.0)
+                .paint_at(ui, rect);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Paints the instrument's logo in `rect`, or its initial in a neutral circle without one.
+fn paint_symbol_mark(ui: &Ui, symbol: &Instrument, rect: egui::Rect) {
+    if paint_image(ui, symbol.logo.as_deref(), rect) {
+        return;
+    }
+    let theme = ui.active_theme();
+    ui.painter()
+        .circle_filled(rect.center(), rect.width() / 2.0, theme.ui.btn_bg_hover);
+    let initial: String = symbol
+        .symbol
+        .chars()
+        .take(1)
+        .flat_map(char::to_uppercase)
+        .collect();
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initial,
+        egui::FontId::proportional(rect.height() * 0.5),
+        theme.ui.text_secondary,
+    );
 }
 
 // =============================================================================
@@ -938,6 +1016,8 @@ impl CompareSymbolsDialog {
             .width(config.width)
             .height(config.height)
             .fill(config.bg_color)
+            .rounding(SEARCH_RADIUS)
+            .backdrop(search_backdrop(ctx))
             .show(ctx, &mut is_open, |ui| {
                 let translated_label = l10n::text(ui.ctx(), "Compare symbols");
                 ui.response().widget_info(|| {

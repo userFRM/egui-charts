@@ -13,6 +13,9 @@ pub(super) struct Recent {
     description: String,
     exchange: String,
     kind: Option<SymbolType>,
+    /// Marks, absent from lists saved before they were kept.
+    logo: Option<String>,
+    exchange_logo: Option<String>,
 }
 
 impl Recent {
@@ -20,6 +23,8 @@ impl Recent {
         let mut symbol = Instrument::new(&self.name).with_description(&self.description);
         symbol.exchange = Some(self.exchange.clone());
         symbol.symbol_type = self.kind;
+        symbol.logo = self.logo.clone();
+        symbol.exchange_logo = self.exchange_logo.clone();
         symbol
     }
 }
@@ -86,6 +91,8 @@ impl Search {
                 .unwrap_or_else(|| symbol.symbol.clone()),
             exchange: symbol.exchange.clone().unwrap_or_default(),
             kind: symbol.symbol_type,
+            logo: symbol.logo.clone(),
+            exchange_logo: symbol.exchange_logo.clone(),
         });
     }
 
@@ -317,7 +324,8 @@ mod tests {
         let mut search = Search::default();
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
-            search.record(&Instrument::new(symbol).with_description("Host name"));
+            let symbol = Instrument::new(symbol).with_description("Host name");
+            search.record(&symbol.with_logo("bytes://logo"));
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -339,7 +347,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
-        assert_eq!(restored.rows[0].description.as_deref(), Some("Host name"));
+        let row = &restored.rows[0];
+        assert_eq!(
+            (row.description.as_deref(), row.logo.as_deref()),
+            (Some("Host name"), Some("bytes://logo"))
+        );
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));
         for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {
