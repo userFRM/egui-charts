@@ -517,11 +517,11 @@ impl DemoApp {
     }
 
     fn capture_comparisons(&self) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
-        let active = super::comparison::capture(&self.chart, &self.comparisons)?;
+        let active = super::comparison::capture(&self.chart, &self.comparisons, &self.spreads)?;
         let mut slots = self
             .extra_charts
             .iter()
-            .map(|slot| super::comparison::capture(&slot.chart, &slot.comparisons))
+            .map(|slot| super::comparison::capture(&slot.chart, &slot.comparisons, &slot.spreads))
             .collect::<Result<Vec<_>, _>>()?;
         slots.insert(self.layout_slot, active);
         if self.layout.mode != ChartLayoutMode::Tabs {
@@ -599,13 +599,13 @@ impl DemoApp {
             let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
             self.extra_charts.push(copy);
         }
-        for (_, id, _) in self.comparisons.drain(..) {
-            self.chart.remove_series(id);
-        }
+        super::comparison::clear(&mut self.chart, &mut self.comparisons, &mut self.spreads);
         for target in &mut self.extra_charts {
-            for (_, id, _) in target.comparisons.drain(..) {
-                target.chart.remove_series(id);
-            }
+            super::comparison::clear(
+                &mut target.chart,
+                &mut target.comparisons,
+                &mut target.spreads,
+            );
         }
         for (slot, snapshot) in layout.charts.iter().enumerate() {
             if slot == self.layout_slot {
@@ -630,7 +630,12 @@ impl DemoApp {
         }
         for (slot, saved) in comparisons.drain(..).enumerate() {
             if slot == self.layout_slot {
-                super::comparison::restore(&mut self.chart, &mut self.comparisons, saved);
+                super::comparison::restore(
+                    &mut self.chart,
+                    &mut self.comparisons,
+                    &mut self.spreads,
+                    saved,
+                );
             } else {
                 let index = if slot < self.layout_slot {
                     slot
@@ -647,7 +652,12 @@ impl DemoApp {
                         target.chart.extended_hours(),
                     ),
                 );
-                super::comparison::restore(&mut target.chart, &mut target.comparisons, saved);
+                super::comparison::restore(
+                    &mut target.chart,
+                    &mut target.comparisons,
+                    &mut target.spreads,
+                    saved,
+                );
             }
         }
         self.refresh_active_chart();

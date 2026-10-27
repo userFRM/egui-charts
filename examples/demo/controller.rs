@@ -4491,7 +4491,7 @@ mod tests {
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into()));
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
         app.add_series_pane();
         let rsi = app
             .chart
@@ -4515,6 +4515,7 @@ mod tests {
             .series_price_scale_mut(id)
             .unwrap()
             .set_range(100.0, 200.0);
+        app.add_spread("AAPL-MSFT");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         for _ in 0..3 {
             ctx.run_ui(Default::default(), |ui| {
@@ -4545,6 +4546,21 @@ mod tests {
             );
             assert_eq!(app.extra_charts.len(), 1);
             assert_eq!(app.extra_charts[0].comparisons.len(), 2);
+            assert_eq!(app.spreads.len(), 1);
+            assert_eq!(app.extra_charts[0].spreads.len(), 1);
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                let spreads: Vec<_> = chart
+                    .series()
+                    .filter(|(_, options)| options.name == "AAPL-MSFT")
+                    .collect();
+                assert_eq!(spreads.len(), 1, "restore each spread exactly once");
+                let id = spreads[0].0;
+                assert!(!chart.bars(id).is_empty());
+                assert_ne!(
+                    chart.series_pane(id),
+                    Some(egui_charts::widget::PaneId::MAIN)
+                );
+            }
             for (_, id, _) in &app.extra_charts[0].comparisons {
                 assert!(!app.extra_charts[0].chart.bars(*id).is_empty());
             }
