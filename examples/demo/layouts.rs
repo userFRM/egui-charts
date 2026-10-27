@@ -12,6 +12,7 @@ pub(super) struct DemoChart {
     pub chart: Chart,
     pub live: Arc<LiveFeed>,
     pub comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
+    pub spreads: Vec<super::comparison::Spread>,
 }
 
 pub(super) struct LayoutTab {
@@ -25,6 +26,7 @@ struct Workspace {
     chart: Chart,
     live: Arc<LiveFeed>,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
+    spreads: Vec<super::comparison::Spread>,
     extra: Vec<DemoChart>,
     layout: ChartLayout,
     slot: usize,
@@ -70,7 +72,8 @@ impl DemoApp {
             mode.chart_count()
         };
         while self.extra_charts.len() + 1 < count {
-            let mut copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
+            let mut copy =
+                self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
             // New slots receive drawings through synchronization, which records their links.
             copy.chart.drawings_mut().drawings.clear();
             self.extra_charts.push(copy);
@@ -88,6 +91,7 @@ impl DemoApp {
         source: &Chart,
         feed: &LiveFeed,
         comparisons: &[(String, SeriesId, Arc<LiveFeed>)],
+        spreads: &[super::comparison::Spread],
     ) -> DemoChart {
         let live = Arc::new(feed.fork());
         live.set_symbol(source.symbol());
@@ -127,6 +131,10 @@ impl DemoApp {
         let (spacing, offset) = source.get_time_scale_state();
         chart.apply_synced_time_scale(spacing, offset);
         let copied_comparisons = super::comparison::copy(&mut chart, source, comparisons);
+        let copied_spreads = spreads
+            .iter()
+            .filter_map(|spread| spread.copy(&mut chart, source))
+            .collect();
         let mut study_ids = std::collections::HashMap::new();
         for (id, indicator) in source.indicators() {
             let copy = chart.add_indicator(indicator.clone_box());
@@ -152,6 +160,7 @@ impl DemoApp {
             chart,
             live,
             comparisons: copied_comparisons,
+            spreads: copied_spreads,
         }
     }
 
@@ -160,9 +169,6 @@ impl DemoApp {
             return;
         }
         self.stop_replay();
-        if self.footprint.take().is_some() {
-            self.restore_feed_after_footprint();
-        }
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
             slot
@@ -173,6 +179,7 @@ impl DemoApp {
             std::mem::swap(&mut self.chart, &mut target.chart);
             std::mem::swap(&mut self.live, &mut target.live);
             std::mem::swap(&mut self.comparisons, &mut target.comparisons);
+            std::mem::swap(&mut self.spreads, &mut target.spreads);
             // Restore stable slot order after moving the former active chart into the vector.
             let old_position = if self.layout_slot < slot {
                 self.layout_slot
@@ -300,9 +307,6 @@ impl DemoApp {
             self.save_layout();
         }
         self.stop_replay();
-        if self.footprint.take().is_some() {
-            self.restore_feed_after_footprint();
-        }
         let Some(next) = self
             .layout_tabs
             .get_mut(index)
@@ -314,6 +318,7 @@ impl DemoApp {
             chart: std::mem::replace(&mut self.chart, next.chart),
             live: std::mem::replace(&mut self.live, next.live),
             comparisons: std::mem::replace(&mut self.comparisons, next.comparisons),
+            spreads: std::mem::replace(&mut self.spreads, next.spreads),
             extra: std::mem::replace(&mut self.extra_charts, next.extra),
             layout: std::mem::replace(&mut self.layout, next.layout),
             slot: std::mem::replace(&mut self.layout_slot, next.slot),
@@ -333,7 +338,7 @@ impl DemoApp {
     }
 
     fn new_layout(&mut self, name: Option<String>) {
-        let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
+        let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
         let duplicate = name.is_some();
         let layout = if duplicate {
             self.layout.clone()
@@ -343,7 +348,7 @@ impl DemoApp {
         let extra = if duplicate {
             self.extra_charts
                 .iter()
-                .map(|c| self.copy_chart(&c.chart, &c.live, &c.comparisons))
+                .map(|c| self.copy_chart(&c.chart, &c.live, &c.comparisons, &c.spreads))
                 .collect()
         } else {
             Vec::new()
@@ -363,6 +368,7 @@ impl DemoApp {
                 chart: copy.chart,
                 live: copy.live,
                 comparisons: copy.comparisons,
+                spreads: copy.spreads,
                 extra,
                 layout,
                 slot: if duplicate { self.layout_slot } else { 0 },
@@ -507,11 +513,11 @@ impl DemoApp {
     }
 
     fn capture_comparisons(&self) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
-        let active = super::comparison::capture(&self.chart, &self.comparisons)?;
+        let active = super::comparison::capture(&self.chart, &self.comparisons, &self.spreads)?;
         let mut slots = self
             .extra_charts
             .iter()
-            .map(|slot| super::comparison::capture(&slot.chart, &slot.comparisons))
+            .map(|slot| super::comparison::capture(&slot.chart, &slot.comparisons, &slot.spreads))
             .collect::<Result<Vec<_>, _>>()?;
         slots.insert(self.layout_slot, active);
         if self.layout.mode != ChartLayoutMode::Tabs {
@@ -586,16 +592,16 @@ impl DemoApp {
         self.extra_charts.truncate(layout.charts.len() - 1);
         self.ensure_chart_slots(layout.mode);
         while self.extra_charts.len() + 1 < layout.charts.len() {
-            let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
+            let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
             self.extra_charts.push(copy);
         }
-        for (_, id, _) in self.comparisons.drain(..) {
-            self.chart.remove_series(id);
-        }
+        super::comparison::clear(&mut self.chart, &mut self.comparisons, &mut self.spreads);
         for target in &mut self.extra_charts {
-            for (_, id, _) in target.comparisons.drain(..) {
-                target.chart.remove_series(id);
-            }
+            super::comparison::clear(
+                &mut target.chart,
+                &mut target.comparisons,
+                &mut target.spreads,
+            );
         }
         for (slot, snapshot) in layout.charts.iter().enumerate() {
             if slot == self.layout_slot {
@@ -620,7 +626,12 @@ impl DemoApp {
         }
         for (slot, saved) in comparisons.drain(..).enumerate() {
             if slot == self.layout_slot {
-                super::comparison::restore(&mut self.chart, &mut self.comparisons, saved);
+                super::comparison::restore(
+                    &mut self.chart,
+                    &mut self.comparisons,
+                    &mut self.spreads,
+                    saved,
+                );
             } else {
                 let index = if slot < self.layout_slot {
                     slot
@@ -637,7 +648,12 @@ impl DemoApp {
                         target.chart.extended_hours(),
                     ),
                 );
-                super::comparison::restore(&mut target.chart, &mut target.comparisons, saved);
+                super::comparison::restore(
+                    &mut target.chart,
+                    &mut target.comparisons,
+                    &mut target.spreads,
+                    saved,
+                );
             }
         }
         self.refresh_active_chart();
@@ -980,10 +996,21 @@ mod tests {
                 show_economic_events: true,
                 ..Default::default()
             });
-        app.handle_comparison(super::super::CompareAction::AddSymbol("AAPL".into()));
+        app.handle_comparison(super::super::CompareAction::AddSymbol(
+            "AAPL".into(),
+            Default::default(),
+        ));
+        app.add_spread("AAPL-MSFT");
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         for copy in &mut app.extra_charts {
+            let spread = copy
+                .chart
+                .series()
+                .find(|(_, series)| series.name == "AAPL-MSFT")
+                .expect("chart slots retain spread series")
+                .0;
+            assert!(!copy.chart.bars(spread).is_empty());
             assert!(
                 !copy
                     .chart
@@ -1089,7 +1116,7 @@ mod tests {
         drawing.id = 8;
         drawing.pane = Some(pane.0);
         app.chart.drawings_mut().drawings.push(drawing);
-        let copied = app.copy_chart(&app.chart, &app.live, &app.comparisons);
+        let copied = app.copy_chart(&app.chart, &app.live, &app.comparisons, &app.spreads);
         let copied_pane = copied
             .chart
             .indicators()

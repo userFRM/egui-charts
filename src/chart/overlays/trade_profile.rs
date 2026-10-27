@@ -8,6 +8,7 @@ use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
 
 /// Draws bid/ask stacks, total volume or signed delta profiles, their POC, value area,
 /// developing POC and volume nodes. `step` is the footprint's grouped price step.
+/// Histograms of partly visible sessions stay at the left edge of the viewport.
 /// Profile ranges and data remain host-owned; edit [`crate::studies::TradeProfileRanges`]
 /// in response to a session menu's merge/split actions and recalculate after trades change.
 pub fn render_trade_profiles(
@@ -29,10 +30,13 @@ pub fn render_trade_profiles(
             continue;
         }
         let x = mapping.idx_to_x(first) - mapping.bar_spacing * 0.45;
-        let width = ((end - first) as f32 * mapping.bar_spacing * 0.7).clamp(1.0, 160.0);
         if mapping.idx_to_x(end - 1) < mapping.rect.left() || x > mapping.rect.right() {
             continue;
         }
+        let x = x.max(mapping.rect.left());
+        let width = ((end - first) as f32 * mapping.bar_spacing * 0.7)
+            .clamp(1.0, 160.0)
+            .min((mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5 - x).max(1.0));
         let max = profile
             .volume
             .levels
@@ -143,6 +147,101 @@ pub fn render_trade_profiles(
                 painter.line_segment([old, point], Stroke::new(1.0, config.text_color));
             }
             previous = Some(point);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::studies::{TradeProfileRanges, trade_profiles};
+    use chrono::TimeDelta;
+    use egui::{Shape, vec2};
+
+    /// A session can start before the viewport while its last bars remain visible. Its full
+    /// distribution stays visible, preserving volume proportions within its visible bars.
+    #[test]
+    fn partly_visible_sessions_keep_their_volume_profile_in_view() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        flow.push(&Tick::new(time, 100.0, 4.0, Some(OrderSide::Buy)))
+            .unwrap();
+        flow.push(&Tick::new(
+            time + TimeDelta::minutes(1),
+            101.0,
+            2.0,
+            Some(OrderSide::Sell),
+        ))
+        .unwrap();
+        let bars: Vec<_> = (0..4)
+            .map(|i| {
+                Bar::new(
+                    time + TimeDelta::minutes(i),
+                    100.0,
+                    101.0,
+                    100.0,
+                    101.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(4)]).unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        let rect = Rect::from_min_size(pos2(40.0, 20.0), vec2(240.0, 160.0));
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::Volume],
+            value_area: None,
+            show_poc: false,
+            ..Default::default()
+        };
+        for (offset, column) in [
+            (0.0, Some((200.0, 56.0))),
+            (9.0, Some((40.0, 56.0))),
+            (11.0, Some((40.0, 19.0))),
+            (-5.0, None),
+            (20.0, None),
+        ] {
+            let mapping = ChartMapping::new(
+                rect,
+                20.0,
+                0,
+                3,
+                offset,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, 103.0),
+                    20.0,
+                    180.0,
+                    false,
+                ),
+            );
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0))),
+                    ..Default::default()
+                },
+                |ui| render_trade_profiles(ui.painter(), &mapping, &bars, &profiles, 1.0, &config),
+            );
+            output.textures_delta.clear();
+            let columns: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let Shape::Rect(rect) = &shape.shape {
+                        Some((rect.rect.left(), rect.rect.width()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let expected = column.map_or_else(Vec::new, |(left, width)| {
+                vec![(left, width), (left, width * 0.5)]
+            });
+            assert_eq!(columns, expected, "scroll offset {offset}");
         }
     }
 }

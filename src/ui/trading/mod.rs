@@ -10,7 +10,7 @@ mod executions;
 mod ticket;
 
 pub use account_panel::{AccountPanel, AccountPanelAction};
-pub use broker_picker::{BrokerPicker, BrokerPickerAction, BrokerTile};
+pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
 use std::sync::Arc;
