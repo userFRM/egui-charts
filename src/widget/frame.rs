@@ -1203,8 +1203,10 @@ impl Chart {
             .max_by(f64::total_cmp)
             .unwrap_or(1.0);
 
-        // Draw grid
-        if self.config.show_grid && self.config.show_horizontal_grid {
+        // Time and price grid lines sharing a style are painted together.
+        let horizontal_grid = self.config.show_grid && self.config.show_horizontal_grid;
+        let time_grid = time_based && self.config.show_grid && self.config.show_vertical_grid;
+        if horizontal_grid && !time_grid {
             rendering::render_grid(
                 &painter,
                 price_rect,
@@ -1249,7 +1251,6 @@ impl Chart {
         let host_scale = self.horizontal_scale.clone();
         let scale: &dyn crate::scales::HorizontalScale =
             host_scale.as_deref().unwrap_or(&time_scale);
-        let time_grid = time_based && self.config.show_grid && self.config.show_vertical_grid;
         // The grid and the labels share one set of marks and the merged bars' mapping.
         let (time_marks, time_points) = if time_grid || self.config.show_time_labels {
             renderers::time_axis_marks(
@@ -1278,6 +1279,8 @@ impl Chart {
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
                     style,
+                    horizontal_grid
+                        .then_some((self.config.grid_color, self.config.grid_line_style)),
                 );
             } else {
                 rendering::render_vertical_grid(

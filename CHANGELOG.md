@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Interval entries can be hidden and restored from the menu without changing the selected interval. Hidden entries are unpinned and persist through host-owned `TimeframePreferences`, including across source changes. Migration: `TimeframePreferences` literals add `hidden_timeframes: Vec::new()` or use `..Default::default()`; older saved preferences default to no hidden entries. ([#974](https://github.com/userFRM/egui-charts/issues/974))
 - `Chart::set_bar_limit` optionally keeps only the newest bars of each series, including feed history, streaming ticks and retained replay history. The default remains unlimited. `remove_oldest_bars` returns evicted bars explicitly. Replay eviction also drops the matching finer-source slots. Studies restart their warm-up on the retained window, drawings keep their timestamps and the viewport keeps its time position where possible. Full windows pause feed scroll-back until the limit is raised or cleared; markers, raw trades and host data retain their independent lifetimes. ([#945](https://github.com/userFRM/egui-charts/issues/945))
 
 - `Chart::forget_symbol` releases an inactive symbol's drawings, markers and storage reader without deleting host storage. Pending local storage edits must finish first. Symbol changes no longer cache empty drawing managers, marker lists or inactive empty storage readers; pending drawing sync notifications are retained. ([#949](https://github.com/userFRM/egui-charts/issues/949))
@@ -312,6 +313,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Custom intervals retain positive week and calendar-month counts, with 3, 6 and 12 month presets. Bar boundaries follow the configured calendar timezone, so April 15 belongs to the quarter opening on April 1; session closes and strategy comparisons also retain calendar months. Month durations remain approximate for sizing, and previously saved `Custom(seconds)` intervals keep their fixed-duration meaning. ([#963](https://github.com/userFRM/egui-charts/issues/963))
 - The drawing rail optically sizes its trend, Fibonacci and ruler glyphs within their existing button slots. Default light ink is black; dark and custom theme colours, disabled contrast and selected utility fills are retained. ([#1001](https://github.com/userFRM/egui-charts/issues/1001))
 
 - The magnet menu independently includes or excludes visible study targets through Snap to indicators, preserving OHLC, drawing anchors and the chosen magnet strength. `DrawingToolbarAction::SetSnapToIndicators` carries the host preference; toolbar snapshots retain it and the demo applies it. Migration: `DrawingManagerOptions`, `ToolbarState` and `DrawingToolbarDomainState` literals add `snap_to_indicators: true` (or use defaults where available); `MagnetButton::show_submenu` takes that preference as its fourth argument. ([#979](https://github.com/userFRM/egui-charts/issues/979))
