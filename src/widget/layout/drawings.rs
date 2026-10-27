@@ -233,6 +233,7 @@ mod tests {
             refs[0].drawings().drawings[0].notes.as_deref(),
             Some("shared note")
         );
+        refs[1].drawings().pending_sync.lock().unwrap().clear();
         let queued = refs[1].drawings().pending_sync.lock().unwrap().len();
         let source_id = refs[0]
             .drawings()

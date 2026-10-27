@@ -18,6 +18,8 @@ The generated API reference retains rustdoc's scripts and styles under the MIT o
 
 `assets/icons/ui/columns.svg`, `maximize.svg`, `square-plus.svg`, `screener.svg`, `hotlists.svg`, `news.svg` and `trading.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
+`assets/icons/chart-types/chart-volume-footprint.svg` and `chart-session-volume-profile.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
 ## Lucide icons
 
 Some interface icons under `assets/icons/` are taken from [Lucide](https://github.com/lucide-icons/lucide), restyled to a 1.5 px stroke and a white root colour. Lucide is licensed under the ISC License, and the subset of its icons derived from Feather under the MIT License; the full text is in [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt). All other icons in the set are original artwork of this project.
@@ -92,3 +94,7 @@ The source is `web/split/Roboto[wdth,wght].ttf` in `Roboto_v3.015.zip` (SHA-256 
 ## Fonts in the web demo
 
 The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.
+
+## Root certificates in the native demo
+
+The native demo's HTTP image loader includes Mozilla's root certificates through `webpki-roots` 1.0.11. This certificate data is licensed under the Community Data License Agreement - Permissive 2.0; the full text is in [`examples/demo/LICENSE-webpki-roots.txt`](examples/demo/LICENSE-webpki-roots.txt).

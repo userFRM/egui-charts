@@ -344,6 +344,12 @@ impl super::Chart {
                     .zoom(delta, anchor, rect.left(), rect.width());
             }
             A::ScrollToRealTime => self.scroll_to_real_time(true),
+            A::ScrollToFirstBar => {
+                // A range spans `length() + 1` bars, so its left index becomes 0.
+                let scale = self.state.time_scale();
+                let position = scale.visible_logical_range().length() - scale.base_idx() as f32;
+                self.scroll_to_position(position, true);
+            }
             A::FitContent => {
                 self.pending_scroll_time = None;
                 self.state.time_scale_mut().fit_content();
@@ -505,20 +511,33 @@ mod tests {
     }
 
     #[test]
-    fn modified_arrows_pan_one_page_or_zoom_without_plain_panning() {
-        for (key, modifiers, pans) in [
-            (Key::ArrowLeft, Modifiers::NONE, true),
-            (Key::ArrowLeft, Modifiers::ALT, false),
-            (Key::ArrowRight, Modifiers::COMMAND, true),
-            (Key::ArrowUp, Modifiers::COMMAND, false),
+    fn navigation_and_panel_keys_follow_the_shared_action_map() {
+        use KeyboardAction as A;
+        let alt_shift = Modifiers::ALT.plus(Modifiers::SHIFT);
+        for (key, modifiers, expected) in [
+            (Key::ArrowLeft, Modifiers::NONE, Some(A::PanLeft)),
+            (Key::ArrowLeft, Modifiers::ALT, None),
+            (Key::ArrowRight, Modifiers::COMMAND, Some(A::PanRightFast)),
+            (Key::ArrowUp, Modifiers::COMMAND, Some(A::ZoomIn)),
+            (Key::ArrowLeft, alt_shift, Some(A::ScrollToFirstBar)),
+            (Key::Home, Modifiers::NONE, Some(A::ScrollToFirstBar)),
+            (Key::ArrowRight, alt_shift, Some(A::ScrollToRealTime)),
+            (Key::End, Modifiers::NONE, Some(A::ScrollToRealTime)),
+            (Key::Period, Modifiers::NONE, Some(A::OpenLayout)),
+            (Key::D, Modifiers::ALT, Some(A::OpenDataWindow)),
+            (Key::E, alt_shift, Some(A::ToggleSession)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
+            let latest = chart.state.time_scale().live_edge_offset();
             let mut before_offset = 0.0;
             let mut before_spacing = 0.0;
             let mut page = 0.0;
-            for pass in 0..3 {
+            for (pass, time) in [0.0, 0.1, 0.2, 0.3, 2.0, 2.1].into_iter().enumerate() {
                 if pass == 2 {
+                    // Zoom into history so neither end is already in view.
+                    chart.state.time_scale_mut().set_bar_spacing(20.0);
+                    chart.scroll_to_position(-40.0, false);
                     before_offset = chart.state.time_scale().right_offset();
                     before_spacing = chart.state.time_scale().bar_spacing();
                     page = chart
@@ -534,6 +553,7 @@ mod tests {
                             egui::Pos2::ZERO,
                             egui::vec2(800.0, 600.0),
                         )),
+                        time: Some(time),
                         events: if pass == 2 {
                             vec![Event::Key {
                                 key,
@@ -556,21 +576,25 @@ mod tests {
                 )
                 .drop_without_applying_deltas();
             }
-            if pans {
-                let expected = if modifiers == Modifiers::NONE {
-                    before_offset + 1.0
-                } else {
-                    before_offset - page
-                };
-                assert_eq!(
-                    chart.state.time_scale().right_offset(),
-                    expected,
-                    "{key:?}, {modifiers:?}"
-                );
-            } else if key == Key::ArrowUp {
-                assert!(chart.state.time_scale().bar_spacing() > before_spacing);
-            } else {
-                assert_eq!(chart.state.time_scale().right_offset(), before_offset);
+            let requests = chart.take_shortcut_requests();
+            let offset = chart.state.time_scale().right_offset();
+            let spacing = chart.state.time_scale().bar_spacing();
+            match expected {
+                Some(A::PanLeft) => assert_eq!(offset, before_offset + 1.0),
+                Some(A::PanRightFast) => assert_eq!(offset, before_offset - page),
+                Some(A::ZoomIn) => assert!(spacing > before_spacing),
+                Some(A::ScrollToFirstBar) => {
+                    let left = chart.visible_logical_range().unwrap().left;
+                    assert!(left.abs() < 1e-3, "{key:?}: left edge at bar {left}");
+                }
+                Some(A::ScrollToRealTime) => assert_eq!(offset, latest, "{key:?}"),
+                Some(action) => {
+                    assert_eq!(requests, vec![ShortcutRequest::Action(action)], "{key:?}")
+                }
+                None => assert_eq!(offset, before_offset),
+            }
+            if expected != Some(A::ZoomIn) {
+                assert_eq!(spacing, before_spacing, "{key:?} keeps the zoom");
             }
         }
     }
@@ -663,12 +687,12 @@ mod tests {
     }
 
     #[test]
-    fn help_preserves_question_marks_in_fields_but_command_search_still_opens() {
+    fn text_fields_keep_typing_and_panel_keys_but_command_search_still_opens() {
         let ctx = Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
         let mut text = "label".to_owned();
-        for pass in 0..5 {
-            if pass == 4 {
+        for pass in 0..8 {
+            if pass == 7 {
                 chart.shortcuts_mut().bindings.insert(
                     0,
                     (
@@ -685,12 +709,12 @@ mod tests {
                 .any(|action| action == KeyboardAction::OpenQuickSearch);
             assert_eq!(
                 visible,
-                pass != 4,
+                pass != 7,
                 "help must not advertise a shadowed binding"
             );
             assert_eq!(
                 map.shortcut(KeyboardAction::OpenQuickSearch).is_some(),
-                pass != 4
+                pass != 7
             );
             let events = match pass {
                 2 => vec![
@@ -703,12 +727,33 @@ mod tests {
                     },
                     Event::Text("?".into()),
                 ],
-                3 | 4 => vec![Event::Key {
+                3 | 7 => vec![Event::Key {
                     key: Key::K,
                     physical_key: None,
                     pressed: true,
                     repeat: false,
                     modifiers: Modifiers::COMMAND,
+                }],
+                4 => vec![
+                    Event::Key {
+                        key: Key::Period,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                    Event::Text(".".into()),
+                ],
+                5 | 6 => vec![Event::Key {
+                    key: if pass == 5 { Key::D } else { Key::E },
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: if pass == 5 {
+                        Modifiers::ALT
+                    } else {
+                        Modifiers::ALT.plus(Modifiers::SHIFT)
+                    },
                 }],
                 _ => vec![],
             };
@@ -738,7 +783,7 @@ mod tests {
                 "field pass {pass}"
             );
         }
-        assert_eq!(text, "label?");
+        assert_eq!(text, "label?.");
     }
 
     #[test]

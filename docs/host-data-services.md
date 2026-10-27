@@ -10,6 +10,12 @@ Apply `SymbolQuery::offset` before `limit`, preserving ordering between pages. A
 
 `SymbolSearchDialog::set_storage` connects recent selections through `StoreKind::RecentSymbols`. Call `show` every frame, including while closed, so asynchronous storage can finish. Recent instruments retain their names and metadata, with the newest first. `record_symbol` also records symbols opened elsewhere. Storage is read before a write; a failed read prevents replacement of the stored catalog. `set_exchange_filter` restricts service queries to a venue. An empty, unfiltered query shows recents; choosing a category or venue browses the host catalog.
 
+`Instrument::logo` and `exchange_logo` are image URIs that the dialogs load with egui's installed image loaders; until an image is ready, rows show the symbol's initial and the exchange name. `Instrument::country` labels compare rows. `CompareSymbolsDialog::set_storage` lists the recents symbol search keeps, and `CompareAction::AddSymbol` carries the `ComparePlacement` the user chose.
+
+`SymbolSearchDialog::set_sources` fills the source menu, whose choice is the `SymbolQuery::exchange` filter. Give the contracts of a futures root, or the listings of one security, the same `Instrument::root`: the dialog lists the first and expands the others under it, and returns the instrument chosen.
+
+Text with an operator, such as `AAPL-MSFT`, is a `services::SymbolExpression`. The dialog searches the service for each of its symbols, lists the spread as a `SymbolType::Spread` instrument once every symbol is found, and otherwise reports the fault. Chart a picked spread from the histories of its symbols with `SymbolExpression::bars`.
+
 ## Signals
 
 Connect `Chart::set_signal_source(Some(source))` to an `Arc<dyn services::Signals>`. Each subscription starts empty. Push current signals first, then `SignalEvent::Upsert`, `Remove` and `Clear`. Identities belong to the subscription; an upsert replaces its prior identity. Markers carry a time, optional price and direction. Levels carry a price and optional start time. Zones carry price bounds and time bounds.

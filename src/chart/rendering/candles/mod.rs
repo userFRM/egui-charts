@@ -104,7 +104,8 @@ pub fn render_chart_type(
 
     match chart_type {
         // === Standard OHLC Types ===
-        ChartType::Candles => {
+        // Execution-based types draw candles for the bars without executions.
+        ChartType::Candles | ChartType::VolumeFootprint | ChartType::SessionVolumeProfile => {
             candlestick::render_candles(
                 ctx.price_ctx,
                 ctx.volume_ctx,

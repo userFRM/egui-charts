@@ -20,6 +20,7 @@ pub struct Modal {
     dim_background: bool,
     rounding: Option<f32>,
     fill: Option<Color32>,
+    backdrop: Option<Color32>,
     top: Option<f32>,
 }
 
@@ -36,6 +37,7 @@ impl Modal {
             dim_background: true,
             rounding: None,
             fill: None,
+            backdrop: None,
             top: None,
         }
     }
@@ -69,6 +71,12 @@ impl Modal {
     /// Override the surface fill, leaving the theme's panel fill as the default.
     pub fn fill(mut self, fill: Color32) -> Self {
         self.fill = Some(fill);
+        self
+    }
+
+    /// Override the backdrop colour, leaving the theme's modal overlay as the default.
+    pub fn backdrop(mut self, color: Color32) -> Self {
+        self.backdrop = Some(color);
         self
     }
 
@@ -127,7 +135,7 @@ impl Modal {
         let size = size.max(egui::Vec2::ZERO);
         let max_height = (height.unwrap_or(screen_height) - frame.total_margin().sum().y).max(0.0);
         let backdrop = if self.dim_background {
-            ctx.active_theme().ui.modal_overlay
+            self.backdrop.unwrap_or(ctx.active_theme().ui.modal_overlay)
         } else {
             Color32::TRANSPARENT
         };

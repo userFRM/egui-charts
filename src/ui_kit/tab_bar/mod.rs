@@ -62,7 +62,8 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
         }
     }
 
-    /// Render rounded chips instead of an underline.
+    /// Render rounded chips instead of an underline, wrapping onto further rows when they do not
+    /// fit the width.
     pub fn pills(mut self) -> Self {
         self.pills = true;
         self
@@ -74,7 +75,7 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
         let mut changed = false;
         let rule_slot = ui.painter().add(egui::Shape::Noop);
 
-        let row = ui.horizontal(|ui| {
+        let add_tabs = |ui: &mut Ui| {
             ui.spacing_mut().item_spacing.x = if self.pills { 4.0 } else { theme.spacing.xxl };
             for tab in self.tabs {
                 let is_active = *tab == *self.active;
@@ -135,7 +136,12 @@ impl<'a, T: TabLabel> TabBar<'a, T> {
                     changed = true;
                 }
             }
-        });
+        };
+        let row = if self.pills {
+            ui.horizontal_wrapped(add_tabs)
+        } else {
+            ui.horizontal(add_tabs)
+        };
 
         // The rule spans the parent's width, under the active underline.
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;

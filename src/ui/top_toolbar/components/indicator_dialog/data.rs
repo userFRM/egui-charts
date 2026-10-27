@@ -1,4 +1,4 @@
-//! Study browser entries, saved favorites and editable parameters.
+//! Study browser entries and saved favorites.
 //!
 //! Use [`IndicatorPreferences`] to retain favorite factory names and
 //! [`IndicatorInfo`] to describe studies in a picker.
@@ -80,68 +80,5 @@ impl IndicatorInfo {
             .collect();
         infos.sort_by_key(|info| info.name.to_lowercase());
         infos
-    }
-}
-
-/// Indicator params for configuration
-///
-/// Selecting a study in the dialog sets these to the parameters the factory creates it with.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndicatorParams {
-    // Moving avgs
-    /// Shared lookback length in bars for the selected study.
-    pub period: usize,
-    // Keltner Channels
-    /// ATR lookback length in bars for Keltner Channels.
-    pub keltner_atr: usize,
-    /// ATR multiplier for the Keltner Channel bands.
-    pub keltner_multiplier: f64,
-    // Bollinger Bands
-    /// Standard deviation multiplier for Bollinger Bands.
-    pub bb_std_dev: f64,
-    // MACD
-    /// Fast EMA length in bars.
-    pub macd_fast: usize,
-    /// Slow EMA length in bars.
-    pub macd_slow: usize,
-    /// MACD signal EMA length in bars.
-    pub macd_signal: usize,
-    // Stochastic
-    /// Stochastic %K lookback length in bars.
-    pub stoch_k: usize,
-    /// Smoothing length in bars for stochastic %K.
-    pub stoch_smooth: usize,
-    /// Smoothing length in bars for stochastic %D.
-    pub stoch_d: usize,
-    // SuperTrend
-    /// ATR multiplier for SuperTrend bands.
-    pub supertrend_multiplier: f64,
-    // Ichimoku
-    /// Ichimoku conversion line lookback in bars.
-    pub ichimoku_tenkan: usize,
-    /// Ichimoku base line lookback in bars.
-    pub ichimoku_kijun: usize,
-    /// Ichimoku leading span B lookback in bars.
-    pub ichimoku_senkou: usize,
-}
-
-impl Default for IndicatorParams {
-    fn default() -> Self {
-        Self {
-            period: 14,
-            keltner_atr: 10,
-            keltner_multiplier: 2.0,
-            bb_std_dev: 2.0,
-            macd_fast: 12,
-            macd_slow: 26,
-            macd_signal: 9,
-            stoch_k: 14,
-            stoch_smooth: 3,
-            stoch_d: 3,
-            supertrend_multiplier: 3.0,
-            ichimoku_tenkan: 9,
-            ichimoku_kijun: 26,
-            ichimoku_senkou: 52,
-        }
     }
 }
