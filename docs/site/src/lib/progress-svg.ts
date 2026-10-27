@@ -1,22 +1,24 @@
 import { areas, counts, features, percentage, treemap, type Feature } from './progress';
 
 const background = '#0d1117';
+const colours = { done: '#2ea043', partial: '#d29922', missing: '#6e7681' };
+const order = { done: 0, partial: 1, missing: 2 };
 const columns = 3, gap = 5, width = 1000, panelHeight = 300;
 const panelWidth = (width - gap * (columns - 1)) / columns;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const text = (x: number, y: number, size: number, value: string) =>
   `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-family="sans-serif" font-size="${size}" fill="#ffffff" stroke="${background}" stroke-width="3" paint-order="stroke">${escape(value)}</text>`;
 
-/** One panel per area: a block per group with one cell per feature, done cells first. */
+/** One panel per area: a block per group with one cell per feature, done cells first, then partial, then missing. */
 function panel(area: string, x: number, y: number) {
   const rows = features.filter((row) => row.area === area);
-  const sorted = [...rows].sort((a, b) => Number(b.status === 'done') - Number(a.status === 'done'));
+  const sorted = [...rows].sort((a, b) => order[a.status] - order[b.status]);
   const { done, total } = counts(rows);
   const groups = treemap(sorted, panelWidth - 2, panelHeight - 32).map((group) => {
     const ox = x + 1, oy = y + 31;
     const cells = group.features.map((feature: Feature, index) => {
       const cell = group.cells[index];
-      return `<rect x="${(ox + cell.x).toFixed(2)}" y="${(oy + cell.y).toFixed(2)}" width="${cell.width.toFixed(2)}" height="${cell.height.toFixed(2)}" fill="${feature.status === 'done' ? '#2ea043' : '#6e7681'}" stroke="${background}" stroke-width="0.5"/>`;
+      return `<rect x="${(ox + cell.x).toFixed(2)}" y="${(oy + cell.y).toFixed(2)}" width="${cell.width.toFixed(2)}" height="${cell.height.toFixed(2)}" fill="${colours[feature.status]}" stroke="${background}" stroke-width="0.5"/>`;
     }).join('\n');
     const groupDone = counts(group.features).done;
     const label = group.name.slice(0, Math.floor((group.box.width - 6) / 7));

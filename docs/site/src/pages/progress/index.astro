@@ -24,7 +24,7 @@ const tables = areas.map((area) => {
 <h1>Progress</h1>
 <img src="progress.svg" alt="progress">
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
-<p>A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
+<p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
   <Fragment>
     <h2>{table.area}</h2>
