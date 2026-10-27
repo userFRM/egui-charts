@@ -312,6 +312,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Notifications default to the bottom-left corner with a 16-point inset. The demo fits notices beside the order ticket and hides them while no room remains; trading notices respect the configured width. Hosts can still select any corner with `NotificationPanel::position`. ([#1009](https://github.com/userFRM/egui-charts/issues/1009))
+
+- Held values show six base rows: time, open, high, low, close and total volume. Change remains in hover readouts. Volume study plots are opt-in through `TooltipOptions::show_volume_details`; other study values and host data windows retain their existing rows. Older saved tooltip options default to hiding volume details. ([#1008](https://github.com/userFRM/egui-charts/issues/1008))
 - Selecting a report trade in the demo opens the full-day session when regular hours hide its entry after switching symbols, so the selected trade remains visible.
 
 - The registry documentation guards its built-in study example with the `studies` feature, so the documented headless configuration compiles every example. CI also runs doctests with no default features. ([#951](https://github.com/userFRM/egui-charts/issues/951))
