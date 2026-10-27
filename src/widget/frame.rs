@@ -1128,7 +1128,9 @@ impl Chart {
             .indicators()
             .iter()
             .zip(&self.study_autoscale)
-            .filter(|(study, autoscale)| **autoscale && !study.is_volume())
+            .filter(|(study, autoscale)| {
+                !self.config.scale_price_chart_only && **autoscale && !study.is_volume()
+            })
             .map(|(study, _)| study.as_ref()),
             heikin_ashi.as_ref().map(|bars| &bars[start_idx..end_idx]),
             self.main_series_visible,

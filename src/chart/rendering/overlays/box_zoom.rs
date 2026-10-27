@@ -5,7 +5,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
-/// Renders box zoom selection rect (right-click drag)
+/// Renders the selection rectangle while dragging in box zoom mode.
 pub fn render_box_zoom(painter: &Painter, box_zoom: &BoxZoomState) {
     if !box_zoom.active {
         return;
@@ -16,26 +16,15 @@ pub fn render_box_zoom(painter: &Painter, box_zoom: &BoxZoomState) {
     };
 
     let rect = Rect::from_two_pos(start, end);
-    let border_color = Color32::from_rgba_premultiplied(
-        DESIGN_TOKENS.semantic.extended.info.r(),
-        DESIGN_TOKENS.semantic.extended.info.g(),
-        DESIGN_TOKENS.semantic.extended.info.b(),
-        220,
-    );
+    let info = painter.ctx().active_theme().ui.info;
+    let border_color = Color32::from_rgba_unmultiplied(info.r(), info.g(), info.b(), 220);
 
-    // Semi-transparent blue fill
     painter.rect_filled(
         rect,
         0.0,
-        Color32::from_rgba_premultiplied(
-            DESIGN_TOKENS.semantic.extended.info.r(),
-            DESIGN_TOKENS.semantic.extended.info.g(),
-            DESIGN_TOKENS.semantic.extended.info.b(),
-            30,
-        ),
+        Color32::from_rgba_unmultiplied(info.r(), info.g(), info.b(), 30),
     );
 
-    // Blue stroke border (2px solid line)
     painter.rect_stroke(
         rect,
         0.0,
@@ -64,7 +53,7 @@ fn render_corner_handles(painter: &Painter, rect: Rect, border_color: Color32) {
             0.0,
             Stroke::new(
                 DESIGN_TOKENS.stroke.hairline,
-                DESIGN_TOKENS.semantic.chart.crosshair_label_text,
+                painter.ctx().active_theme().chart.crosshair_label_text,
             ),
             egui::epaint::StrokeKind::Outside,
         );
@@ -81,27 +70,72 @@ fn render_dimension_labels(painter: &Painter, rect: Rect) {
 
     let label_text = format!("{width:.0}x{height:.0}");
     let label_pos = Pos2::new(rect.center().x, rect.min.y - 15.0);
+    let theme = painter.ctx().active_theme();
 
     // Draw label background
     let text_size = painter.text(
         label_pos,
         egui::Align2::CENTER_CENTER,
         &label_text,
-        FontId::proportional(painter.ctx().active_theme().text.small),
+        FontId::proportional(theme.text.small),
         Color32::TRANSPARENT,
     );
-    painter.rect_filled(
-        text_size.expand(3.0),
-        2.0,
-        DESIGN_TOKENS.semantic.extended.chart_crosshair_label_bg,
-    );
+    painter.rect_filled(text_size.expand(3.0), 2.0, theme.chart.crosshair_label_bg);
 
     // Draw label text
     painter.text(
         label_pos,
         egui::Align2::CENTER_CENTER,
         label_text,
-        FontId::proportional(painter.ctx().active_theme().text.small),
-        DESIGN_TOKENS.semantic.chart.crosshair_label_text,
+        FontId::proportional(theme.text.small),
+        theme.chart.crosshair_label_text,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{apply_to_egui, presets};
+
+    #[test]
+    fn box_zoom_uses_the_active_info_colour_with_translucent_fill() {
+        let ctx = egui::Context::default();
+        let start = Pos2::new(20.0, 20.0);
+        let end = Pos2::new(100.0, 100.0);
+        for (name, theme) in presets() {
+            apply_to_egui(&ctx, &theme);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                render_box_zoom(
+                    ui.painter(),
+                    &BoxZoomState {
+                        active: true,
+                        start_pos: Some(start),
+                        curr_pos: Some(end),
+                    },
+                );
+            });
+            let rects: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect == Rect::from_two_pos(start, end) => {
+                        Some(rect.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let info = theme.ui.info;
+            assert_eq!(
+                rects[0].fill,
+                Color32::from_rgba_unmultiplied(info.r(), info.g(), info.b(), 30),
+                "{name}: fill"
+            );
+            assert_eq!(
+                rects[1].stroke.color,
+                Color32::from_rgba_unmultiplied(info.r(), info.g(), info.b(), 220),
+                "{name}: border"
+            );
+        }
+    }
 }

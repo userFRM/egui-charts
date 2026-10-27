@@ -986,10 +986,15 @@ mod tests {
                 "no_scale",
                 "displaced_future",
                 "main_hidden",
+                "price_only",
+                "price_only_shared",
+                "price_only_shared_other",
+                "price_only_restored",
+                "price_only_excluded",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
-                chart.price_scale_mut().options_mut().mode = mode;
+                chart.config_mut().right_axis_scale_mode = mode;
                 frame(&ctx, &mut chart, 0.0, Vec::new());
                 chart.set_visible_bars(20);
                 chart.set_start_idx(40);
@@ -1045,6 +1050,12 @@ mod tests {
                     "independent" => crate::studies::StudyScale::Independent,
                     "no_scale" => crate::studies::StudyScale::None,
                     "pane" => crate::studies::StudyScale::Independent,
+                    "price_only_shared" => {
+                        crate::studies::StudyScale::Shared(crate::model::SeriesScale::Right)
+                    }
+                    "price_only_shared_other" => {
+                        crate::studies::StudyScale::Shared(crate::model::SeriesScale::Left)
+                    }
                     _ => crate::studies::StudyScale::Main,
                 });
                 let study: Box<dyn Indicator> = if case == "profile" {
@@ -1069,13 +1080,54 @@ mod tests {
                     study.apply_settings(&[], settings).unwrap();
                 }
                 chart.set_indicator_visible(id, case != "hidden");
-                assert!(chart.set_indicator_autoscale(id, case != "excluded"));
+                assert!(chart.set_indicator_autoscale(
+                    id,
+                    !matches!(case, "excluded" | "price_only_excluded")
+                ));
                 chart.set_main_series_visible(case != "main_hidden");
+                if case.starts_with("price_only") {
+                    #[cfg(feature = "ui")]
+                    {
+                        let mut menu = crate::ui::top_toolbar::SettingsMenu::new();
+                        menu.settings.scale_price_chart_only = true;
+                        chart.update_config(menu.apply_to_config(chart.config().clone()));
+                    }
+                    #[cfg(not(feature = "ui"))]
+                    {
+                        chart.config_mut().scale_price_chart_only = true;
+                    }
+                    if matches!(case, "price_only_restored" | "price_only_excluded") {
+                        frame(&ctx, &mut chart, 0.03, Vec::new());
+                        chart.config_mut().scale_price_chart_only = false;
+                    }
+                    assert!(
+                        chart
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .unwrap()
+                            .1
+                            .is_visible()
+                    );
+                }
                 frame(&ctx, &mut chart, 0.04, Vec::new());
+                if case == "price_only_shared_other" {
+                    let study = chart
+                        .indicators()
+                        .find(|(study, _)| *study == id)
+                        .unwrap()
+                        .1;
+                    let map =
+                        crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping())
+                            .price;
+                    assert!(map.range().contains(map.transform().to_scale(120.0)));
+                }
                 let expected = if case == "main_hidden" {
                     let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
                     (value - value.abs() * 0.00125, value + value.abs() * 0.00125)
-                } else if matches!(case, "single" | "multiple" | "displaced_future") {
+                } else if matches!(
+                    case,
+                    "single" | "multiple" | "displaced_future" | "price_only_restored"
+                ) {
                     fitted
                 } else {
                     bars_only

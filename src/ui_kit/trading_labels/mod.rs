@@ -215,7 +215,7 @@ mod tests {
         let wrong: Vec<_> = [
             (
                 PnlLabel::currency(12.5, &CurrencyFormatter::eur()),
-                "+12.50 €",
+                "+12,50 €",
             ),
             (
                 PnlLabel::currency(-12.0, &CurrencyFormatter::new("JPY", 0)),

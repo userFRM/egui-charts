@@ -162,7 +162,10 @@ impl PriceFormatter for PercentageFormatter {
     }
 }
 
-/// Currency formatter with symbol
+/// Currency formatter with symbol.
+///
+/// If the thousands and decimal separators match, grouping is omitted so an amount
+/// never uses the same character for both separators, including after direct field edits.
 #[derive(Debug, Clone)]
 pub struct CurrencyFormatter {
     /// Currency symbol (e.g., "$", "€", "£", "¥")
@@ -179,6 +182,9 @@ pub struct CurrencyFormatter {
 
     /// Thousands separator (e.g., "," for US, "." for EU)
     pub thousands_sep: Option<char>,
+
+    /// Decimal separator (e.g., '.' for US, ',' for EU).
+    pub decimal_sep: char,
 }
 
 impl CurrencyFormatter {
@@ -190,6 +196,7 @@ impl CurrencyFormatter {
             symbol_before: true,
             add_space: false,
             thousands_sep: Some(','),
+            decimal_sep: '.',
         }
     }
 
@@ -201,6 +208,7 @@ impl CurrencyFormatter {
             symbol_before: false,
             add_space: true,
             thousands_sep: Some('.'),
+            decimal_sep: ',',
         }
     }
 
@@ -212,6 +220,7 @@ impl CurrencyFormatter {
             symbol_before: false,
             add_space: true,
             thousands_sep: Some(','),
+            decimal_sep: '.',
         }
     }
 
@@ -223,16 +232,17 @@ impl CurrencyFormatter {
             symbol_before: true,
             add_space: false,
             thousands_sep: Some(','),
+            decimal_sep: '.',
         }
     }
 }
 
 impl PriceFormatter for CurrencyFormatter {
     fn format(&self, price: f64) -> String {
-        let val_str = if let Some(sep) = self.thousands_sep {
+        let val_str = if let Some(sep) = self.thousands_sep.filter(|sep| *sep != self.decimal_sep) {
             self.format_with_separator(price, sep)
         } else {
-            format_decimal(price, self.precision)
+            format_decimal(price, self.precision).replace('.', &self.decimal_sep.to_string())
         };
 
         let space = if self.add_space { " " } else { "" };
@@ -286,7 +296,7 @@ impl CurrencyFormatter {
         let body = if decimal.is_empty() {
             integer_with_sep
         } else {
-            format!("{integer_with_sep}.{decimal}")
+            format!("{integer_with_sep}{}{decimal}", self.decimal_sep)
         };
         format!("{sign}{body}")
     }
@@ -585,11 +595,47 @@ mod tests {
         let usd = CurrencyFormatter::usd();
         assert_eq!(usd.format(1234.56), "$1,234.56");
 
-        let eur = CurrencyFormatter::eur();
-        assert!(eur.format(1234.56).contains("€"));
-
-        let btc = CurrencyFormatter::btc();
-        assert!(btc.format(0.12345678).contains("₿"));
+        for (formatter, value, expected) in [
+            (CurrencyFormatter::eur(), 1234.56, "1.234,56 €"),
+            (CurrencyFormatter::eur(), -1234.5, "-1.234,50 €"),
+            (CurrencyFormatter::eur(), 0.5, "0,50 €"),
+            (CurrencyFormatter::eur(), 123.45, "123,45 €"),
+            (CurrencyFormatter::btc(), 0.12345678, "0.12345678 ₿"),
+            (
+                CurrencyFormatter {
+                    thousands_sep: None,
+                    ..CurrencyFormatter::eur()
+                },
+                1234.56,
+                "1234,56 €",
+            ),
+            (
+                CurrencyFormatter {
+                    decimal_sep: '.',
+                    ..CurrencyFormatter::eur()
+                },
+                1234.56,
+                "1234.56 €",
+            ),
+            (
+                CurrencyFormatter {
+                    decimal_sep: ',',
+                    ..CurrencyFormatter::usd()
+                },
+                1234.56,
+                "$1234,56",
+            ),
+            (
+                CurrencyFormatter {
+                    precision: 0,
+                    ..CurrencyFormatter::eur()
+                },
+                1234.56,
+                "1.235 €",
+            ),
+        ] {
+            assert_eq!(formatter.format(value), expected);
+        }
     }
 
     #[test]
@@ -608,7 +654,7 @@ mod tests {
             (CurrencyFormatter::new("JPY", 0), -0.1, "JPY0"),
             (CurrencyFormatter::new("JPY", 0), -0.6, "-JPY1"),
             (CurrencyFormatter::btc(), -0.000000001, "0.00000000 ₿"),
-            (CurrencyFormatter::eur(), -0.001, "0.00 €"),
+            (CurrencyFormatter::eur(), -0.001, "0,00 €"),
             (
                 CurrencyFormatter {
                     thousands_sep: None,

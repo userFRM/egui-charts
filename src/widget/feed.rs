@@ -186,8 +186,8 @@ impl Chart {
     /// the series and its studies, then resolves, loads and subscribes it, in one load per
     /// `show` however many setters ran; an unchanged one does nothing, also after an error.
     /// Drawings and markers are retained separately for each symbol. A changed symbol clears
-    /// chart undo history. Without a feed replace the bars with
-    /// [`set_data`](Self::set_data).
+    /// chart undo and zoom history and returns its price scale to autoscaling. Without a feed
+    /// replace the bars with [`set_data`](Self::set_data).
     pub fn set_symbol(&mut self, symbol: impl Into<String>) {
         let symbol = symbol.into();
         if symbol != self.symbol {
@@ -248,6 +248,8 @@ impl Chart {
             }
             self.history.clear();
             self.history.edits += 1;
+            self.state.price_scale_mut().reset();
+            self.state.clear_zoom_history();
             self.pending_scroll_time = None;
             self.legend_instrument = None;
             self.currency_choice = None;
@@ -1327,6 +1329,75 @@ mod tests {
         match symbol {
             Some(symbol) => builder.with_symbol(symbol).build(),
             None => builder.build(),
+        }
+    }
+
+    /// Changing symbols fits the new prices, with or without a feed. Repeating a symbol,
+    /// replacing its bars or reloading its feed preserves the user's manual range.
+    /// Initial ratio-lock configuration still applies to the first frame of supplied bars.
+    #[test]
+    fn symbol_changes_reset_manual_price_scaling() {
+        for with_feed in [false, true] {
+            for locked in [false, true] {
+                let feed = Arc::new(Script::default());
+                let mut chart = if with_feed {
+                    fed(&feed, Some("A"))
+                } else {
+                    let mut chart = ChartBuilder::new()
+                        .with_config(crate::config::ChartConfig {
+                            lock_price_to_bar_ratio: locked,
+                            ..Default::default()
+                        })
+                        .with_symbol("A")
+                        .build();
+                    chart.set_data(SeriesId::MAIN, bars(6));
+                    chart
+                };
+                let mut frames = Frames::new();
+                frames.run(&mut chart);
+                if with_feed {
+                    feed.page().send(page(bars(6), true));
+                } else {
+                    assert_eq!(chart.state.price_scale().bar_ratio_locked(), locked);
+                }
+                frames.run(&mut chart);
+                chart.price_scale_mut().set_range(80.0, 120.0);
+                chart.config_mut().lock_price_to_bar_ratio = locked;
+                frames.run(&mut chart);
+                chart.state.push_zoom_state();
+                let manual = chart.state.price_scale().range();
+                chart.set_symbol("A");
+                if with_feed {
+                    chart.reload_feed();
+                    frames.run(&mut chart);
+                    feed.page().send(page(bars(6), true));
+                } else {
+                    chart.set_data(SeriesId::MAIN, bars(6));
+                }
+                frames.run(&mut chart);
+                assert!(chart.state.price_scale().is_manual());
+                assert_eq!(chart.state.price_scale().range(), manual);
+
+                chart.set_symbol("B");
+                frames.run(&mut chart);
+                let next = bars(6)
+                    .into_iter()
+                    .map(|bar| Bar::new(bar.time, 1000.0, 1050.0, 1000.0, 1050.0, 1.0))
+                    .collect();
+                if with_feed {
+                    feed.page().send(page(next, true));
+                } else {
+                    chart.set_data(SeriesId::MAIN, next);
+                }
+                frames.run(&mut chart);
+                assert!(!chart.state.price_scale().is_manual());
+                assert!(!chart.state.price_scale().bar_ratio_locked());
+                assert!(!chart.state.has_zoom_history());
+                let range = chart.state.price_scale().range();
+                // 50 / (1 - 0.1 - 0.1) = 62.5; each margin adds 6.25.
+                assert!((range.min - 993.75).abs() < 1e-10, "{range:?}");
+                assert!((range.max - 1056.25).abs() < 1e-10, "{range:?}");
+            }
         }
     }
 
