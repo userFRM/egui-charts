@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `KineticScrollOptions::mouse` continues a released mouse drag with the same damping, speed limits, minimum movement and cancellation as touch inertia, which `enabled` keeps controlling on its own. Migration: `KineticScrollOptions` literals add `mouse: false` or use defaults. ([#1065](https://github.com/userFRM/egui-charts/issues/1065))
+
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 
 - The snapshot menu offers Download image, Copy image and Open in new tab. Hosts with publishing enable `TopToolbarState::can_publish_image` and handle Copy link, Post image and Publish through their service. The demo copies images or opens them in a browser tab or native viewer. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
