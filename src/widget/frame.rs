@@ -2173,6 +2173,11 @@ impl Chart {
                 price_formatter.as_deref(),
                 self.volume_formatter.as_deref(),
                 self.config.price_axis.allow_label_overlap,
+                if self.config.price_axis.show_symbol_name {
+                    &self.symbol
+                } else {
+                    ""
+                },
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -2215,7 +2220,7 @@ impl Chart {
             }
         }
         if show_price_axis {
-            for (value, colors, map, formatter) in
+            for (value, colors, map, label) in
                 self.secondary_axis_values(self.main_series_scale, price_rect)
             {
                 tags.push(rendering::axes::render_axis_value(
@@ -2223,8 +2228,7 @@ impl Chart {
                     price_rect,
                     axis_edge,
                     map.price_to_y(value),
-                    map.transform()
-                        .label(map.transform().to_scale(value), 2, formatter.as_deref()),
+                    label,
                     colors,
                     &tags,
                     self.config.price_axis.allow_label_overlap,

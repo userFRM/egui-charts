@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `PriceAxisOptions::show_symbol_name` and `show_study_names`, and the Scales and lines settings checkboxes of the same names, write the symbol or study name before its last value tag on the price scale, so equal values of different series stay apart. They are off by default, independent of the legend titles and the value visibility flags, and persist with the settings. Added series write their own name on their tags. Migration: `PriceAxisOptions` and `ScalesAndLinesSettings` literals add `show_symbol_name: false` and `show_study_names: false` or use defaults. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
+
 - Point and Figure builds from high/low input, as before, or from closes through `ChartTypeParams::pnf_source` and the series settings Symbol tab. The choice is part of the cached build, so a change rebuilds the columns, and it persists with the chart type parameters. Migration: `ChartTypeParams` literals add `pnf_source: PriceBasedSource::HighLow` or use `..Default::default()`. ([#1062](https://github.com/userFRM/egui-charts/issues/1062))
 
 - The HLC area chart's fill opacity and close line width are set through `ChartTypeStyles::hlc_area` and the series settings Symbol tab, and persist with the chart type parameters. Defaults keep the former look; opacities outside 0 to 1 are clamped and a non-positive width hides the line. Migration: `ChartTypeStyles` literals add `hlc_area: HlcAreaStyle::default()` or use `..Default::default()`. ([#1103](https://github.com/userFRM/egui-charts/issues/1103))
@@ -349,6 +351,8 @@ All notable changes to this project are documented in this file. The format is b
 - `ToolbarState::lock_all` and `ToolbarState::hide_drawings`, `hide_indicators`, `hide_positions` and `hide_orders` hold what the Lock button and the Hide menu show: the lock button is filled with a closed padlock while `lock_all` is set, and the Hide menu checks each hidden group. The bar sets them from the clicks it reports; a host that changes the chart's state elsewhere sets them too. Migration: struct literals of `ToolbarState` set the five fields or use `..ToolbarState::default()`.
 
 ### Fixed
+
+- Value tags and legend values of added series use their own price scale's decimals instead of a fixed two, while a host formatter set for the series still writes them. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
 
 - Volume candle bodies are as wide as the bar's volume over the largest visible volume, with no hidden minimum: a zero or missing volume draws a body as thin as the wick, and without any visible volume every body keeps the full width. ([#1104](https://github.com/userFRM/egui-charts/issues/1104))
 
