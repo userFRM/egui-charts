@@ -112,9 +112,6 @@ pub(super) fn restore(
     comparisons: &mut Vec<(String, SeriesId, Arc<LiveFeed>)>,
     saved: Vec<SavedComparison>,
 ) {
-    for (_, id, _) in comparisons.drain(..) {
-        chart.remove_series(id);
-    }
     let panes = chart.panes();
     for entry in saved {
         let feed = Arc::new(LiveFeed::new(&entry.symbol, chrono::Utc::now()));
