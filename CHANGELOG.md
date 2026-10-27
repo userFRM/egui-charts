@@ -339,6 +339,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing sync notifications coalesce repeated saves and updates per drawing, and automatic storage disables them, so the queue no longer grows with every edit. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`. ([#948](https://github.com/userFRM/egui-charts/issues/948))
 - Saving an alert with unchanged expiry fields preserves its exact saved instant, including seconds and the later occurrence of a repeated local time when clocks go back. Edited date/time fields still resolve in the explicit entry zone and validate before saving. ([#981](https://github.com/userFRM/egui-charts/issues/981))
 
 - Session volume profiles keep their histogram visible when the session opens before the viewport, retaining the whole session's executed volumes and their proportions. ([#967](https://github.com/userFRM/egui-charts/issues/967))
