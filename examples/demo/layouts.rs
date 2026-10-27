@@ -169,9 +169,6 @@ impl DemoApp {
             return;
         }
         self.stop_replay();
-        if self.footprint.take().is_some() {
-            self.restore_feed_after_footprint();
-        }
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
             slot
@@ -310,9 +307,6 @@ impl DemoApp {
             self.save_layout();
         }
         self.stop_replay();
-        if self.footprint.take().is_some() {
-            self.restore_feed_after_footprint();
-        }
         let Some(next) = self
             .layout_tabs
             .get_mut(index)

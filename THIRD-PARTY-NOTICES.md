@@ -18,6 +18,8 @@ The generated API reference retains rustdoc's scripts and styles under the MIT o
 
 `assets/icons/ui/columns.svg`, `maximize.svg`, `square-plus.svg`, `screener.svg`, `hotlists.svg` and `news.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
+`assets/icons/chart-types/chart-volume-footprint.svg` and `chart-session-volume-profile.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+
 ## Lucide icons
 
 Some interface icons under `assets/icons/` are taken from [Lucide](https://github.com/lucide-icons/lucide), restyled to a 1.5 px stroke and a white root colour. Lucide is licensed under the ISC License, and the subset of its icons derived from Feather under the MIT License; the full text is in [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt). All other icons in the set are original artwork of this project.
