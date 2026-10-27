@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The top toolbar's Chart layout button is a `ToolbarIconButton`: it has the dark toolbar tooltip with the other toolbar controls instead of egui's small neutral one, and the toolbar's 32 point square. Like them, it shows a shortcut chip only for a bound shortcut, and Chart layout has none. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
+
 - The legend's Sell and Buy buttons are outlined in the falling and accent colours on the chart background, with prices and labels in the same colours, and are at least 59 points wide instead of 66. Bid and ask axis tags from the quote source are off by default (`TradingSettings::bid_ask_labels`); saved settings keep their value. With study values on, overlay and pane volume put the last bar's compact volume on the axis in its up or down colour, as the moving average already did. ([#988](https://github.com/userFRM/egui-charts/issues/988))
 
 - The demo gives overlay volume 25% of the price pane instead of 12%, about 198 points at a 1440 by 900 point window, with the columns still standing on the plot bottom. `ChartConfig::volume_height_fraction` continues to set the band. ([#987](https://github.com/userFRM/egui-charts/issues/987))
