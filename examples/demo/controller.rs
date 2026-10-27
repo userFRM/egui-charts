@@ -1611,11 +1611,11 @@ impl DemoApp {
         } else {
             MagnetType::Strong
         };
-        self.drawing_toolbar.state.snap_to_indicators = dm.options.snap_to_indicators;
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool,
                 magnet_mode: dm.options.magnet_mode,
+                snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
                 current_cursor_type: match self.chart.chart_options().crosshair.style {
                     CrosshairStyle::Full => CursorType::Cross,
@@ -5295,13 +5295,15 @@ mod tests {
         assert!(!app.drawing_toolbar.state.lock_all);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
+            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            RegressionTrendConfig,
         };
         for tool in [
             DrawingToolType::FibonacciRetracement,
             DrawingToolType::Pitchfork,
             DrawingToolType::GannBox,
             DrawingToolType::LongPos,
+            DrawingToolType::ShortPos,
             DrawingToolType::FixedRangeVolumeProfile,
             DrawingToolType::RegressionTrend,
             DrawingToolType::ParallelChannel,
@@ -5335,6 +5337,13 @@ mod tests {
                 account_size: 10_000.0,
                 percent: 1.0,
             });
+            settings.position_sizing = PositionSizing {
+                point_value: 50.0,
+                lot_size: 10.0,
+                quantity_step: 0.01,
+                leverage: 5.0,
+            };
+            let sizing = settings.position_sizing;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -5349,6 +5358,7 @@ mod tests {
                 Some(50.0)
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
+            assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());

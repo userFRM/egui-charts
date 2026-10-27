@@ -55,6 +55,8 @@ pub struct DrawingToolbarDomainState {
     pub magnet_mode: bool,
     /// The snapping strength, retained while snapping is off.
     pub magnet_type: MagnetType,
+    /// Whether magnet targets include visible study plots.
+    pub snap_to_indicators: bool,
     /// The chart cursor used while the eraser is off.
     pub current_cursor_type: CursorType,
     /// Whether the chart is erasing drawings.
@@ -129,6 +131,7 @@ impl DrawingToolbar {
         self.state.sel_tool = domain.sel_tool;
         self.state.magnet_mode = domain.magnet_mode;
         self.state.magnet_type = domain.magnet_type;
+        self.state.snap_to_indicators = domain.snap_to_indicators;
         self.state.current_cursor_type = domain.current_cursor_type;
         self.state.eraser_mode_enabled = domain.eraser_mode_enabled;
         self.state.stay_in_drawing_mode = domain.stay_in_drawing_mode;
@@ -141,6 +144,7 @@ impl DrawingToolbar {
             sel_tool: self.state.sel_tool,
             magnet_mode: self.state.magnet_mode,
             magnet_type: self.state.magnet_type,
+            snap_to_indicators: self.state.snap_to_indicators,
             current_cursor_type: self.state.current_cursor_type,
             eraser_mode_enabled: self.state.eraser_mode_enabled,
             stay_in_drawing_mode: self.state.stay_in_drawing_mode,
@@ -1275,6 +1279,7 @@ mod tests {
             let mut source = DrawingToolbar::new();
             source.state.magnet_mode = true;
             source.state.magnet_type = magnet;
+            source.state.snap_to_indicators = magnet != MagnetType::Weak;
             source.state.current_cursor_type = cursor;
             source.state.eraser_mode_enabled = eraser;
             source.state.sel_tool = tool;
@@ -1282,9 +1287,14 @@ mod tests {
             target.select_tool(DrawingToolType::TrendLine);
             target.clear_selection();
             target.state.zoom_mode_active = true;
+            target.state.snap_to_indicators = !source.state.snap_to_indicators;
             target.state.expanded_category = Some("Magnet".into());
             target.sync_from_domain_state(&source.get_domain_state());
             assert_eq!(target.state.magnet_type, magnet);
+            assert_eq!(
+                target.state.snap_to_indicators,
+                source.state.snap_to_indicators
+            );
             assert_eq!(target.state.current_cursor_type, cursor);
             assert_eq!(target.state.eraser_mode_enabled, eraser);
             assert!(target.state.magnet_mode);

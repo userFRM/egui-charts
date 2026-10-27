@@ -61,7 +61,11 @@ impl Drawing {
                     let decimals = step
                         .split_once('.')
                         .map_or(0, |(_, fraction)| fraction.len());
-                    return format!("{qty:.decimals$}");
+                    return if decimals <= 19 && qty < 1e15 {
+                        format!("{qty:.decimals$}")
+                    } else {
+                        format!("{qty:e}")
+                    };
                 }
                 // Four decimals, or four significant digits below 0.1, where that
                 // rounding is exact; an exponent beyond it.
@@ -277,16 +281,25 @@ impl Drawing {
         let sizing = &DESIGN_TOKENS.sizing.position_tool;
         let width = sizing.label_info_width.min(painter.clip_rect().width());
         let galley = painter.layout(summary, font_large, summary_color, (width - 10.0).max(1.0));
-        let height = galley.size().y + 10.0;
-        let left = (entry.x + sizing.label_offset_x).clamp(
-            painter.clip_rect().left(),
-            painter.clip_rect().right() - width,
-        );
+        let height = (galley.size().y + 10.0).max(sizing.label_info_height);
         let info_rect = Rect::from_min_size(
-            Pos2::new(left, target_y - sizing.label_offset_y - height),
+            Pos2::new(
+                entry.x + sizing.label_offset_x,
+                target_y - sizing.label_offset_y - height,
+            ),
             egui::vec2(width, height),
         );
         if painter.clip_rect().intersects(info_rect) {
+            let clip = painter.clip_rect();
+            let info_rect = Rect::from_min_size(
+                Pos2::new(
+                    info_rect.left().clamp(clip.left(), clip.right() - width),
+                    info_rect
+                        .top()
+                        .clamp(clip.top(), (clip.bottom() - height).max(clip.top())),
+                ),
+                info_rect.size(),
+            );
             painter.rect_filled(
                 info_rect,
                 DESIGN_TOKENS.rounding.md,
@@ -426,48 +439,113 @@ mod tests {
     #[test]
     fn position_labels_use_lot_economics_and_leveraged_capital() {
         use crate::drawings::{ChartPoint, DrawingToolType, PositionSize};
-        use crate::widget::test_frames::{chart, shapes};
+        use crate::widget::test_frames::chart;
         for (tool, target, stop, low, high) in [
             (DrawingToolType::LongPos, 105.0, 97.5, 99.0, 106.0),
             (DrawingToolType::ShortPos, 95.0, 102.5, 94.0, 101.0),
         ] {
-            for (risk, step, labels) in [
+            for (size, step, labels) in [
                 (
-                    230.0,
+                    PositionSize::RiskAmount(230.0),
                     0.01,
                     ["Qty: 0.18", "Closed P&L: 450.00", "Capital: 1800.00"],
                 ),
                 (
-                    230.40125,
+                    PositionSize::RiskAmount(230.40125),
                     0.000001,
                     ["Qty: 0.184321", "Closed P&L: 460.80", "Capital: 1843.21"],
                 ),
+                (
+                    PositionSize::Quantity(1e20),
+                    0.01,
+                    ["Qty: 1e20", "Closed P&L:", "Capital:"],
+                ),
+                (
+                    PositionSize::Quantity(1e-25),
+                    1e-27,
+                    ["Qty: 1e-25", "Closed P&L:", "Capital:"],
+                ),
             ] {
-                let mut saved = serde_json::to_value(Drawing::new(1, tool)).unwrap();
-                saved["position_sizing"] = serde_json::json!({
-                    "point_value": 50.0, "lot_size": 10.0, "quantity_step": step, "leverage": 5.0,
-                });
-                let mut drawing: Drawing = serde_json::from_value(saved).unwrap();
-                drawing.position_size = Some(PositionSize::RiskAmount(risk));
+                let mut drawing = Drawing::new(1, tool);
+                drawing.position_sizing = crate::drawings::PositionSizing {
+                    point_value: 50.0,
+                    lot_size: 10.0,
+                    quantity_step: step,
+                    leverage: 5.0,
+                };
+                drawing.position_size = Some(size);
                 drawing.chart_points = vec![
                     ChartPoint::new(30.0, 100.0),
                     ChartPoint::new(50.0, target),
                     ChartPoint::new(50.0, stop),
                 ];
                 drawing.completed = true;
-                let mut chart = chart(&[low], &[high]);
-                chart.drawings_mut().drawings.push(drawing);
-                let output = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
-                let text = output
-                    .iter()
-                    .filter_map(|s| match s {
-                        egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                for label in labels {
-                    assert!(text.contains(label), "{tool:?}: missing {label}: {text}");
+                for (dark, width) in [(false, 800.0), (true, 800.0), (false, 320.0), (true, 320.0)]
+                {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[low], &[high]);
+                    chart.set_theme(
+                        &ctx,
+                        &if dark {
+                            crate::theme::Theme::dark()
+                        } else {
+                            crate::theme::Theme::light()
+                        },
+                    );
+                    let render = |chart: &mut crate::Chart| {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    egui::vec2(width, 600.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                            },
+                        )
+                    };
+                    render(&mut chart).drop_without_applying_deltas();
+                    chart.set_visible_logical_range(crate::model::LogicalRange {
+                        left: 10.0,
+                        right: 70.0,
+                    });
+                    chart.drawings_mut().drawings.push(drawing.clone());
+                    let output = render(&mut chart);
+                    let summary = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) if t.galley.job.text.contains("Qty:") => Some(t),
+                            _ => None,
+                        })
+                        .expect("position summary");
+                    for label in labels {
+                        assert!(
+                            summary.galley.job.text.contains(label),
+                            "{tool:?}: missing {label}: {}",
+                            summary.galley.job.text
+                        );
+                    }
+                    assert!(
+                        chart
+                            .get_rendered_price_rect()
+                            .contains_rect(summary.visual_bounding_rect()),
+                        "{tool:?}, width {width}: {:?}",
+                        summary.visual_bounding_rect()
+                    );
+                    output.drop_without_applying_deltas();
+                    chart.set_visible_logical_range(crate::model::LogicalRange {
+                        left: 90.0,
+                        right: 130.0,
+                    });
+                    let output = render(&mut chart);
+                    assert!(
+                        !output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains("Qty:"))),
+                        "{tool:?}, width {width}: offscreen summary"
+                    );
+                    output.drop_without_applying_deltas();
                 }
             }
         }

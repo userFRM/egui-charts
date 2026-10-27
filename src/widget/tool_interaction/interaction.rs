@@ -140,7 +140,7 @@ pub fn handle_active_tool<F1, F2>(
                     && !ui
                         .ctx()
                         .data(|d| d.get_temp::<bool>(first_press).unwrap_or(false));
-                if response.drag_stopped() || second_click {
+                if response.drag_stopped_by(egui::PointerButton::Primary) || second_click {
                     // The preview is already snapped and constrained; keep it as the endpoint.
                     drawing_manager.complete_drag_drawing();
                 }

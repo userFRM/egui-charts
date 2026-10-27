@@ -326,7 +326,7 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
 
-    /// Two-point tools preview and commit the chosen anchors; Escape leaves no drawing.
+    /// Primary clicks place two anchors; secondary drags leave the preview and Escape cancels it.
     #[test]
     fn two_point_tools_accept_clicks_and_cancel_unfinished_previews() {
         use crate::drawings::DrawingToolType::*;
@@ -359,7 +359,12 @@ mod tests {
             Arrow,
             TrendLine,
         ] {
-            for (cancel, batched) in [(false, false), (true, false), (false, true)] {
+            for (cancel, batched, secondary_drag) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+            ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0], &[20.0]);
                 frame(&ctx, &mut chart, 0.0, vec![]);
@@ -398,6 +403,33 @@ mod tests {
                 assert_eq!(preview.chart_points[0].bar_idx, 30.0, "{tool:?}");
                 assert_eq!(preview.chart_points[1].bar_idx, 50.0, "{tool:?}");
                 assert!(chart.drawings().drawings.is_empty());
+                if secondary_drag {
+                    for (i, events) in [
+                        vec![Event::PointerButton {
+                            pos: b,
+                            button: PointerButton::Secondary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        vec![Event::PointerMoved(b + egui::vec2(20.0, 0.0))],
+                        vec![Event::PointerButton {
+                            pos: b,
+                            button: PointerButton::Secondary,
+                            pressed: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        frame(&ctx, &mut chart, 0.41 + i as f64 * 0.01, events);
+                    }
+                    assert!(
+                        chart.drawings().drawings.is_empty(),
+                        "{tool:?}: secondary drag"
+                    );
+                    assert!(chart.drawings().curr_drawing.is_some());
+                }
                 if cancel {
                     frame(
                         &ctx,
