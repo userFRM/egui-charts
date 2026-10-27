@@ -10,9 +10,12 @@ use crate::styles::icons as icon_sizes;
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
-use crate::ui::top_toolbar::components::timeframe_selector::{menu_list_height, menu_row_focus};
+use crate::ui::top_toolbar::components::timeframe_selector::{
+    favorite_star, favorite_strip, menu_list_height, menu_row_focus, retain_non_favorite,
+};
 use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
 use egui::{Color32, Rect, Role, Ui, WidgetInfo, pos2, vec2};
+use std::collections::HashSet;
 
 /// Height of a chart type row.
 const ROW_H: f32 = 40.0;
@@ -56,7 +59,7 @@ impl ChartTypeUiExt for ChartType {
 /// Configuration for chart type selector
 #[derive(Debug, Clone)]
 pub struct ChartTypeSelectorConfig {
-    /// Minimum width of the button; it is otherwise sized to its label.
+    /// Minimum width of each chart type button; it is otherwise sized to its icon.
     pub btn_width: f32,
     /// Minimum width of the menu.
     pub dropdown_width: f32,
@@ -100,6 +103,17 @@ pub enum ChartTypeAction {
     None,
     /// Select the supplied value.
     Select(ChartType),
+    /// Toggle the supplied chart type's favorite state.
+    ToggleFavorite(ChartType),
+}
+
+/// Host-owned chart type settings. Save with the user's settings and restore with
+/// [`ChartTypeSelector::set_preferences`]. The selector owns no storage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChartTypePreferences {
+    /// Pinned chart types in menu order.
+    #[serde(default)]
+    pub favorites: Vec<ChartType>,
 }
 
 /// Chart type selector widget
@@ -108,6 +122,9 @@ pub struct ChartTypeSelector {
     pub current: ChartType,
     /// Is dropdown open
     is_open: bool,
+    /// Favorite chart types
+    pub favorites: HashSet<ChartType>,
+    last_non_favorite: Option<ChartType>,
     /// Configuration
     pub config: ChartTypeSelectorConfig,
 }
@@ -119,11 +136,13 @@ impl Default for ChartTypeSelector {
 }
 
 impl ChartTypeSelector {
-    /// Create a selector with `initial` as its selected chart type.
+    /// Create a selector with `initial` selected and no favorites.
     pub fn new(initial: ChartType) -> Self {
         Self {
             current: initial,
             is_open: false,
+            favorites: HashSet::new(),
+            last_non_favorite: None,
             config: ChartTypeSelectorConfig::default(),
         }
     }
@@ -134,10 +153,43 @@ impl ChartTypeSelector {
         self
     }
 
-    /// Show the chart type selector
+    /// Export the favorites for the host's persisted user settings.
+    pub fn preferences(&self) -> ChartTypePreferences {
+        ChartTypePreferences {
+            favorites: self.favorites_in_menu_order(),
+        }
+    }
+
+    /// Restore saved favorites.
+    pub fn set_preferences(&mut self, preferences: ChartTypePreferences) {
+        self.favorites = preferences.favorites.into_iter().collect();
+    }
+
+    fn favorites_in_menu_order(&self) -> Vec<ChartType> {
+        ChartType::all()
+            .iter()
+            .copied()
+            .filter(|chart_type| self.favorites.contains(chart_type))
+            .collect()
+    }
+
+    /// Show favorite chart type buttons and the chart type menu trigger.
     pub fn show(&mut self, ui: &mut Ui) -> ChartTypeAction {
-        // Main button
-        let btn_res = self.trigger().show(ui, self.is_open);
+        let extra = retain_non_favorite(&mut self.last_non_favorite, self.current, &self.favorites);
+        let (btn_res, clicked) = favorite_strip(
+            ui,
+            self.current,
+            self.favorites_in_menu_order(),
+            extra,
+            self.is_open,
+            "Chart type",
+            |_, chart_type| Self::button(chart_type, self.config.btn_width),
+        );
+        let mut selected = ChartTypeAction::None;
+        if let Some(chart_type) = clicked {
+            self.current = chart_type;
+            selected = ChartTypeAction::Select(chart_type);
+        }
 
         let theme = ui.active_theme();
         let id = ui.make_persistent_id("chart_type_menu");
@@ -151,17 +203,20 @@ impl ChartTypeSelector {
             .show(|ui| self.menu_ui(ui, &theme, max_height))
             .map_or(ChartTypeAction::None, |menu| menu.inner);
         self.is_open = egui::Popup::is_id_open(ui.ctx(), id);
-        action
+        if action == ChartTypeAction::None {
+            selected
+        } else {
+            action
+        }
     }
 
-    /// The button that opens the dropdown, showing the current chart type.
-    pub(crate) fn trigger(&self) -> Trigger<'static> {
-        let label = self.current.name();
+    /// An icon-only toolbar button for `chart_type`, named by the type's name.
+    fn button(chart_type: ChartType, min_width: f32) -> Trigger<'static> {
         Trigger {
-            icon: Some(self.current.icon()),
+            icon: Some(chart_type.icon()),
             label: String::new(),
-            name: label.to_owned(),
-            min_width: self.config.btn_width.max(40.0),
+            name: chart_type.name().to_owned(),
+            min_width: min_width.max(40.0),
             filled: false,
         }
     }
@@ -197,20 +252,30 @@ impl ChartTypeSelector {
                     ) {
                         ui.add(egui::Separator::default().spacing(GROUP_GAP));
                     }
+                    let mut toggle_favorite = false;
                     let content = ChartTypeRow {
                         chart_type: *chart_type,
+                        favorite: self.favorites.contains(chart_type),
                         theme,
+                        toggle_favorite: &mut toggle_favorite,
                     };
                     let row = ListItem::new()
                         .selected(current == *chart_type)
                         .height(ROW_H)
                         .show(ui, content);
-                    if row.clicked() {
+                    if toggle_favorite {
+                        action = ChartTypeAction::ToggleFavorite(*chart_type);
+                    } else if row.clicked() {
                         action = ChartTypeAction::Select(*chart_type);
                     }
                 }
             });
 
+        if let ChartTypeAction::ToggleFavorite(chart_type) = action
+            && !self.favorites.remove(&chart_type)
+        {
+            self.favorites.insert(chart_type);
+        }
         if let ChartTypeAction::Select(chart_type) = action {
             self.current = chart_type;
             ui.close();
@@ -219,10 +284,12 @@ impl ChartTypeSelector {
     }
 }
 
-/// One chart type row: icon, name, and a check on the current type.
+/// One chart type row: icon, name, a check on the current type, and a favourite star.
 struct ChartTypeRow<'a> {
     chart_type: ChartType,
+    favorite: bool,
     theme: &'a Theme,
+    toggle_favorite: &'a mut bool,
 }
 
 impl ListItemContent for ChartTypeRow<'_> {
@@ -261,10 +328,13 @@ impl ListItemContent for ChartTypeRow<'_> {
             color,
         );
 
+        *self.toggle_favorite = favorite_star(ui, context, self.favorite, true, color);
+
         if context.selected {
+            // Left of the star's slot.
             let check = Rect::from_min_size(
                 pos2(
-                    rect.max.x - icon_sizes::SM,
+                    rect.max.x - 28.0 - icon_sizes::SM,
                     rect.center().y - icon_sizes::SM / 2.0,
                 ),
                 vec2(icon_sizes::SM, icon_sizes::SM),
@@ -275,5 +345,106 @@ impl ListItemContent for ChartTypeRow<'_> {
         }
         menu_row_focus(ui, context.response);
         context.response.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Starred chart types become toolbar buttons in menu order, followed by the latest chosen
+    /// type that is not starred and a menu chevron, and unstarring them restores one button.
+    #[test]
+    fn favorites_show_as_buttons_with_the_latest_other_type() {
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(vec2(800.0, 1400.0))
+            .build_ui_state(
+                |ui, selector: &mut ChartTypeSelector| {
+                    ui.horizontal(|ui| selector.show(ui));
+                },
+                ChartTypeSelector::new(ChartType::Candles),
+            );
+        harness.run();
+        // Buttons left to right, by name.
+        let strip = |harness: &Harness<'_, ChartTypeSelector>| {
+            let mut buttons: Vec<_> = [
+                "Chart type",
+                "Bars",
+                "Line",
+                "Area",
+                "Candles",
+                "Heikin Ashi",
+            ]
+            .into_iter()
+            .filter_map(|name| Some((harness.query_by_label(name)?.rect().min.x, name)))
+            .collect();
+            buttons.sort_by(|a, b| a.0.total_cmp(&b.0));
+            buttons
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(&harness), ["Candles"]);
+
+        harness.get_by_label("Candles").click();
+        harness.run();
+        // Stars sit on every row in menu order; starring turns one into "Remove from favorites".
+        for index in [7, 4, 0] {
+            harness
+                .query_all_by_label("Add to favorites")
+                .nth(index)
+                .unwrap()
+                .click();
+            harness.run();
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert_eq!(
+            strip(&harness),
+            ["Bars", "Line", "Area", "Candles", "Chart type"]
+        );
+
+        harness.get_by_label("Line").click();
+        harness.run();
+        assert_eq!(harness.state().current, ChartType::Line);
+        assert_eq!(
+            strip(&harness),
+            ["Bars", "Line", "Area", "Candles", "Chart type"]
+        );
+
+        harness.get_by_label("Chart type").click();
+        harness.run();
+        harness.get_by_label("Heikin Ashi").click();
+        harness.run();
+        assert_eq!(harness.state().current, ChartType::Heikin);
+        assert_eq!(
+            strip(&harness),
+            ["Bars", "Line", "Area", "Heikin Ashi", "Chart type"]
+        );
+
+        let saved = harness.state().preferences();
+        assert_eq!(
+            saved.favorites,
+            [ChartType::Bars, ChartType::Line, ChartType::Area]
+        );
+        let mut restored = ChartTypeSelector::new(ChartType::Candles);
+        restored.set_preferences(saved);
+        assert_eq!(restored.favorites, harness.state().favorites);
+
+        harness.get_by_label("Chart type").click();
+        harness.run();
+        for _ in 0..3 {
+            harness
+                .query_all_by_label("Remove from favorites")
+                .next()
+                .unwrap()
+                .click();
+            harness.run();
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert_eq!(strip(&harness), ["Heikin Ashi"]);
     }
 }

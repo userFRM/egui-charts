@@ -536,6 +536,12 @@ impl DemoApp {
         {
             top_toolbar.timeframe_selector.set_preferences(preferences);
         }
+        if let Some(preferences) = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "chart_type_preferences"))
+        {
+            top_toolbar.chart_type_selector.set_preferences(preferences);
+        }
         let mut timeframe_toolbar = TimeframeToolbar::default();
         timeframe_toolbar.config.active_bg = egui::Color32::TRANSPARENT;
         timeframe_toolbar.state.timeframe = timeframe;
@@ -1236,6 +1242,11 @@ impl eframe::App for DemoApp {
             storage,
             "interval_preferences",
             &self.top_toolbar.timeframe_selector.preferences(),
+        );
+        eframe::set_value(
+            storage,
+            "chart_type_preferences",
+            &self.top_toolbar.chart_type_selector.preferences(),
         );
     }
 
