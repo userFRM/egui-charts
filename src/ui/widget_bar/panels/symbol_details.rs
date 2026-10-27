@@ -10,7 +10,7 @@ use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use super::object_tree::{format_price, price_decimals};
+use super::object_tree::price_decimals;
 use super::watchlist::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
@@ -507,7 +507,7 @@ impl SymbolDetailsPanel {
                         }
                         ui.add_space(theme.spacing.md);
                         let facts = |ui: &mut Ui| {
-                            ui.label(RichText::new(title).strong());
+                            ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
                             for (label, value) in rows {
                                 ui.horizontal(|ui| {
                                     ui.label(
@@ -582,7 +582,7 @@ fn price_line(
     };
     // One text, so the figures of different sizes share a baseline.
     let mut job = LayoutJob::single_section(
-        l10n::text(ui.ctx(), grouped(format_price(price, Some(decimals)))),
+        l10n::text(ui.ctx(), grouped(price, usize::from(decimals))),
         weighted(size, 700.0, theme.ui.text),
     );
     if let Some(currency) = currency {
@@ -594,8 +594,8 @@ fn price_line(
     }
     let change_size = (size * 2.0 / 3.0).max(theme.text.body);
     for text in [
-        grouped(signed(change, usize::from(decimals))),
-        format!("{}%", grouped(signed(percent, 2))),
+        signed(change, usize::from(decimals)),
+        format!("{}%", signed(percent, 2)),
     ] {
         job.append(&text, theme.spacing.sm, weighted(change_size, 600.0, color));
     }
@@ -774,6 +774,9 @@ mod tests {
     #[test]
     fn details_follow_the_symbol_and_notes_are_written_one_at_a_time() {
         let ctx = egui::Context::default();
+        l10n::set_translator(&ctx, |text| {
+            (text == "Key statistics").then(|| "Facts".to_owned())
+        });
         let feed = Arc::new(Feed::default());
         let store = Arc::new(Store::default());
         let mut panel = SymbolDetailsPanel::new();
@@ -785,12 +788,17 @@ mod tests {
         let requests = std::mem::take(&mut *feed.0.lock().unwrap());
         for (symbol, reply) in requests.into_iter().rev() {
             let statistics = vec![("Market cap".into(), format!("{symbol} cap"))];
-            reply.send(Ok(SymbolDetails::new(statistics, Vec::new())));
+            reply.send(Ok(SymbolDetails::new(statistics, Vec::new())
+                .with_category(format!("{symbol} category"))));
         }
         panel.poll(&ctx);
         let shown = texts(&ctx, &mut panel);
         assert!(shown.contains(&"MSFT cap".into()), "{shown:?}");
         assert!(!shown.contains(&"AAPL cap".into()), "{shown:?}");
+        assert!(shown.contains(&"MSFT category".into()), "{shown:?}");
+        assert!(!shown.contains(&"AAPL category".into()), "{shown:?}");
+        assert!(shown.contains(&"Facts".into()), "{shown:?}");
+        assert!(!shown.contains(&"Key statistics".into()), "{shown:?}");
         assert!(!shown.contains(&"Profile".into()), "{shown:?}");
 
         // A second edit waits for the first write of the same document, then writes the latest text.

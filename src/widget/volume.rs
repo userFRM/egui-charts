@@ -154,8 +154,7 @@ pub(super) fn tags(
     if !study.is_visible() || study.scale() == crate::studies::StudyScale::None {
         return;
     }
-    // The last bar's column, in its up or down colour without the columns' opacity, then the
-    // moving average.
+    // Keep tags opaque even when volume columns use transparency.
     for line in 0..study.line_count() {
         let plot = study.plot_style(line);
         if let Some(value) = study.values().value(line, bar)

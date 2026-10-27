@@ -868,17 +868,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- The symbol details panel sits 10 points inside its host panel, in line with the watchlist's symbol column, and sets the last price at 26 points instead of 24, about 19 points of digit height. `SymbolDetails::category`, set with `with_category`, is shown under the instrument's name, key statistics are grouped on an accent-tinted card above the profile, and prices and changes group their whole digits in thousands as the watchlist does. The demo supplies each symbol's kind as its category instead of a Type row. ([#990](https://github.com/userFRM/egui-charts/issues/990))
+- Symbol details inset the title and price by 10 points inside the host panel and enlarge the main price to 26 points. The supplied `SymbolDetails::category` appears below the name, key statistics sit on a tinted card, and prices use the watchlist's thousands grouping. ([#990](https://github.com/userFRM/egui-charts/issues/990))
 
-- Watchlist rows are 30 points high instead of 26 and start with an 18 point symbol mark, so symbol names line up whatever mark a row has. `WatchlistPanel::set_mark` supplies a symbol's mark, such as its issuer's logo; without one the row shows the symbol's first letter on a neutral disc. Last prices, changes and change percentages group their whole digits in thousands, so 43237.45 reads 43,237.45. ([#989](https://github.com/userFRM/egui-charts/issues/989))
+- Watchlist rows are 30 points high with an 18 point symbol mark and aligned names. `WatchlistPanel::set_mark` supplies a mark; rows without one show an initial on a neutral disc. Prices and changes use thousands grouping, so 43237.45 reads 43,237.45, and changes omit the sign when they round to zero. ([#989](https://github.com/userFRM/egui-charts/issues/989))
 
-- The top toolbar's Chart layout button is a `ToolbarIconButton`: it has the dark toolbar tooltip with the other toolbar controls instead of egui's small neutral one, and the toolbar's 32 point square. Like them, it shows a shortcut chip only for a bound shortcut, and Chart layout has none. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
+- Chart layout uses the shared dark toolbar tooltip with consistent padding and no shortcut chip when no shortcut is bound. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
 
-- The legend's Sell and Buy buttons are outlined in the falling and accent colours on the chart background, with prices and labels in the same colours, and are at least 59 points wide instead of 66. Bid and ask axis tags from the quote source are off by default (`TradingSettings::bid_ask_labels`); saved settings keep their value. With study values on, overlay and pane volume put the last bar's compact volume on the axis in its up or down colour, as the moving average already did. ([#988](https://github.com/userFRM/egui-charts/issues/988))
+- Sell and Buy quote buttons use outlines and matching text on the chart background, with a minimum width of 59 points. Bid and Ask axis tags default to hidden while saved choices remain intact; volume shows a compact last-value tag when study values are enabled. ([#988](https://github.com/userFRM/egui-charts/issues/988))
 
-- The demo gives overlay volume 25% of the price pane instead of 12%, about 198 points at a 1440 by 900 point window, with the columns still standing on the plot bottom. `ChartConfig::volume_height_fraction` continues to set the band. ([#987](https://github.com/userFRM/egui-charts/issues/987))
+- The demo allocates 25% of the price pane to overlay volume, keeping the columns on the plot bottom and the height configurable through `ChartConfig::volume_height_fraction`. ([#987](https://github.com/userFRM/egui-charts/issues/987))
 
-- The light preset's crosshair tags are black with white text instead of #EBEBEB with #1A1A1A text, and its dashed crosshair lines read #9C9C9C on the white plot instead of #909090, so the hovered price and time stand out from the axis labels at every display density. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
+- Light crosshair tags use black fills and white text, with dashed crosshair ink at approximately #9C9C9C on the white plot. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
 
 - The light preset draws grid lines in #D1D1D1 instead of #DCDCDC, so the dotted grid stays visible on the white plot. Horizontal and vertical grid lines keep their separate visibility settings. ([#1010](https://github.com/userFRM/egui-charts/issues/1010))
 

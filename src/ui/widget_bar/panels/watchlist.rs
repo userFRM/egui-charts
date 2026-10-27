@@ -14,10 +14,11 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::object_tree::{format_price, price_decimals};
+use super::object_tree::price_decimals;
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
 use crate::model::Quote;
+use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::services::{Listener, Quotes};
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton};
@@ -788,7 +789,6 @@ impl WatchlistPanel {
                                     .corner_radius(MARK_SIZE / 2.0)
                                     .paint_at(ui, mark),
                                 None => {
-                                    // Grey under white, apart from the hover and selection fills.
                                     painter.circle_filled(
                                         mark.center(),
                                         MARK_SIZE / 2.0,
@@ -829,17 +829,9 @@ impl WatchlistPanel {
                                     theme.ui.text
                                 };
                                 for (column, text, color) in [
-                                    (
-                                        1,
-                                        grouped(format_price(quote.last, Some(decimals))),
-                                        theme.ui.text,
-                                    ),
-                                    (2, grouped(signed(change, usize::from(decimals))), color),
-                                    (
-                                        3,
-                                        format!("{}%", grouped(signed(quote.change_percent(), 2))),
-                                        color,
-                                    ),
+                                    (1, grouped(quote.last, usize::from(decimals)), theme.ui.text),
+                                    (2, signed(change, usize::from(decimals)), color),
+                                    (3, format!("{}%", signed(quote.change_percent(), 2)), color),
                                 ] {
                                     ui.new_child(
                                         egui::UiBuilder::new()
@@ -931,34 +923,22 @@ pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
     format
 }
 
-/// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
+/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
 pub(super) fn signed(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        "-".to_owned()
-    } else if value == 0.0 {
-        format!("{:.*}", decimals, 0.0)
+    let text = grouped(value, decimals);
+    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+        format!("+{text}")
     } else {
-        format!("{value:+.decimals$}")
+        text
     }
 }
 
-/// `number`, a formatted decimal such as `-43237.45`, with its whole digits grouped in
-/// thousands: `-43,237.45`. Text without digits is unchanged.
-pub(super) fn grouped(number: String) -> String {
-    let start = number
-        .find(|c: char| c.is_ascii_digit())
-        .unwrap_or(number.len());
-    let end = number[start..]
-        .find(|c: char| !c.is_ascii_digit())
-        .map_or(number.len(), |len| start + len);
-    let mut text = number[..start].to_owned();
-    for (index, digit) in number[start..end].chars().enumerate() {
-        if index > 0 && (end - start - index) % 3 == 0 {
-            text.push(',');
-        }
-        text.push(digit);
+/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
+pub(super) fn grouped(value: f64, decimals: usize) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
     }
-    text + &number[end..]
+    CurrencyFormatter::new("", decimals).format(value)
 }
 
 /// Item indices in display order: list order, or with `sort`, each run of symbols between
@@ -1030,16 +1010,21 @@ mod tests {
     }
 
     #[test]
-    fn prices_group_whole_digits_in_thousands() {
-        for (number, expected) in [
-            ("43237.45", "43,237.45"),
-            ("-1234567", "-1,234,567"),
-            ("+863.83", "+863.83"),
-            ("100000.5", "100,000.5"),
-            ("0.000123", "0.000123"),
-            ("\u{2014}", "\u{2014}"),
+    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
+        for (value, decimals, price, change) in [
+            (43237.45, 2, "43,237.45", "+43,237.45"),
+            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
+            (863.83, 2, "863.83", "+863.83"),
+            (100000.5, 1, "100,000.5", "+100,000.5"),
+            (0.000123, 6, "0.000123", "+0.000123"),
+            (-0.0, 2, "0.00", "0.00"),
+            (-0.001, 2, "0.00", "0.00"),
+            (0.001, 2, "0.00", "0.00"),
+            (f64::INFINITY, 2, "-", "-"),
+            (f64::NAN, 2, "-", "-"),
         ] {
-            assert_eq!(grouped(number.to_owned()), expected);
+            assert_eq!(grouped(value, decimals), price);
+            assert_eq!(signed(value, decimals), change);
         }
     }
 

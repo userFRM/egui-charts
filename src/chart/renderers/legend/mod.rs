@@ -1018,7 +1018,6 @@ fn quote_box(
 ) -> Response {
     let response = ui.interact(rect.intersect(painter.clip_rect()), id, Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
-    // The chart background inside an outline in the side's colour, which also colours the text.
     painter.rect(
         rect,
         5.0,
