@@ -151,23 +151,28 @@ pub(super) fn tags(
     let Some(bar) = study.values().len().checked_sub(1) else {
         return;
     };
-    let plot = study.plot_style(2);
-    if !study.is_visible() || !plot.visible || study.scale() == crate::studies::StudyScale::None {
+    if !study.is_visible() || study.scale() == crate::studies::StudyScale::None {
         return;
     }
-    if let Some(value) = study.values().value(2, bar)
-        && map.range().contains(value)
-    {
-        let label = study.format_value(value);
-        occupied.push(crate::chart::rendering::axes::render_axis_value(
-            painter,
-            rect,
-            edge,
-            map.price_to_y(value),
-            label,
-            (egui::Color32::WHITE, plot.color),
-            occupied,
-        ));
+    // The last bar's column, in its up or down colour without the columns' opacity, then the
+    // moving average.
+    for line in 0..study.line_count() {
+        let plot = study.plot_style(line);
+        if let Some(value) = study.values().value(line, bar)
+            && plot.visible
+            && map.range().contains(value)
+        {
+            let label = study.format_value(value);
+            occupied.push(crate::chart::rendering::axes::render_axis_value(
+                painter,
+                rect,
+                edge,
+                map.price_to_y(value),
+                label,
+                (egui::Color32::WHITE, plot.color.to_opaque()),
+                occupied,
+            ));
+        }
     }
 }
 
@@ -248,6 +253,14 @@ mod tests {
                 InputValue::Length(period)
             );
         }
+        let painted = shapes(&ctx, &mut chart, 1.04, vec![]);
+        assert!(
+            painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == "1.00M"
+                    && text.pos.x >= chart.last_rendered_price_rect.right()
+            )),
+            "the last column's volume is tagged on the price axis"
+        );
         assert_eq!(chart.get_chart_mapping().price.range().min, price_range.min);
         assert_eq!(chart.get_chart_mapping().price.range().max, price_range.max);
         let volume = chart.last_rendered_volume_rect;

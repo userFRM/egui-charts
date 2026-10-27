@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The legend's Sell and Buy buttons are outlined in the falling and accent colours on the chart background, with prices and labels in the same colours, and are at least 59 points wide instead of 66. Bid and ask axis tags from the quote source are off by default (`TradingSettings::bid_ask_labels`); saved settings keep their value. With study values on, overlay and pane volume put the last bar's compact volume on the axis in its up or down colour, as the moving average already did. ([#988](https://github.com/userFRM/egui-charts/issues/988))
+
 - The demo gives overlay volume 25% of the price pane instead of 12%, about 198 points at a 1440 by 900 point window, with the columns still standing on the plot bottom. `ChartConfig::volume_height_fraction` continues to set the band. ([#987](https://github.com/userFRM/egui-charts/issues/987))
 
 - The light preset's crosshair tags are black with white text instead of #EBEBEB with #1A1A1A text, and its dashed crosshair lines read #9C9C9C on the white plot instead of #909090, so the hovered price and time stand out from the axis labels at every display density. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
