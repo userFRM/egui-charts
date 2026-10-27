@@ -132,18 +132,22 @@ impl FinancialsPanel {
                         .size(theme.text.title + 2.0)
                         .color(theme.ui.text_secondary),
                 );
-                ui.add_sized(
+                ui.allocate_ui_with_layout(
                     vec2(ui.available_width(), ui.spacing().interact_size.y),
-                    egui::Label::new(
-                        RichText::new(&self.title)
-                            .size(theme.text.title + 2.0)
-                            .strong()
-                            .color(theme.ui.text),
-                    )
-                    .truncate()
-                    .halign(Align::Min),
-                )
-                .on_hover_text(&self.title);
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&self.title)
+                                    .size(theme.text.title + 2.0)
+                                    .strong()
+                                    .color(theme.ui.text),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&self.title);
+                    },
+                );
             });
         });
         ui.add_space(theme.spacing.md);
@@ -457,6 +461,24 @@ mod tests {
                 assert!(
                     back.right() <= width && back.left() >= 0.0,
                     "back at {width}: {back:?}"
+                );
+                let title = harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.text().starts_with("A company name")
+                        {
+                            Some(text.pos.x)
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("company title");
+                assert!(
+                    (title - 8.0).abs() < 0.5,
+                    "title stays at the content edge: {title}"
                 );
                 let name = harness.output().shapes.iter().rev().find(|shape| matches!(&shape.shape,
                     egui::Shape::Text(text) if text.galley.text().starts_with("A financial row name"))).unwrap();
