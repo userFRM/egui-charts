@@ -67,7 +67,9 @@ pub(super) fn render_kagi(
         let x = x_of(i);
         let y = |price| price_scale.price_to_y(price);
         let start = Pos2::new(x, y(line.start_price));
-        let start_thickness = line.crossing.map_or(line.thickness, |_| flip(line.thickness));
+        let start_thickness = line
+            .crossing
+            .map_or(line.thickness, |_| flip(line.thickness));
         // The shoulder or waist joining the previous line keeps its thickness.
         if let Some(prev_x) = prev_x {
             let joint = Pos2::new(prev_x, start.y);
