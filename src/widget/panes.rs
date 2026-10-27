@@ -184,12 +184,22 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
+        let maximized_plot = maximized.filter(|id| *id != PaneId::MAIN).map(|id| {
+            ui.interact(
+                Rect::from_min_max(
+                    Pos2::new(plot.left(), available.top()),
+                    Pos2::new(plot.right(), time_axis.top()),
+                ),
+                ui.scope_id().with((id, "plot")),
+                Sense::click_and_drag(),
+            )
+        });
         let response = ui
             .scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(main_rect)
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                |ui| self.show_internal(ui, Some(time_axis), footprint),
+                |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
             )
             .inner;
 
@@ -722,7 +732,10 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = pane_response.interact(Sense::click_and_drag());
+                    let pane_response = maximized_plot
+                        .as_ref()
+                        .unwrap_or(&pane_response)
+                        .interact(Sense::click_and_drag());
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
@@ -1213,6 +1226,118 @@ mod tests {
         pointer(ctx, chart, to, None);
         pointer(ctx, chart, to, Some(false));
         pointer(ctx, chart, to, None);
+    }
+
+    #[test]
+    fn maximized_panes_keep_pointer_navigation() {
+        use crate::widget::test_frames::{frame, shapes};
+        for left in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            chart.config.show_right_axis = !left;
+            chart.config.show_left_axis = left;
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            chart.chart_options.crosshair.horz_line_style = crate::model::LineStyle::Solid;
+            chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
+            let study = chart.add_indicator(Box::new(RSI::new(14)));
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            if left {
+                chart.move_pane(chart.series_pane(study).unwrap(), 0);
+            }
+            chart.pane_layout.maximized = chart.series_pane(study);
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            frame(&ctx, &mut chart, 0.2, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            let pos = pane.chart_rect.center();
+            let before = chart.state.time_scale().right_offset_precise();
+            assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
+            chart.state.price_scale_mut().set_range(90.0, 120.0);
+            drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 20.0));
+            // Forty pixels at six pixels per bar move history by 6 2/3 bars.
+            assert!(
+                (chart.state.time_scale().right_offset_precise() - (before - 20.0 / 3.0)).abs()
+                    < 1e-5
+            );
+            assert_eq!(chart.state.price_scale().range().min, 90.0);
+            assert_eq!(chart.state.price_scale().range().max, 120.0);
+
+            for event in [
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -20.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::Zoom(1.1),
+            ] {
+                let before = chart.state.time_scale().bar_spacing();
+                let time = ctx.input(|input| input.time) + 1.0;
+                frame(
+                    &ctx,
+                    &mut chart,
+                    time,
+                    vec![Event::PointerMoved(pos), event],
+                );
+                assert!(chart.state.time_scale().bar_spacing() > before);
+            }
+            let price_axis = Pos2::new(
+                if left {
+                    pane.panel_rect.left() + 5.0
+                } else {
+                    pane.panel_rect.right() - 5.0
+                },
+                pos.y,
+            );
+            let time_axis = chart.time_axis_rect.center();
+            let before = chart.state.time_scale().bar_spacing();
+            drag(
+                &ctx,
+                &mut chart,
+                time_axis,
+                time_axis + egui::vec2(30.0, 0.0),
+            );
+            assert!(chart.state.time_scale().bar_spacing() > before);
+            let at = chart
+                .pane_layout
+                .panes
+                .iter()
+                .position(|pane| Some(pane.id) == chart.series_pane(study))
+                .unwrap();
+            drag(
+                &ctx,
+                &mut chart,
+                price_axis,
+                price_axis + egui::vec2(0.0, 30.0),
+            );
+            assert!(chart.pane_layout.panes[at].scale.is_manual());
+            for axis in [price_axis, time_axis] {
+                let time = ctx.input(|input| input.time) + 1.0;
+                frame(&ctx, &mut chart, time, Vec::new());
+                for pressed in [None, Some(true), Some(false), Some(true), Some(false)] {
+                    pointer(&ctx, &mut chart, axis, pressed);
+                }
+            }
+            assert!(!chart.pane_layout.panes[at].scale.is_manual());
+            assert_eq!(
+                chart.state.time_scale().bar_spacing(),
+                chart.chart_options.time_scale.bar_spacing
+            );
+
+            let time = ctx.input(|input| input.time) + 1.0;
+            let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+            assert!(chart.get_hover_bar_idx().is_some());
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::BLUE && points.iter().all(|p| (p.y - pos.y).abs() < 0.1))));
+            frame(&ctx, &mut chart, time + 0.1, vec![Event::Zoom(1.1)]);
+            drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 0.0));
+            let offset = chart.state.time_scale().right_offset_precise();
+            let spacing = chart.state.time_scale().bar_spacing();
+            chart.pane_layout.maximized = None;
+            pointer(&ctx, &mut chart, Pos2::ZERO, None);
+            assert_eq!(chart.state.time_scale().right_offset_precise(), offset);
+            assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+        }
     }
 
     /// Pane drawings retain study units through editing, layout changes and storage.

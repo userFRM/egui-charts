@@ -238,6 +238,7 @@ impl Chart {
                     .scroll_pixels(translation_delta.x);
             }
             if self.chart_options.handle_scroll.vert_touch_drag
+                && self.last_rendered_price_rect.height() > 0.0
                 && self.state.price_scale().is_manual()
                 && translation_delta.y.abs() > 0.5
             {
@@ -398,7 +399,10 @@ impl Chart {
                 }
 
                 // Manual prices follow only the movement enabled for this input device.
-                if vertical && self.state.price_scale().is_manual() {
+                if vertical
+                    && self.last_rendered_price_rect.height() > 0.0
+                    && self.state.price_scale().is_manual()
+                {
                     let map = self.last_price_map;
                     let dy = response.drag_delta().y;
                     let shift = map.y_to_scale(curr_pos.y - dy) - map.y_to_scale(curr_pos.y);

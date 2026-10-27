@@ -510,7 +510,7 @@ impl Chart {
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
-            let response = self.show_internal(ui, None, footprint);
+            let response = self.show_internal(ui, None, None, footprint);
             if let Some(main) = self
                 .pane_layout
                 .panes
@@ -713,6 +713,7 @@ impl Chart {
         &mut self,
         ui: &mut Ui,
         shared_time_axis: Option<Rect>,
+        shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
         // Register the SVG and icon image loaders once per context so the
@@ -819,7 +820,8 @@ impl Chart {
         });
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
-        let shown = response.clone();
+        let shown =
+            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         let axis_corner = Rect::from_min_max(
             Pos2::new(
                 if self.config.show_right_axis {
@@ -860,14 +862,17 @@ impl Chart {
             response.rect = rect;
         }
 
+        // The visible pane drives time navigation even while the price pane has no height.
+        let mut time_response =
+            shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         // Handle tracking mode
-        self.handle_tracking_mode(ui, &response);
+        self.handle_tracking_mode(ui, &time_response);
 
         // Request focus on hover for keyboard shortcuts
-        self.request_focus_if_needed(&mut response);
+        self.request_focus_if_needed(&mut time_response);
 
         // Handle keyboard shortcuts
-        self.handle_keyboard_shortcuts(ui, &response, chart_width, chart_rect.min.x);
+        self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
 
         // Calculate visible bars
         let logical_range = self.state.time_scale().visible_logical_range();
@@ -875,7 +880,7 @@ impl Chart {
         self.last_visible_bars = visible_bars;
 
         // Show grabbing cursor during panning
-        self.set_panning_cursor(ui, &response);
+        self.set_panning_cursor(ui, &time_response);
 
         // Define axis rects
         let price_axis_rect = Rect::from_min_max(
@@ -897,7 +902,7 @@ impl Chart {
         );
 
         // Handle double-click to reset axes
-        self.handle_double_click(&response, price_axis_rect, time_axis_rect);
+        self.handle_double_click(&time_response, price_axis_rect, time_axis_rect);
 
         // Handle mouse wheel for zoom/scroll
         // Block pan/zoom when drawing tool is active OR when manipulating a drawing
@@ -931,19 +936,19 @@ impl Chart {
                 });
         let pending_price_zoom = self.handle_mouse_wheel(
             ui,
-            &response,
+            &time_response,
             chart_width,
             chart_rect.min.x,
             price_axis_rect,
         );
 
         // Handle pinch-to-zoom for touch/trackpad gestures
-        self.handle_pinch_zoom(ui, &response, chart_width, chart_rect.min.x);
+        self.handle_pinch_zoom(ui, &time_response, chart_width, chart_rect.min.x);
 
         // Handle drag to pan (blocked when interacting with drawings)
         self.handle_drag_pan(
             ui,
-            &response,
+            &time_response,
             price_axis_rect,
             time_axis_rect,
             chart_rect.min.x,
@@ -2466,8 +2471,10 @@ impl Chart {
                         - 8.0;
             }
         }
-        let hover_rect =
-            Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top));
+        let hover_rect = shared_plot.map_or_else(
+            || Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top)),
+            |plot| plot.rect,
+        );
         let hover_pos = self
             .axis_hover
             .filter(|(_, tag)| {

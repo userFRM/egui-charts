@@ -321,6 +321,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Maximized indicator panes keep plot dragging, wheel and pinch zoom, axis scaling and reset, and the pointer crosshair. Restoring the layout retains the shared time position and zoom without moving the hidden price pane's manual range. ([#1030](https://github.com/userFRM/egui-charts/issues/1030))
+
 - Drawing sync notifications coalesce per drawing and overflow after 1,024 actions into `DrawingSyncAction::ResyncRequired`. Hosts replace their stored set with the manager's saveable drawings, deleting absent records. Automatic storage disables notifications. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`; enabling requests a full replacement. ([#948](https://github.com/userFRM/egui-charts/issues/948))
 
 - Drawing autosave retains failed documents until storage acknowledges them, retries after one second of input time, and keeps the latest edits through delayed writes and symbol changes. `Chart::flush_stored_drawings` retries immediately and reports whether captured edits are acknowledged; storage remains host-owned. ([#942](https://github.com/userFRM/egui-charts/issues/942))
