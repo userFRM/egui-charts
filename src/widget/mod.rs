@@ -257,6 +257,8 @@ pub struct Chart {
     pub(crate) studies: IndicatorRegistry,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
+    /// Range bars built from the held trades, while the chart type is Range.
+    execution_ranges: crate::chart::rendering::candles::price_based::ExecutionRanges,
     #[cfg(feature = "studies")]
     volume_setting: bool,
     #[cfg(feature = "studies")]
