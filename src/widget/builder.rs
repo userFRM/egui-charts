@@ -113,6 +113,7 @@ impl Chart {
                 ..FeedState::default()
             },
             from_ticks: BTreeSet::new(),
+            bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             study_data: Default::default(),
             element_studies: Default::default(),

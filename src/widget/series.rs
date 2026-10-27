@@ -10,6 +10,7 @@ use crate::model::{Bar, BarClock, BarData, LogicalRange, Marker, MarkerOptions, 
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 
 /// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +68,8 @@ impl Chart {
             return;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
-            let (bars, rejected) = clean(bars, &self.clock());
+            let (mut bars, rejected) = clean(bars, &self.clock());
+            retain_bars(&mut bars, self.bar_limit(series));
             let item = &mut self.price_series[at];
             item.bars = bars;
             item.revision = crate::model::next_revision();
@@ -86,7 +88,8 @@ impl Chart {
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
-        let (bars, rejected) = clean(bars, &self.clock());
+        let (mut bars, rejected) = clean(bars, &self.clock());
+        retain_bars(&mut bars, self.bar_limit(SeriesId::MAIN));
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
         if let Some(marks) = &mut self.change_marks {
@@ -134,7 +137,9 @@ impl Chart {
             if merged.first_changed.is_some_and(|first| first + 1 < len) {
                 item.revision = crate::model::next_revision();
             }
-            merged.first_changed.is_some()
+            let changed = merged.first_changed.is_some();
+            self.enforce_bar_limit(series);
+            changed
         } else if self.main_series_present && holds_bars(series, "update") {
             self.apply(vec![(bar, Origin::Live)])
                 .first_changed
@@ -185,6 +190,125 @@ impl Chart {
             self.data_updated(series);
         }
         removed
+    }
+
+    /// Limits the retained bars of `series` to the newest `limit`, evicting the oldest at once
+    /// and after history loads and updates. `None` (the default) keeps all bars. The limit
+    /// survives symbol and timeframe changes and also bounds retained replay history.
+    /// Removed data must be supplied again by the host to recover it. Feed scroll-back stops
+    /// while the limit is full; raising or clearing it allows paging again.
+    ///
+    /// Studies recalculate on the retained window, including their warm-up. Drawing timestamps
+    /// are kept, even for evicted bars; markers and raw trades have independent lifetimes.
+    /// Unknown ids and study ids are ignored with a warning.
+    pub fn set_bar_limit(&mut self, series: SeriesId, limit: Option<NonZeroUsize>) {
+        if !self.bar_series_present(series, "set_bar_limit") {
+            return;
+        }
+        match limit {
+            Some(limit) => {
+                self.bar_limits.insert(series, limit);
+            }
+            None => {
+                self.bar_limits.remove(&series);
+            }
+        }
+        if self.replay.is_some() {
+            self.apply_replay_window();
+        } else if self.enforce_bar_limit(series) > 0 {
+            self.data_updated(series);
+        }
+    }
+
+    /// The retained-bar limit of `series`, or `None` when unlimited or absent.
+    pub fn bar_limit(&self, series: SeriesId) -> Option<NonZeroUsize> {
+        self.bar_limits.get(&series).copied()
+    }
+
+    /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
+    /// restart on the retained window; drawings keep their timestamps and the view keeps its
+    /// time position where possible. During replay this removes from the full retained history
+    /// and its matching finer-source slots.
+    /// Emits [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) when bars are removed.
+    /// Unknown ids and study ids are ignored with a warning.
+    pub fn remove_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
+        let removed = self.take_oldest_bars(series, count);
+        if !removed.is_empty() {
+            self.data_updated(series);
+        }
+        removed
+    }
+
+    fn take_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
+        if !self.bar_series_present(series, "remove_oldest_bars") || count == 0 {
+            return Vec::new();
+        }
+        let clock = self
+            .timeframe
+            .map_or_else(BarClock::exact, |_| self.bar_clock());
+        let removed = if let Some(replay) = &mut self.replay {
+            let removed = replay.remove_oldest_bars(series, count, &clock);
+            self.apply_replay_window();
+            removed
+        } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
+            let count = count.min(item.bars.len());
+            let removed = item.bars.drain(..count).collect();
+            if count > 0 {
+                item.revision = crate::model::next_revision();
+                shrink_bars(&mut item.bars);
+                if let Some(marks) = &mut item.change_marks {
+                    marks.clear();
+                }
+            }
+            removed
+        } else {
+            #[cfg(feature = "drawings")]
+            self.anchor_drawing_points();
+            let mut removed = Vec::new();
+            self.state.edit_bars(|bars| {
+                let count = count.min(bars.len());
+                removed = bars.drain(..count).collect();
+                shrink_bars(bars);
+                (count > 0).then_some(0)
+            });
+            if !removed.is_empty() {
+                if let Some(first) = self.state.data().bars.first() {
+                    self.from_ticks = self.from_ticks.split_off(&first.time);
+                } else {
+                    self.from_ticks.clear();
+                }
+                if let Some(marks) = &mut self.change_marks {
+                    marks.clear();
+                }
+                self.pending_from.fill(Some(0));
+                if let Some(start) = &mut self.pending_start_idx {
+                    *start = start.saturating_sub(removed.len());
+                }
+                self.scroll_animation = None;
+            }
+            #[cfg(feature = "drawings")]
+            self.project_drawing_points();
+            removed
+        };
+        if series == SeriesId::MAIN && !removed.is_empty() {
+            self.feed.history_complete = false;
+        }
+        removed
+    }
+
+    fn bar_series_present(&self, series: SeriesId, call: &str) -> bool {
+        self.price_series.iter().any(|item| item.id == series)
+            || self.main_series_present && holds_bars(series, call)
+    }
+
+    fn enforce_bar_limit(&mut self, series: SeriesId) -> usize {
+        let count = self.bar_limit(series).map_or(0, |limit| {
+            self.bars(series).len().saturating_sub(limit.get())
+        });
+        if count > 0 {
+            self.take_oldest_bars(series, count);
+        }
+        count
     }
 
     /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
@@ -415,6 +539,9 @@ impl Chart {
             let time_scale = self.state.time_scale_mut();
             time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
         }
+        if self.enforce_bar_limit(SeriesId::MAIN) > 0 {
+            merged.first_changed = Some(0);
+        }
         merged
     }
 
@@ -489,6 +616,7 @@ impl Chart {
     /// `false` for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         self.series_formatters.remove(&id);
+        self.bar_limits.remove(&id);
         if id == SeriesId::MAIN {
             if !self.main_series_present {
                 return false;
@@ -778,6 +906,23 @@ pub(super) fn clean(bars: Vec<Bar>, clock: &BarClock) -> (Vec<Bar>, u64) {
     (clean, merged.rejected)
 }
 
+/// Keeps the newest bars and releases excessive capacity after a large import.
+pub(super) fn retain_bars(bars: &mut Vec<Bar>, limit: Option<NonZeroUsize>) {
+    if let Some(limit) = limit {
+        let count = bars.len().saturating_sub(limit.get());
+        if count > 0 {
+            bars.drain(..count);
+            shrink_bars(bars);
+        }
+    }
+}
+
+pub(super) fn shrink_bars(bars: &mut Vec<Bar>) {
+    if bars.capacity() / 2 > bars.len() {
+        bars.shrink_to_fit();
+    }
+}
+
 /// Warn about an id that was not handled as a secondary bar series.
 pub(super) fn holds_bars(series: SeriesId, call: &str) -> bool {
     if series != SeriesId::MAIN {
@@ -950,18 +1095,47 @@ mod tests {
     #[test]
     fn appended_bars_keep_the_view() {
         use crate::model::{ChartType, ChartTypeParams};
-        for (name, kind, offset, expected) in [
+        for (name, kind, offset, limit, expected) in [
             (
                 "candles at the live edge",
                 ChartType::Candles,
                 None,
+                None,
                 [20.0; 3],
             ),
-            ("renko at the live edge", ChartType::Renko, None, [20.0; 3]),
+            (
+                "renko at the live edge",
+                ChartType::Renko,
+                None,
+                None,
+                [20.0; 3],
+            ),
+            (
+                "limited candles at the live edge",
+                ChartType::Candles,
+                None,
+                Some(100),
+                [20.0; 3],
+            ),
+            (
+                "limited candles scrolled back",
+                ChartType::Candles,
+                Some(-30.0),
+                Some(100),
+                [-31.0, -32.0, -33.0],
+            ),
+            (
+                "limited renko scrolled back",
+                ChartType::Renko,
+                Some(-30.0),
+                Some(100),
+                [-32.0, -34.0, -36.0],
+            ),
             (
                 "renko scrolled back",
                 ChartType::Renko,
                 Some(-30.0),
+                None,
                 [-32.0, -34.0, -36.0],
             ),
         ] {
@@ -986,6 +1160,7 @@ mod tests {
             });
             let ctx = egui::Context::default();
             frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.set_bar_limit(SeriesId::MAIN, limit.and_then(NonZeroUsize::new));
             if let Some(offset) = offset {
                 chart.state.time_scale_mut().set_right_offset(offset);
             }
@@ -996,6 +1171,60 @@ mod tests {
                 got.push(chart.state.time_scale().right_offset());
             }
             assert_eq!(got, expected, "{name}");
+            if let Some(limit) = limit {
+                assert_eq!(
+                    chart.bars(SeriesId::MAIN).len(),
+                    limit,
+                    "{name}: retained bars"
+                );
+            }
+        }
+    }
+
+    /// Limits and explicit removal operate on retained replay history and independent series.
+    #[test]
+    fn bar_limits_cover_replay_and_added_series() {
+        use crate::widget::SeriesOptions;
+        let initial: Vec<_> = (0..5).map(|i| bar(i * 60, i as f64 + 1.0)).collect();
+        for replay in [false, true] {
+            for main in [false, true] {
+                let mut chart = Chart::new(BarData::from_bars(initial.clone()));
+                let id = if main {
+                    SeriesId::MAIN
+                } else {
+                    chart.add_series(SeriesOptions::default())
+                };
+                chart.set_data(id, initial.clone());
+                if replay {
+                    chart.set_replay_time(Some(bar(120, 0.0).time));
+                }
+                chart.set_bar_limit(id, NonZeroUsize::new(3));
+                chart.set_data(id, initial.clone());
+                chart.update(id, bar(300, 6.0));
+                if replay {
+                    chart.set_replay_time(None);
+                }
+                assert_eq!(
+                    chart.bars(id),
+                    &[bar(180, 4.0), bar(240, 5.0), bar(300, 6.0)]
+                );
+                assert_eq!(chart.remove_oldest_bars(id, 0), []);
+                if replay {
+                    chart.set_replay_time(Some(bar(301, 0.0).time));
+                }
+                assert_eq!(
+                    chart.remove_oldest_bars(id, usize::MAX),
+                    [bar(180, 4.0), bar(240, 5.0), bar(300, 6.0)]
+                );
+                if replay {
+                    chart.set_replay_time(None);
+                }
+                assert!(chart.bars(id).is_empty());
+                chart.set_bar_limit(id, None);
+                chart.set_data(id, initial.clone());
+                assert_eq!(chart.bars(id), initial);
+                assert!(chart.bar_limit(id).is_none());
+            }
         }
     }
 
@@ -1012,8 +1241,10 @@ mod tests {
         enum Action {
             Update(Bar),
             SetData(Vec<Bar>),
+            Limit(usize),
+            RemoveOldest(usize),
         }
-        use Action::{SetData, Update};
+        use Action::{Limit, RemoveOldest, SetData, Update};
         // Five one-minute bars closing at 1 to 5.
         let start: Vec<Bar> = (0..5).map(|i| bar(i * 60, (i + 1) as f64)).collect();
         let mut invalid = bar(300, 6.0);
@@ -1026,6 +1257,15 @@ mod tests {
         // Expected bars, then the SMA(2) of their closes, which has no value on the first bar.
         #[rustfmt::skip]
         let cases = [
+            ("retained window slides on append", vec![Limit(3), Update(bar(300, 6.0))],
+                series(&[(180, 4.0), (240, 5.0), (300, 6.0)]),
+                vec![None, Some(4.5), Some(5.5)], true, 0),
+            ("oldest bars removed", vec![RemoveOldest(2)],
+                series(&[(120, 3.0), (180, 4.0), (240, 5.0)]),
+                vec![None, Some(3.5), Some(4.5)], true, 0),
+            ("replacement respects limit", vec![Limit(4), SetData(start.clone())],
+                start[1..].to_vec(),
+                vec![None, Some(2.5), Some(3.5), Some(4.5)], true, 0),
             ("last-bar update", vec![Update(bar(240, 6.0))],
                 series(&[(0, 1.0), (60, 2.0), (120, 3.0), (180, 4.0), (240, 6.0)]),
                 vec![None, Some(1.5), Some(2.5), Some(3.5), Some(5.0)], false, 0),
@@ -1070,6 +1310,13 @@ mod tests {
                 match action {
                     Update(bar) => chart.update(SeriesId::MAIN, bar),
                     SetData(bars) => chart.set_data(SeriesId::MAIN, bars),
+                    Limit(count) => chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(count)),
+                    RemoveOldest(count) => {
+                        assert_eq!(
+                            chart.remove_oldest_bars(SeriesId::MAIN, count),
+                            start[..count]
+                        );
+                    }
                 }
             }
             frame(&ctx, &mut chart, 0.0, Vec::new());
