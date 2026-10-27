@@ -1240,9 +1240,7 @@ impl Chart {
                         } else {
                             ""
                         },
-                        if self.config.show_indicator_last_val
-                            && self.config.price_axis.show_study_values
-                        {
+                        if self.config.show_indicator_last_val {
                             &value
                         } else {
                             ""
@@ -2202,6 +2200,17 @@ mod tests {
         let drawn = bodies(&painted);
         assert_eq!(drawn.len(), 3);
         assert!(drawn.iter().all(|body| main.contains_rect(*body)));
+        for show_study_values in [false, true] {
+            chart.config.price_axis.show_study_values = show_study_values;
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.1, vec![]);
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.pos.x < chart.last_rendered_price_rect.right()
+                        && text.galley.text().contains("label 220.00")
+                )),
+                "study axis settings must preserve comparison legend values"
+            );
+        }
     }
 
     /// Bars can be popped from, and looked up in, any bar series; live changes are reported

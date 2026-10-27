@@ -1072,6 +1072,7 @@ fn sound_controls(
     ui.add_enabled_ui(*enabled, |ui| {
         ui.horizontal(|ui| {
             ui.combo_select(label, sound, sounds.iter().cloned(), Clone::clone);
+            ui.visuals_mut().widgets.inactive.bg_fill = ui.active_theme().ui.border_control;
             ui.add(egui::Slider::new(volume, 0.0..=1.0).text(l10n::text(ui.ctx(), "Volume")));
         });
         if ui.button(l10n::text(ui.ctx(), "Test sound")).clicked() {
