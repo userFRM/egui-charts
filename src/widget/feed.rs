@@ -1717,12 +1717,8 @@ mod tests {
             let end = rect.right_bottom() - egui::vec2(10.0, 10.0);
             assert!(chart.execute_box_zoom(start, end, rect, rect.width()));
         };
-        let moves: [fn(&mut Chart, &mut Frames); 4] = [
-            |chart, _| chart.set_start_idx(600),
-            drag,
-            end_key,
-            box_zoom,
-        ];
+        let moves: [fn(&mut Chart, &mut Frames); 4] =
+            [|chart, _| chart.set_start_idx(600), drag, end_key, box_zoom];
         for (row, user_move) in moves.into_iter().enumerate() {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
