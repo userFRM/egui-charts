@@ -167,9 +167,9 @@ impl DrawingToolType {
             | Self::ThreeDrivesPattern
             | Self::ElliottImpulse
             | Self::ElliottCorrection
-            | Self::ElliottTriangle
             | Self::ElliottDoubleCombo
             | Self::ElliottTripleCombo => 1,
+            Self::ElliottTriangle => 6,
             _ if self.interaction_mode() == DrawingInteractionMode::SingleClick => 1,
             _ => 2,
         }
@@ -218,11 +218,8 @@ impl DrawingToolType {
                     | Self::ElliottCorrection
                     | Self::TrianglePattern
                     | Self::DoubleCurve => Some(4),
-                    Self::XABCDPattern
-                    | Self::CypherPattern
-                    | Self::ElliottTriangle
-                    | Self::ElliottTripleCombo => Some(5),
-                    Self::ElliottImpulse => Some(6),
+                    Self::XABCDPattern | Self::CypherPattern | Self::ElliottTripleCombo => Some(5),
+                    Self::ElliottImpulse | Self::ElliottTriangle => Some(6),
                     Self::HeadAndShoulders | Self::ThreeDrivesPattern => Some(7),
                     // Polyline, Path have no fixed limit
                     _ => None,
@@ -261,6 +258,7 @@ mod tests {
             (TrianglePattern, DrawingInteractionMode::MultiPoint, 4),
             (ThreeDrivesPattern, DrawingInteractionMode::MultiPoint, 7),
             (ElliottDoubleCombo, DrawingInteractionMode::MultiPoint, 3),
+            (ElliottTriangle, DrawingInteractionMode::MultiPoint, 6),
             (ElliottTripleCombo, DrawingInteractionMode::MultiPoint, 5),
             (PriceNote, DrawingInteractionMode::ClickClick, 2),
             (ArrowMarker, DrawingInteractionMode::ClickClick, 2),

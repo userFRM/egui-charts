@@ -567,7 +567,6 @@ mod tests {
                 &[
                     DrawingToolType::XABCDPattern,
                     DrawingToolType::CypherPattern,
-                    DrawingToolType::ElliottTriangle,
                     DrawingToolType::ElliottTripleCombo,
                     DrawingToolType::Brush,
                     DrawingToolType::Highlighter,
@@ -576,7 +575,13 @@ mod tests {
                 ],
                 5,
             ),
-            (&[DrawingToolType::ElliottImpulse], 6),
+            (
+                &[
+                    DrawingToolType::ElliottImpulse,
+                    DrawingToolType::ElliottTriangle,
+                ],
+                6,
+            ),
             (
                 &[
                     DrawingToolType::HeadAndShoulders,

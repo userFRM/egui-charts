@@ -346,6 +346,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The Elliott impulse projects its 1.618 wave 3 target from the wave 2 end by the wave 1 price leg, rising or falling with wave 1 and unchanged by zoom; `fib_config.logarithmic` projects the leg's log return instead. The Elliott triangle collects an origin and waves A to E, labelled 0 and A to E, with the fill, trendlines and handles on A to E. Migration: `DrawingToolType::ElliottTriangle` needs and requires 6 anchors, and a triangle saved with 5 loads as a skipped drawing (`Elliott Triangle needs 6 anchors, has 5`) in `DrawingStorage::from_json`'s result rather than gaining an invented origin; redraw it. ([#1068](https://github.com/userFRM/egui-charts/issues/1068))
+
 - Three drives labels each correction's retracement of the drive before it and each drive's extension of the correction before it, measured in price, and omits a ratio over a zero-length leg. The reversal zone is the price interval 1.272 to 1.618 second-correction lengths beyond the correction's end, painted through the active price scale, in place of a fixed-size badge. ([#1071](https://github.com/userFRM/egui-charts/issues/1071))
 
 - Fibonacci retracement and extension fills span the same horizontal bounds as their level lines and hit regions. Channel levels extended left or right run on to the visible pane edge on that side and keep the anchor on a side that is not extended. ([#1069](https://github.com/userFRM/egui-charts/issues/1069))

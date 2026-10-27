@@ -391,7 +391,7 @@ impl Drawing {
             DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
 
             // Elliott Wave (5 tools)
-            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter),
+            DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter, view),
             DrawingToolType::ElliottCorrection => self.render_elliott_correction(painter),
             DrawingToolType::ElliottTriangle => self.render_elliott_triangle(painter),
             DrawingToolType::ElliottDoubleCombo => self.render_elliott_double_combo(painter),
