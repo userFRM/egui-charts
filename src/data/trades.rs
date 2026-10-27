@@ -109,6 +109,10 @@ impl Trades {
     }
 
     /// Identifies the held trades: it differs after any trade was added or evicted.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
