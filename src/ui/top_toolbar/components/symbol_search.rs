@@ -784,10 +784,11 @@ impl SymbolSearchDialog {
         }
         let mut right = rect.right() - 8.0;
         // The exchange mark column exists once any row has one, so the other columns line up.
-        if self
-            .filtered_symbols
-            .iter()
-            .any(|symbol| symbol.exchange_logo.is_some())
+        if self.config.show_exchange
+            && self
+                .filtered_symbols
+                .iter()
+                .any(|symbol| symbol.exchange_logo.is_some())
         {
             let mark = egui::Rect::from_min_max(
                 Pos2::new(right - 20.0, rect.center().y - 10.0),
