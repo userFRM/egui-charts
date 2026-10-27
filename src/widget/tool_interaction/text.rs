@@ -63,7 +63,9 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     };
     let width = 260.0_f32.min(pane.width());
     pos.x = pos.x.min(pane.right() - width).max(pane.left());
-    let height = 160.0_f32.min(pane.height());
+    let table = drawing.tool_type == DrawingToolType::Table;
+    // A table editor shows about six rows of cells above its buttons.
+    let height = if table { 240.0_f32 } else { 160.0 }.min(pane.height());
     pos.y = pos.y.min(pane.bottom() - height).max(pane.top());
     let id = chart_id.with(("drawing_text", editor.id));
     let (cancel, commit) = ui.input_mut(|input| {
@@ -77,7 +79,6 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let opened_frame = *editor.opened_frame.get_or_insert(frame);
     let request_focus = std::mem::take(&mut editor.focus);
     let font_size = drawing.font_size;
-    let table = drawing.tool_type == DrawingToolType::Table;
     let hint = match drawing.tool_type {
         DrawingToolType::Image => "Image address, such as file:///home/me/chart.png",
         DrawingToolType::Tweet => "Author on the first line, then the post",

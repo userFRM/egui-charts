@@ -55,25 +55,29 @@ impl Drawing {
         egui::ScrollArea::both()
             .max_height(max_height)
             .show(ui, |ui| {
-                egui::Grid::new(id.with("cells")).show(ui, |ui| {
-                    for (r, row) in grid.iter_mut().enumerate() {
-                        for (c, cell) in row.iter_mut().enumerate() {
-                            let field = if r == 0 && c == 0 {
-                                id
-                            } else {
-                                id.with((r, c))
-                            };
-                            let response =
-                                ui.add(egui::TextEdit::singleline(cell).id(field).desired_width(
-                                    DESIGN_TOKENS.sizing.annotation.table_cell_width,
-                                ));
-                            // Tabs and line breaks separate the cells in the saved text.
-                            cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
-                            first.get_or_insert(response);
+                // Without a minimum, the first frame's narrow columns would stay narrow.
+                egui::Grid::new(id.with("cells"))
+                    .min_col_width(DESIGN_TOKENS.sizing.annotation.table_cell_width)
+                    .show(ui, |ui| {
+                        for (r, row) in grid.iter_mut().enumerate() {
+                            for (c, cell) in row.iter_mut().enumerate() {
+                                let field = if r == 0 && c == 0 {
+                                    id
+                                } else {
+                                    id.with((r, c))
+                                };
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(cell).id(field).desired_width(
+                                        DESIGN_TOKENS.sizing.annotation.table_cell_width,
+                                    ),
+                                );
+                                // Tabs and line breaks separate the cells in the saved text.
+                                cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
+                                first.get_or_insert(response);
+                            }
+                            ui.end_row();
                         }
-                        ui.end_row();
-                    }
-                });
+                    });
             });
         let (rows, cols) = (grid.len(), grid[0].len());
         ui.horizontal_wrapped(|ui| {
@@ -174,7 +178,7 @@ impl Drawing {
         };
 
         let table_width = widths.iter().sum::<f32>();
-        let table_height = row_top(rows.len());
+        let table_height = row_top(rows.len()) - pos.y;
         let table_rect = Rect::from_min_size(pos, egui::vec2(table_width, table_height));
 
         // Background
@@ -253,16 +257,18 @@ mod tests {
     use egui::{Context, LayerId, Painter, RawInput, Shape};
 
     /// Guards #984: a table paints its own cells, header row first and short rows padded, and
-    /// an empty grid of the default size until it has text.
+    /// an empty grid of the default size until it has text, its frame as tall as its rows: a
+    /// 26 px header and 22 px rows.
     #[test]
     fn tables_paint_their_own_cells() {
         let mut table = Drawing::new(1, DrawingToolType::Table);
         table.points = vec![Pos2::new(10.0, 10.0)];
-        for (text, rows, cells) in [
-            (None, 4, vec![]),
+        for (text, rows, height, cells) in [
+            (None, 4, 92.0, vec![]),
             (
                 Some("Symbol\tLast\tChange\nAAPL\t189.50\nMSFT\t402.10\t+1.2%"),
                 3,
+                70.0,
                 vec![
                     "Symbol", "Last", "Change", "AAPL", "189.50", "MSFT", "402.10", "+1.2%",
                 ],
@@ -277,21 +283,23 @@ mod tests {
                     Rect::EVERYTHING,
                 ));
             });
-            let (mut texts, mut lines) = (Vec::new(), [0, 0]);
+            let (mut texts, mut row_rules, mut column_rules) = (Vec::new(), 0, Vec::new());
             for shape in &output.shapes {
                 match &shape.shape {
                     Shape::Text(text) if !text.galley.text().is_empty() => {
                         texts.push(text.galley.text().to_owned());
                     }
-                    Shape::LineSegment { points, .. } => {
-                        lines[usize::from(points[0].x == points[1].x)] += 1;
+                    Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
+                        column_rules.push(points[1].y - points[0].y);
                     }
+                    Shape::LineSegment { .. } => row_rules += 1,
                     _ => {}
                 }
             }
             output.drop_without_applying_deltas();
             assert_eq!(texts, cells);
-            assert_eq!(lines, [rows + 1, 4], "row and column rules");
+            assert_eq!(row_rules, rows + 1);
+            assert_eq!(column_rules, [height; 4], "column rules span the table");
         }
     }
 }
