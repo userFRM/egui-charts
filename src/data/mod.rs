@@ -394,6 +394,8 @@ pub struct SymbolDetails {
     pub profile: Vec<(String, String)>,
     /// A page about the instrument, linked beside its name.
     pub url: Option<String>,
+    /// What the instrument is, such as `"Technology • Software"`, shown under its name.
+    pub category: Option<String>,
 }
 
 impl SymbolDetails {
@@ -403,12 +405,19 @@ impl SymbolDetails {
             statistics,
             profile,
             url: None,
+            category: None,
         }
     }
 
     /// Sets [`url`](Self::url).
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
+        self
+    }
+
+    /// Sets [`category`](Self::category).
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
         self
     }
 }

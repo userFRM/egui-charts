@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The symbol details panel sits 10 points inside its host panel, in line with the watchlist's symbol column, and sets the last price at 26 points instead of 24, about 19 points of digit height. `SymbolDetails::category`, set with `with_category`, is shown under the instrument's name, key statistics are grouped on an accent-tinted card above the profile, and prices and changes group their whole digits in thousands as the watchlist does. The demo supplies each symbol's kind as its category instead of a Type row. ([#990](https://github.com/userFRM/egui-charts/issues/990))
+
 - Watchlist rows are 30 points high instead of 26 and start with an 18 point symbol mark, so symbol names line up whatever mark a row has. `WatchlistPanel::set_mark` supplies a symbol's mark, such as its issuer's logo; without one the row shows the symbol's first letter on a neutral disc. Last prices, changes and change percentages group their whole digits in thousands, so 43237.45 reads 43,237.45. ([#989](https://github.com/userFRM/egui-charts/issues/989))
 
 - The top toolbar's Chart layout button is a `ToolbarIconButton`: it has the dark toolbar tooltip with the other toolbar controls instead of egui's small neutral one, and the toolbar's 32 point square. Like them, it shows a shortcut chip only for a bound shortcut, and Chart layout has none. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
