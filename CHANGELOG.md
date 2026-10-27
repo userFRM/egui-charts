@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Selecting a report trade in the demo opens the full-day session when regular hours hide its entry after switching symbols, so the selected trade remains visible.
+
 - The registry documentation guards its built-in study example with the `studies` feature, so the documented headless configuration compiles every example. CI also runs doctests with no default features. ([#951](https://github.com/userFRM/egui-charts/issues/951))
 
 - Restoring a layout rejects main or pane scales requesting more than 1,000 tick marks before changing the chart. Direct tick generation caps the limit at 1,000, and built-in numeric formatters cap precision at 324 places even when fields are set directly, preventing overflow and formatting panics. Migration: lower saved `tick_marks.max_marks` values above 1,000 before restoring; formatter precisions above 324 now produce at most 324 decimal places. ([#947](https://github.com/userFRM/egui-charts/issues/947))
