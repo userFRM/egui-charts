@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Symbol search validates arithmetic expressions such as `AAPL-MSFT`, reports invalid symbols and syntax, and returns a synthetic instrument. `services::SymbolExpression` evaluates expressions and aligns component histories by timestamp; the demo charts spreads in their own panes. ([#976](https://github.com/userFRM/egui-charts/issues/976))
+
+- Symbol search offers an exchange source menu through `SymbolSearchDialog::set_sources` and expands instruments sharing `Instrument::root`. Results and recents retain separate exchange listings, and selection returns the exact instrument. The demo includes two futures expiries for drilldown. ([#975](https://github.com/userFRM/egui-charts/issues/975))
+
+- Compare lists recent symbols through `CompareSymbolsDialog::set_storage`, including with a local catalog. Aligned 56-point rows show host marks, descriptions, type badges and optional `Instrument::country`. Rows offer Same % scale, New price scale and New pane, with an Add menu in narrow windows. Migration: match `CompareAction::AddSymbol(symbol, placement)`; `ComparePlacement::SamePercentScale` preserves the former behaviour. ([#999](https://github.com/userFRM/egui-charts/issues/999), [#962](https://github.com/userFRM/egui-charts/issues/962))
 - The indicator templates menu has Indicators and Templates pages for one-click study additions and saved-template application. Hosts supply starred studies through `TopToolbar::favorite_indicators` and handle `TopToolbarAction::AddIndicator`. Save indicator template remains available, and empty pages explain how to fill them. ([#1004](https://github.com/userFRM/egui-charts/issues/1004))
 
 - Alt+Shift+Left and Home navigate to the first bar; Alt+Shift+Right and End return to the latest, preserving zoom. Period, Alt+D and Alt+Shift+E request Open layout, Data window and session switching through `ShortcutMap`; text fields keep their keys. The demo scrolls its saved-layout chooser and toggles SAMPLE between regular and extended hours, including from its initial 24/7 session. Continuous markets retain their session. ([#983](https://github.com/userFRM/egui-charts/issues/983))
@@ -321,6 +326,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Symbol search opens at 840 by 680 points, centred and constrained to the window, with 32-point rows and wrapping categories. `Instrument::logo` and `exchange_logo` supply marks with text fallbacks. Search and Compare share 20-point corners and a light backdrop near #F1F1F1 over white; dark themes retain their overlay. `Modal::backdrop` allows a host override. ([#998](https://github.com/userFRM/egui-charts/issues/998), [#1012](https://github.com/userFRM/egui-charts/issues/1012))
+
+- Quick search opens with an empty, focused query and an instruction to type. Commands are listed, and the best match highlighted, only once the query matches them; Enter still runs the highlighted match. ([#1000](https://github.com/userFRM/egui-charts/issues/1000))
 - Study appearance and input edits keep settings snapshots in chart undo history instead of copying calculated columns. Undo and redo restore the saved inputs and presentation and recompute against current data; removed studies retain their original implementation. ([#944](https://github.com/userFRM/egui-charts/issues/944))
 
 - Drawing sync notifications coalesce per drawing and overflow after 1,024 actions into `DrawingSyncAction::ResyncRequired`. Hosts replace their stored set with the manager's saveable drawings, deleting absent records. Automatic storage disables notifications. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`; enabling requests a full replacement. ([#948](https://github.com/userFRM/egui-charts/issues/948))
@@ -337,7 +345,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Demo alerts retain independent live symbol sources and their creation interval across symbol changes and replay. Watchlist members have separate occurrence state and log their actual triggering symbol through `AlertEvent::TriggeredForSymbol`. Editing source references refreshes the retained study definitions without changing the alert's clock or session; expiry also works with an empty watchlist. Monitoring lasts while the demo runs; durable evaluation, market feeds and remote delivery remain host-owned. ([#961](https://github.com/userFRM/egui-charts/issues/961))
 
-- The demo saves comparison symbols, styles, visibility, pane positions and price scales beside each layout's chart snapshots, and recreates their synthetic feed bindings on restore. Save As, rename and autosave retain these definitions; older layouts open without comparisons. ([#960](https://github.com/userFRM/egui-charts/issues/960))
+- The demo saves comparison symbols and arithmetic spreads, including styles, visibility, pane positions and price scales, beside each layout's chart snapshots, and recreates their synthetic feed bindings on restore. Save As, rename and autosave retain these definitions; older layouts open without comparisons. ([#960](https://github.com/userFRM/egui-charts/issues/960))
 
 - Chart settings use the active representation's Symbol controls for line styles, area and baseline fills, and price-based construction inputs. The demo's top gear, price-axis gear, main-series menu and main-series double-click open the same seven-tab dialog with current values. `ChartSettingsState` literals add `chart_type`, `chart_type_params` and `price_source`, or use `..Default::default()`; older saved settings retain the chart's existing parameters. `SettingsAction::Apply` carries `Box<ChartSettingsState>`; dereference it when passing settings to an owned setter. ([#965](https://github.com/userFRM/egui-charts/issues/965), [#966](https://github.com/userFRM/egui-charts/issues/966))
 

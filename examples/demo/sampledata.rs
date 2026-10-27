@@ -102,6 +102,20 @@ impl DemoSymbol {
                 start_price: 1.08,
                 seed: 53,
             },
+            DemoSymbol {
+                symbol: "ESZ2026",
+                company_name: "S&P 500 futures, December 2026",
+                exchange: "CME",
+                start_price: 5_100.0,
+                seed: 59,
+            },
+            DemoSymbol {
+                symbol: "ESH2027",
+                company_name: "S&P 500 futures, March 2027",
+                exchange: "CME",
+                start_price: 5_120.0,
+                seed: 61,
+            },
             // Neutral name for published screenshots: no real ticker with made-up prices.
             DemoSymbol {
                 symbol: "SAMPLE",
@@ -131,13 +145,18 @@ impl DemoSymbol {
                     "Crypto" => SymbolType::Crypto,
                     "Index" => SymbolType::Index,
                     "Forex" => SymbolType::Forex,
+                    "CME" => SymbolType::Futures,
                     "Synthetic" => SymbolType::Fund,
                     _ => SymbolType::Stock,
                 };
-                Instrument::new(s.symbol)
+                let mut instrument = Instrument::new(s.symbol)
                     .with_description(s.company_name)
                     .with_exchange(s.exchange)
-                    .with_symbol_type(kind)
+                    .with_symbol_type(kind);
+                if kind == SymbolType::Futures {
+                    instrument = instrument.with_root("ES");
+                }
+                instrument
             })
             .collect()
     }

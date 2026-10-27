@@ -960,6 +960,7 @@ impl Datafeed for LiveFeed {
             "Crypto" => "Cryptocurrency",
             "Index" => "Index",
             "Forex" => "Currency pair",
+            "CME" => "Futures",
             "Synthetic" => "Fund",
             _ => "Stock",
         };

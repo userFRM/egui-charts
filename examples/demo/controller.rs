@@ -314,6 +314,8 @@ pub struct DemoApp {
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
+    /// Spreads picked in symbol search, with feeds of their symbols.
+    spreads: Vec<comparison::Spread>,
     storage: Arc<storage::DemoStorage>,
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
@@ -549,6 +551,7 @@ impl DemoApp {
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparisons: Vec::new(),
+            spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
             storage,
             grid_edits: 0,
@@ -668,6 +671,17 @@ impl DemoApp {
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
+        app.compare_dialog.set_storage(app.storage.clone());
+        let mut sources = Vec::new();
+        for exchange in DemoSymbol::symbols()
+            .into_iter()
+            .filter_map(|row| row.exchange)
+        {
+            if !sources.contains(&exchange) {
+                sources.push(exchange);
+            }
+        }
+        app.symbol_search.set_sources(sources);
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
             .find(|row| row.symbol == symbol)
@@ -999,6 +1013,8 @@ impl DemoApp {
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
                 self.watchlist.add_symbol(&picked.symbol);
+            } else if picked.symbol_type == Some(egui_charts::model::SymbolType::Spread) {
+                self.add_spread(&picked.symbol);
             } else {
                 self.switch_symbol(&picked.symbol);
             }
@@ -1253,6 +1269,7 @@ impl eframe::App for DemoApp {
                 feed.advance(chrono::Utc::now());
                 comparison::refresh(&mut extra.chart, *id, feed);
             }
+            comparison::refresh_spreads(&mut extra.chart, &mut extra.spreads, extra.live.paused());
             if !extra.live.paused() {
                 ctx.request_repaint_after(delay);
             }
@@ -3955,51 +3972,74 @@ mod tests {
     fn typed_symbol_search_keeps_queued_editing_keys() {
         use eframe::App;
         use egui_charts::drawings::{Drawing, DrawingToolType};
-        let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
-        app.chart
-            .drawings_mut()
-            .drawings
-            .push(Drawing::new(7, DrawingToolType::TrendLine));
-        app.chart.drawings_mut().select(7);
-        let key = |key| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        };
-        for events in [
-            vec![
-                egui::Event::Text("SAMX".into()),
-                key(egui::Key::Backspace),
-                egui::Event::Text("PLE".into()),
-            ],
-            vec![key(egui::Key::Enter)],
+        for (typed, suffix, expected) in [
+            ("SAMX", "PLE", "SAMPLE"),
+            ("ESZ202X", "6", "ESZ2026"),
+            ("ESH202X", "7", "ESH2027"),
         ] {
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-            )
-            .drop_without_applying_deltas();
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.chart
+                .drawings_mut()
+                .drawings
+                .push(Drawing::new(7, DrawingToolType::TrendLine));
+            app.chart.drawings_mut().select(7);
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for events in [
+                vec![
+                    egui::Event::Text(typed.into()),
+                    key(egui::Key::Backspace),
+                    egui::Event::Text(suffix.into()),
+                ],
+                vec![key(egui::Key::Enter)],
+            ] {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                )
+                .drop_without_applying_deltas();
+                if app.symbol_search.is_open() {
+                    assert_eq!(
+                        app.chart.drawings().drawings.len(),
+                        1,
+                        "search editing must not delete drawings"
+                    );
+                }
+            }
+            assert!(
+                !app.symbol_search.is_open(),
+                "Enter selects the edited {expected} query"
+            );
+            assert_eq!(app.chart.symbol(), expected);
+            if expected.starts_with("ES") {
+                assert_eq!(
+                    app.chart.instrument().unwrap().exchange.as_deref(),
+                    Some("CME")
+                );
+            }
+            assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
+            if expected == "SAMPLE" {
+                assert_eq!(
+                    app.chart.drawings().drawings.len(),
+                    1,
+                    "search editing must not delete drawings"
+                );
+            }
         }
-        assert!(
-            !app.symbol_search.is_open(),
-            "Enter selects the edited SAMPLE query"
-        );
-        assert_eq!(
-            app.chart.drawings().drawings.len(),
-            1,
-            "search editing must not delete drawings"
-        );
     }
 
     /// A bare number enters minutes and Enter applies it through the normal host path.
@@ -4451,7 +4491,7 @@ mod tests {
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into()));
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
         app.add_series_pane();
         let rsi = app
             .chart
@@ -4475,6 +4515,7 @@ mod tests {
             .series_price_scale_mut(id)
             .unwrap()
             .set_range(100.0, 200.0);
+        app.add_spread("AAPL-MSFT");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         for _ in 0..3 {
             ctx.run_ui(Default::default(), |ui| {
@@ -4505,6 +4546,21 @@ mod tests {
             );
             assert_eq!(app.extra_charts.len(), 1);
             assert_eq!(app.extra_charts[0].comparisons.len(), 2);
+            assert_eq!(app.spreads.len(), 1);
+            assert_eq!(app.extra_charts[0].spreads.len(), 1);
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                let spreads: Vec<_> = chart
+                    .series()
+                    .filter(|(_, options)| options.name == "AAPL-MSFT")
+                    .collect();
+                assert_eq!(spreads.len(), 1, "restore each spread exactly once");
+                let id = spreads[0].0;
+                assert!(!chart.bars(id).is_empty());
+                assert_ne!(
+                    chart.series_pane(id),
+                    Some(egui_charts::widget::PaneId::MAIN)
+                );
+            }
             for (_, id, _) in &app.extra_charts[0].comparisons {
                 assert!(!app.extra_charts[0].chart.bars(*id).is_empty());
             }
@@ -4640,93 +4696,142 @@ mod tests {
 
     #[test]
     fn comparison_dialog_adds_hides_and_removes_chart_series() {
-        let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
-        app.chart.set_feed_paused(true);
-        let main_symbol = app.chart.symbol().to_owned();
-        let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
-        app.handle_top_toolbar(&ctx, TopToolbarAction::OpenCompare);
-        for (label, count, visible) in [
-            ("AAPL", 1, true),
-            ("Hide", 1, false),
-            ("Show", 1, true),
-            ("X", 0, false),
+        use egui_charts::model::SeriesScale;
+        use egui_charts::ui::top_toolbar::ComparePlacement;
+        for (placement, main_scale, add_label) in [
+            (
+                ComparePlacement::SamePercentScale,
+                SeriesScale::Right,
+                "AAPL",
+            ),
+            (
+                ComparePlacement::NewPriceScale,
+                SeriesScale::Separate(1),
+                "New price scale",
+            ),
+            (ComparePlacement::NewPane, SeriesScale::Right, "New pane"),
         ] {
-            let mut frame = |events| {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(1440.0, 900.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| app.show_dialogs(ui.ctx()),
-                );
-                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                pos
-            };
-            frame(vec![]);
-            let pos = frame(vec![]).expect("comparison action is visible");
-            frame(vec![egui::Event::PointerMoved(pos)]);
-            for pressed in [true, false] {
-                frame(vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                }]);
-            }
-            let comparisons: Vec<_> = app
-                .chart
-                .series()
-                .filter(|(_, series)| series.name == "AAPL")
-                .collect();
-            assert_eq!(
-                comparisons.len(),
-                count,
-                "{label} must change actual chart membership"
-            );
-            if let Some((id, _)) = comparisons.first() {
-                assert_eq!(app.chart.is_series_visible(*id), visible);
-                assert!(!app.chart.bars(*id).is_empty());
-            }
-            if label == "AAPL" {
-                let colour = comparisons[0].1.color;
-                let mut painted = false;
-                for _ in 0..3 {
-                    let output = ctx.run_ui(Default::default(), |ui| {
-                        app.show_chart(ui, app.theme.chart.bg)
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.chart.set_feed_paused(true);
+            app.chart.set_series_scale(SeriesId::MAIN, main_scale);
+            let main_symbol = app.chart.symbol().to_owned();
+            let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::OpenCompare);
+            for (label, count, visible) in [
+                ("AAPL", 1, true),
+                ("Hide", 1, false),
+                ("Show", 1, true),
+                ("X", 0, false),
+            ] {
+                let mut frame = |events, target| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1440.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.show_dialogs(ui.ctx()),
+                    );
+                    let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == target => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
                     });
-                    painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(colour)));
                     output.drop_without_applying_deltas();
+                    pos
+                };
+                frame(vec![], label);
+                let mut pos = frame(vec![], label).expect("comparison action is visible");
+                frame(vec![egui::Event::PointerMoved(pos)], label);
+                if label == "AAPL" {
+                    pos = frame(vec![], add_label).expect("placement choice is visible");
+                    frame(vec![egui::Event::PointerMoved(pos)], add_label);
                 }
-                assert!(painted, "comparison prices must be painted");
-                let template = app.current_study_template();
+                for pressed in [true, false] {
+                    frame(
+                        vec![egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                        label,
+                    );
+                }
+                let comparisons: Vec<_> = app
+                    .chart
+                    .series()
+                    .filter(|(_, series)| series.name == "AAPL")
+                    .collect();
                 assert_eq!(
-                    template
-                        .iter()
-                        .map(|study| study.name.as_str())
-                        .collect::<Vec<_>>(),
-                    ["Volume"]
+                    comparisons.len(),
+                    count,
+                    "{label} must change actual chart membership"
                 );
-                app.load_study_template(&template);
-                assert!(app.chart.series().any(|(_, series)| series.name == "AAPL"));
+                if let Some((id, _)) = comparisons.first() {
+                    assert_eq!(app.chart.is_series_visible(*id), visible);
+                    assert!(!app.chart.bars(*id).is_empty());
+                    match placement {
+                        ComparePlacement::SamePercentScale => {
+                            assert_eq!(app.chart.series_scale(*id), Some(main_scale));
+                            assert_eq!(
+                                app.chart
+                                    .series_price_scale(SeriesId::MAIN)
+                                    .unwrap()
+                                    .options()
+                                    .mode,
+                                egui_charts::scales::PriceScaleMode::Percentage
+                            );
+                        }
+                        ComparePlacement::NewPriceScale => {
+                            assert_ne!(app.chart.series_scale(*id), Some(main_scale));
+                            assert_eq!(
+                                app.chart.series_pane(*id),
+                                Some(egui_charts::widget::PaneId::MAIN)
+                            );
+                        }
+                        ComparePlacement::NewPane => assert_ne!(
+                            app.chart.series_pane(*id),
+                            Some(egui_charts::widget::PaneId::MAIN)
+                        ),
+                        _ => unreachable!(),
+                    }
+                }
+                if label == "AAPL" {
+                    let colour = comparisons[0].1.color;
+                    let mut painted = false;
+                    for _ in 0..3 {
+                        let output = ctx.run_ui(Default::default(), |ui| {
+                            app.show_chart(ui, app.theme.chart.bg)
+                        });
+                        painted |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(colour)));
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(painted, "comparison prices must be painted");
+                    let template = app.current_study_template();
+                    assert_eq!(
+                        template
+                            .iter()
+                            .map(|study| study.name.as_str())
+                            .collect::<Vec<_>>(),
+                        ["Volume"]
+                    );
+                    app.load_study_template(&template);
+                    assert!(app.chart.series().any(|(_, series)| series.name == "AAPL"));
+                }
+                assert_eq!(app.compare_dialog.compared_symbols.len(), count);
+                assert_eq!(app.chart.symbol(), main_symbol);
+                assert!(
+                    app.chart.bars(SeriesId::MAIN) == main_bars,
+                    "comparison actions must preserve the main data"
+                );
             }
-            assert_eq!(app.compare_dialog.compared_symbols.len(), count);
-            assert_eq!(app.chart.symbol(), main_symbol);
-            assert!(
-                app.chart.bars(SeriesId::MAIN) == main_bars,
-                "comparison actions must preserve the main data"
-            );
         }
     }
 

@@ -3,7 +3,7 @@
 use crate::data::{FeedError, inbox::Inbox};
 use crate::localization as l10n;
 use crate::model::{Instrument, SymbolType};
-use crate::services::{StoreKind, SymbolQuery, SymbolSearch};
+use crate::services::{ExpressionError, StoreKind, SymbolExpression, SymbolQuery, SymbolSearch};
 use crate::ui::dialogs::templates::TemplateStore;
 use std::sync::Arc;
 
@@ -13,6 +13,11 @@ pub(super) struct Recent {
     description: String,
     exchange: String,
     kind: Option<SymbolType>,
+    /// Marks and country, absent from lists saved before they were kept.
+    logo: Option<String>,
+    exchange_logo: Option<String>,
+    country: Option<String>,
+    root: Option<String>,
 }
 
 impl Recent {
@@ -20,6 +25,10 @@ impl Recent {
         let mut symbol = Instrument::new(&self.name).with_description(&self.description);
         symbol.exchange = Some(self.exchange.clone());
         symbol.symbol_type = self.kind;
+        symbol.logo = self.logo.clone();
+        symbol.exchange_logo = self.exchange_logo.clone();
+        symbol.country = self.country.clone();
+        symbol.root = self.root.clone();
         symbol
     }
 }
@@ -36,6 +45,16 @@ pub(super) struct Search {
     pub(super) exchange: Option<String>,
     pub(super) recents: TemplateStore<Vec<Recent>>,
     opened: Vec<Recent>,
+    components: Components,
+}
+
+/// The lookups of an expression's symbols: one search each, answered under its position.
+#[derive(Default)]
+struct Components {
+    text: String,
+    inbox: Arc<Inbox>,
+    /// Per symbol: `None` while unanswered, then the catalog's spelling or its lookup error.
+    found: Vec<Option<Result<String, String>>>,
 }
 
 impl Default for Search {
@@ -52,6 +71,7 @@ impl Default for Search {
             exchange: None,
             recents: TemplateStore::new(StoreKind::RecentSymbols),
             opened: Vec::new(),
+            components: Components::default(),
         }
     }
 }
@@ -74,18 +94,25 @@ impl Search {
         self.more = false;
         self.error = None;
         self.offset = 0;
+        self.components = Components::default();
     }
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
-        self.opened.retain(|row| row.name != symbol.symbol);
+        let exchange = symbol.exchange.clone().unwrap_or_default();
+        self.opened
+            .retain(|row| row.name != symbol.symbol || row.exchange != exchange);
         self.opened.push(Recent {
             name: symbol.symbol.clone(),
             description: symbol
                 .description
                 .clone()
                 .unwrap_or_else(|| symbol.symbol.clone()),
-            exchange: symbol.exchange.clone().unwrap_or_default(),
+            exchange,
             kind: symbol.symbol_type,
+            logo: symbol.logo.clone(),
+            exchange_logo: symbol.exchange_logo.clone(),
+            country: symbol.country.clone(),
+            root: symbol.root.clone(),
         });
     }
 
@@ -99,7 +126,7 @@ impl Search {
                 .cloned()
                 .unwrap_or_default();
             for row in self.opened.drain(..) {
-                recent.retain(|old| old.name != row.name);
+                recent.retain(|old| old.name != row.name || old.exchange != row.exchange);
                 recent.insert(0, row);
             }
             recent.truncate(20);
@@ -122,7 +149,9 @@ impl Search {
                     self.more = rows.len() >= limit && limit > 0;
                     self.offset += rows.len();
                     for instrument in rows.into_iter().take(limit) {
-                        if self.rows.iter().any(|row| row.symbol == instrument.symbol) {
+                        if self.rows.iter().any(|row| {
+                            row.symbol == instrument.symbol && row.exchange == instrument.exchange
+                        }) {
                             continue;
                         }
                         self.rows.push(instrument);
@@ -150,6 +179,16 @@ impl Search {
             .into_iter()
             .flatten()
             .map(|row| row.name.clone())
+            .collect()
+    }
+
+    pub(super) fn recent_results(&self) -> Vec<Instrument> {
+        self.recents
+            .entries()
+            .get("recent")
+            .into_iter()
+            .flatten()
+            .map(Recent::symbol)
             .collect()
     }
 
@@ -181,10 +220,7 @@ impl Search {
             }
         }
         if recent {
-            self.rows = self.recents.entries()["recent"]
-                .iter()
-                .map(Recent::symbol)
-                .collect();
+            self.rows = self.recent_results();
             self.more = false;
             self.loading = false;
             self.inbox = Arc::default();
@@ -202,6 +238,75 @@ impl Search {
             self.loading = true;
             source.search(query, self.inbox.reply(0));
         }
+    }
+
+    /// Looks up each symbol of `expression`, parsed from `text`, through the host service, or in
+    /// `fallback` without one, and spells it as the catalog does, ignoring case. `None` while
+    /// lookups are outstanding.
+    pub(super) fn resolve(
+        &mut self,
+        ctx: &egui::Context,
+        text: &str,
+        mut expression: SymbolExpression,
+        fallback: &[Instrument],
+    ) -> Option<Result<SymbolExpression, String>> {
+        let symbols: Vec<String> = expression.symbols().into_iter().map(Into::into).collect();
+        if self.components.text != text {
+            self.components = Components {
+                text: text.into(),
+                inbox: Arc::default(),
+                found: vec![None; symbols.len()],
+            };
+            let source: Arc<dyn SymbolSearch> = match &self.source {
+                Some(source) => source.clone(),
+                None => Arc::new(fallback.to_vec()),
+            };
+            for (at, symbol) in symbols.iter().enumerate() {
+                let query = SymbolQuery {
+                    text: symbol.clone(),
+                    symbol_type: None,
+                    exchange: None,
+                    offset: 0,
+                    limit: 20,
+                };
+                source.search(query, self.components.inbox.reply(at as u64));
+            }
+        }
+        let repaint = ctx.clone();
+        let viewport = ctx.viewport_id();
+        self.components
+            .inbox
+            .set_waker(move || repaint.request_repaint_of(viewport));
+        for (at, answer) in self.components.inbox.drain().answers {
+            let at = at as usize;
+            let rows = *answer
+                .downcast::<Result<Vec<Instrument>, FeedError>>()
+                .expect("symbol search");
+            self.components.found[at] =
+                Some(rows.map_err(|error| error.to_string()).and_then(|rows| {
+                    rows.into_iter()
+                        .map(|row| row.symbol)
+                        .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
+                        .ok_or_else(|| {
+                            ExpressionError::UnknownSymbol(symbols[at].clone()).to_string()
+                        })
+                }));
+        }
+        let found = match self
+            .components
+            .found
+            .iter()
+            .cloned()
+            .collect::<Option<Result<Vec<_>, _>>>()?
+        {
+            Ok(found) => found,
+            Err(error) => return Some(Err(error)),
+        };
+        expression.rename_symbols(|symbol| {
+            let at = symbols.iter().position(|name| name == symbol);
+            found[at.expect("symbol of the expression")].clone()
+        });
+        Some(Ok(expression))
     }
 
     pub(super) fn results(&self) -> Vec<Instrument> {
@@ -285,6 +390,55 @@ mod tests {
             "empty page ends pagination"
         );
     }
+    #[test]
+    fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
+        let ctx = egui::Context::default();
+        let source = Arc::new(Source::default());
+        let mut search = Search::default();
+        search.set_service(Some(source.clone()));
+        let expression = SymbolExpression::parse("A-B").unwrap();
+        assert!(
+            search
+                .resolve(&ctx, "A-B", expression.clone(), &[])
+                .is_none()
+        );
+        let requests = std::mem::take(&mut *source.0.lock().unwrap());
+        let failure = FeedError::Network("offline".into());
+        let expected = failure.to_string();
+        for (query, reply) in requests {
+            if query.text == "A" {
+                reply.send(Err(failure.clone()));
+            } else {
+                reply.send(Ok(vec![Instrument::new("B")]));
+            }
+        }
+        let result = search.resolve(&ctx, "A-B", expression, &[]).unwrap();
+        assert_eq!(result.unwrap_err().to_string(), expected);
+    }
+
+    #[test]
+    fn listings_keep_their_exchange_in_results_and_recents() {
+        let ctx = egui::Context::default();
+        let listings = vec![
+            Instrument::new("ABC").with_exchange("X").with_root("ABC"),
+            Instrument::new("ABC").with_exchange("Y").with_root("ABC"),
+        ];
+        let mut search = Search::default();
+        search.set_service(Some(Arc::new(listings.clone())));
+        search.query(&ctx, "ABC", None, 20);
+        assert_eq!(search.results(), listings);
+        for listing in [&listings[0], &listings[1], &listings[0]] {
+            search.record(listing);
+        }
+        search.poll(&ctx);
+        search.query(&ctx, "", None, 20);
+        for (actual, expected) in search.results().iter().zip(&listings) {
+            assert_eq!(actual.exchange, expected.exchange);
+            assert_eq!(actual.root, expected.root);
+        }
+        assert_eq!(search.results().len(), 2);
+    }
+
     #[derive(Default)]
     struct Vault(Mutex<Option<String>>);
     impl crate::services::Storage for Vault {
@@ -317,7 +471,8 @@ mod tests {
         let mut search = Search::default();
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
-            search.record(&Instrument::new(symbol).with_description("Host name"));
+            let symbol = Instrument::new(symbol).with_description("Host name");
+            search.record(&symbol.with_logo("bytes://logo").with_country("US"));
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -339,7 +494,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
-        assert_eq!(restored.rows[0].description.as_deref(), Some("Host name"));
+        let row = &restored.rows[0];
+        assert_eq!(
+            (
+                row.description.as_deref(),
+                row.logo.as_deref(),
+                row.country.as_deref()
+            ),
+            (Some("Host name"), Some("bytes://logo"), Some("US"))
+        );
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));
         for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {
