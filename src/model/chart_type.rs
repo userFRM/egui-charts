@@ -38,7 +38,8 @@ pub enum ChartType {
     Candles,
     /// Hollow when close > open, filled when close < open
     HollowCandles,
-    /// Candle width proportional to volume
+    /// Candle body width proportional to the bar's volume over the largest visible volume;
+    /// a zero volume draws a body as thin as the wick
     VolumeCandles,
 
     // === Line-Based Types ===

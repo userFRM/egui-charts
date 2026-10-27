@@ -346,6 +346,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Volume candle bodies are as wide as the bar's volume over the largest visible volume, with no hidden minimum: a zero or missing volume draws a body as thin as the wick, and without any visible volume every body keeps the full width. ([#1104](https://github.com/userFRM/egui-charts/issues/1104))
+
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
 
 - `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))

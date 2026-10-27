@@ -252,7 +252,8 @@ pub(super) fn render_heikin_ashi(
     }
 }
 
-/// Volume candles: width proportional to volume
+/// Volume candles: body width proportional to the bar's share of `max_volume`, the largest
+/// visible volume.
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -279,13 +280,15 @@ pub(super) fn render_volume_candles(
         let color = bar_color(bar, bullish_color, bearish_color);
         let y = OhlcYCoords::from_bar(bar, &coords);
 
-        // Scale bar width by volume (30% to 100% of base width)
-        let volume_ratio = if max_volume > 0.0 {
-            (bar.volume / max_volume).clamp(0.3, 1.0) as f32
+        // A zero or missing volume leaves a body as thin as the wick; without any visible
+        // volume every body keeps the full bar width.
+        let volume_ratio = if max_volume.is_finite() && max_volume > 0.0 {
+            let volume = if bar.volume.is_finite() { bar.volume } else { 0.0 };
+            (volume / max_volume).clamp(0.0, 1.0) as f32
         } else {
             1.0
         };
-        let bar_width = base_bar_width * volume_ratio;
+        let bar_width = (base_bar_width * volume_ratio).max(wick_width);
 
         draw_wicks(painter, x, &y, wick_width, color);
         draw_body_filled(painter, x, bar_width, &y, color);
@@ -461,6 +464,71 @@ mod tests {
             }
             output.drop_without_applying_deltas();
             assert_eq!((drawn_bodies, drawn_wicks), (bodies, wicks), "{style:?}");
+        }
+    }
+
+    /// Volumes 0, 1 and 10 under a largest visible volume of 10 draw bodies 1 (the wick),
+    /// 2 and 20 points wide out of 20; a larger visible maximum narrows them, and without
+    /// any visible volume every body keeps the full width.
+    #[test]
+    fn volume_candle_bodies_scale_with_their_share_of_the_largest_volume() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        for (volumes, max_volume, widths) in [
+            ([0.0, 1.0, 10.0], 10.0, [1.0, 2.0, 20.0]),
+            ([0.0, 1.0, 10.0], 20.0, [1.0, 1.0, 10.0]),
+            ([f64::NAN, 5.0, 10.0], 10.0, [1.0, 10.0, 20.0]),
+            ([0.0, 0.0, 0.0], 0.0, [20.0, 20.0, 20.0]),
+        ] {
+            let bars = volumes.map(|volume| {
+                Bar::new(chrono::DateTime::UNIX_EPOCH, 40.0, 60.0, 30.0, 50.0, volume)
+            });
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_volume_candles(
+                    &context,
+                    &context,
+                    &map,
+                    &colors,
+                    &bars,
+                    0,
+                    20.0,
+                    1.0,
+                    max_volume,
+                    0.0,
+                    |i, _| 25.0 + i as f32 * 50.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+            });
+            let drawn: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Rect(body) => Some(body.rect.width()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(drawn, widths, "{volumes:?} / {max_volume}");
         }
     }
 }
