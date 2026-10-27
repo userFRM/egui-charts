@@ -700,6 +700,11 @@ mod tests {
                 egui::Pos2::new(pane.chart_rect.right() - 22.0, pane.panel_rect.top() + 2.0),
                 Vec2::splat(20.0),
             );
+            let menu = painted.iter().any(|shape| {
+                matches!(shape, Shape::Text(text)
+                if text.galley.text() == "..." && pane.panel_rect.contains(text.pos))
+            });
+            assert_eq!(menu, visibility == ButtonVisibility::AlwaysVisible);
             let icon = painted
                 .iter()
                 .any(|shape| matches!(shape, Shape::Rect(rect) if button.contains_rect(rect.rect)));

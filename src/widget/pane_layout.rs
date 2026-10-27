@@ -895,9 +895,7 @@ impl Chart {
         collapsed: bool,
     ) {
         self.pane_maximize_button(ui, id, rect, plot);
-        if !self.pane_buttons_visible(ui, rect) {
-            return;
-        }
+        let visible = self.pane_buttons_visible(ui, rect);
         let button = Rect::from_min_size(
             Pos2::new(plot.right() - 42.0, rect.top() + 2.0),
             egui::vec2(20.0, 20.0),
@@ -909,6 +907,10 @@ impl Chart {
                 .id_salt((id, "pane_actions"))
                 .max_rect(button),
         );
+        // The menu stays in the frame while hidden, so a menu opened in one pane survives its neighbours.
+        if !visible {
+            child.set_invisible();
+        }
         let panes = &self.pane_layout.panes;
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
