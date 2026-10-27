@@ -360,8 +360,12 @@ impl<'a> Legend<'a> {
                 .ctx()
                 .data(|data| data.get_temp::<bool>(id.with("flag")).unwrap_or(false));
             // Tab reaches the controls through the title, which stays revealed while one of
-            // them has focus.
-            let title_response = ui.interact(title_rect, id.with("title"), Sense::click());
+            // them has focus. It takes focus only, so clicks on it still reach the chart.
+            let title_response = ui.interact(
+                title_rect,
+                id.with("title"),
+                Sense::focusable_noninteractive(),
+            );
             title_response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::Button, true, "Series controls")
             });
