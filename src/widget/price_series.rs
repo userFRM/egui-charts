@@ -54,7 +54,7 @@ fn shared_prices(
 }
 
 /// Display settings of a host-fed bar series.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SeriesOptions {
     /// Host-supplied title, displayed beside the series values.
     pub name: String,
