@@ -4,6 +4,7 @@ use super::{Storage, StoreKind};
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// An answer [`StoredDocument::poll`] received.
 pub(crate) enum Received {
@@ -28,6 +29,9 @@ pub(crate) struct StoredDocument {
     waiting: Option<String>,
     /// Whether the last write failed, so that a run of failures is reported once.
     failing: bool,
+    /// Input time of the last poll and the earliest automatic retry after a failure.
+    now: f64,
+    retry_at: Option<f64>,
 }
 
 impl StoredDocument {
@@ -43,6 +47,8 @@ impl StoredDocument {
             writing: None,
             waiting: None,
             failing: false,
+            now: 0.0,
+            retry_at: None,
         }
     }
 
@@ -56,6 +62,7 @@ impl StoredDocument {
     pub(crate) fn refuse_writes(&mut self) {
         self.writable = Some(false);
         self.waiting = None;
+        self.retry_at = None;
     }
 
     /// Writes `document` after the write in flight. Dropped before the document has been read,
@@ -68,12 +75,11 @@ impl StoredDocument {
             self.waiting = None;
             return;
         }
-        if self.waiting.as_ref() == Some(&document) {
-            return;
-        }
-        if self.writing.is_some() {
+        if self.writing.is_some() || self.retry_at.is_some() {
             self.waiting = Some(document);
         } else {
+            self.waiting = None;
+            self.retry_at = None;
             self.writing = Some(document.clone());
             storage.save(self.kind, &self.name, document, self.inbox.reply(1));
         }
@@ -81,7 +87,13 @@ impl StoredDocument {
 
     /// Whether an unconfirmed write could still replace the stored document.
     pub(crate) fn saving(&self) -> bool {
-        self.writing.is_some()
+        self.writing.is_some() || self.waiting.is_some()
+    }
+
+    /// Whether reading succeeded and no write remains unacknowledged.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn flushed(&self) -> bool {
+        self.writable == Some(true) && !self.saving()
     }
 
     /// Takes the answers that arrived, sends the document waiting for them and wakes the UI on
@@ -89,7 +101,28 @@ impl StoredDocument {
     pub(crate) fn poll(&mut self, storage: &dyn Storage, ctx: &egui::Context) -> Vec<Received> {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
-        self.receive(storage)
+        self.now = ctx.input(|input| input.time);
+        let mut received = self.receive(storage);
+        if self.retry_at.is_some_and(|at| at <= self.now) {
+            received.extend(self.flush(storage));
+        }
+        if let Some(at) = self.retry_at {
+            ctx.request_repaint_after(Duration::from_secs_f64((at - self.now).max(0.0)));
+        }
+        received
+    }
+
+    /// Retries retained writes now, draining inline replies without waiting for asynchronous ones.
+    pub(crate) fn flush(&mut self, storage: &dyn Storage) -> Vec<Received> {
+        let mut received = self.receive(storage);
+        if self.writing.is_none()
+            && let Some(document) = self.waiting.take()
+        {
+            self.retry_at = None;
+            self.save(storage, document);
+            received.extend(self.receive(storage));
+        }
+        received
     }
 
     /// Finishes replies already available, including inline writes, without changing the waker.
@@ -127,24 +160,127 @@ impl StoredDocument {
                 match answer {
                     Ok(()) => {
                         self.failing = false;
+                        self.retry_at = None;
                         received.push(Received::Saved(document));
                     }
-                    Err(error) if !self.failing => {
+                    Err(error) => {
+                        self.waiting.get_or_insert(document);
+                        self.retry_at = Some(self.now + 1.0);
+                        if !self.failing {
+                            received.push(Received::Failed(format!(
+                                "Could not save {}: {error}",
+                                self.name
+                            )));
+                        }
                         self.failing = true;
-                        received.push(Received::Failed(format!(
-                            "Could not save {}: {error}",
-                            self.name
-                        )));
                     }
-                    Err(_) => {}
                 }
             }
-            if self.writing.is_none()
+            if !self.failing
+                && self.writing.is_none()
                 && let Some(document) = self.waiting.take()
             {
                 self.save(storage, document);
             }
         }
         received
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Reply;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Host(Mutex<Vec<(String, Reply<()>)>>);
+
+    impl Storage for Host {
+        fn list(&self, _: StoreKind, _: Reply<Vec<String>>) {
+            unreachable!()
+        }
+        fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(None));
+        }
+        fn save(&self, _: StoreKind, _: &str, document: String, reply: Reply<()>) {
+            self.0.lock().unwrap().push((document, reply));
+        }
+        fn delete(&self, _: StoreKind, _: &str, _: Reply<()>) {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn failed_writes_retain_the_latest_document_and_retry_once_per_second() {
+        for (before_failure, after_failure) in [(false, false), (true, false), (false, true)] {
+            let host = Host::default();
+            let ctx = egui::Context::default();
+            let mut document = StoredDocument::open(&host, StoreKind::Drawings, "A");
+            let poll = |document: &mut StoredDocument, time| {
+                let mut received = Vec::new();
+                ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |_| {
+                        received = document.poll(&host, &ctx);
+                    },
+                )
+                .drop_without_applying_deltas();
+                received
+            };
+            poll(&mut document, 9.0);
+            document.save(&host, "first".into());
+            if before_failure {
+                document.save(&host, "latest".into());
+            }
+            let (_, reply) = host.0.lock().unwrap().pop().unwrap();
+            reply.send(Err(FeedError::Network("offline".into())));
+            assert!(matches!(
+                poll(&mut document, 10.0).as_slice(),
+                [Received::Failed(_)]
+            ));
+            assert!(document.saving(), "a failed write is still dirty");
+            assert!(host.0.lock().unwrap().is_empty());
+            if after_failure {
+                document.save(&host, "latest".into());
+            }
+            poll(&mut document, 10.99);
+            assert!(
+                host.0.lock().unwrap().is_empty(),
+                "retry must wait one second"
+            );
+            poll(&mut document, 11.0);
+            let (json, reply) = host.0.lock().unwrap().pop().unwrap();
+            assert_eq!(
+                json,
+                if before_failure || after_failure {
+                    "latest"
+                } else {
+                    "first"
+                }
+            );
+            reply.send(Err(FeedError::Network("offline".into())));
+            assert!(
+                poll(&mut document, 11.0).is_empty(),
+                "report a run of failures once"
+            );
+            poll(&mut document, 11.99);
+            assert!(host.0.lock().unwrap().is_empty());
+            poll(&mut document, 12.0);
+            let (json, reply) = host.0.lock().unwrap().pop().unwrap();
+            reply.send(Ok(()));
+            assert!(
+                matches!(poll(&mut document, 12.0).as_slice(), [Received::Saved(saved)] if saved == &json)
+            );
+            assert!(!document.saving());
+            poll(&mut document, 600.0);
+            assert!(
+                host.0.lock().unwrap().is_empty(),
+                "acknowledged writes need no retry"
+            );
+        }
     }
 }

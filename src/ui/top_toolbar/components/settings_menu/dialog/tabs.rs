@@ -11,6 +11,7 @@ use egui::{Color32, FontId, RichText, Ui};
 use super::SettingsDialog;
 use crate::theme::Theme;
 use crate::ui_kit::ColorPicker;
+use crate::ui_kit::ext::UiExt;
 
 use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
@@ -314,59 +315,85 @@ impl SettingsDialog {
                     "Analyst price targets",
                     theme.ui.text,
                 );
-                // CANDLE COLORS
-                self.draw_section_header(ui, "CANDLE COLORS", theme);
+                let kind = self.settings.chart_type;
+                if kind.is_time_independent()
+                    || !kind.uses_ohlc()
+                    || kind == crate::model::ChartType::TimePriceOpportunity
+                {
+                    let mut series = crate::chart::series::SeriesSettings {
+                        chart_type: kind,
+                        chart_type_params: self
+                            .settings
+                            .chart_type_params
+                            .clone()
+                            .unwrap_or_default(),
+                        price_source: self.settings.price_source.unwrap_or_default(),
+                        bullish_color: self.settings.candle_colors.body_up,
+                        bearish_color: self.settings.candle_colors.body_down,
+                        ..Default::default()
+                    };
+                    crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                    self.settings.chart_type_params = Some(series.chart_type_params);
+                    self.settings.price_source = Some(series.price_source);
+                    self.settings.candle_colors.body_up = series.bullish_color;
+                    self.settings.candle_colors.body_down = series.bearish_color;
+                } else {
+                    // CANDLE COLORS
+                    self.draw_section_header(ui, "CANDLE COLORS", theme);
 
-                self.draw_setting_row_with_controls(ui, "Body", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Body", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.body_up = color;
+                        }
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.body_down = color;
+                        }
+                    });
 
-                self.draw_setting_row_with_controls(ui, "Border", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_down, "border_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Border", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.border_up = color;
+                        }
+                        if let Some(color) = ColorPicker::new(
+                            &mut dialog.color_picker_states.border_down,
+                            "border_down",
+                        )
+                        .show(ui)
+                        .inner
+                        {
+                            dialog.settings.candle_colors.border_down = color;
+                        }
+                    });
 
-                self.draw_setting_row_with_controls(ui, "Wick", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_down = color;
-                    }
-                });
+                    self.draw_setting_row_with_controls(ui, "Wick", theme, |ui, dialog| {
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.wick_up = color;
+                        }
+                        if let Some(color) =
+                            ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
+                                .show(ui)
+                                .inner
+                        {
+                            dialog.settings.candle_colors.wick_down = color;
+                        }
+                    });
+                }
 
                 ui.add_space(ui.active_theme().spacing.xxl);
 
@@ -635,32 +662,14 @@ impl SettingsDialog {
             "Instant orders placement",
             text,
         );
-        let sounds = &self.execution_sounds;
-        let play = trading.play_execution_sound;
-        trading_option(
+        sound_controls(
             ui,
-            0.0,
-            &mut trading.play_execution_sound,
             "Play sound for executions",
-            text,
-            |ui| {
-                if let Some(first) = sounds.first() {
-                    let sound = &mut trading.execution_sound;
-                    let selected = if sound.is_empty() { first } else { &*sound }.clone();
-                    ui.add_enabled_ui(play, |ui| {
-                        styled_dropdown(ui, "execution_sound", 140.0, text, &selected, |ui| {
-                            for name in sounds {
-                                if ui
-                                    .selectable_label(selected == *name, l10n::text(ui.ctx(), name))
-                                    .clicked()
-                                {
-                                    sound.clone_from(name);
-                                }
-                            }
-                        });
-                    });
-                }
-            },
+            &mut trading.play_execution_sound,
+            &mut trading.execution_sound,
+            &mut trading.execution_sound_volume,
+            &self.execution_sounds,
+            &mut self.sound_preview,
         );
         ui.horizontal(|ui| {
             ui.set_min_height(42.0);
@@ -742,6 +751,16 @@ impl SettingsDialog {
             ui.add_space(0.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "ALERT SETTINGS", theme);
+                let alerts = &mut self.settings.alerts;
+                sound_controls(
+                    ui,
+                    "Play sound for alerts",
+                    &mut alerts.play_sound,
+                    &mut alerts.sound,
+                    &mut alerts.sound_volume,
+                    &self.execution_sounds,
+                    &mut self.sound_preview,
+                );
 
                 self.draw_setting_row_with_controls(ui, "Color", theme, |ui, dialog| {
                     if let Some(color) =
@@ -853,6 +872,37 @@ impl SettingsDialog {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+fn sound_controls(
+    ui: &mut Ui,
+    label: &str,
+    enabled: &mut bool,
+    sound: &mut String,
+    volume: &mut f32,
+    sounds: &[String],
+    preview: &mut Option<(String, f32)>,
+) {
+    styled_checkbox(ui, enabled, label, ui.active_theme().ui.text);
+    let Some(first) = sounds.first() else { return };
+    if sound.is_empty() {
+        sound.clone_from(first);
+    }
+    ui.add_enabled_ui(*enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.combo_select(label, sound, sounds.iter().cloned(), Clone::clone);
+            ui.add(egui::Slider::new(volume, 0.0..=1.0).text(l10n::text(ui.ctx(), "Volume")));
+        });
+        if ui.button(l10n::text(ui.ctx(), "Test sound")).clicked() {
+            *preview = Some((sound.clone(), *volume));
+        }
+        if cfg!(target_arch = "wasm32") {
+            ui.label(l10n::text(
+                ui.ctx(),
+                "Click Test sound to enable browser audio.",
+            ));
+        }
+    });
+}
 
 fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, line: &mut bool) {
     let mut mode = (*label, *line);

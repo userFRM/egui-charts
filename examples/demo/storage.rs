@@ -54,6 +54,37 @@ impl DemoStorage {
         }
     }
 
+    pub(super) fn save_comparisons(
+        &self,
+        name: &str,
+        comparisons: &[Vec<super::comparison::SavedComparison>],
+    ) -> Result<(), String> {
+        let document = serde_json::to_string(comparisons).map_err(|error| error.to_string())?;
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(format!("layout-comparisons/{name}"), document);
+        self.changed.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(super) fn comparisons(
+        &self,
+        name: &str,
+    ) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&format!("layout-comparisons/{name}"))
+            .map_or_else(
+                || Ok(Vec::new()),
+                |json| {
+                    serde_json::from_str(json)
+                        .map_err(|error| format!("Could not open comparisons: {error}"))
+                },
+            )
+    }
+
     fn write(&self, kind: StoreKind, name: &str, document: Option<String>) {
         let mut documents = self.documents.lock().unwrap();
         match document {
@@ -93,6 +124,12 @@ impl Storage for DemoStorage {
     }
     fn delete(&self, kind: StoreKind, name: &str, reply: Reply<()>) {
         self.write(kind, name, None);
+        if kind == StoreKind::Layouts {
+            self.documents
+                .lock()
+                .unwrap()
+                .remove(&format!("layout-comparisons/{name}"));
+        }
         reply.send(Ok(()));
     }
 }

@@ -17,6 +17,9 @@ impl ChartSettingsState {
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self {
+            chart_type: chart.chart_type(),
+            chart_type_params: Some(chart.chart_type_params().clone()),
+            price_source: Some(chart.config().price_source),
             events: chart.event_visibility().clone(),
             show_price_targets: chart.price_targets_visible(),
             ..Self::default()
@@ -167,6 +170,19 @@ impl ChartSettingsState {
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err("Crosshair width must be above zero");
         }
+        for volume in [
+            self.trading.execution_sound_volume,
+            self.alerts.sound_volume,
+        ] {
+            if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+                return Err("Sound volume must be between zero and one");
+            }
+        }
+        if let Some(params) = &self.chart_type_params
+            && let Some(error) = params.invalid(self.chart_type)
+        {
+            return Err(error);
+        }
         Ok(timezone)
     }
 
@@ -175,6 +191,15 @@ impl ChartSettingsState {
     /// margins or crosshair width returns an error before changing the chart.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), &'static str> {
         let timezone = self.validate()?;
+        if let Some(params) = &self.chart_type_params {
+            if let Some(error) = params.invalid(chart.chart_type()) {
+                return Err(error);
+            }
+            chart.set_chart_type_params(params.clone());
+        }
+        if let Some(source) = self.price_source {
+            chart.config_mut().price_source = source;
+        }
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
         let watermark_text = if self.watermark.mode == WatermarkMode::SymbolAndDescription {

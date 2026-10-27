@@ -145,6 +145,7 @@ impl Chart {
             ));
         }
         let mut manager = DrawingManager::new();
+        manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
         manager.options = self.drawings.options.clone();
         manager.tool_defaults = self.drawings.tool_defaults.clone();

@@ -85,6 +85,19 @@ pub(super) fn render_item_menu(
             action = ObjectTreeAction::SendToBack(id);
             ui.close();
         }
+        if !item.panes.is_empty() {
+            ui.menu_button(l10n::text(ui.ctx(), "Move to"), |ui| {
+                for (pane, title) in &item.panes {
+                    if ui
+                        .selectable_label(false, l10n::text(ui.ctx(), title))
+                        .clicked()
+                    {
+                        action = ObjectTreeAction::MoveToPane(id, *pane);
+                        ui.close();
+                    }
+                }
+            });
+        }
 
         ui.separator();
     }

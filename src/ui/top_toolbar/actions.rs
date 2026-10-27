@@ -22,6 +22,9 @@ pub enum TopToolbarAction {
     ChartStyleSelected(crate::model::ChartType),
     /// Open indicators dialog
     OpenIndicators,
+    /// Ask the host to add the study registered under this name, chosen among
+    /// [`TopToolbar::favorite_indicators`](super::TopToolbar::favorite_indicators).
+    AddIndicator(String),
     /// Ask the host to save the current indicator set.
     SaveIndicatorTemplate,
     /// Ask the host to apply the saved indicator set with this id.

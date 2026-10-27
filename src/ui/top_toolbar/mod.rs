@@ -30,7 +30,6 @@ pub use components::{
     IndicatorDialogAction,
     IndicatorDialogConfig,
     IndicatorInfo,
-    IndicatorParams,
     IndicatorTab,
     LayoutAction,
     LayoutMenu,

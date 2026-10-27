@@ -125,6 +125,8 @@ pub struct SourceItem {
     pub properties: Option<DrawingProperties>,
     /// Indicator parameters string (for indicators, e.g., "20, close")
     pub parameters: Option<String>,
+    /// Panes a drawing row's Move to menu offers, by stable id and title; empty leaves it out.
+    pub panes: Vec<(crate::widget::PaneId, String)>,
 }
 
 impl SourceItem {
@@ -154,6 +156,7 @@ impl SourceItem {
                 ..Default::default()
             }),
             parameters: None,
+            panes: Vec::new(),
         }
     }
 
@@ -180,6 +183,7 @@ impl SourceItem {
             z_index: id as i32,
             properties: None,
             parameters: None,
+            panes: Vec::new(),
         }
     }
 
@@ -219,6 +223,7 @@ impl SourceItem {
             z_index: id as i32,
             properties: None,
             parameters: None,
+            panes: Vec::new(),
         }
     }
 
@@ -244,12 +249,20 @@ impl SourceItem {
             z_index: 0,     // Data source is always at z-index 0
             properties: None,
             parameters: None,
+            panes: Vec::new(),
         }
     }
 
     /// Bind a data-source or indicator row to its chart series without overloading the tree's ids.
     pub fn with_series_id(mut self, id: crate::widget::SeriesId) -> Self {
         self.series_id = Some(id);
+        self
+    }
+
+    /// Offer the panes of `chart` other than the one drawing this row's drawing as its Move to
+    /// choices, applied with [`ObjectTreePanel::apply_to_chart`](super::ObjectTreePanel::apply_to_chart).
+    pub fn with_panes(mut self, chart: &crate::widget::Chart) -> Self {
+        self.panes = crate::ui::dialogs::drawing_context_menu::move_targets(chart, self.id);
         self
     }
 

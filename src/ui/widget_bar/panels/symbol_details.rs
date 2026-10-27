@@ -10,8 +10,8 @@ use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use super::object_tree::{format_price, price_decimals};
-use super::watchlist::{HEADER_HEIGHT, signed, weighted};
+use super::object_tree::price_decimals;
+use super::watchlist::{HEADER_HEIGHT, grouped, signed, weighted};
 use crate::data::inbox::Inbox;
 use crate::data::{Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
@@ -22,8 +22,8 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
 
-/// Text size of the last price, the panel's largest figure.
-const PRICE_SIZE: f32 = 24.0;
+/// Text size of the last price, the panel's largest figure: digits about 19 points high.
+const PRICE_SIZE: f32 = 26.0;
 /// Text size of the extended-hours price.
 const EXTENDED_PRICE_SIZE: f32 = 18.0;
 /// The sections the layout menu shows or hides, in panel order.
@@ -62,8 +62,9 @@ enum Request {
 /// regular last price; update times are shown in the time zone set with
 /// [`set_timezone`](Self::set_timezone), UTC by default. The header's layout button shows or
 /// hides sections, the edit button moves to the notes, and a feed that supplies
-/// [`SymbolDetails::url`] gets a link to the instrument beside its name. For each new symbol the
-/// panel asks the feed for [`Datafeed::symbol_details`] and shows the statistics and profile it
+/// [`SymbolDetails::url`] gets a link to the instrument beside its name, and one that supplies
+/// [`SymbolDetails::category`] gets the category under it. For each new symbol the panel asks the
+/// feed for [`Datafeed::symbol_details`] and shows the statistics, on a card, and the profile it
 /// answers; an empty section, or a feed that does not support the request, shows nothing. Notes
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
@@ -294,6 +295,13 @@ impl SymbolDetailsPanel {
 
     /// Render the shown symbol after [`poll`](Self::poll).
     pub fn show(&mut self, ui: &mut Ui) {
+        // Inset like the watchlist's symbol column, so the title and prices line up with it.
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(10, 0))
+            .show(ui, |ui| self.contents(ui));
+    }
+
+    fn contents(&mut self, ui: &mut Ui) {
         let Self {
             instrument,
             quote,
@@ -394,6 +402,16 @@ impl SymbolDetailsPanel {
                         }
                     });
                 }
+                if let Some(category) = details.as_ref().and_then(|d| d.category.as_deref()) {
+                    ui.add(
+                        Label::new(
+                            RichText::new(l10n::text(ui.ctx(), category))
+                                .size(theme.text.small)
+                                .color(theme.ui.text_secondary),
+                        )
+                        .truncate(),
+                    );
+                }
                 if let Some(quote) = quote {
                     let decimals =
                         (instrument.price_decimals).unwrap_or_else(|| price_decimals(quote.last));
@@ -488,19 +506,35 @@ impl SymbolDetailsPanel {
                             continue;
                         }
                         ui.add_space(theme.spacing.md);
-                        ui.label(RichText::new(title).strong());
-                        for (label, value) in rows {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(l10n::text(ui.ctx(), label))
-                                        .color(theme.ui.text_secondary),
-                                );
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.add(
-                                        Label::new(l10n::text(ui.ctx(), value.as_str())).truncate(),
+                        let facts = |ui: &mut Ui| {
+                            ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
+                            for (label, value) in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), label))
+                                            .color(theme.ui.text_secondary),
                                     );
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.add(
+                                            Label::new(l10n::text(ui.ctx(), value.as_str()))
+                                                .truncate(),
+                                        );
+                                    });
                                 });
-                            });
+                            }
+                        };
+                        if title == "Key statistics" {
+                            // The key facts stand apart from the profile on an accent-tinted card.
+                            egui::Frame::new()
+                                .fill(theme.ui.accent.gamma_multiply(0.1))
+                                .corner_radius(theme.radius.md)
+                                .inner_margin(theme.spacing.md)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    facts(ui);
+                                });
+                        } else {
+                            facts(ui);
                         }
                     }
                 }
@@ -548,7 +582,7 @@ fn price_line(
     };
     // One text, so the figures of different sizes share a baseline.
     let mut job = LayoutJob::single_section(
-        l10n::text(ui.ctx(), format_price(price, Some(decimals))),
+        l10n::text(ui.ctx(), grouped(price, usize::from(decimals))),
         weighted(size, 700.0, theme.ui.text),
     );
     if let Some(currency) = currency {
@@ -740,6 +774,9 @@ mod tests {
     #[test]
     fn details_follow_the_symbol_and_notes_are_written_one_at_a_time() {
         let ctx = egui::Context::default();
+        l10n::set_translator(&ctx, |text| {
+            (text == "Key statistics").then(|| "Facts".to_owned())
+        });
         let feed = Arc::new(Feed::default());
         let store = Arc::new(Store::default());
         let mut panel = SymbolDetailsPanel::new();
@@ -751,12 +788,17 @@ mod tests {
         let requests = std::mem::take(&mut *feed.0.lock().unwrap());
         for (symbol, reply) in requests.into_iter().rev() {
             let statistics = vec![("Market cap".into(), format!("{symbol} cap"))];
-            reply.send(Ok(SymbolDetails::new(statistics, Vec::new())));
+            reply.send(Ok(SymbolDetails::new(statistics, Vec::new())
+                .with_category(format!("{symbol} category"))));
         }
         panel.poll(&ctx);
         let shown = texts(&ctx, &mut panel);
         assert!(shown.contains(&"MSFT cap".into()), "{shown:?}");
         assert!(!shown.contains(&"AAPL cap".into()), "{shown:?}");
+        assert!(shown.contains(&"MSFT category".into()), "{shown:?}");
+        assert!(!shown.contains(&"AAPL category".into()), "{shown:?}");
+        assert!(shown.contains(&"Facts".into()), "{shown:?}");
+        assert!(!shown.contains(&"Key statistics".into()), "{shown:?}");
         assert!(!shown.contains(&"Profile".into()), "{shown:?}");
 
         // A second edit waits for the first write of the same document, then writes the latest text.

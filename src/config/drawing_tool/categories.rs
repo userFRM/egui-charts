@@ -85,6 +85,7 @@ impl DrawingToolType {
                 Self::ShortPos,
                 Self::Forecast,
                 Self::BarsPattern,
+                Self::GhostFeed,
                 Self::ProjectionTool,
             ],
             "volume" => vec![
@@ -126,13 +127,14 @@ impl DrawingToolType {
                 Self::Note,
                 Self::PriceNote,
                 Self::AnchoredNote,
+                Self::Table,
                 Self::Callout,
                 Self::Comment,
                 Self::PriceLabel,
                 Self::Signpost,
                 Self::FlagNote,
             ],
-            "content" => Vec::new(),
+            "content" => vec![Self::Image, Self::Tweet, Self::Idea],
             "icons" => vec![Self::FontIcon, Self::Sticker],
             _ => vec![Self::TrendLine],
         }
