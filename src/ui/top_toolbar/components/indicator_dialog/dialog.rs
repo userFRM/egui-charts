@@ -364,8 +364,6 @@ impl IndicatorDialog {
         SidebarLayout::new(SIDEBAR_WIDTH).show(
             ui,
             |ui| {
-                ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
-                ui.visuals_mut().selection.stroke.color = theme.ui.text;
                 for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
                     ui.add_space(theme.spacing.xxl);
                     ui.label(

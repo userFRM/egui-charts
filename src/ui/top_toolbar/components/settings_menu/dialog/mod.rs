@@ -26,6 +26,9 @@ use std::collections::HashSet;
 // Settings Dialog (Modal)
 // ============================================================================
 
+/// Width of the tab sidebar, before it yields to narrow windows.
+const SIDEBAR_WIDTH: f32 = 206.0;
+
 /// Modal settings dialog with tabbed interface.
 ///
 /// Edits chart display settings, event category visibility and the host trading and
@@ -253,6 +256,7 @@ impl SettingsDialog {
         Modal::new("chart_settings", "Chart settings")
             .width(width)
             .height(height)
+            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 ui.add_space(theme.spacing.xxl);
                 action = self.draw_content(ui, theme);
@@ -288,19 +292,21 @@ impl SettingsDialog {
         let content_height = (ui.available_height() - 68.0).max(0.0);
 
         let seam_top = ui.cursor().top();
-        let seam_x = ui.cursor().left()
-            + 184.0_f32.min(ui.available_width() * 0.4)
-            + ui.spacing().item_spacing.x;
+        let sidebar_width = SIDEBAR_WIDTH.min(ui.available_width() * 0.4);
+        let seam_x = ui.cursor().left() + sidebar_width + ui.spacing().item_spacing.x;
         let mut active = self.active_tab;
         ui.allocate_ui(Vec2::new(ui.available_width(), content_height), |ui| {
-            SidebarLayout::new(184.0_f32.min(ui.available_width() * 0.4)).show(
+            SidebarLayout::new(sidebar_width).show(
                 ui,
                 |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("settings_tabs")
                         .show(ui, |ui| {
                             for tab in SettingsTab::all() {
-                                if SidebarTab::new(tab.name(), active == *tab).show(ui) {
+                                if SidebarTab::new(tab.name(), active == *tab)
+                                    .icon(tab.icon())
+                                    .show(ui)
+                                {
                                     active = *tab;
                                 }
                             }
