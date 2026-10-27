@@ -137,7 +137,7 @@ pub(crate) struct TextEditState {
 /// - **Selection** via [`SelectionService`]
 /// - **Undo/redo** via [`HistoryService`]
 /// - **Snapping** via [`SnapService`]
-/// - **Handle manipulation** via [`HandleService`]
+/// - **Handle manipulation** via [`HandleService`](crate::drawings::services::HandleService)
 ///
 /// # Frame loop integration
 ///
