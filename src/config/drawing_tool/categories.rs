@@ -85,6 +85,7 @@ impl DrawingToolType {
                 Self::ShortPos,
                 Self::Forecast,
                 Self::BarsPattern,
+                Self::GhostFeed,
                 Self::ProjectionTool,
             ],
             "volume" => vec![

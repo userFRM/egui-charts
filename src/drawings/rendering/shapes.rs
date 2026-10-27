@@ -309,7 +309,6 @@ mod tests {
                                 | DrawingToolType::Image
                                 | DrawingToolType::Tweet
                                 | DrawingToolType::Idea
-                                | DrawingToolType::GhostFeed
                         ),
                         "unfinished {tool:?} in {category}"
                     );

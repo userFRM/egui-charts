@@ -157,6 +157,7 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                     DrawingToolType::ShortPos,
                     DrawingToolType::Forecast,
                     DrawingToolType::BarsPattern,
+                    DrawingToolType::GhostFeed,
                     DrawingToolType::ProjectionTool,
                 ],
             ),
