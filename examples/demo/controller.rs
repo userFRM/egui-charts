@@ -454,9 +454,10 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Earlier releases saved active palettes without an explicit choice.
         let theme_choice = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, "dark_theme"));
+            .and_then(|storage| eframe::get_value(storage, "theme_choice"));
         let dark = theme_choice
             .or_else(|| {
                 cc.egui_ctx
@@ -1221,6 +1222,9 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(dark) = self.theme_choice {
+            eframe::set_value(storage, "theme_choice", &dark);
+        }
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1365,6 +1369,13 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(ui);
+        if let Some(dark) = self.theme_choice
+            && let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<bool>(storage, "theme_choice") != Some(dark)
+        {
+            eframe::set_value(storage, "theme_choice", &dark);
+            storage.flush();
+        }
         self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
@@ -3560,9 +3571,22 @@ mod tests {
     }
 
     #[test]
-    fn theme_selection_survives_restart_and_initializes_the_chart() {
+    fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         use eframe::App;
-        for initial in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+        use egui_charts::drawings::DrawingToolType;
+        let cases = [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)]
+            .into_iter()
+            .flat_map(|initial| {
+                [
+                    (None, None),
+                    (Some(true), None),
+                    (Some(false), None),
+                    (Some(true), Some("dark")),
+                    (Some(false), Some("light")),
+                ]
+                .map(|(key, document)| (initial, key, document))
+            });
+        for (initial, legacy_key, legacy_document) in cases {
             let ctx = egui::Context::default();
             ctx.run_ui(
                 egui::RawInput {
@@ -3573,10 +3597,36 @@ mod tests {
             )
             .drop_without_applying_deltas();
             let mut storage = AppStorage::default();
+            if let Some(dark) = legacy_key {
+                eframe::set_value(&mut storage, "dark_theme", &dark);
+            }
+            if let Some(theme) = legacy_document {
+                // Earlier releases saved the active theme even without a user choice.
+                let settings = format!(
+                    r#"{{"version":1,"theme":"{theme}","symbol":"AAPL","interval":"Min5","drawing_favorites":["TrendLine"],"layout":null,"layout_autosave":true}}"#
+                );
+                eframe::set_value(
+                    &mut storage,
+                    "templates",
+                    &std::collections::HashMap::from([
+                        ("Settings/settings", settings.as_str()),
+                        ("Layouts/Kept", "saved layout"),
+                    ]),
+                );
+            }
             for explicit in [false, true, true] {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
+                if legacy_document.is_some() {
+                    assert_eq!(app.state.symbol, "AAPL");
+                    assert_eq!(app.state.timeframe, Timeframe::Min5);
+                    assert_eq!(
+                        app.drawing_toolbar.state.favorites,
+                        [DrawingToolType::TrendLine]
+                    );
+                    assert!(app.top_toolbar.layout_menu.autosave);
+                }
                 if !explicit {
                     assert_eq!(app.theme.dark, initial == Some(egui::Theme::Dark));
                 }
@@ -3612,6 +3662,11 @@ mod tests {
                     assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
                 }
                 app.save(&mut storage);
+                if legacy_document.is_some() {
+                    let documents: std::collections::HashMap<String, String> =
+                        eframe::get_value(&storage, "templates").unwrap();
+                    assert_eq!(documents["Layouts/Kept"], "saved layout");
+                }
                 drop(app);
                 ctx.run_ui(
                     egui::RawInput {
