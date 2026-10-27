@@ -9,6 +9,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -43,6 +44,17 @@ impl Default for Momentum {
     }
 }
 
+impl Momentum {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        (0..data.len())
+            .map(|i| match i.checked_sub(self.period) {
+                Some(prev) => IndicatorValue::Single(data[i].close - data[prev].close),
+                None => IndicatorValue::None,
+            })
+            .collect()
+    }
+}
+
 impl Indicator for Momentum {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -67,12 +79,23 @@ impl Indicator for Momentum {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = (0..data.len())
-            .map(|i| match i.checked_sub(self.period) {
-                Some(prev) => IndicatorValue::Single(data[i].close - data[prev].close),
-                None => IndicatorValue::None,
-            })
-            .collect();
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

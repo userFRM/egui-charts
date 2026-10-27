@@ -3,7 +3,8 @@
 //! Provides utilities for rendering SVG icons with proper
 //! theme colors based on hover/active state.
 
-use crate::icons::Icon;
+use crate::icons::{Icon, icons};
+use crate::theme::ThemeExt;
 use egui::{Rect, Ui, Vec2};
 
 /// Render SVG icon centered in a rect with theme-aware colors.
@@ -61,4 +62,29 @@ pub fn render_svg_centered(
 ) {
     let rect = Rect::from_center_size(center, Vec2::splat(size));
     render_svg_at_rect_themed(ui, icon, rect, is_hovered, is_active);
+}
+
+/// Match visible rail ink rather than the transparent padding of each SVG viewport.
+pub(super) fn rail_icon_size(icon: &Icon) -> Vec2 {
+    if icon.name == icons::TREND_LINE.name {
+        Vec2::splat(29.0)
+    } else if icon.name == icons::FIB_RETRACEMENT.name {
+        Vec2::new(34.0, 27.0)
+    } else if icon.name == icons::MEASURE.name {
+        Vec2::splat(31.0)
+    } else {
+        Vec2::splat(crate::tokens::DESIGN_TOKENS.sizing.toolbar.icon_size)
+    }
+}
+
+/// Default light rail ink is black; custom theme colours and disabled contrast stay intact.
+pub(super) fn rail_icon_color(ui: &Ui) -> egui::Color32 {
+    let theme = ui.active_theme();
+    if !ui.is_enabled() {
+        theme.ui.text_disabled
+    } else if !theme.dark && theme.ui.text == egui::Color32::from_gray(26) {
+        egui::Color32::BLACK
+    } else {
+        theme.ui.text
+    }
 }

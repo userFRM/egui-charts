@@ -25,10 +25,10 @@
 //! assert_eq!(alligator.plot_offset(0), 8);
 //! ```
 
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -42,6 +42,7 @@ pub struct WilliamsAlligator {
     teeth_offset: usize,
     lips_offset: usize,
     values: IndicatorValues,
+    stepper: Stepper<[Smoothing; 3]>,
     colors: [Color32; 3],
     visible: bool,
 }
@@ -58,6 +59,7 @@ impl WilliamsAlligator {
             teeth_offset: 5,
             lips_offset: 3,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: [palette::ACCENT, palette::PINK, palette::GREEN],
             visible: true,
         }
@@ -67,16 +69,6 @@ impl WilliamsAlligator {
     pub fn with_offsets(mut self, jaw: usize, teeth: usize, lips: usize) -> Self {
         (self.jaw_offset, self.teeth_offset, self.lips_offset) = (jaw, teeth, lips);
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let median: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
-        let lines = [self.jaw_length, self.teeth_length, self.lips_length]
-            .map(|n| helpers::rma(&median, n));
-        (0..data.len())
-            .map(|i| IndicatorValue::Multiple(lines.iter().map(|line| line[i]).collect()))
-            .collect()
     }
 }
 
@@ -112,11 +104,27 @@ impl Indicator for WilliamsAlligator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let median = (bar.high + bar.low) / 2.0;
+                let values = state
+                    .iter_mut()
+                    .zip([self.jaw_length, self.teeth_length, self.lips_length])
+                    .map(|(average, n)| average.next(median, n, 1.0 / n as f64))
+                    .collect();
+                IndicatorValue::Multiple(values)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn plot_offset(&self, line: usize) -> isize {

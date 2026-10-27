@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -13,6 +13,7 @@ pub struct ElderRay {
     /// EMA period (typically 13)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<Smoothing>,
     /// Colors: [Bull Power (green), Bear Power (red)]
     colors: Vec<Color32>,
     visible: bool,
@@ -24,6 +25,7 @@ impl ElderRay {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::GREEN, // Green - Bull Power
                 palette::RED,   // Red - Bear Power
@@ -36,40 +38,6 @@ impl ElderRay {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate EMA
-        let ema = helpers::ema_sma(
-            &data.iter().map(|b| b.close).collect::<Vec<_>>(),
-            self.period,
-        );
-
-        // Calculate Bull Power and Bear Power
-        for i in 0..data.len() {
-            if ema[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                // Bull Power = High - EMA
-                let bull_power = data[i].high - ema[i];
-                // Bear Power = Low - EMA
-                let bear_power = data[i].low - ema[i];
-
-                values.push_lines(&[bull_power, bear_power]);
-            }
-        }
-
-        values
     }
 }
 
@@ -98,11 +66,26 @@ impl Indicator for ElderRay {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let ema = state.next(bar.close, self.period, 2.0 / (self.period as f64 + 1.0));
+                if ema.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![bar.high - ema, bar.low - ema])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

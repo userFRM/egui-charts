@@ -1,8 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
-use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -18,8 +17,20 @@ pub struct SchaffTrendCycle {
     /// Stochastic cycle period (typically 10)
     cycle: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    index: usize,
+    count: usize,
+    ema: [Smoothing; 2],
+    macd: std::collections::VecDeque<f64>,
+    first: std::collections::VecDeque<f64>,
+    smooth: [f64; 2],
+    pending: Vec<(usize, f64)>,
 }
 
 impl SchaffTrendCycle {
@@ -30,6 +41,7 @@ impl SchaffTrendCycle {
             macd_long: 50,
             cycle: 10,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::CYAN,
             visible: true,
         }
@@ -49,93 +61,19 @@ impl SchaffTrendCycle {
         self
     }
 
-    fn stochastic(values: &[f64], period: usize) -> Vec<f64> {
-        let mut result = Vec::with_capacity(values.len());
-        let highest = rolling_max(values.iter().copied(), period);
-        let lowest = rolling_min(values.iter().copied(), period);
-        for i in 0..values.len() {
-            if i < period - 1 || values[i].is_nan() {
-                result.push(f64::NAN);
-                continue;
-            }
-            let (high, low) = (highest[i], lowest[i]);
-            let range = high - low;
-
-            if range == 0.0 {
-                result.push(50.0); // Middle of range
-            } else {
-                let stoch = (values[i] - low) / range * 100.0;
-                result.push(stoch);
-            }
+    fn stochastic(values: &std::collections::VecDeque<f64>, period: usize) -> f64 {
+        let value = *values.back().unwrap();
+        if values.len() < period || value.is_nan() {
+            return f64::NAN;
         }
-
-        result
-    }
-
-    fn smooth_stochastic(values: &[f64], factor: f64) -> Vec<f64> {
-        let mut result = Vec::with_capacity(values.len());
-        let mut prev = 0.0;
-
-        for &value in values {
-            if value.is_nan() {
-                result.push(f64::NAN);
-            } else {
-                let smoothed = prev + factor * (value - prev);
-                result.push(smoothed);
-                prev = smoothed;
-            }
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let range = high - low;
+        if range == 0.0 {
+            50.0
+        } else {
+            (value - low) / range * 100.0
         }
-
-        result
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.macd_long.saturating_add(self.cycle) {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Get closes
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate MACD line (short EMA - long EMA)
-        let short_ema = helpers::ema_sma(&closes, self.macd_short);
-        let long_ema = helpers::ema_sma(&closes, self.macd_long);
-
-        let mut macd = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if short_ema[i].is_nan() || long_ema[i].is_nan() {
-                macd.push(f64::NAN);
-            } else {
-                macd.push(short_ema[i] - long_ema[i]);
-            }
-        }
-
-        // First Stochastic of MACD
-        let stoch1 = Self::stochastic(&macd, self.cycle);
-        let smooth1 = Self::smooth_stochastic(&stoch1, 0.5);
-
-        // Second Stochastic of smoothed values
-        let stoch2 = Self::stochastic(&smooth1, self.cycle);
-        let stc = Self::smooth_stochastic(&stoch2, 0.5);
-
-        // Store results
-        for value in stc {
-            if value.is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                // Clamp to 0-100 range
-                let clamped = value.clamp(0.0, 100.0);
-                values.push(IndicatorValue::Single(clamped));
-            }
-        }
-
-        values
     }
 }
 
@@ -167,7 +105,78 @@ impl Indicator for SchaffTrendCycle {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.index;
+                state.index += 1;
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                let short = state.ema[0].next(
+                    bar.close,
+                    self.macd_short,
+                    2.0 / (self.macd_short as f64 + 1.0),
+                );
+                let long = state.ema[1].next(
+                    bar.close,
+                    self.macd_long,
+                    2.0 / (self.macd_long as f64 + 1.0),
+                );
+                let macd = if short.is_nan() || long.is_nan() {
+                    f64::NAN
+                } else {
+                    short - long
+                };
+                state.macd.push_back(macd);
+                if state.macd.len() > self.cycle {
+                    state.macd.pop_front();
+                }
+                let first = Self::stochastic(&state.macd, self.cycle);
+                let smooth = if first.is_nan() {
+                    f64::NAN
+                } else {
+                    state.smooth[0] += 0.5 * (first - state.smooth[0]);
+                    state.smooth[0]
+                };
+                state.first.push_back(smooth);
+                if state.first.len() > self.cycle {
+                    state.first.pop_front();
+                }
+                let second = Self::stochastic(&state.first, self.cycle);
+                if second.is_nan() {
+                    return IndicatorValue::None;
+                }
+                state.smooth[1] += 0.5 * (second - state.smooth[1]);
+                let value = state.smooth[1].clamp(0.0, 100.0);
+                if state.count < self.macd_long.saturating_add(self.cycle) {
+                    if value.is_finite() {
+                        state.pending.push((index, value));
+                    }
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(value)
+                }
+            });
+        let required = self.macd_long.saturating_add(self.cycle);
+        for &(index, value) in &self.stepper.state().pending {
+            self.values.set(
+                index,
+                if self.stepper.state().count < required {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(value)
+                },
+            );
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

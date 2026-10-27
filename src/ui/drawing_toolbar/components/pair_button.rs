@@ -7,7 +7,7 @@ use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
-use super::svg_helpers::render_svg_at_rect_themed;
+use super::svg_helpers::{rail_icon_color, rail_icon_size, render_svg_at_rect_themed};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Response from a pair button interaction
@@ -212,7 +212,7 @@ impl<'a> PairButton<'a> {
     /// - Outer rect: 52×38px
     /// - Inner hover rect: 9px horizontal margin, 2px vertical margin
     /// - Inner rounding: the theme's medium radius
-    /// - Icon: 24×24 centered
+    /// - Icon: optically sized and centered
     pub fn show_styled(&self, ui: &mut Ui) -> PairButtonResponse {
         let tokens = &DESIGN_TOKENS.sizing.toolbar;
         let btn_width = tokens.button_width;
@@ -220,7 +220,6 @@ impl<'a> PairButton<'a> {
         let margin_h = tokens.hover_margin_h;
         let margin_v = tokens.hover_margin_v;
         let inner_rounding = ui.active_theme().radius.md;
-        let icon_size = tokens.icon_size;
 
         let cursor_pos = ui.cursor().min;
 
@@ -291,9 +290,11 @@ impl<'a> PairButton<'a> {
         }
 
         // Draw icon centered in inner rect (with visibility check)
-        let icon_rect = Rect::from_center_size(inner_rect.center(), Vec2::splat(icon_size));
+        let icon_rect = Rect::from_center_size(inner_rect.center(), rail_icon_size(self.icon));
         if ui.is_rect_visible(icon_rect) {
-            render_svg_at_rect_themed(ui, self.icon, icon_rect, any_hovered, self.is_icon_active);
+            self.icon
+                .as_image_tinted(icon_rect.size(), rail_icon_color(ui))
+                .paint_at(ui, icon_rect);
         }
 
         // Draw arrow at right edge (with visibility check)

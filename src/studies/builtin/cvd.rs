@@ -4,8 +4,8 @@
 //! volume. Bars do not say which trades were buys, so the delta is estimated
 //! from the bar's shape; see [`CVDMode`].
 
-use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -17,6 +17,7 @@ use egui::Color32;
 pub struct CVD {
     /// Values calculated from bars
     values: IndicatorValues,
+    stepper: Stepper<f64>,
     /// Line color
     color: Color32,
     /// Visibility flag
@@ -42,6 +43,7 @@ impl CVD {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: Color32::from_rgb(76, 175, 80), // Green for volume/delta
             visible: true,
             mode: CVDMode::default(),
@@ -61,14 +63,14 @@ impl CVD {
     }
 
     /// Estimate delta volume for a bar
-    fn estimate_delta(&self, bar: &Bar) -> f64 {
+    fn estimate_delta(mode: CVDMode, bar: &Bar) -> f64 {
         let range = bar.high - bar.low;
         if range <= 0.0 {
             // Doji - no delta
             return 0.0;
         }
 
-        match self.mode {
+        match mode {
             CVDMode::ClosePosition => {
                 // Delta based on close position within bar range
                 // Close at high = 100% buy, at low = 100% sell
@@ -93,22 +95,6 @@ impl CVD {
                 }
             }
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low, close and volume, and open outside
-    /// `ClosePosition` mode, which does not read it.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let mut cumulative_delta = 0.0;
-        for bar in data {
-            let delta = self.estimate_delta(bar);
-            cumulative_delta += delta;
-
-            values.push(IndicatorValue::Single(cumulative_delta));
-        }
-
-        values
     }
 }
 
@@ -136,17 +122,26 @@ impl Indicator for CVD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                (self.mode == CVDMode::ClosePosition || b.open.is_finite())
-                    && b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.close.is_finite()
-                    && b.volume.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !(self.mode == CVDMode::ClosePosition || bar.open.is_finite())
+                    || ![bar.high, bar.low, bar.close, bar.volume]
+                        .iter()
+                        .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                *state += Self::estimate_delta(self.mode, bar);
+                IndicatorValue::Single(*state)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -26,6 +26,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -72,6 +73,46 @@ impl Default for CCI {
     }
 }
 
+impl CCI {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        // Calculate typical prices
+        let tp: Vec<f64> = data.iter().map(Self::typical_price).collect();
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+            } else {
+                // Calculate SMA of typical price
+                let start = i + 1 - self.period;
+                let sma: f64 = tp[start..=i].iter().sum::<f64>() / self.period as f64;
+
+                // Calculate mean deviation
+                let mean_dev: f64 =
+                    tp[start..=i].iter().map(|p| (p - sma).abs()).sum::<f64>() / self.period as f64;
+
+                // Calculate CCI
+                if mean_dev.abs() < 1e-10 {
+                    values.push(IndicatorValue::Single(0.0));
+                } else {
+                    // Lambert's constant 0.015 ensures ~70-80% of values fall between -100 and +100
+                    let cci = (tp[i] - sma) / (0.015 * mean_dev);
+                    values.push(IndicatorValue::Single(cci));
+                }
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for CCI {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -92,40 +133,23 @@ impl Indicator for CCI {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        // Calculate typical prices
-        let tp: Vec<f64> = data.iter().map(Self::typical_price).collect();
-
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                // Calculate SMA of typical price
-                let start = i + 1 - self.period;
-                let sma: f64 = tp[start..=i].iter().sum::<f64>() / self.period as f64;
-
-                // Calculate mean deviation
-                let mean_dev: f64 =
-                    tp[start..=i].iter().map(|p| (p - sma).abs()).sum::<f64>() / self.period as f64;
-
-                // Calculate CCI
-                if mean_dev.abs() < 1e-10 {
-                    self.values.push(IndicatorValue::Single(0.0));
-                } else {
-                    // Lambert's constant 0.015 ensures ~70-80% of values fall between -100 and +100
-                    let cci = (tp[i] - sma) / (0.015 * mean_dev);
-                    self.values.push(IndicatorValue::Single(cci));
-                }
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

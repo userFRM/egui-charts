@@ -59,8 +59,18 @@ impl UpDownVolume {
             Timeframe::Sec1
         })
     }
-    fn calculate_intrabars(&mut self, data: &[Bar], intrabars: &[Bar]) {
-        self.values = IndicatorValues::missing(data.len());
+    fn calculate_intrabars(&mut self, data: &[Bar], intrabars: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        if from == 0 || intrabars.is_empty() {
+            self.values = IndicatorValues::missing(data.len());
+        } else {
+            self.values.truncate(from);
+            self.values
+                .resize(data.len(), crate::studies::IndicatorValue::None);
+        }
+        if intrabars.is_empty() {
+            return;
+        }
         let Some(tf) = self
             .clock
             .timeframe()
@@ -83,14 +93,19 @@ impl UpDownVolume {
                 self.clock.bar_open(bar.time)
             }
         };
-        let mut at = 0;
-        let mut previous = None;
-        for (i, bar) in data.iter().enumerate() {
-            let parent = if daily {
+        let parent = |bar: &Bar| {
+            if daily {
                 BarClock::new(tf).bar_open(bar.time)
             } else {
                 self.clock.bar_open(bar.time)
-            };
+            }
+        };
+        let mut at = data.get(from).map_or(0, |bar| {
+            intrabars.partition_point(|intrabar| key(intrabar) < parent(bar))
+        });
+        let mut previous = at.checked_sub(1).map(|i| intrabars[i].close);
+        for (i, bar) in data.iter().enumerate().skip(from) {
+            let parent = parent(bar);
             let (mut up, mut down, mut count) = (0.0, 0.0, 0);
             while let Some(intrabar) = intrabars.get(at).filter(|b| key(b) <= parent) {
                 let rising = intrabar.close > intrabar.open
@@ -139,23 +154,25 @@ impl Indicator for UpDownVolume {
             .into_iter()
             .collect()
     }
-    fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[StudyData<'_>]) {
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+        let from = from.min(self.values.len()).min(data.len());
         let request = self.data_requests().pop();
         let source = sources
             .iter()
             .find(|source| Some(&source.request) == request.as_ref());
         let intrabars = if let Some(source) = source {
             if Some(source.timeframe) != self.lower_timeframe()
-                || source
-                    .bars
-                    .windows(2)
-                    .any(|pair| pair[0].time >= pair[1].time)
-                || source.bars.iter().any(|bar| {
-                    !bar.open.is_finite()
-                        || !bar.close.is_finite()
-                        || !bar.volume.is_finite()
-                        || bar.volume < 0.0
-                })
+                || (from == 0
+                    && (source
+                        .bars
+                        .windows(2)
+                        .any(|pair| pair[0].time >= pair[1].time)
+                        || source.bars.iter().any(|bar| {
+                            !bar.open.is_finite()
+                                || !bar.close.is_finite()
+                                || !bar.volume.is_finite()
+                                || bar.volume < 0.0
+                        })))
             {
                 return;
             }
@@ -163,7 +180,7 @@ impl Indicator for UpDownVolume {
         } else {
             &[]
         };
-        self.calculate_intrabars(data, intrabars);
+        self.calculate_intrabars(data, intrabars, from);
     }
     fn set_timeframe(&mut self, timeframe: Timeframe) {
         self.set_bar_clock(&self.clock.for_timeframe(timeframe));
@@ -174,7 +191,10 @@ impl Indicator for UpDownVolume {
         changed
     }
     fn calculate(&mut self, data: &[Bar]) {
-        self.calculate_intrabars(data, &[]);
+        self.calculate_intrabars(data, &[], 0);
+    }
+    fn is_incremental(&self) -> bool {
+        true
     }
     fn is_overlay(&self) -> bool {
         false

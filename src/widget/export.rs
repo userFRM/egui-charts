@@ -70,7 +70,7 @@ impl Chart {
     /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
-    pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -488,7 +488,10 @@ mod tests {
             last.close = 22.0;
             last.high = 23.0;
             chart.update(SeriesId::MAIN, last);
-            let csv = chart.export_csv().unwrap();
+            let csv = chart.export_csv();
+            fn assert_send_sync<T: Send + Sync>(_: &T) {}
+            assert_send_sync(&csv);
+            let csv = csv.unwrap();
             let mut reader = csv::Reader::from_reader(csv.as_bytes());
             assert_eq!(
                 reader.headers().unwrap().iter().collect::<Vec<_>>(),
