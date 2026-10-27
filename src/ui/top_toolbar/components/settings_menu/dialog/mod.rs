@@ -78,6 +78,9 @@ struct ColorPickerStates {
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
     alert: ColorPickerState,
+    symbol_value: ColorPickerState,
+    study_value: ColorPickerState,
+    extended_value: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -131,6 +134,21 @@ impl SettingsDialog {
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
+                symbol_value: ColorPickerState::new(
+                    settings
+                        .scales_and_lines
+                        .symbol_price_color
+                        .unwrap_or(settings.candle_colors.body_up),
+                ),
+                study_value: ColorPickerState::new(
+                    settings
+                        .scales_and_lines
+                        .study_value_color
+                        .unwrap_or(settings.scales_appearance.text_color),
+                ),
+                extended_value: ColorPickerState::new(
+                    settings.scales_and_lines.extended_session_price_color,
+                ),
             },
             margin_top_str: format!("{}", settings.margins.top_percent),
             margin_bottom_str: format!("{}", settings.margins.bottom_percent),
@@ -188,6 +206,18 @@ impl SettingsDialog {
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
 
         self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
+        self.color_picker_states.symbol_value.sel_color = self
+            .settings
+            .scales_and_lines
+            .symbol_price_color
+            .unwrap_or(self.settings.candle_colors.body_up);
+        self.color_picker_states.study_value.sel_color = self
+            .settings
+            .scales_and_lines
+            .study_value_color
+            .unwrap_or(self.settings.scales_appearance.text_color);
+        self.color_picker_states.extended_value.sel_color =
+            self.settings.scales_and_lines.extended_session_price_color;
 
         self.margin_top_str = format!("{}", self.settings.margins.top_percent);
         self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);

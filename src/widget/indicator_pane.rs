@@ -296,11 +296,16 @@ pub struct IndicatorPane {
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
+    pub(super) axis_options: crate::config::PriceAxisOptions,
 }
 
 impl IndicatorPane {
     /// Create a new indicator panel with custom configuration
     pub fn with_config(config: IndicatorPaneConfig) -> Self {
+        let axis_options = crate::config::PriceAxisOptions {
+            show_study_values: config.show_values,
+            ..Default::default()
+        };
         Self {
             config,
             bar_index: None,
@@ -312,6 +317,7 @@ impl IndicatorPane {
             pane_controls: false,
             axis_rect: None,
             axis_tags: Vec::new(),
+            axis_options,
         }
     }
 
@@ -745,6 +751,7 @@ impl IndicatorPane {
                                     label.color,
                                 ),
                                 &self.axis_tags,
+                                self.axis_options.allow_label_overlap,
                             );
                             self.axis_tags.push(tag);
                         }
@@ -1312,14 +1319,29 @@ impl IndicatorPane {
             .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
-        if self.config.show_values {
+        if self.axis_options.show_study_values {
             if indicator.is_volume()
                 && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
             {
-                super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
+                super::volume::tags(
+                    painter,
+                    chart_rect,
+                    &map,
+                    indicator,
+                    axis_edge,
+                    &mut tags,
+                    &self.axis_options,
+                );
             } else {
                 crate::chart::rendering::axes::render_study_tags(
-                    painter, chart_rect, &map, indicator, axis_edge, &mut tags, None,
+                    painter,
+                    chart_rect,
+                    &map,
+                    indicator,
+                    axis_edge,
+                    &mut tags,
+                    None,
+                    &self.axis_options,
                 );
             }
         }

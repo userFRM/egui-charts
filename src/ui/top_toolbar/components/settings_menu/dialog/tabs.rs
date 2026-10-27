@@ -542,6 +542,49 @@ impl SettingsDialog {
                     );
                 });
                 ui.add_space(theme.spacing.xxxl);
+                for (value, label) in [
+                    (
+                        &mut self.settings.scales_and_lines.show_currency,
+                        "Currency",
+                    ),
+                    (&mut self.settings.scales_and_lines.show_unit, "Unit"),
+                    (
+                        &mut self.settings.scales_and_lines.show_scale_mode_buttons,
+                        "Scale mode buttons",
+                    ),
+                    (
+                        &mut self.settings.scales_and_lines.show_plus_button,
+                        "Plus button",
+                    ),
+                    (
+                        &mut self.settings.scales_and_lines.allow_label_overlap,
+                        "Allow labels to overlap",
+                    ),
+                ] {
+                    styled_checkbox(ui, value, label, theme.ui.text);
+                }
+                let scales = &mut self.settings.scales_and_lines;
+                let locked = scales.lock_price_to_bar_ratio;
+                trading_option(
+                    ui,
+                    0.0,
+                    &mut scales.lock_price_to_bar_ratio,
+                    "Lock price-to-bar ratio",
+                    theme.ui.text,
+                    |ui| {
+                        ui.add_enabled(
+                            locked,
+                            egui::DragValue::new(&mut scales.price_to_bar_ratio)
+                                .speed(0.01)
+                                .range(0.00000001..=f64::MAX),
+                        )
+                        .accessible_name(l10n::text(ui.ctx(), "Price-to-bar ratio"));
+                    },
+                );
+                if scales.lock_price_to_bar_ratio {
+                    scales.auto_scale = false;
+                }
+                ui.add_space(theme.spacing.xl);
                 self.draw_section_header(ui, "PRICE LABELS & LINES", theme);
                 styled_checkbox(
                     ui,
@@ -558,6 +601,65 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_price_line,
                     );
                 });
+                self.draw_setting_row_with_controls(ui, "Symbol color", theme, |ui, dialog| {
+                    if let Some(color) = ColorPicker::new(
+                        &mut dialog.color_picker_states.symbol_value,
+                        "symbol_value_color",
+                    )
+                    .show(ui)
+                    .inner
+                    {
+                        dialog.settings.scales_and_lines.symbol_price_color = Some(color);
+                    }
+                    if ui.button(l10n::text(ui.ctx(), "Automatic")).clicked() {
+                        dialog.settings.scales_and_lines.symbol_price_color = None;
+                    }
+                });
+                self.draw_setting_row_with_controls(ui, "Study values", theme, |ui, dialog| {
+                    styled_checkbox(
+                        ui,
+                        &mut dialog.settings.scales_and_lines.show_study_values,
+                        "Show",
+                        theme.ui.text,
+                    );
+                    if let Some(color) = ColorPicker::new(
+                        &mut dialog.color_picker_states.study_value,
+                        "study_value_color",
+                    )
+                    .show(ui)
+                    .inner
+                    {
+                        dialog.settings.scales_and_lines.study_value_color = Some(color);
+                    }
+                    if ui.button(l10n::text(ui.ctx(), "Automatic")).clicked() {
+                        dialog.settings.scales_and_lines.study_value_color = None;
+                    }
+                });
+                self.draw_setting_row_with_controls(
+                    ui,
+                    "Extended-session price",
+                    theme,
+                    |ui, dialog| {
+                        styled_checkbox(
+                            ui,
+                            &mut dialog.settings.scales_and_lines.show_extended_session_price,
+                            "Show",
+                            theme.ui.text,
+                        );
+                        if let Some(color) = ColorPicker::new(
+                            &mut dialog.color_picker_states.extended_value,
+                            "extended_value_color",
+                        )
+                        .show(ui)
+                        .inner
+                        {
+                            dialog
+                                .settings
+                                .scales_and_lines
+                                .extended_session_price_color = color;
+                        }
+                    },
+                );
                 self.draw_setting_row_with_controls(ui, "Previous close", theme, |ui, dialog| {
                     price_line_dropdown(
                         ui,
@@ -593,12 +695,15 @@ impl SettingsDialog {
                     "Invert scale",
                     theme.ui.text,
                 );
-                styled_checkbox(
+                if styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.auto_scale,
                     "Auto scale",
                     theme.ui.text,
-                );
+                ) && self.settings.scales_and_lines.auto_scale
+                {
+                    self.settings.scales_and_lines.lock_price_to_bar_ratio = false;
+                }
             });
         });
     }
@@ -810,6 +915,7 @@ impl SettingsDialog {
     fn label_width(ui: &Ui, theme: &Theme) -> f32 {
         [
             "Panel layout",
+            "Extended-session price",
             "Background",
             "Grid lines",
             "Crosshair",

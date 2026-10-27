@@ -1240,7 +1240,9 @@ impl Chart {
                         } else {
                             ""
                         },
-                        if self.config.show_indicator_last_val {
+                        if self.config.show_indicator_last_val
+                            && self.config.price_axis.show_study_values
+                        {
                             &value
                         } else {
                             ""
@@ -1358,6 +1360,11 @@ impl Chart {
         rect: Rect,
         colors: &StyleColors,
     ) -> f32 {
+        let study_axis = crate::config::PriceAxisOptions {
+            show_study_values: self.config.show_indicator_last_val
+                && self.config.price_axis.show_study_values,
+            ..self.config.price_axis
+        };
         let mut measured = 0.0_f32;
         for (key, axis) in self.secondary_axes(widget, rect) {
             let position = if key == SeriesScale::Right {
@@ -1392,7 +1399,7 @@ impl Chart {
                         &assigned,
                         &coords,
                         axis,
-                        self.config.show_indicator_last_val,
+                        &study_axis,
                         self.percentage_formatter.as_deref(),
                     ));
                 }
@@ -1420,9 +1427,10 @@ impl Chart {
                     ),
                     colors,
                     &tags,
+                    self.config.price_axis.allow_label_overlap,
                 ));
             }
-            if self.config.show_indicator_last_val {
+            if study_axis.show_study_values {
                 for study in &assigned {
                     let mapping = study
                         .scale_mapping()
@@ -1436,6 +1444,7 @@ impl Chart {
                         axis.right(),
                         &mut tags,
                         None,
+                        &study_axis,
                     );
                 }
             }

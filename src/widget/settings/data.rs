@@ -265,7 +265,32 @@ impl Default for MarginsSettings {
 
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ScalesAndLinesSettings {
+    /// Display host-supplied currency metadata.
+    pub show_currency: bool,
+    /// Display host-supplied price unit metadata.
+    pub show_unit: bool,
+    /// Display Auto, Log and Percent navigation buttons.
+    pub show_scale_mode_buttons: bool,
+    /// Display the price-axis host action button.
+    pub show_plus_button: bool,
+    /// Let value tags overlap instead of moving them apart.
+    pub allow_label_overlap: bool,
+    /// Lock scale units per bar to `price_to_bar_ratio`.
+    pub lock_price_to_bar_ratio: bool,
+    /// Positive scale units per bar while locked; log scales use log10 price units.
+    pub price_to_bar_ratio: f64,
+    /// Last price tag and line colour, or the candle direction colour when unset.
+    pub symbol_price_color: Option<Color32>,
+    /// Display the last values of studies on their price axes.
+    pub show_study_values: bool,
+    /// Study value tag colour, or each plot's colour when unset.
+    pub study_value_color: Option<Color32>,
+    /// Display the host-supplied extended-session price tag.
+    pub show_extended_session_price: bool,
+    /// Extended-session price tag colour.
+    pub extended_session_price_color: Color32,
     /// Whether visible prices determine the scale range.
     pub auto_scale: bool,
     /// Whether prices use a logarithmic scale.
@@ -295,6 +320,18 @@ pub struct ScalesAndLinesSettings {
 impl Default for ScalesAndLinesSettings {
     fn default() -> Self {
         Self {
+            show_currency: true,
+            show_unit: true,
+            show_scale_mode_buttons: true,
+            show_plus_button: true,
+            allow_label_overlap: false,
+            lock_price_to_bar_ratio: false,
+            price_to_bar_ratio: 1.0,
+            symbol_price_color: None,
+            show_study_values: true,
+            study_value_color: None,
+            show_extended_session_price: true,
+            extended_session_price_color: Color32::from_rgb(251, 142, 1),
             auto_scale: true,
             log_scale: false,
             percentage_scale: false,

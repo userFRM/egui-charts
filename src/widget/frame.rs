@@ -1922,10 +1922,20 @@ impl Chart {
             price_rect.left()
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
-        let has_currency = self
+        let study_axis = crate::config::PriceAxisOptions {
+            show_study_values: self.config.show_indicator_last_val
+                && self.config.price_axis.show_study_values,
+            ..self.config.price_axis
+        };
+        let currency = self
             .instrument()
             .and_then(|instrument| instrument.currency.as_deref())
-            .is_some_and(|code| !code.is_empty());
+            .filter(|code| self.config.show_currency && !code.is_empty());
+        let unit = self
+            .instrument()
+            .and_then(|instrument| instrument.unit.as_deref())
+            .filter(|unit| self.config.show_unit && !unit.is_empty());
+        let has_currency = currency.is_some() || unit.is_some();
         let mut tags = Vec::new();
         if has_currency {
             tags.push(Some(Rect::from_min_size(
@@ -2078,8 +2088,8 @@ impl Chart {
                 &line,
                 self.session_quote
                     .as_ref()
-                    .filter(|_| show_price_axis)
-                    .map(|quote| (quote, egui::Color32::from_rgb(251, 142, 1))),
+                    .filter(|_| show_price_axis && self.config.show_extended_session_price)
+                    .map(|quote| (quote, self.config.extended_session_price_color)),
                 (show_volume && show_price_axis && !cfg!(feature = "studies"))
                     .then_some((last.volume, egui::Color32::from_rgb(233, 30, 99))),
                 axis_edge,
@@ -2089,6 +2099,7 @@ impl Chart {
                 if has_currency { 24.0 } else { 0.0 },
                 price_formatter.as_deref(),
                 self.volume_formatter.as_deref(),
+                self.config.price_axis.allow_label_overlap,
             );
             tags.extend([quote_tags[1], quote_tags[2]]);
             quote_tags[0]
@@ -2116,6 +2127,7 @@ impl Chart {
                         label,
                         *colors,
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     );
                     if *outlined && let Some(rect) = tag {
                         painter.rect_stroke(
@@ -2142,6 +2154,7 @@ impl Chart {
                         .label(map.transform().to_scale(value), 2, formatter.as_deref()),
                     colors,
                     &tags,
+                    self.config.price_axis.allow_label_overlap,
                 ));
             }
         }
@@ -2164,6 +2177,7 @@ impl Chart {
                         label.text,
                         (rendering::axes::tag_text_color(label.color), label.color),
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     ));
                 }
             }
@@ -2209,12 +2223,12 @@ impl Chart {
                         &[study.as_ref()],
                         &mapping,
                         axis,
-                        self.config.show_indicator_last_val,
+                        &study_axis,
                         None,
                     ));
             }
         }
-        if show_price_axis && self.config.show_indicator_last_val {
+        if show_price_axis && study_axis.show_study_values {
             for study in studies
                 .indicators()
                 .iter()
@@ -2239,6 +2253,7 @@ impl Chart {
                             study.as_ref(),
                             axis_edge,
                             &mut tags,
+                            &study_axis,
                         );
                     }
                     continue;
@@ -2256,6 +2271,7 @@ impl Chart {
                     axis_edge,
                     &mut tags,
                     price_formatter.as_deref(),
+                    &study_axis,
                 );
             }
         }
@@ -2342,6 +2358,7 @@ impl Chart {
                         label,
                         (egui::Color32::WHITE, color),
                         &tags,
+                        self.config.price_axis.allow_label_overlap,
                     );
                     if quote && let Some(rect) = tag {
                         let badge = painter.layout_no_wrap(
@@ -2862,10 +2879,11 @@ impl Chart {
         self.axis_hover = hover_pos.zip(crosshair_tags[0]);
         #[cfg(feature = "icons")]
         if show_price_axis {
-            if let Some((pos, tag)) = self
-                .axis_hover
-                .filter(|(pos, _)| price_rect.contains(*pos) && !volume_rect.contains(*pos))
-            {
+            if let Some((pos, tag)) = self.axis_hover.filter(|(pos, _)| {
+                self.config.show_plus_button
+                    && price_rect.contains(*pos)
+                    && !volume_rect.contains(*pos)
+            }) {
                 let price = if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords.local_idx_at_x(pos.x, visible_data.len())
                 {
@@ -2912,12 +2930,17 @@ impl Chart {
             self.measured_axis_width = self.measured_axis_width.max(tag.width() + 5.0 + 8.0);
         }
 
-        if show_price_axis
-            && let Some(currency) = self
+        if show_price_axis && has_currency {
+            let currency = self
                 .instrument()
                 .and_then(|instrument| instrument.currency.as_deref())
-                .filter(|code| !code.is_empty())
-        {
+                .filter(|_| self.config.show_currency)
+                .unwrap_or("");
+            let unit = self
+                .instrument()
+                .and_then(|instrument| instrument.unit.as_deref())
+                .filter(|_| self.config.show_unit);
+
             let currency_width = painter
                 .layout_no_wrap(
                     currency.to_owned(),
@@ -2939,8 +2962,11 @@ impl Chart {
                 Pos2::new(axis_edge, price_rect.bottom()),
             );
             let (button, choice) =
-                renderers::render_axis_currency(ui, axis, currency, &self.currency_choices);
-            self.measured_axis_width = self.measured_axis_width.max(currency_width);
+                renderers::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
+            self.measured_axis_width = self
+                .measured_axis_width
+                .max(currency_width)
+                .max(button.rect.width());
             if choice.is_some() {
                 self.currency_choice = choice;
             }
@@ -3599,9 +3625,15 @@ mod tests {
     #[cfg(feature = "icons")]
     #[test]
     fn axis_buttons_route_without_scaling() {
-        for (settings, magnet) in [(false, false), (true, false), (false, true)] {
+        for (settings, magnet, enabled) in [
+            (false, false, true),
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_plus_button = enabled;
             if magnet {
                 chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Magnet;
             }
@@ -3643,6 +3675,8 @@ mod tests {
             if settings {
                 assert!(chart.take_scale_settings_request());
                 assert!(!chart.take_scale_settings_request());
+            } else if !enabled {
+                assert!(chart.take_right_click().is_none());
             } else {
                 assert!(
                     matches!(chart.take_right_click(), Some(super::RightClickTarget::Background { price, .. }) if (price - expected_price).abs() < 0.001)
@@ -5144,6 +5178,10 @@ mod tests {
                 );
             }
         }
+        chart.config.show_scale_mode_buttons = false;
+        chart.config.navigation_buttons = Always;
+        let painted = shapes(&ctx, &mut chart, 20.0, Vec::new());
+        assert!(!painted.iter().any(|shape| matches!(shape, Shape::Text(text) if ["A", "log", "%"].contains(&text.galley.text()))));
     }
 
     /// A drag starting on a button belongs to that button even after leaving the row.

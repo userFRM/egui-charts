@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Scales and lines settings expose currency and unit headers, scale-mode and price-action visibility, a numeric price-to-bar ratio lock, overlapping value tags, and symbol, study and extended-session value colours and visibility. Units come from `Instrument::unit` without converting data. Existing study-value visibility continues to gate study axis tags. ([#993](https://github.com/userFRM/egui-charts/issues/993))
+
 - Alert settings include sound volume from mute to 100%. `AlertsPanel::take_trigger_sound` returns the volume requested by trigger events for host audio playback; the demo displays the request. Notification lifetime is applied to trigger toasts. Migration: `AlertsSettings` literals add `sound_volume: 100` or use `..Default::default()`. ([#995](https://github.com/userFRM/egui-charts/issues/995))
 
 - The Events settings tab separates earnings badges from earnings breaks, a dashed vertical line at each earnings event (`EventVisibility::show_earnings_breaks`). It adds News notifications (`show_news_notifications`), which the host reads before raising a notification for a headline it supplies, and shows or hides host-supplied ideas, the new `EventKind::Idea` badged "I" (`show_ideas`).
@@ -908,6 +910,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure log10 price units.
 
 - `EventVisibility` struct literals add `show_earnings_breaks`, `show_news_notifications` and `show_ideas` or end with `..Default::default()`; saved visibility without them takes the defaults.
 
