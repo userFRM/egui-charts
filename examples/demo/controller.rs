@@ -1985,7 +1985,8 @@ impl DemoApp {
 
         // Live drawings.
         for d in self.chart.drawings().listed_drawings() {
-            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+            let mut item =
+                SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
             item.z_index = d.z_order;
@@ -2722,6 +2723,9 @@ impl DemoApp {
             DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
+            DrawingContextMenuAction::MoveTo(pane) => {
+                self.chart.move_drawing_to_pane(id, pane);
+            }
             DrawingContextMenuAction::AddAlert(alert) => {
                 self.list_alert_sources();
                 self.alert_dialog.edit(*alert);

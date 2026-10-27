@@ -1,5 +1,6 @@
 //! Validated host creation and editing of timestamp-based drawings.
 
+use super::PaneId;
 use crate::Chart;
 use crate::drawings::{ChartPoint, Drawing};
 use chrono::{DateTime, Utc};
@@ -65,6 +66,47 @@ impl Chart {
             target.chart_points = drawing.chart_points;
         });
         Ok(())
+    }
+
+    /// The pane that draws drawing `id`, or `None` for an unknown drawing.
+    pub fn drawing_pane(&self, id: usize) -> Option<PaneId> {
+        let drawing = self.drawings().drawings.iter().find(|d| d.id == id)?;
+        Some(
+            self.pane_layout
+                .panes
+                .iter()
+                .find(|pane| {
+                    drawing.pane == Some(pane.id.0)
+                        || pane.members.iter().any(|id| drawing.pane == Some(id.0))
+                })
+                .map_or(PaneId::MAIN, |pane| pane.id),
+        )
+    }
+
+    /// Moves drawing `id` into `pane` as one undoable edit, keeping its anchors and style; the
+    /// anchors' prices are read on the new pane's scale. Returns `false` for an unknown drawing
+    /// or pane and for a locked drawing.
+    pub fn move_drawing_to_pane(&mut self, id: usize, pane: PaneId) -> bool {
+        let owner = if pane == PaneId::MAIN {
+            None
+        } else if let Some(pane) = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .filter(|_| self.panes().contains(&pane))
+        {
+            // The pane's drawings belong to its first member, or to an empty pane itself.
+            Some(pane.members.first().map_or(pane.id.0, |id| id.0))
+        } else {
+            return false;
+        };
+        let drawings = self.drawings_mut();
+        if !drawings.drawings.iter().any(|d| d.id == id && !d.locked) {
+            return false;
+        }
+        drawings.edit_drawing(id, |d| d.pane = owner);
+        true
     }
 
     /// Reveals an offscreen drawing by panning, retaining zoom and the auto/manual scale state.
@@ -167,6 +209,47 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
+
+    /// Guards #977: a drawing moves between the price pane and a study pane as one undoable
+    /// edit with its anchors and style, and joins the pane the chart draws it in.
+    #[test]
+    fn drawings_move_between_panes_with_their_anchors() {
+        let bars = (0..20)
+            .map(|i| {
+                let time = DateTime::from_timestamp(i * 60, 0).unwrap();
+                Bar::new(time, 10., 12., 8., 10. + i as f64 % 3., 1.)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(3)));
+        let pane = chart.series_pane(rsi).unwrap();
+        let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+        line.color = [1, 2, 3, 255];
+        line.chart_points = vec![ChartPoint::new(2.0, 30.0), ChartPoint::new(9.0, 70.0)];
+        let id = chart.drawings_mut().add_drawing(line).unwrap();
+        let before = chart.drawings().drawings[0].clone();
+        assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
+
+        assert!(chart.user_action(|chart| chart.move_drawing_to_pane(id, pane)));
+        let moved = &chart.drawings().drawings[0];
+        assert_eq!(chart.drawing_pane(id), Some(pane));
+        assert_eq!(moved.pane, Some(rsi.0));
+        assert_eq!(
+            (&moved.chart_points, moved.color),
+            (&before.chart_points, before.color)
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
+        assert!(chart.redo());
+        assert!(chart.move_drawing_to_pane(id, PaneId::MAIN));
+        assert_eq!(chart.drawings().drawings[0].pane, None);
+
+        assert!(!chart.move_drawing_to_pane(id, PaneId(999)));
+        assert!(!chart.move_drawing_to_pane(id + 1, pane));
+        chart.drawings_mut().edit_drawing(id, |d| d.locked = true);
+        assert!(!chart.move_drawing_to_pane(id, pane));
+        assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
+    }
 
     #[test]
     fn timestamp_creation_validates_before_mutation_and_round_trips_edits() {
