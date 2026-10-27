@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -15,6 +15,7 @@ pub struct VolumeOscillator {
     /// Long EMA period (typically 10)
     long_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<[Smoothing; 2]>,
     color: Color32,
     visible: bool,
 }
@@ -26,6 +27,7 @@ impl VolumeOscillator {
             short_period: short_period.max(1),
             long_period: long_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::BLUE, // Blue
             visible: true,
         }
@@ -35,37 +37,6 @@ impl VolumeOscillator {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.long_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Extract volumes
-        let volumes: Vec<f64> = data.iter().map(|b| b.volume).collect();
-
-        // Calculate short and long EMAs
-        let short_ema = helpers::ema_sma(&volumes, self.short_period);
-        let long_ema = helpers::ema_sma(&volumes, self.long_period);
-
-        // Calculate oscillator as percentage
-        for i in 0..data.len() {
-            if short_ema[i].is_nan() || long_ema[i].is_nan() || long_ema[i] == 0.0 {
-                values.push(IndicatorValue::None);
-            } else {
-                let osc = (short_ema[i] - long_ema[i]) / long_ema[i] * 100.0;
-                values.push(IndicatorValue::Single(osc));
-            }
-        }
-
-        values
     }
 }
 
@@ -95,7 +66,35 @@ impl Indicator for VolumeOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.volume.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let short = state[0].next(
+                    bar.volume,
+                    self.short_period,
+                    2.0 / (self.short_period as f64 + 1.0),
+                );
+                let long = state[1].next(
+                    bar.volume,
+                    self.long_period,
+                    2.0 / (self.long_period as f64 + 1.0),
+                );
+                if short.is_nan() || long.is_nan() || long == 0.0 {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single((short - long) / long * 100.0)
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -1,4 +1,4 @@
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -63,8 +63,28 @@ pub struct ZigZag {
     mode: ZigZagMode,
     values: IndicatorValues,
     pivots: Vec<ZigZagPivot>,
+    source_len: usize,
+    finite: Vec<usize>,
+    prices: Vec<(usize, f64, f64)>,
+    completed: Vec<((usize, f64), bool)>,
+    detector: Detector,
+    before_last: Checkpoint,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Detector {
+    extremes: Option<((usize, f64), (usize, f64))>,
+    trend: Option<(bool, (usize, f64))>,
+}
+
+#[derive(Clone, Default)]
+struct Checkpoint {
+    detector: Detector,
+    finite: usize,
+    prices: usize,
+    completed: usize,
 }
 
 impl ZigZag {
@@ -76,6 +96,12 @@ impl ZigZag {
             mode: ZigZagMode::HighLow,
             values: IndicatorValues::new(),
             pivots: Vec::new(),
+            source_len: 0,
+            finite: Vec::new(),
+            prices: Vec::new(),
+            completed: Vec::new(),
+            detector: Detector::default(),
+            before_last: Checkpoint::default(),
             color: palette::BLUE,
             visible: true,
         }
@@ -114,21 +140,81 @@ impl ZigZag {
         }
     }
 
-    /// The values over `data`, every bar of which has finite prices.
-    fn compute(&self, data: &[Bar]) -> (IndicatorValues, Vec<ZigZagPivot>) {
-        let mut values = IndicatorValues::missing(data.len());
-        let (depth, deviation) = (self.depth, self.deviation_percent);
-        if deviation <= 0.0 {
-            return (values, Vec::new());
+    fn tail_from(&self, data: &[Bar], from: usize) -> usize {
+        if self.source_len > 0 && from >= self.source_len - 1 && data.len() >= self.source_len {
+            from.min(self.source_len)
+        } else {
+            0
         }
-        // (bar, high, low) of the bars with usable prices.
-        let bars: Vec<(usize, f64, f64)> = data
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (i, self.get_price(b, true), self.get_price(b, false)))
-            .filter(|&(_, high, low)| [high, low].iter().all(|p| p.is_finite() && *p > 0.0))
-            .collect();
-        // The extremes below are (position in `bars`, price).
+    }
+
+    /// Resume swing detection without interpolating lines that automatic drawings do not use.
+    pub(super) fn update_swings(&mut self, data: &[Bar], from: usize) -> usize {
+        let start = self.tail_from(data, from);
+        if start == 0 {
+            self.finite.clear();
+            self.prices.clear();
+            self.completed.clear();
+            self.detector = Detector::default();
+            self.before_last = Checkpoint::default();
+        } else if start < self.source_len {
+            self.finite.truncate(self.before_last.finite);
+            self.prices.truncate(self.before_last.prices);
+            self.completed.truncate(self.before_last.completed);
+            self.detector = self.before_last.detector;
+        }
+        let fixed = self.completed.len();
+        self.pivots.truncate(fixed);
+        if self.deviation_percent > 0.0 {
+            for (source, bar) in data.iter().enumerate().skip(start) {
+                if source + 1 == data.len() {
+                    self.before_last = Checkpoint {
+                        detector: self.detector,
+                        finite: self.finite.len(),
+                        prices: self.prices.len(),
+                        completed: self.completed.len(),
+                    };
+                }
+                let (high, low) = (self.get_price(bar, true), self.get_price(bar, false));
+                if !high.is_finite() || !low.is_finite() {
+                    continue;
+                }
+                let sequence = self.finite.len();
+                self.finite.push(source);
+                if high <= 0.0 || low <= 0.0 {
+                    continue;
+                }
+                self.prices.push((sequence, high, low));
+                self.process(self.prices.len() - 1);
+            }
+        }
+        self.pivots.extend(
+            self.completed[fixed..]
+                .iter()
+                .map(|&((point, price), is_high)| ZigZagPivot {
+                    bar_index: self.finite[self.prices[point].0],
+                    price,
+                    is_high,
+                }),
+        );
+        if let Some((up, (point, price))) = self.detector.trend {
+            self.pivots.push(ZigZagPivot {
+                bar_index: self.finite[self.prices[point].0],
+                price,
+                is_high: up,
+            });
+        }
+        self.source_len = data.len();
+        fixed
+    }
+
+    fn process(&mut self, mut p: usize) {
+        let bars = &self.prices;
+        let Some((mut top, mut bottom)) = self.detector.extremes else {
+            self.detector.extremes = Some(((p, bars[p].1), (p, bars[p].2)));
+            return;
+        };
+        let (depth, deviation) = (self.depth, self.deviation_percent);
         let rises = |from: (usize, f64), p: usize| {
             bars[p].0 - bars[from.0].0 >= depth
                 && (bars[p].1 - from.1) / from.1 * 100.0 >= deviation
@@ -137,22 +223,11 @@ impl ZigZag {
             bars[p].0 - bars[from.0].0 >= depth
                 && (from.1 - bars[p].2) / from.1 * 100.0 >= deviation
         };
-        let Some(&(_, high, low)) = bars.first() else {
-            return (values, Vec::new());
-        };
-
-        // Before the first pivot: the highest high and the lowest low.
-        let (mut top, mut bottom) = ((0, high), (0, low));
-        // Pivots in bar order, then the current leg's direction and extreme.
-        let mut pivots = Vec::new();
-        let mut trend: Option<(bool, (usize, f64))> = None;
-
-        let mut p = 1;
         while p < bars.len() {
             let (_, high, low) = bars[p];
             // The pivot a reversal confirms at this bar, and whether the new leg goes up.
             let mut reversal = None;
-            match &mut trend {
+            match &mut self.detector.trend {
                 None => {
                     if high > top.1 {
                         top = (p, high);
@@ -182,7 +257,7 @@ impl ZigZag {
                 }
             }
             if let Some((pivot, up)) = reversal {
-                pivots.push((pivot, !up));
+                self.completed.push((pivot, !up));
                 // The new leg starts at the swing's extreme since the pivot, not at the confirming
                 // bar; the bars after it are judged again against the leg.
                 let extreme = (pivot.0 + 1..=p)
@@ -195,33 +270,12 @@ impl ZigZag {
                         }
                     })
                     .expect("the pivot comes before this bar");
-                trend = Some((up, extreme));
+                self.detector.trend = Some((up, extreme));
                 p = extreme.0;
             }
             p += 1;
         }
-        pivots.extend(trend.map(|(up, extreme)| (extreme, up)));
-        // Back to bar numbers.
-        let pivots: Vec<ZigZagPivot> = pivots
-            .into_iter()
-            .map(|((p, price), is_high)| ZigZagPivot {
-                bar_index: bars[p].0,
-                price,
-                is_high,
-            })
-            .collect();
-
-        // Renderers join values on adjacent bars, so fill each leg with a
-        // straight line between its pivots. A lone pivot is not a swing.
-        for leg in pivots.windows(2) {
-            let (start, from) = (leg[0].bar_index, leg[0].price);
-            let (end, to) = (leg[1].bar_index, leg[1].price);
-            for i in start..=end {
-                let t = (i - start) as f64 / (end - start) as f64;
-                values.set(i, IndicatorValue::Single(from + (to - from) * t));
-            }
-        }
-        (values, pivots)
+        self.detector.extremes = Some((top, bottom));
     }
 }
 
@@ -248,30 +302,47 @@ impl Indicator for ZigZag {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let finite = |b: &Bar| {
-            [true, false]
-                .iter()
-                .all(|&high| self.get_price(b, high).is_finite())
-        };
-        let mut pivots = Vec::new();
-        let values = over_finite_bars(data, finite, |data| {
-            let (values, computed) = self.compute(data);
-            pivots = computed;
-            values
-        });
-        if data.iter().any(|b| !finite(b)) {
-            let indices: Vec<_> = data
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| finite(b))
-                .map(|(i, _)| i)
-                .collect();
-            for pivot in &mut pivots {
-                pivot.bar_index = indices[pivot.bar_index];
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let start = self.tail_from(data, from);
+        if start == 0 {
+            self.values = IndicatorValues::missing(data.len());
+        } else {
+            let fixed = if start < self.source_len {
+                self.before_last.completed
+            } else {
+                self.completed.len()
+            };
+            if let (Some(first), Some(last)) =
+                (self.pivots.get(fixed.saturating_sub(1)), self.pivots.last())
+                && first.bar_index < last.bar_index
+            {
+                let first = self.finite.partition_point(|&bar| bar < first.bar_index);
+                let end = self.finite.partition_point(|&bar| bar <= last.bar_index);
+                for &bar in &self.finite[first..end] {
+                    self.values.set(bar, IndicatorValue::None);
+                }
+            }
+            self.values.resize(data.len(), IndicatorValue::None);
+        }
+        let fixed = self.update_swings(data, from);
+        for leg in self.pivots[fixed.saturating_sub(1)..].windows(2) {
+            let first = self.finite.binary_search(&leg[0].bar_index).unwrap();
+            let end = self.finite.binary_search(&leg[1].bar_index).unwrap();
+            for position in first..=end {
+                let t = (position - first) as f64 / (end - first) as f64;
+                self.values.set(
+                    self.finite[position],
+                    IndicatorValue::Single(leg[0].price + (leg[1].price - leg[0].price) * t),
+                );
             }
         }
-        self.values = values;
-        self.pivots = pivots;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -590,6 +661,14 @@ mod tests {
                     (None, None) => {}
                     _ => panic!("{name} bar {i}: got {g:?}, expected {e:?}\n  got {got:?}"),
                 }
+            }
+            zz.set_input("deviation_percent", crate::studies::InputValue::Number(0.0))
+                .unwrap();
+            zz.calculate(&data);
+            for _ in 0..2 {
+                zz.update(&data, data.len().saturating_sub(1));
+                assert!(zz.pivots().is_empty(), "{name}: disabled swings");
+                assert!((0..data.len()).all(|bar| zz.values().value(0, bar).is_none()));
             }
         }
     }

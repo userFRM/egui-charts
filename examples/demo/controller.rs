@@ -1281,7 +1281,7 @@ impl eframe::App for DemoApp {
         self.show_watchlist_import(&ctx);
 
         // Transient status notice.
-        self.show_notice(&ctx);
+        self.show_notice(ui);
         self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
@@ -1623,6 +1623,7 @@ impl DemoApp {
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool,
                 magnet_mode: dm.options.magnet_mode,
+                snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
                 current_cursor_type: match self.chart.chart_options().crosshair.style {
                     CrosshairStyle::Full => CursorType::Cross,
@@ -1761,6 +1762,9 @@ impl DemoApp {
                     egui_charts::config::CrosshairMode::Normal
                 };
                 self.chart.set_crosshair_mode(mode);
+            }
+            DrawingToolbarAction::SetSnapToIndicators(enabled) => {
+                dm.options.snap_to_indicators = enabled;
             }
             DrawingToolbarAction::SetMagnetType(kind) => {
                 dm.options.magnet_mode = true;
@@ -2965,10 +2969,16 @@ impl DemoApp {
         self.notify(result.unwrap_or_else(|error| format!("Export failed: {error}")));
     }
 
-    fn show_notice(&mut self, ctx: &egui::Context) {
+    fn show_notice(&mut self, ui: &egui::Ui) {
+        let spacing = self.theme.spacing;
+        let width = (ui.clip_rect().right() - 2.0 * (spacing.xxl + spacing.lg) - 2.0).min(340.0);
+        // Trading notices reserve 80 points for the icon, padding and close button.
+        if width <= 80.0 {
+            return;
+        }
         NotificationPanel::new()
-            .width(340.0)
-            .show_with_toasts(ctx, &mut self.toasts);
+            .width(width)
+            .show_with_toasts(ui.ctx(), &mut self.toasts);
     }
 
     fn save_screenshot(
@@ -3114,9 +3124,12 @@ mod tests {
         assert!(Arc::ptr_eq(&paper, &app.paper));
         app.trading.display.show_execution_labels = true;
         app.chart.fit_content();
+        for toast in app.toasts.toasts_mut() {
+            toast.duration = 0.0;
+        }
 
         // A live quote must not price the ticket while the broker follows replay closes.
-        for side in [OrderSide::Buy, OrderSide::Sell] {
+        for (side, width) in [(OrderSide::Buy, 1440.0), (OrderSide::Sell, 640.0)] {
             app.trading.set_quote(
                 &symbol,
                 egui_charts::model::Quote::new(999.0, 990.0, chrono::Utc::now())
@@ -3131,11 +3144,26 @@ mod tests {
                 ));
             let mut value = false;
             let mut marked = false;
-            for _ in 0..3 {
-                let output = ctx.run_ui(Default::default(), |ui| {
-                    app.trading.show_ticket(ui, &app.chart);
-                    app.show_chart(ui, app.theme.chart.bg);
-                });
+            for pass in 0..3 {
+                if pass == 1 {
+                    app.chart.fit_content();
+                }
+                let mut ticket_left = 0.0;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.trading.show_ticket(ui, &app.chart);
+                        ticket_left = ui.clip_rect().right();
+                        app.show_chart(ui, app.theme.chart.bg);
+                        app.show_notice(ui);
+                    },
+                );
                 let has_text = |label| {
                     output.shapes.iter().any(|shape| {
                         matches!(&shape.shape, egui::Shape::Text(text)
@@ -3144,6 +3172,17 @@ mod tests {
                 };
                 value |= has_text("Trade value") && has_text("110.00");
                 marked |= has_text("1 @ 100.00") && has_text("1 @ 110.00");
+                if pass == 2 {
+                    for toast in app.toasts.toasts().iter().rev().take(5) {
+                        let rect = ctx
+                            .memory(|m| m.area_rect(egui::Id::unique("toast").with(toast.id)))
+                            .expect("trade notice");
+                        assert!(
+                            rect.right() <= ticket_left,
+                            "notice covers ticket at {width}"
+                        );
+                    }
+                }
                 output.drop_without_applying_deltas();
             }
             assert!(value, "{side:?} ticket must use the replay close");
@@ -5307,13 +5346,15 @@ mod tests {
         assert!(!app.drawing_toolbar.state.lock_all);
         use egui_charts::data::VolumeProfileConfig;
         use egui_charts::drawings::{
-            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, RegressionTrendConfig,
+            FibonacciConfig, GannConfig, PitchforkConfig, PositionSize, PositionSizing,
+            RegressionTrendConfig,
         };
         for tool in [
             DrawingToolType::FibonacciRetracement,
             DrawingToolType::Pitchfork,
             DrawingToolType::GannBox,
             DrawingToolType::LongPos,
+            DrawingToolType::ShortPos,
             DrawingToolType::FixedRangeVolumeProfile,
             DrawingToolType::RegressionTrend,
             DrawingToolType::ParallelChannel,
@@ -5347,6 +5388,13 @@ mod tests {
                 account_size: 10_000.0,
                 percent: 1.0,
             });
+            settings.position_sizing = PositionSizing {
+                point_value: 50.0,
+                lot_size: 10.0,
+                quantity_step: 0.01,
+                leverage: 5.0,
+            };
+            let sizing = settings.position_sizing;
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -5361,6 +5409,7 @@ mod tests {
                 Some(50.0)
             );
             assert_eq!(saved.volume_profile.unwrap().rows(), 48);
+            assert_eq!(saved.position_sizing, sizing);
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
             assert!(app.chart.drawings().drawings[1].fib_config.is_none());

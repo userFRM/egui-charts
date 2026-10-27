@@ -17,6 +17,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -57,6 +58,34 @@ impl Default for WMA {
     }
 }
 
+impl WMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        // Weight sum: n*(n+1)/2
+        let weight_sum = self.period as f64 * (self.period as f64 + 1.0) / 2.0;
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let mut weighted_sum = 0.0;
+                for j in 0..self.period {
+                    let weight = (self.period - j) as f64;
+                    weighted_sum += data[i - j].close * weight;
+                }
+                let wma = weighted_sum / weight_sum;
+                values.push(IndicatorValue::Single(wma));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for WMA {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -77,28 +106,23 @@ impl Indicator for WMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        // Weight sum: n*(n+1)/2
-        let weight_sum = self.period as f64 * (self.period as f64 + 1.0) / 2.0;
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let mut weighted_sum = 0.0;
-                for j in 0..self.period {
-                    let weight = (self.period - j) as f64;
-                    weighted_sum += data[i - j].close * weight;
-                }
-                let wma = weighted_sum / weight_sum;
-                self.values.push(IndicatorValue::Single(wma));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

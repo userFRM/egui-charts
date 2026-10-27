@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -10,6 +10,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct VolumePriceTrend {
     values: IndicatorValues,
+    stepper: Stepper<(Option<f64>, f64)>,
     color: Color32,
     visible: bool,
 }
@@ -19,6 +20,7 @@ impl VolumePriceTrend {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::UP, // Teal
             visible: true,
         }
@@ -28,30 +30,6 @@ impl VolumePriceTrend {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // First bar starts at 0
-        let mut cumulative = 0.0;
-        values.push(IndicatorValue::Single(cumulative));
-
-        for i in 1..data.len() {
-            let prev_close = data[i - 1].close;
-            if prev_close != 0.0 {
-                let pct_change = (data[i].close - prev_close) / prev_close;
-                cumulative += data[i].volume * pct_change;
-            }
-            values.push(IndicatorValue::Single(cumulative));
-        }
-
-        values
     }
 }
 
@@ -81,11 +59,26 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if let Some(previous) = state.0.filter(|p| *p != 0.0) {
+                    let change = (bar.close - previous) / previous;
+                    state.1 += bar.volume * change;
+                }
+                state.0 = Some(bar.close);
+                IndicatorValue::Single(state.1)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -126,34 +119,30 @@ impl Indicator for VolumePriceTrend {
 /// Length of the NVI and PVI signal line, the published one-year EMA of the index.
 const SIGNAL_LEN: f64 = 255.0;
 
-/// The index from 1000, moved by the close's percentage change on the bars where `counts(volume,
-/// previous volume)` holds, and its EMA signal line seeded with the first index value.
-fn volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> IndicatorValues {
-    over_finite_bars(
-        data,
-        |b| b.close.is_finite() && b.volume.is_finite(),
-        |data| compute_volume_index(data, counts),
-    )
-}
-
-fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> IndicatorValues {
-    let Some(first) = data.first() else {
-        return IndicatorValues::new();
-    };
-    let alpha = 2.0 / (SIGNAL_LEN + 1.0);
-    let (mut index, mut signal) = (1000.0, 1000.0);
-    let mut values = IndicatorValues::new();
-    values.push_lines(&[index, signal]);
-    let mut prev = first;
-    for bar in &data[1..] {
-        if counts(bar.volume, prev.volume) && prev.close != 0.0 {
-            index += index * ((bar.close - prev.close) / prev.close);
+/// Resume the volume-gated index and its first-value-seeded signal.
+fn volume_index(
+    stepper: &mut Stepper<(Option<[f64; 2]>, f64, f64)>,
+    values: &mut IndicatorValues,
+    data: &[Bar],
+    from: usize,
+    counts: fn(f64, f64) -> bool,
+) {
+    stepper.run(data, from, values, |state, bar| {
+        if !bar.close.is_finite() || !bar.volume.is_finite() {
+            return IndicatorValue::None;
         }
-        signal += (index - signal) * alpha;
-        values.push_lines(&[index, signal]);
-        prev = bar;
-    }
-    values
+        if let Some([close, volume]) = state.0 {
+            if counts(bar.volume, volume) && close != 0.0 {
+                state.1 += state.1 * ((bar.close - close) / close);
+            }
+            state.2 += (state.1 - state.2) * (2.0 / (SIGNAL_LEN + 1.0));
+        } else {
+            state.1 = 1000.0;
+            state.2 = 1000.0;
+        }
+        state.0 = Some([bar.close, bar.volume]);
+        IndicatorValue::Multiple(vec![state.1, state.2])
+    });
 }
 
 /// Negative Volume Index (NVI)
@@ -164,6 +153,7 @@ fn compute_volume_index(data: &[Bar], counts: fn(f64, f64) -> bool) -> Indicator
 #[derive(Clone)]
 pub struct NegativeVolumeIndex {
     values: IndicatorValues,
+    stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,
     color: Color32,
     signal_color: Color32,
     visible: bool,
@@ -174,6 +164,7 @@ impl NegativeVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::RED,           // Red
             signal_color: palette::ORANGE, // Orange
             visible: true,
@@ -209,7 +200,21 @@ impl Indicator for NegativeVolumeIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = volume_index(data, |volume, prev| volume < prev);
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        volume_index(
+            &mut self.stepper,
+            &mut self.values,
+            data,
+            from,
+            |volume, prev| volume < prev,
+        );
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -262,6 +267,7 @@ impl Indicator for NegativeVolumeIndex {
 #[derive(Clone)]
 pub struct PositiveVolumeIndex {
     values: IndicatorValues,
+    stepper: Stepper<(Option<[f64; 2]>, f64, f64)>,
     color: Color32,
     signal_color: Color32,
     visible: bool,
@@ -272,6 +278,7 @@ impl PositiveVolumeIndex {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::GREEN,         // Green
             signal_color: palette::ORANGE, // Orange
             visible: true,
@@ -307,7 +314,21 @@ impl Indicator for PositiveVolumeIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = volume_index(data, |volume, prev| volume > prev);
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        volume_index(
+            &mut self.stepper,
+            &mut self.values,
+            data,
+            from,
+            |volume, prev| volume > prev,
+        );
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

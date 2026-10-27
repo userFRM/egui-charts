@@ -25,6 +25,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -76,6 +77,43 @@ impl Default for AwesomeOscillator {
     }
 }
 
+impl AwesomeOscillator {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        let min_period = self.slow_period.max(self.fast_period);
+
+        // Calculate median prices (HL/2)
+        let median_prices: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
+
+        for i in 0..data.len() {
+            if i < min_period - 1 {
+                values.push(IndicatorValue::None);
+                continue;
+            }
+
+            // Calculate fast SMA of median prices
+            let fast_start = i + 1 - self.fast_period;
+            let fast_sma: f64 =
+                median_prices[fast_start..=i].iter().sum::<f64>() / self.fast_period as f64;
+
+            // Calculate slow SMA of median prices
+            let slow_start = i + 1 - self.slow_period;
+            let slow_sma: f64 =
+                median_prices[slow_start..=i].iter().sum::<f64>() / self.slow_period as f64;
+
+            // AO = Fast SMA - Slow SMA
+            let ao = fast_sma - slow_sma;
+            values.push(IndicatorValue::Single(ao));
+        }
+        values
+    }
+}
+
 impl Indicator for AwesomeOscillator {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -121,37 +159,23 @@ impl Indicator for AwesomeOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.fast_period.max(self.slow_period) - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        let min_period = self.slow_period.max(self.fast_period);
-
-        // Calculate median prices (HL/2)
-        let median_prices: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
-
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-
-            // Calculate fast SMA of median prices
-            let fast_start = i + 1 - self.fast_period;
-            let fast_sma: f64 =
-                median_prices[fast_start..=i].iter().sum::<f64>() / self.fast_period as f64;
-
-            // Calculate slow SMA of median prices
-            let slow_start = i + 1 - self.slow_period;
-            let slow_sma: f64 =
-                median_prices[slow_start..=i].iter().sum::<f64>() / self.slow_period as f64;
-
-            // AO = Fast SMA - Slow SMA
-            let ao = fast_sma - slow_sma;
-            self.values.push(IndicatorValue::Single(ao));
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

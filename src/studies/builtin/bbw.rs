@@ -1,6 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -36,6 +37,42 @@ impl Default for BollingerBandsWidth {
     }
 }
 
+impl BollingerBandsWidth {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+                continue;
+            }
+
+            let start = i + 1 - self.period;
+            let prices: Vec<f64> = data[start..=i].iter().map(|b| b.close).collect();
+
+            let sma = prices.iter().sum::<f64>() / self.period as f64;
+            let variance =
+                prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
+            let stdev = variance.sqrt();
+
+            let upper = sma + self.std_dev * stdev;
+            let lower = sma - self.std_dev * stdev;
+
+            if sma.abs() < 1e-15 {
+                values.push(IndicatorValue::Single(0.0));
+            } else {
+                let bbw = (upper - lower) / sma * 100.0;
+                values.push(IndicatorValue::Single(bbw));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for BollingerBandsWidth {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -61,36 +98,23 @@ impl Indicator for BollingerBandsWidth {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let start = i + 1 - self.period;
-            let prices: Vec<f64> = data[start..=i].iter().map(|b| b.close).collect();
-
-            let sma = prices.iter().sum::<f64>() / self.period as f64;
-            let variance =
-                prices.iter().map(|p| (p - sma).powi(2)).sum::<f64>() / self.period as f64;
-            let stdev = variance.sqrt();
-
-            let upper = sma + self.std_dev * stdev;
-            let lower = sma - self.std_dev * stdev;
-
-            if sma.abs() < 1e-15 {
-                self.values.push(IndicatorValue::Single(0.0));
-            } else {
-                let bbw = (upper - lower) / sma * 100.0;
-                self.values.push(IndicatorValue::Single(bbw));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

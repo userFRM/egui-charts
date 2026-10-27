@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -19,6 +19,7 @@ pub struct StochasticMomentumIndex {
     /// Signal line period (typically 10)
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(std::collections::VecDeque<[f64; 2]>, [Smoothing; 5])>,
     /// Colors: [SMI, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -34,6 +35,7 @@ impl StochasticMomentumIndex {
             smooth2: smooth2.max(1),
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - SMI
                 palette::ORANGE, // Orange - Signal
@@ -46,91 +48,6 @@ impl StochasticMomentumIndex {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate highest high and lowest low
-        let mut highest = Vec::with_capacity(data.len());
-        let mut lowest = Vec::with_capacity(data.len());
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                highest.push(f64::NAN);
-                lowest.push(f64::NAN);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-                let hh = window
-                    .iter()
-                    .map(|b| b.high)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let ll = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-                highest.push(hh);
-                lowest.push(ll);
-            }
-        }
-
-        // Calculate distance from HL midpoint: Close - (HH + LL) / 2
-        let mut distance = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if highest[i].is_nan() || lowest[i].is_nan() {
-                distance.push(f64::NAN);
-            } else {
-                let midpoint = (highest[i] + lowest[i]) / 2.0;
-                distance.push(data[i].close - midpoint);
-            }
-        }
-
-        // Calculate HL range: HH - LL
-        let mut range = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if highest[i].is_nan() || lowest[i].is_nan() {
-                range.push(f64::NAN);
-            } else {
-                range.push(highest[i] - lowest[i]);
-            }
-        }
-
-        // Double EMA smoothing
-        let distance_ema1 = helpers::ema(&distance, self.smooth1);
-        let distance_ema2 = helpers::ema(&distance_ema1, self.smooth2);
-
-        let range_ema1 = helpers::ema(&range, self.smooth1);
-        let range_ema2 = helpers::ema(&range_ema1, self.smooth2);
-
-        // Calculate SMI
-        let mut smi = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if distance_ema2[i].is_nan() || range_ema2[i].is_nan() || range_ema2[i] == 0.0 {
-                smi.push(f64::NAN);
-            } else {
-                let value = 100.0 * distance_ema2[i] / (range_ema2[i] / 2.0);
-                smi.push(value);
-            }
-        }
-
-        // Calculate signal line
-        let signal = helpers::ema(&smi, self.signal_period);
-
-        // Store results
-        for i in 0..data.len() {
-            if smi[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push_lines(&[smi[i], signal[i]]);
-            }
-        }
-
-        values
     }
 }
 
@@ -157,11 +74,52 @@ impl Indicator for StochasticMomentumIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.0.push_back([bar.high, bar.low]);
+                if state.0.len() > self.period {
+                    state.0.pop_front();
+                }
+                if state.0.len() < self.period {
+                    return IndicatorValue::None;
+                }
+                let high = state
+                    .0
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = state.0.iter().map(|v| v[1]).fold(f64::INFINITY, f64::min);
+                let distance = bar.close - (high + low) / 2.0;
+                let range = high - low;
+                let a1 = 2.0 / (self.smooth1 as f64 + 1.0);
+                let a2 = 2.0 / (self.smooth2 as f64 + 1.0);
+                let d1 = state.1[0].next(distance, 1, a1);
+                let d2 = state.1[1].next(d1, 1, a2);
+                let r1 = state.1[2].next(range, 1, a1);
+                let r2 = state.1[3].next(r1, 1, a2);
+                let smi = if d2.is_nan() || r2.is_nan() || r2 == 0.0 {
+                    f64::NAN
+                } else {
+                    100.0 * d2 / (r2 / 2.0)
+                };
+                let signal = state.1[4].next(smi, 1, 2.0 / (self.signal_period as f64 + 1.0));
+                if smi.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![smi, signal])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

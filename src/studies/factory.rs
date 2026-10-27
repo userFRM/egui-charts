@@ -848,13 +848,27 @@ mod tests {
     /// Every registered name must construct, and the produced indicator's
     /// `name()` must round-trip back to the key it was registered under. This
     /// guards the factory's core invariant: a name returned by `list()` is a
-    /// name that `create()` honors, and the key matches the indicator identity.
+    /// name that `create()` honors, and the key matches the indicator identity. Bar studies
+    /// must also opt into live updates; profiles use a cached driver and the visible average
+    /// can change its whole line.
     #[test]
-    fn every_registered_name_round_trips() {
+    fn every_registered_study_round_trips_and_supports_live_updates() {
         let factory = IndicatorFactory::new();
+        let bars: Vec<_> = (0..3)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    100.0,
+                    101.0,
+                    99.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
 
         for name in factory.list() {
-            let indicator = factory
+            let mut indicator = factory
                 .create(&name)
                 .unwrap_or_else(|| panic!("registered name {name:?} failed to construct"));
             assert_eq!(
@@ -862,6 +876,13 @@ mod tests {
                 name,
                 "indicator constructed for key {name:?} reports a different name()",
             );
+            if !name.starts_with("Vol Profile ") && name != "Visible Average Price" {
+                indicator.calculate(&bars);
+                assert!(
+                    indicator.is_incremental(),
+                    "{name} must update on every tick"
+                );
+            }
         }
     }
 
@@ -1170,6 +1191,7 @@ mod tests {
             Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
             Box::new(WilliamsFractals::new(l(0))),
             Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
+            Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
             Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
             Box::new(PriceChannel::new(l(0))),
             Box::new(LinearRegression::new(l(0))),
@@ -1267,9 +1289,9 @@ mod tests {
     /// `update(data, from)` leaves the values of a fresh `calculate(data)`, bit for bit, for every
     /// built-in after each change a chart passes on: a new bar, a new close of the last bar, a
     /// correction up to five bars back, a removed last bar, bars loaded in front, a daily series
-    /// turning intraday, and bars with a non-finite price or volume. A checkpoint not restored on
-    /// a last-bar update, a correction resumed instead of restarted, a window read one bar short
-    /// or a warm-up threshold or VWAP's daily rule not rechecked fails it.
+    /// turning intraday, unchanged data, and bars with a non-finite price or volume. Unchanged
+    /// updates must retain the checkpoint for withdrawing and restoring the developing bar,
+    /// including its markers, zones, tables and projections.
     #[test]
     fn every_update_equals_a_fresh_calculate() {
         // In UTC no VWAP value depends on its daily rule; in Tokyo with weekly periods the
@@ -1283,6 +1305,18 @@ mod tests {
         };
         let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
         studies.push(tokyo_week());
+        for study in &studies {
+            if matches!(
+                study.name(),
+                "C2C Vol" | "Price Channel" | "HLC3" | "HL2" | "CVD" | "Ehlers Fisher"
+            ) {
+                assert!(
+                    study.is_incremental(),
+                    "{} must update on every tick",
+                    study.name()
+                );
+            }
+        }
         let mut twins = builtins_with(|k| 3 + 2 * k, |v| v);
         twins.push(tokyo_week());
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
@@ -1312,7 +1346,7 @@ mod tests {
                         .map_or(Utc.with_ymd_and_hms(2023, 9, 15, 23, 0, 0).unwrap(), |b| {
                             b.time
                                 + if len < 60 {
-                                    Duration::days(1)
+                                    Duration::weeks(1)
                                 } else {
                                     Duration::minutes(1)
                                 }
@@ -1326,15 +1360,54 @@ mod tests {
                 len
             };
             for (study, twin) in studies.iter_mut().zip(&twins) {
-                study.update(&data, from);
-                let mut fresh = twin.clone_box();
-                fresh.calculate(&data);
-                assert_eq!(
-                    bits(&study.values().to_rows()),
-                    bits(&fresh.values().to_rows()),
-                    "{} event {event}",
-                    study.name()
-                );
+                let last = data.last().cloned();
+                for revision in 0..3 {
+                    let from = if revision == 0 {
+                        from
+                    } else if let Some(last) = &last {
+                        let at = data.len() - 1;
+                        data[at] = if revision == 1 {
+                            Bar::whitespace(last.time)
+                        } else {
+                            last.clone()
+                        };
+                        at
+                    } else {
+                        continue;
+                    };
+                    study.update(&data, from);
+                    study.update(&data, data.len());
+                    let mut fresh = twin.clone_box();
+                    fresh.calculate(&data);
+                    assert_eq!(
+                        bits(&study.values().to_rows()),
+                        bits(&fresh.values().to_rows()),
+                        "{} event {event}, revision {revision}",
+                        study.name()
+                    );
+                    assert_eq!(
+                        format!(
+                            "{:?}",
+                            (
+                                study.markers(),
+                                study.zones(),
+                                study.table(),
+                                study.projections()
+                            )
+                        ),
+                        format!(
+                            "{:?}",
+                            (
+                                fresh.markers(),
+                                fresh.zones(),
+                                fresh.table(),
+                                fresh.projections()
+                            )
+                        ),
+                        "{} metadata, event {event}, revision {revision}",
+                        study.name()
+                    );
+                }
             }
         }
     }

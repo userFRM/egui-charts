@@ -41,10 +41,10 @@
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
-use super::over_finite_bars;
 use crate::model::{Bar, Instrument, Timeframe};
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// The level formulas used by [`PivotPoints`].
@@ -103,9 +103,28 @@ pub struct PivotPoints {
     interval: Timeframe,
     days: ExchangeDays,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    intraday: bool,
+    shown_start: usize,
     /// One per line: P, then R1, S1 through R5, S5.
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone)]
+struct Period {
+    key: (i32, u32),
+    start: usize,
+    ohlc: Bar,
+    levels: [f64; 11],
+}
+
+#[derive(Clone, Default)]
+struct State {
+    index: usize,
+    previous_date: Option<chrono::NaiveDate>,
+    intraday: bool,
+    periods: std::collections::VecDeque<Period>,
 }
 
 impl PivotPoints {
@@ -132,6 +151,9 @@ impl PivotPoints {
             interval: Timeframe::Min1,
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            intraday: false,
+            shown_start: 0,
             colors,
             visible: true,
         }
@@ -184,12 +206,12 @@ impl PivotPoints {
     }
 
     /// `[P, R1, S1, ..., R5, S5]` from the previous period and the current period's open.
-    fn levels(&self, prev: &Bar, open: f64) -> [f64; 11] {
+    fn levels(method: PivotMethod, prev: &Bar, open: f64) -> [f64; 11] {
         let (h, l, c) = (prev.high, prev.low, prev.close);
         let r = h - l;
         let p = (h + l + c) / 3.0;
         let nan = f64::NAN;
-        match self.method {
+        match method {
             PivotMethod::Traditional => [
                 p,
                 2.0 * p - l,
@@ -287,37 +309,6 @@ impl PivotPoints {
             }
         }
     }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let period = self.period();
-        // Each period's key, first bar and open, high, low and close.
-        let mut periods: Vec<((i32, u32), usize, Bar)> = Vec::new();
-        for (i, (bar, day)) in data.iter().zip(self.days.of(data)).enumerate() {
-            let key = period.key(day);
-            match periods.last_mut() {
-                Some((last, _, ohlc)) if *last == key => {
-                    ohlc.high = ohlc.high.max(bar.high);
-                    ohlc.low = ohlc.low.min(bar.low);
-                    ohlc.close = bar.close;
-                }
-                _ => periods.push((key, i, bar.clone())),
-            }
-        }
-        let mut values = IndicatorValues::missing(data.len());
-        let first = periods.len().saturating_sub(self.pivots_back).max(1);
-        for k in first..periods.len() {
-            let start = periods[k].1;
-            let end = periods.get(k + 1).map_or(data.len(), |next| next.1);
-            let levels = self.levels(&periods[k - 1].2, data[start].open);
-            for bar in start..end {
-                for (line, level) in levels.iter().enumerate() {
-                    values.set_value(line, bar, *level);
-                }
-            }
-        }
-        values
-    }
 }
 
 /// Construct with the conventional default parameters.
@@ -343,17 +334,89 @@ impl Indicator for PivotPoints {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let open = matches!(self.method, PivotMethod::Woodie | PivotMethod::DM);
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.close.is_finite()
-                    && (!open || b.open.is_finite())
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], mut from: usize) {
+        let period = self.period();
+        let method = self.method;
+        let needs_open = matches!(method, PivotMethod::Woodie | PivotMethod::DM);
+        let usable = |bar: &Bar| {
+            bar.high.is_finite()
+                && bar.low.is_finite()
+                && bar.close.is_finite()
+                && (!needs_open || bar.open.is_finite())
+        };
+        let len = self.values.len();
+        if len == 0 || from < len - 1 || data.len() < len {
+            self.shown_start = 0;
+        }
+        loop {
+            self.stepper
+                .run(data, from, &mut self.values, |state, bar| {
+                    let index = state.index;
+                    state.index += 1;
+                    if !usable(bar) {
+                        return IndicatorValue::None;
+                    }
+                    let date = bar.time.date_naive();
+                    state.intraday |= state.previous_date == Some(date);
+                    state.previous_date = Some(date);
+                    let key = period.key(self.days.day(bar, !self.intraday));
+                    if state.periods.back().is_none_or(|last| last.key != key) {
+                        let levels = state.periods.back().map_or([f64::NAN; 11], |last| {
+                            Self::levels(method, &last.ohlc, bar.open)
+                        });
+                        state.periods.push_back(Period {
+                            key,
+                            start: index,
+                            ohlc: bar.clone(),
+                            levels,
+                        });
+                        if state.periods.len() > self.pivots_back {
+                            state.periods.pop_front();
+                        }
+                    } else {
+                        let current = state.periods.back_mut().unwrap();
+                        current.ohlc.high = current.ohlc.high.max(bar.high);
+                        current.ohlc.low = current.ohlc.low.min(bar.low);
+                        current.ohlc.close = bar.close;
+                    }
+                    IndicatorValue::Multiple(state.periods.back().unwrap().levels.to_vec())
+                });
+            if self.intraday == self.stepper.state().intraday {
+                break;
+            }
+            self.intraday = self.stepper.state().intraday;
+            self.shown_start = 0;
+            from = 0;
+        }
+        let periods = &self.stepper.state().periods;
+        let start = periods.front().map_or(data.len(), |period| period.start);
+        if start > self.shown_start {
+            for bar in self.shown_start..start {
+                self.values.set(bar, IndicatorValue::None);
+            }
+        } else if start < self.shown_start {
+            // Withdrawing a new period reveals the one that its display limit had expired.
+            for (at, period) in periods.iter().enumerate() {
+                let end = periods
+                    .get(at + 1)
+                    .map_or(data.len(), |next| next.start)
+                    .min(self.shown_start);
+                for (bar, source) in data.iter().enumerate().take(end).skip(period.start) {
+                    if usable(source) {
+                        self.values
+                            .set(bar, IndicatorValue::Multiple(period.levels.to_vec()));
+                    }
+                }
+            }
+        }
+        self.shown_start = start;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn set_timeframe(&mut self, timeframe: Timeframe) {

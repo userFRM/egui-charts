@@ -48,12 +48,20 @@ impl Indicator for TypicalPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        self.values.truncate(from);
+        for bar in &data[from..] {
             let tp = (bar.high + bar.low + bar.close) / 3.0;
             self.values.push(IndicatorValue::Single(tp));
         }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -132,12 +140,20 @@ impl Indicator for WeightedClose {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        self.values.truncate(from);
+        for bar in &data[from..] {
             let wc = (bar.high + bar.low + 2.0 * bar.close) / 4.0;
             self.values.push(IndicatorValue::Single(wc));
         }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -218,12 +234,20 @@ impl Indicator for MedianPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        self.values.truncate(from);
+        for bar in &data[from..] {
             let mp = (bar.high + bar.low) / 2.0;
             self.values.push(IndicatorValue::Single(mp));
         }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
