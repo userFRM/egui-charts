@@ -763,7 +763,7 @@ impl Chart {
         self.zoom_just_applied
     }
 
-    /// Sets the crosshair rendering style (Full, Dot, Arrow or Demonstration).
+    /// Sets the crosshair rendering style (Full, Dot, Arrow, Demonstration or Magic).
     ///
     /// Use this to connect a toolbar cursor-type selector to the chart.
     /// The style controls how the crosshair lines and labels are drawn
