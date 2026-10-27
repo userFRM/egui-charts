@@ -348,6 +348,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Returning demo visitors follow the system appearance, including live changes, until they pick a theme. Palettes saved automatically by earlier releases are ignored without discarding other settings; new choices persist in the app and on the loading page. ([#1043](https://github.com/userFRM/egui-charts/issues/1043))
 - The interval toolbar starts without favourites and shows one button for the current interval. Starred intervals appear in menu order, followed by the last selected non-favourite and an icon-only menu trigger, without repeating an interval. Selecting a favourite retains the non-favourite button. Toolbar buttons abbreviate one day, week and month to `D`, `W` and `M`. ([#1041](https://github.com/userFRM/egui-charts/issues/1041))
 
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
