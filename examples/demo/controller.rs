@@ -907,6 +907,7 @@ impl DemoApp {
     fn list_alert_sources(&mut self) {
         use egui_charts::model::AlertSource;
         let bar = self.chart.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
+        let scale = self.chart.config().right_axis_scale_mode;
         self.alert_dialog.sources = self
             .chart
             .indicators()
@@ -932,7 +933,7 @@ impl DemoApp {
                     .iter()
                     .filter(|d| d.completed)
                     .flat_map(|d| {
-                        let levels = d.alert_levels(bar);
+                        let levels = d.alert_levels(bar, scale);
                         let single = levels.len() == 1;
                         levels.into_iter().map(move |(level, name, _)| {
                             let drawing = format!("{} {}", d.tool_type.as_str(), d.id);

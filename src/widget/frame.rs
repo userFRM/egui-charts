@@ -1398,6 +1398,7 @@ impl Chart {
             // Full dataset so window-independent transforms (Heikin-Ashi) can be
             // computed over the complete series, not just the visible slice.
             full_data: &self.state.data().bars,
+            shows_elements: self.state.shows_elements(),
             revision: self.state.revision(),
             heikin_ashi: &self.heikin_ashi,
             start_idx,
