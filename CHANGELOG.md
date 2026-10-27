@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+- The drawing rail optically sizes its trend, Fibonacci and ruler glyphs within their existing button slots. Default light ink is black; dark and custom theme colours, disabled contrast and selected utility fills are retained. ([#1001](https://github.com/userFRM/egui-charts/issues/1001))
+
 - The magnet menu independently includes or excludes visible study targets through Snap to indicators, preserving OHLC, drawing anchors and the chosen magnet strength. `DrawingToolbarAction::SetSnapToIndicators` carries the host preference; the demo applies it. Migration: `DrawingManagerOptions` and `ToolbarState` literals add `snap_to_indicators: true` or use their defaults; `MagnetButton::show_submenu` takes that preference as its fourth argument. ([#979](https://github.com/userFRM/egui-charts/issues/979))
 
 - Position drawings size risk in lots using point value and lot size, round down to a configured quantity step, display its precision, convert profit and loss, and report required capital using leverage. Both position Inputs tabs expose the economics; saved drawings and defaults retain them, and older drawings keep unit sizing. Summaries wrap inside the chart. Migration: `Drawing` literals add `position_sizing: PositionSizing::default()` or use `Drawing::new`; hosts supply point values and lot conventions in the account currency. ([#959](https://github.com/userFRM/egui-charts/issues/959))

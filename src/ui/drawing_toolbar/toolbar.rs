@@ -1362,6 +1362,7 @@ mod tests {
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]
     fn drawing_bar_icons_keep_their_grid_pitch_and_state_colours() {
+        use egui::emath::GuiRounding;
         use egui::{Color32, Pos2, Shape, vec2};
 
         let mut custom = crate::theme::Theme::dark();
@@ -1369,7 +1370,7 @@ mod tests {
         custom.ui.accent_text = Color32::YELLOW;
         for (theme, text) in [
             (crate::theme::Theme::dark(), Color32::from_gray(219)),
-            (crate::theme::Theme::light(), Color32::from_gray(26)),
+            (crate::theme::Theme::light(), Color32::BLACK),
             (custom, Color32::GREEN),
         ] {
             for (selected, magnet) in [
@@ -1431,7 +1432,16 @@ mod tests {
                     assert_eq!(
                         icons[i],
                         (
-                            Rect::from_center_size(origin + vec2(26.0, y), vec2(24.0, 24.0)),
+                            Rect::from_center_size(
+                                origin + vec2(26.0, y),
+                                match i {
+                                    1 => vec2(29.0, 29.0),
+                                    2 => vec2(34.0, 27.0),
+                                    8 => vec2(31.0, 31.0),
+                                    _ => vec2(24.0, 24.0),
+                                }
+                            )
+                            .round_to_pixels(1.0),
                             colour
                         ),
                         "icon {i}, selected {selected:?}"
