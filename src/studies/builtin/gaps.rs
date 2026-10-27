@@ -70,6 +70,9 @@ pub struct Gaps {
     trail_length: usize,
     values: IndicatorValues,
     stepper: Stepper<State>,
+    closed: Vec<(usize, StudyZone)>,
+    before_last_closed: usize,
+    expired: Vec<(usize, (usize, StudyZone))>,
     zones: Vec<StudyZone>,
     up_color: Color32,
     down_color: Color32,
@@ -109,7 +112,6 @@ struct State {
     last_source: Option<usize>,
     ranges: std::collections::VecDeque<f64>,
     open: Vec<Gap>,
-    closed: Vec<(usize, StudyZone)>,
     found: usize,
 }
 
@@ -125,6 +127,9 @@ impl Gaps {
             trail_length: 300,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
+            closed: Vec::new(),
+            before_last_closed: 0,
+            expired: Vec::new(),
             zones: Vec::new(),
             up_color: palette::GREEN,
             down_color: palette::RED,
@@ -177,10 +182,43 @@ impl Indicator for Gaps {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        if len > 0 && from == len && data.len() == len {
+            return;
+        }
+        if len == 0 || from < len - 1 || data.len() < len {
+            self.closed.clear();
+            self.zones.clear();
+        } else if from == len - 1 {
+            if self.expired.is_empty() {
+                self.closed.truncate(self.before_last_closed);
+                self.zones.truncate(self.before_last_closed);
+            } else {
+                let mut kept = std::mem::take(&mut self.closed).into_iter();
+                let mut expired = std::mem::take(&mut self.expired).into_iter().peekable();
+                for at in 0..self.before_last_closed {
+                    self.closed
+                        .push(if expired.peek().is_some_and(|(index, _)| *index == at) {
+                            expired.next().unwrap().1
+                        } else {
+                            kept.next().unwrap()
+                        });
+                }
+                self.zones.clear();
+            }
+        } else {
+            self.zones.truncate(self.closed.len());
+        }
+        let mut retained = self.zones.len();
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 let source = state.source;
                 state.source += 1;
+                let last = source + 1 == data.len();
+                if last {
+                    self.before_last_closed = self.closed.len();
+                    self.expired.clear();
+                }
                 if !bar.high.is_finite() || !bar.low.is_finite() {
                     return IndicatorValue::None;
                 }
@@ -205,7 +243,7 @@ impl Indicator for Gaps {
                         (bar.high > gap.near, bar.high >= gap.far)
                     };
                     if entered {
-                        state.closed.push(gap.zone(source));
+                        self.closed.push(gap.zone(source));
                         if covered || !self.close_partially {
                             return false;
                         }
@@ -213,7 +251,7 @@ impl Indicator for Gaps {
                         gap.left = i;
                         gap.source_left = source;
                     } else if self.limit_trail && i - gap.left >= self.trail_length {
-                        state.closed.push(gap.zone(source));
+                        self.closed.push(gap.zone(source));
                         return false;
                     }
                     true
@@ -242,17 +280,31 @@ impl Indicator for Gaps {
                 };
                 state.found += 1;
                 if self.limit_trail && self.trail_length == 1 {
-                    state.closed.push(gap.zone(source));
+                    self.closed.push(gap.zone(source));
                 } else {
                     state.open.push(gap);
                 }
                 let shown = state.found.saturating_sub(self.max_gaps);
                 state.open.retain(|gap| gap.index >= shown);
-                state.closed.retain(|(gap, _)| *gap >= shown);
+                let mut at = 0;
+                self.closed.retain(|zone| {
+                    let keep = zone.0 >= shown;
+                    if !keep && last && at < self.before_last_closed {
+                        self.expired.push((at, zone.clone()));
+                    }
+                    if !keep {
+                        retained = 0;
+                    }
+                    at += 1;
+                    keep
+                });
                 IndicatorValue::None
             });
         let state = self.stepper.state();
-        self.zones = state.closed.iter().map(|(_, zone)| zone.clone()).collect();
+        // Completed segments do not move on a tick and must stay outside the cloned checkpoint.
+        self.zones.truncate(retained);
+        self.zones
+            .extend(self.closed[retained..].iter().map(|(_, zone)| zone.clone()));
         if let Some(last) = state.last_source {
             self.zones
                 .extend(state.open.iter().map(|gap| gap.zone(last).1));

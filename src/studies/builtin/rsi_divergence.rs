@@ -181,6 +181,9 @@ impl Indicator for RsiDivergence {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let len = self.values.len();
+        if len > 0 && from == len && data.len() == len {
+            return;
+        }
         if len > 0 && from == len - 1 && data.len() >= len {
             // A developing confirmation can be withdrawn, restoring the earlier segment it replaced.
             for &(line, bar, value) in &self.undo {

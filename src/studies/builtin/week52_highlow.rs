@@ -1,6 +1,5 @@
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use chrono::Duration;
 use egui::Color32;
@@ -13,7 +12,7 @@ use std::collections::VecDeque;
 #[derive(Clone)]
 pub struct Week52HighLow {
     values: IndicatorValues,
-    stepper: Stepper<State>,
+    state: State,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -23,7 +22,7 @@ impl Week52HighLow {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            stepper: Stepper::default(),
+            state: State::default(),
             colors: vec![palette::PINK],
             visible: true,
         }
@@ -54,20 +53,19 @@ impl Indicator for Week52HighLow {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
-                    return IndicatorValue::None;
-                }
-                match state.next(bar) {
-                    None => IndicatorValue::None,
-                    Some((high, low)) => IndicatorValue::Single(if (high - low).abs() < 1e-15 {
-                        50.0
-                    } else {
-                        (bar.close - low) / (high - low) * 100.0
-                    }),
-                }
-            });
+        self.state.run(
+            data,
+            from,
+            &mut self.values,
+            |bar| [bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()),
+            |bar, high, low| {
+                IndicatorValue::Single(if (high - low).abs() < 1e-15 {
+                    50.0
+                } else {
+                    (bar.close - low) / (high - low) * 100.0
+                })
+            },
+        );
     }
 
     fn is_incremental(&self) -> bool {
@@ -114,7 +112,7 @@ impl Indicator for Week52HighLow {
 #[derive(Clone)]
 pub struct Week52HighLowLevels {
     values: IndicatorValues,
-    stepper: Stepper<State>,
+    state: State,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -124,7 +122,7 @@ impl Week52HighLowLevels {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
-            stepper: Stepper::default(),
+            state: State::default(),
             colors: vec![palette::BLUE, palette::PINK],
             visible: true,
         }
@@ -150,16 +148,13 @@ impl Indicator for Week52HighLowLevels {
         self.update(data, 0);
     }
     fn update(&mut self, data: &[Bar], from: usize) {
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                if !bar.high.is_finite() || !bar.low.is_finite() {
-                    return IndicatorValue::None;
-                }
-                match state.next(bar) {
-                    Some((high, low)) => IndicatorValue::Multiple(vec![high, low]),
-                    None => IndicatorValue::None,
-                }
-            });
+        self.state.run(
+            data,
+            from,
+            &mut self.values,
+            |bar| bar.high.is_finite() && bar.low.is_finite(),
+            |_, high, low| IndicatorValue::Multiple(vec![high, low]),
+        );
     }
     fn is_incremental(&self) -> bool {
         true
@@ -202,41 +197,73 @@ impl Indicator for Week52HighLowLevels {
 
 #[derive(Clone, Default)]
 struct State {
+    processed: usize,
     first: Option<chrono::DateTime<chrono::Utc>>,
-    highs: VecDeque<(chrono::DateTime<chrono::Utc>, f64)>,
-    lows: VecDeque<(chrono::DateTime<chrono::Utc>, f64)>,
+    extremes: [VecDeque<usize>; 2],
 }
 
 impl State {
-    /// Include the bar exactly 52 weeks before this one, expiring only older candidates.
-    fn next(&mut self, bar: &Bar) -> Option<(f64, f64)> {
-        let first = *self.first.get_or_insert(bar.time);
-        while self
-            .highs
-            .front()
-            .is_some_and(|&(time, _)| bar.time - time > Duration::weeks(52))
-        {
-            self.highs.pop_front();
+    fn run(
+        &mut self,
+        data: &[Bar],
+        from: usize,
+        values: &mut IndicatorValues,
+        usable: impl Fn(&Bar) -> bool,
+        output: impl Fn(&Bar, f64, f64) -> IndicatorValue,
+    ) {
+        let len = values.len();
+        let from = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            *self = Self::default();
+            0
+        };
+        values.truncate(from);
+        // Commit completed bars only. Revisions of the developing bar leave the queues intact.
+        for at in self.processed..data.len() {
+            let bar = &data[at];
+            let last = at + 1 == data.len();
+            let value = if usable(bar) {
+                let first = self.first.unwrap_or(bar.time);
+                let mut range = [bar.high, bar.low];
+                for (line, queue) in self.extremes.iter_mut().enumerate() {
+                    let expired = |i: usize| bar.time - data[i].time > Duration::weeks(52);
+                    let price = |i: usize| if line == 0 { data[i].high } else { data[i].low };
+                    let better = |a: f64, b: f64| if line == 0 { a > b } else { a < b };
+                    if !last {
+                        while queue.front().is_some_and(|&i| expired(i)) {
+                            queue.pop_front();
+                        }
+                        while queue.back().is_some_and(|&i| !better(price(i), price(at))) {
+                            queue.pop_back();
+                        }
+                        queue.push_back(at);
+                    }
+                    // Include the bar exactly 52 weeks before this one.
+                    let start = queue.partition_point(|&i| expired(i));
+                    if let Some(&i) = queue.get(start)
+                        && better(price(i), range[line])
+                    {
+                        range[line] = price(i);
+                    }
+                }
+                if !last {
+                    self.first = Some(first);
+                }
+                if bar.time - first >= Duration::weeks(52) {
+                    output(bar, range[0], range[1])
+                } else {
+                    IndicatorValue::None
+                }
+            } else {
+                IndicatorValue::None
+            };
+            if at >= from {
+                values.push(value);
+            }
+            if !last {
+                self.processed = at + 1;
+            }
         }
-        while self
-            .lows
-            .front()
-            .is_some_and(|&(time, _)| bar.time - time > Duration::weeks(52))
-        {
-            self.lows.pop_front();
-        }
-        while self
-            .highs
-            .back()
-            .is_some_and(|&(_, price)| price <= bar.high)
-        {
-            self.highs.pop_back();
-        }
-        while self.lows.back().is_some_and(|&(_, price)| price >= bar.low) {
-            self.lows.pop_back();
-        }
-        self.highs.push_back((bar.time, bar.high));
-        self.lows.push_back((bar.time, bar.low));
-        (bar.time - first >= Duration::weeks(52)).then(|| (self.highs[0].1, self.lows[0].1))
     }
 }

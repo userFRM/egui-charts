@@ -205,6 +205,9 @@ impl Indicator for RelativeVolumeAtTime {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let len = self.values.len();
+        if len > 0 && from == len && data.len() == len {
+            return;
+        }
         let start = if len > 0 && from >= len - 1 && data.len() >= len {
             from.min(len)
         } else {
