@@ -887,9 +887,9 @@ mod tests {
                         |ui| {
                             action = selector.menu_ui(ui, &theme, 2500.0);
                             right = ui.min_rect().right();
-                            assert!(right <= width, "{right} exceeds {width}");
                         },
                     );
+                    assert!(right <= width, "{right} exceeds {width}");
                     let labels: Vec<_> = output
                         .shapes
                         .iter()
