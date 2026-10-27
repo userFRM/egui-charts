@@ -313,6 +313,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Drawing sync notifications coalesce repeated saves and updates per drawing, and a queue of more than 1,024 actions becomes `DrawingSyncAction::ResyncRequired`. Hosts receiving it replace their complete stored drawing set with the manager's current saveable drawings, including deleting absent records. Automatic storage no longer fills this second queue. Migration: integrations consuming notifications alongside `Chart::set_storage` call `chart.drawings_mut().set_sync_enabled(true)` after attaching storage; enabling requests a full replacement to include edits made while disabled. The setting survives symbol changes and drawing loads. ([#948](https://github.com/userFRM/egui-charts/issues/948))
+
+- Drawing autosave retains failed documents until storage acknowledges them, retries after one second of input time, and keeps the latest edits through delayed writes and symbol changes. `Chart::flush_stored_drawings` retries immediately and reports whether captured edits are acknowledged; storage remains host-owned. ([#942](https://github.com/userFRM/egui-charts/issues/942))
+
 - Built-in studies, including KST, Ichimoku and Parabolic SAR, update changed bars and appends without recalculating unaffected history. Retrospective studies refresh affected pivots, legs and calendar periods. Migration: direct callers of `Indicator::update_data` must pass `from = 0` when a requested history changes; nonzero `from` reuses requested histories. The chart supplies this invalidation. ([#946](https://github.com/userFRM/egui-charts/issues/946))
 - Point and Figure columns retain their price endpoints and saturate inclusive box counts at `usize::MAX` rather than overflowing, including on 32-bit targets. `PnfColumn::boxes` rejects invalid geometry or expansion above two million boxes and reports allocation failures. Migration: `boxes()` now returns `Result<Vec<f64>, String>`; handle the error before using the prices, or use the column endpoints without expanding. ([#943](https://github.com/userFRM/egui-charts/issues/943))
 
