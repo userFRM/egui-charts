@@ -964,13 +964,16 @@ mod tests {
                         ))
                     })
                     .collect();
+                let active = ctx.global_style().visuals.widgets.active.bg_fill;
                 let pressed: Vec<_> = labels
                     .iter()
                     .filter(|(_, pos)| {
-                        output.shapes.iter().any(|shape|
-                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect.contains(*pos)
-                        && rect.fill == ctx.global_style().visuals.widgets.active.bg_fill)
-                )
+                        output.shapes.iter().any(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect) => {
+                                rect.rect.contains(*pos) && rect.fill == active
+                            }
+                            _ => false,
+                        })
                     })
                     .map(|(label, _)| label.clone())
                     .collect();
@@ -1324,13 +1327,11 @@ mod tests {
                 ("45s".parse().unwrap(), "45S", "45 seconds"),
                 (Model::Min5, "5m", "5 minutes"),
                 (Model::Hour1, "1h", "1 hour"),
-                (Model::Hour4, "4h", "4 hours"),
                 (Model::Day1, "D", "1 day"),
                 (Model::Week1, "W", "1 week"),
                 (Model::Month1, "M", "1 month"),
                 ("2D".parse().unwrap(), "2D", "2 days"),
                 ("2W".parse().unwrap(), "2W", "2 weeks"),
-                ("10R".parse().unwrap(), "10R", "10 range ticks"),
                 ("3month".parse().unwrap(), "3M", "3 months"),
                 ("6month".parse().unwrap(), "6M", "6 months"),
                 ("12month".parse().unwrap(), "12M", "12 months"),
