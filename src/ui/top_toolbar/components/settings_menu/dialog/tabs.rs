@@ -779,6 +779,12 @@ impl SettingsDialog {
                 ui.add_space(ui.active_theme().spacing.xxl);
                 self.draw_section_header(ui, "NOTIFICATIONS", theme);
 
+                self.draw_setting_row_with_controls(ui, "Sound volume", theme, |ui, dialog| {
+                    ui.add(
+                        egui::Slider::new(&mut dialog.settings.alerts.sound_volume, 0..=100)
+                            .suffix("%"),
+                    );
+                });
                 self.draw_setting_row_with_controls(ui, "Lifetime", theme, |ui, dialog| {
                     ui.add(
                         egui::DragValue::new(&mut dialog.settings.alerts.notification_seconds)

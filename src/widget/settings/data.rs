@@ -410,6 +410,8 @@ pub struct AlertsSettings {
     pub alert_color: Color32,
     /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
     pub show_active_only: bool,
+    /// Alert sound volume in percent; zero is mute. The host plays requested sounds.
+    pub sound_volume: u8,
     /// Seconds an alert notification stays on screen.
     pub notification_seconds: u32,
 }
@@ -421,6 +423,7 @@ impl Default for AlertsSettings {
             show_alert_labels: true,
             alert_color: crate::studies::palette::ORANGE, // Orange
             show_active_only: true,
+            sound_volume: 100,
             notification_seconds: 5,
         }
     }

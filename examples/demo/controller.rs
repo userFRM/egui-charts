@@ -1026,6 +1026,7 @@ impl DemoApp {
         self.trading.display = state.trading.clone();
         self.alerts
             .set_notification_seconds(state.alerts.notification_seconds as f32);
+        self.alerts.set_sound_volume(state.alerts.sound_volume);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
         if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
@@ -1170,6 +1171,9 @@ impl eframe::App for DemoApp {
         self.handle_screenshot(&ctx);
         let logged = self.alerts.log().len();
         self.alerts.poll(&ctx, &mut self.toasts);
+        if let Some(volume) = self.alerts.take_trigger_sound() {
+            self.notify(format!("Alert sound: {volume}%"));
+        }
         // shortcut: a log already holding its 10,000 triggers forwards no new ones; count the
         // triggers in the alert service if a session can reach that.
         let new = self.alerts.log().len().saturating_sub(logged);

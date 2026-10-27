@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Alert settings include sound volume from mute to 100%. `AlertsPanel::take_trigger_sound` returns the volume requested by trigger events for host audio playback; the demo displays the request. Notification lifetime is applied to trigger toasts. Migration: `AlertsSettings` literals add `sound_volume: 100` or use `..Default::default()`. ([#995](https://github.com/userFRM/egui-charts/issues/995))
+
 - The Events settings tab separates earnings badges from earnings breaks, a dashed vertical line at each earnings event (`EventVisibility::show_earnings_breaks`). It adds News notifications (`show_news_notifications`), which the host reads before raising a notification for a headline it supplies, and shows or hides host-supplied ideas, the new `EventKind::Idea` badged "I" (`show_ideas`).
 
 - The Alerts settings tab adds Show active alerts only and the number of seconds a trigger notification stays on screen (`AlertsSettings::show_active_only`, `notification_seconds`). With `active_only` unset, `chart::render_alert_levels` draws triggered, disabled and expired alerts dimmed. `AlertsPanel::set_notification_seconds` sets the lifetime of trigger notifications, five seconds by default.

@@ -74,6 +74,8 @@ pub struct AlertsPanel {
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
+    sound_volume: u8,
+    sound: Option<u8>,
 }
 
 impl Default for AlertsPanel {
@@ -96,12 +98,29 @@ impl AlertsPanel {
             error: None,
             show_log: false,
             notification_seconds: 5.0,
+            sound_volume: 100,
+            sound: None,
         }
     }
 
     /// Keep each trigger notification on screen for this many seconds, five by default.
     pub fn set_notification_seconds(&mut self, seconds: f32) {
-        self.notification_seconds = seconds;
+        self.notification_seconds = if seconds.is_finite() {
+            seconds.max(0.0)
+        } else {
+            5.0
+        };
+    }
+
+    /// Set trigger sound volume in percent, clamped to 100; zero mutes sounds.
+    pub fn set_sound_volume(&mut self, percent: u8) {
+        self.sound_volume = percent.min(100);
+    }
+
+    /// Take the requested trigger sound volume in percent after polling. The host plays it.
+    /// Multiple triggers between calls share one sound; muted triggers request none.
+    pub fn take_trigger_sound(&mut self) -> Option<u8> {
+        self.sound.take()
     }
 
     /// Attach a host service, clearing the previous account's alerts and log.
@@ -110,6 +129,7 @@ impl AlertsPanel {
         self.service = Some(service);
         self.alerts.clear();
         self.log.clear();
+        self.sound = None;
         self.error = None;
         self.inbox = Arc::default();
         self.watch();
@@ -190,6 +210,7 @@ impl AlertsPanel {
             AlertEvent::Remove(id) => self.alerts.retain(|a| a.id.as_ref() != Some(&id)),
             AlertEvent::Clear => self.alerts.clear(),
             AlertEvent::Triggered { id, time, price } => {
+                self.sound = (self.sound_volume > 0).then_some(self.sound_volume);
                 let symbol = self
                     .alerts
                     .iter()
@@ -419,6 +440,8 @@ mod tests {
         let host = Arc::new(Host::default());
         let mut panel = AlertsPanel::default();
         panel.set_service(host.clone());
+        panel.set_sound_volume(35);
+        panel.set_notification_seconds(12.0);
         let events = host.events.lock().unwrap().clone().unwrap();
         let ctx = egui::Context::default();
         let mut toasts = Toasts::new();
@@ -443,6 +466,8 @@ mod tests {
         frame(&mut panel);
         assert_eq!(panel.alerts(), &[alert.clone()]);
         assert_eq!(panel.alerts()[0].status, AlertStatus::Active);
+        assert_eq!(panel.take_trigger_sound(), Some(35));
+        assert_eq!(panel.take_trigger_sound(), None);
         assert_eq!(panel.log().len(), 1);
         assert_eq!(
             panel.log_csv(),
@@ -482,6 +507,17 @@ mod tests {
         frame(&mut panel);
         assert_eq!(panel.error, Some(FeedError::Unanswered));
         assert_eq!(panel.log().len(), 1);
+        assert_eq!(toasts.toasts()[0].duration, 12.0);
+        panel.set_sound_volume(0);
+        panel.apply_event(
+            AlertEvent::Triggered {
+                id: AlertId("muted".into()),
+                time: Utc::now(),
+                price: None,
+            },
+            &mut toasts,
+        );
+        assert_eq!(panel.take_trigger_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());
     }
