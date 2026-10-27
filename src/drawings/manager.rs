@@ -85,6 +85,8 @@ pub struct DrawingManagerOptions {
     /// Snap to the nearest OHLC value of the bar under the pointer regardless of distance.
     /// Requires `magnet_mode`; `false` retains the pixel threshold and nearby overlay targets.
     pub strong_magnet: bool,
+    /// Include visible study plots in magnet targets. Independent of OHLC and drawing anchors.
+    pub snap_to_indicators: bool,
     /// Configuration for selection handle appearance and hit testing.
     pub handle_config: HandleConfig,
 }
@@ -99,6 +101,7 @@ impl Default for DrawingManagerOptions {
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
             strong_magnet: false,
+            snap_to_indicators: true,
             handle_config: HandleConfig::default(),
         }
     }
