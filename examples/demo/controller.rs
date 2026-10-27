@@ -6,6 +6,8 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
+#[path = "alert_monitor.rs"]
+mod alert_monitor;
 #[path = "commands.rs"]
 mod commands;
 #[path = "interval.rs"]
@@ -340,6 +342,10 @@ pub struct DemoApp {
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
+    alert_monitors: std::collections::HashMap<
+        (egui_charts::model::AlertId, String),
+        alert_monitor::AlertMonitor,
+    >,
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
@@ -561,6 +567,7 @@ impl DemoApp {
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
+            alert_monitors: Default::default(),
             trading: Default::default(),
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
@@ -872,6 +879,12 @@ impl DemoApp {
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
+        self.alert_dialog.watchlists = self
+            .watchlist
+            .lists()
+            .iter()
+            .map(|list| (list.name.clone(), list.name.clone()))
+            .collect();
         self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
@@ -1147,16 +1160,13 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
-        let logged = self.alerts.log().len();
         self.alerts.poll(&ctx, &mut self.toasts);
-        // shortcut: a log already holding its 10,000 triggers forwards no new ones; count the
-        // triggers in the alert service if a session can reach that.
-        let new = self.alerts.log().len().saturating_sub(logged);
-        for trigger in self.alerts.log().iter().rev().take(new).rev() {
-            self.notification_host.notify(
-                format!("Alert triggered: {}", trigger.symbol),
-                Some(&trigger.symbol),
-            );
+        self.monitor_alerts(&ctx);
+        self.alerts.poll(&ctx, &mut self.toasts);
+        let triggers = self.alert_host.take_triggers();
+        for (_, symbol) in &triggers {
+            self.notification_host
+                .notify(format!("Alert triggered: {symbol}"), Some(symbol));
         }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
@@ -2474,9 +2484,6 @@ impl DemoApp {
                     self.layout.show(ui, &mut charts);
                 }
                 self.highlight_strategy_trade(ui);
-                if self.replay.is_none() {
-                    self.alert_host.evaluate(&self.chart, chrono::Utc::now());
-                }
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts {
                     let decimals = self
@@ -6299,6 +6306,118 @@ mod tests {
                 app.settings_dialog.settings(),
                 &ChartSettingsState::from_chart(&app.chart)
             );
+        }
+    }
+
+    #[test]
+    fn live_alerts_survive_symbol_changes_replay_and_watchlist_membership() {
+        use eframe::App;
+        for watchlist in [false, true] {
+            for replay in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                app.switch_symbol("AAPL");
+                app.switch_timeframe(Timeframe::Hour1);
+                let mut list = Watchlist::new("Test list");
+                list.add_symbol("AAPL");
+                list.add_symbol("BTCUSD");
+                app.watchlist = WatchlistPanel::new(vec![list]);
+                let mut alert = Alert::new("AAPL", AlertCondition::Above(0.0));
+                if watchlist {
+                    alert.watchlist = Some("Test list".into());
+                    if !replay {
+                        alert.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
+                    }
+                }
+                app.alerts.save(alert);
+                app.alerts.poll(&ctx, &mut app.toasts);
+                app.switch_symbol("EURUSD");
+                if replay {
+                    app.start_replay();
+                }
+                for _ in 0..4 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                let mut symbols: Vec<_> = app
+                    .alerts
+                    .log()
+                    .iter()
+                    .map(|trigger| trigger.symbol.as_str())
+                    .collect();
+                symbols.sort_unstable();
+                assert_eq!(
+                    symbols,
+                    if watchlist {
+                        vec!["AAPL", "BTCUSD"]
+                    } else {
+                        vec!["AAPL"]
+                    },
+                    "watchlist={watchlist}, replay={replay}"
+                );
+                app.switch_timeframe(Timeframe::Min1);
+                app.watchlist.add_symbol("MSFT");
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                if watchlist && !replay {
+                    let feed = LiveFeed::new("MSFT", app.live.now());
+                    let bars = feed.snapshot(
+                        Timeframe::Hour1,
+                        egui_charts::model::BarClock::new(Timeframe::Hour1),
+                        false,
+                    );
+                    let trigger = app
+                        .alerts
+                        .log()
+                        .iter()
+                        .find(|trigger| trigger.symbol == "MSFT")
+                        .unwrap();
+                    assert_eq!(
+                        trigger.price,
+                        Some(bars[bars.len() - 2].close),
+                        "new watchlist members keep the alert's original interval"
+                    );
+                }
+
+                // A removed parent must not resolve to a copied study with the same numeric id.
+                let parent = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                let child = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                app.chart
+                    .set_indicator_source(
+                        child,
+                        egui_charts::studies::StudySource::Study {
+                            id: parent.0,
+                            plot: 0,
+                        },
+                    )
+                    .unwrap();
+                app.chart.remove_series(parent);
+                let mut missing = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                missing.source = egui_charts::model::AlertSource::Study {
+                    id: child.0.to_string(),
+                    output: 0,
+                };
+                app.alerts.save(missing);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+            }
         }
     }
 }
