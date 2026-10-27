@@ -4,6 +4,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -41,38 +42,20 @@ impl Default for LinearRegression {
     }
 }
 
-impl Indicator for LinearRegression {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "LinReg"
-    }
-
-    fn desc(&self) -> &str {
-        "Linear Regression Line - Best fit line value"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl LinearRegression {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &data[i + 1 - self.period..=i];
                 let n = self.period as f64;
@@ -96,9 +79,50 @@ impl Indicator for LinearRegression {
 
                 // Value at the end of the regression line (current bar)
                 let value = intercept + slope * (self.period - 1) as f64;
-                self.values.push(IndicatorValue::Single(value));
+                values.push(IndicatorValue::Single(value));
             }
         }
+        values
+    }
+}
+
+impl Indicator for LinearRegression {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "LinReg"
+    }
+
+    fn desc(&self) -> &str {
+        "Linear Regression Line - Best fit line value"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -169,6 +193,46 @@ impl Default for LinearRegressionSlope {
     }
 }
 
+impl LinearRegressionSlope {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let window = &data[i + 1 - self.period..=i];
+                let n = self.period as f64;
+
+                let mut sum_x = 0.0;
+                let mut sum_y = 0.0;
+                let mut sum_xy = 0.0;
+                let mut sum_x2 = 0.0;
+
+                for (j, bar) in window.iter().enumerate() {
+                    let x = j as f64;
+                    let y = bar.close;
+                    sum_x += x;
+                    sum_y += y;
+                    sum_xy += x * y;
+                    sum_x2 += x * x;
+                }
+
+                let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+                values.push(IndicatorValue::Single(slope));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for LinearRegressionSlope {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -189,40 +253,23 @@ impl Indicator for LinearRegressionSlope {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-                let n = self.period as f64;
-
-                let mut sum_x = 0.0;
-                let mut sum_y = 0.0;
-                let mut sum_xy = 0.0;
-                let mut sum_x2 = 0.0;
-
-                for (j, bar) in window.iter().enumerate() {
-                    let x = j as f64;
-                    let y = bar.close;
-                    sum_x += x;
-                    sum_y += y;
-                    sum_xy += x * y;
-                    sum_x2 += x * x;
-                }
-
-                let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
-                self.values.push(IndicatorValue::Single(slope));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

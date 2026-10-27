@@ -25,6 +25,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -81,6 +82,40 @@ impl Default for ALMA {
     }
 }
 
+impl ALMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period {
+            values.resize(data.len(), IndicatorValue::None);
+            return values;
+        }
+
+        // Gaussian weights, computed here so their size is bounded by the data
+        let m = self.offset * (self.period - 1) as f64;
+        let s = self.period as f64 / self.sigma;
+        let weights: Vec<f64> = (0..self.period)
+            .map(|i| (-((i as f64 - m).powi(2)) / (2.0 * s * s)).exp())
+            .collect();
+        let weight_sum: f64 = weights.iter().sum();
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+            } else {
+                let mut weighted_sum = 0.0;
+                for j in 0..self.period {
+                    let idx = i + 1 - self.period + j;
+                    weighted_sum += weights[j] * data[idx].close;
+                }
+                let alma = weighted_sum / weight_sum;
+                values.push(IndicatorValue::Single(alma));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for ALMA {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -103,34 +138,23 @@ impl Indicator for ALMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period {
-            self.values.resize(data.len(), IndicatorValue::None);
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        // Gaussian weights, computed here so their size is bounded by the data
-        let m = self.offset * (self.period - 1) as f64;
-        let s = self.period as f64 / self.sigma;
-        let weights: Vec<f64> = (0..self.period)
-            .map(|i| (-((i as f64 - m).powi(2)) / (2.0 * s * s)).exp())
-            .collect();
-        let weight_sum: f64 = weights.iter().sum();
-
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let mut weighted_sum = 0.0;
-                for j in 0..self.period {
-                    let idx = i + 1 - self.period + j;
-                    weighted_sum += weights[j] * data[idx].close;
-                }
-                let alma = weighted_sum / weight_sum;
-                self.values.push(IndicatorValue::Single(alma));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

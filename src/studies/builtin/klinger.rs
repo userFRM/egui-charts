@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -21,9 +21,18 @@ pub struct KlingerOscillator {
     /// Signal line period (typically 13)
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     /// Colors: [Klinger, Signal]
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<[f64; 3]>,
+    trend: f64,
+    cm: f64,
+    ema: [Smoothing; 3],
 }
 
 impl KlingerOscillator {
@@ -34,6 +43,7 @@ impl KlingerOscillator {
             long_period: 55,
             signal_period: 13,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - Klinger
                 palette::ORANGE, // Orange - Signal
@@ -54,67 +64,6 @@ impl KlingerOscillator {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut volume_force = vec![f64::NAN; data.len()];
-        // 0.0 until a bar's sum first differs from the bar before.
-        let mut trend = 0.0;
-        let mut cm = 0.0;
-        let mut prev: Option<&Bar> = None;
-        for (i, bar) in data.iter().enumerate() {
-            let Some(prev) = prev.replace(bar) else {
-                continue;
-            };
-            let sum = bar.high + bar.low + bar.close;
-            let prev_sum = prev.high + prev.low + prev.close;
-            let bar_trend = if sum > prev_sum {
-                1.0
-            } else if sum < prev_sum {
-                -1.0
-            } else {
-                trend
-            };
-            if bar_trend == 0.0 {
-                continue;
-            }
-            let dm = bar.high - bar.low;
-            cm = if trend == 0.0 {
-                dm
-            } else if bar_trend == trend {
-                cm + dm
-            } else {
-                prev.high - prev.low + dm
-            };
-            trend = bar_trend;
-            volume_force[i] = if cm == 0.0 {
-                0.0
-            } else {
-                bar.volume * (2.0 * (dm / cm - 1.0)).abs() * trend * 100.0
-            };
-        }
-
-        let short_ema = helpers::ema_sma(&volume_force, self.short_period);
-        let long_ema = helpers::ema_sma(&volume_force, self.long_period);
-        let klinger: Vec<f64> = short_ema
-            .iter()
-            .zip(&long_ema)
-            .map(|(s, l)| s - l)
-            .collect();
-        let signal = helpers::ema_sma(&klinger, self.signal_period);
-
-        klinger
-            .iter()
-            .zip(&signal)
-            .map(|(&kvo, &signal)| {
-                if kvo.is_nan() {
-                    IndicatorValue::None
-                } else {
-                    IndicatorValue::Multiple(vec![kvo, signal])
-                }
-            })
-            .collect()
     }
 }
 
@@ -144,16 +93,73 @@ impl Indicator for KlingerOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.close.is_finite()
-                    && b.volume.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close, bar.volume]
+                    .iter()
+                    .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                let Some(previous) = state.previous.replace([bar.high, bar.low, bar.close]) else {
+                    return IndicatorValue::None;
+                };
+                let sum = bar.high + bar.low + bar.close;
+                let previous_sum = previous[0] + previous[1] + previous[2];
+                let trend = if sum > previous_sum {
+                    1.0
+                } else if sum < previous_sum {
+                    -1.0
+                } else {
+                    state.trend
+                };
+                if trend == 0.0 {
+                    return IndicatorValue::None;
+                }
+                let dm = bar.high - bar.low;
+                state.cm = if state.trend == 0.0 {
+                    dm
+                } else if trend == state.trend {
+                    state.cm + dm
+                } else {
+                    previous[0] - previous[1] + dm
+                };
+                state.trend = trend;
+                let force = if state.cm == 0.0 {
+                    0.0
+                } else {
+                    bar.volume * (2.0 * (dm / state.cm - 1.0)).abs() * trend * 100.0
+                };
+                let short = state.ema[0].next(
+                    force,
+                    self.short_period,
+                    2.0 / (self.short_period as f64 + 1.0),
+                );
+                let long = state.ema[1].next(
+                    force,
+                    self.long_period,
+                    2.0 / (self.long_period as f64 + 1.0),
+                );
+                let kvo = short - long;
+                let signal = state.ema[2].next(
+                    kvo,
+                    self.signal_period,
+                    2.0 / (self.signal_period as f64 + 1.0),
+                );
+                if kvo.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![kvo, signal])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

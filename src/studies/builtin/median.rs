@@ -22,10 +22,11 @@
 //! median.calculate(&bars);
 //! ```
 
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -36,6 +37,8 @@ pub struct Median {
     atr_length: usize,
     multiplier: f64,
     values: IndicatorValues,
+    atr: ATR,
+    stepper: Stepper<(usize, std::collections::VecDeque<f64>, Smoothing)>,
     /// Median, upper band, lower band, Median EMA, rising fill, falling fill.
     colors: [Color32; 6],
     visible: bool,
@@ -50,6 +53,8 @@ impl Median {
             atr_length: atr_length.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
+            atr: ATR::new(atr_length),
+            stepper: Stepper::default(),
             colors: [
                 palette::ORANGE,
                 palette::ACCENT,
@@ -60,41 +65,6 @@ impl Median {
             ],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let n = self.length;
-        let mid: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
-        let mut window = Vec::with_capacity(n.min(data.len()));
-        let median: Vec<f64> = (0..data.len())
-            .map(|i| {
-                if i + 1 < n {
-                    return f64::NAN;
-                }
-                window.clear();
-                window.extend_from_slice(&mid[i + 1 - n..=i]);
-                let rank = n.div_ceil(2) - 1;
-                *window.select_nth_unstable_by(rank, f64::total_cmp).1
-            })
-            .collect();
-        let ema = helpers::ema_sma(&median, n);
-        let mut atr = ATR::new(self.atr_length);
-        atr.calculate(data);
-        (0..data.len())
-            .map(|i| {
-                let band = atr
-                    .values()
-                    .value(0, i)
-                    .map_or(f64::NAN, |atr| self.multiplier * atr);
-                IndicatorValue::Multiple(vec![
-                    median[i],
-                    median[i] + band,
-                    median[i] - band,
-                    ema[i],
-                ])
-            })
-            .collect()
     }
 }
 
@@ -131,11 +101,47 @@ impl Indicator for Median {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.atr = ATR::new(self.atr_length);
+        }
+        self.atr.update(data, from);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.0;
+                state.0 += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.1.push_back((bar.high + bar.low) / 2.0);
+                if state.1.len() > self.length {
+                    state.1.pop_front();
+                }
+                let median = if state.1.len() < self.length {
+                    f64::NAN
+                } else {
+                    let mut window: Vec<_> = state.1.iter().copied().collect();
+                    *window
+                        .select_nth_unstable_by(self.length.div_ceil(2) - 1, f64::total_cmp)
+                        .1
+                };
+                let ema = state
+                    .2
+                    .next(median, self.length, 2.0 / (self.length as f64 + 1.0));
+                let band = self
+                    .atr
+                    .values()
+                    .value(0, index)
+                    .map_or(f64::NAN, |atr| self.multiplier * atr);
+                IndicatorValue::Multiple(vec![median, median + band, median - band, ema])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -49,6 +49,7 @@ pub struct SMIErgodic<const OSCILLATOR: bool> {
     short_length: usize,
     signal_length: usize,
     values: IndicatorValues,
+    tsi: TrueStrengthIndex,
     /// Colors: [SMI, Signal], or [Oscillator]
     colors: Vec<Color32>,
     visible: bool,
@@ -62,6 +63,7 @@ impl<const OSCILLATOR: bool> SMIErgodic<OSCILLATOR> {
             short_length: short_length.max(1),
             signal_length: signal_length.max(1),
             values: IndicatorValues::new(),
+            tsi: TrueStrengthIndex::new(long_length, short_length, signal_length),
             colors: if OSCILLATOR {
                 vec![palette::RED]
             } else {
@@ -126,14 +128,22 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let mut tsi =
-            TrueStrengthIndex::new(self.long_length, self.short_length, self.signal_length);
-        tsi.calculate(data);
-        self.values = IndicatorValues::new();
-        for bar in 0..data.len() {
-            let (Some(smi), Some(signal)) =
-                (tsi.values().value(0, bar), tsi.values().value(1, bar))
-            else {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.tsi =
+                TrueStrengthIndex::new(self.long_length, self.short_length, self.signal_length);
+        }
+        self.tsi.update(data, from);
+        let start = from.min(self.values.len()).min(data.len());
+        self.values.truncate(start);
+        for bar in start..data.len() {
+            let (Some(smi), Some(signal)) = (
+                self.tsi.values().value(0, bar),
+                self.tsi.values().value(1, bar),
+            ) else {
                 self.values.push(IndicatorValue::None);
                 continue;
             };
@@ -144,6 +154,10 @@ impl<const OSCILLATOR: bool> Indicator for SMIErgodic<OSCILLATOR> {
                 self.values.push_lines(&[smi, signal]);
             }
         }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

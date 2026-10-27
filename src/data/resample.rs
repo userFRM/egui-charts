@@ -53,7 +53,10 @@ pub fn resample(
         return None;
     }
     // Weeks do not nest in months or in fixed multi-week intervals, and a month has no fixed length.
-    if matches!(from, Timeframe::Week1 | Timeframe::Month1) {
+    if matches!(
+        from,
+        Timeframe::Week1 | Timeframe::Month1 | Timeframe::Weeks(_) | Timeframe::Months(_)
+    ) {
         return None;
     }
     let mut resampled: Vec<Bar> = Vec::new();
@@ -413,6 +416,12 @@ mod tests {
             // Some weeks end in the next month, so weekly bars never build monthly ones, even a week inside one month.
             (Timeframe::Week1, Timeframe::Month1, vec![
                 bar("2024-03-04T00:00:00Z", [1.0, 1.0, 1.0, 1.0, 1.0]),
+            ], None),
+            ("2w".parse::<Timeframe>().unwrap(), "3month".parse::<Timeframe>().unwrap(), vec![
+                bar("2024-03-04T00:00:00Z", [1.0, 1.0, 1.0, 1.0, 1.0]),
+            ], None),
+            ("3month".parse::<Timeframe>().unwrap(), "6month".parse::<Timeframe>().unwrap(), vec![
+                bar("2024-01-01T00:00:00Z", [1.0, 1.0, 1.0, 1.0, 1.0]),
             ], None),
         ];
         for (from, to, bars, expected) in cases {

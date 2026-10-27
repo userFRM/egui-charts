@@ -88,9 +88,9 @@
 //! ```
 
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// How [`CandlestickPatterns`] decides whether a bar is in a downtrend or an uptrend.
@@ -558,8 +558,17 @@ pub struct CandlestickPatterns {
     /// One bit per pattern of [`PATTERNS`] found on each source bar.
     found: Vec<u64>,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     colors: [Color32; 3],
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    closes: std::collections::VecDeque<f64>,
+    bodies: std::collections::VecDeque<f64>,
+    average: Option<f64>,
+    candles: std::collections::VecDeque<Candle>,
 }
 
 impl CandlestickPatterns {
@@ -571,6 +580,7 @@ impl CandlestickPatterns {
             patterns: [true; PATTERNS.len()],
             found: Vec::new(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: [palette::BLUE, palette::RED, palette::GRAY],
             visible: true,
         }
@@ -698,87 +708,124 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        // A bar without finite prices is skipped as if absent.
-        let kept: Vec<usize> = (0..data.len())
-            .filter(|&i| {
-                let b = &data[i];
-                [b.open, b.high, b.low, b.close]
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        let start = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            0
+        };
+        self.found.truncate(start);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.open, bar.high, bar.low, bar.close]
                     .iter()
-                    .all(|x| x.is_finite())
-            })
-            .collect();
-        let close: Vec<f64> = kept.iter().map(|&i| data[i].close).collect();
-        let body: Vec<f64> = kept
-            .iter()
-            .map(|&i| (data[i].close - data[i].open).abs())
-            .collect();
-        let (sma50, sma200) = (helpers::sma(&close, 50), helpers::sma(&close, 200));
-        let mut average = helpers::sma(&body, BODY_AVERAGE);
-        let alpha = 2.0 / (BODY_AVERAGE + 1) as f64;
-        for i in BODY_AVERAGE..average.len() {
-            average[i] = average[i - 1] + alpha * (body[i] - average[i - 1]);
-        }
-        let candles: Vec<Candle> = kept
-            .iter()
-            .enumerate()
-            .map(|(k, &i)| {
-                let b = &data[i];
+                    .all(|v| v.is_finite())
+                {
+                    self.found.push(0);
+                    return IndicatorValue::None;
+                }
+                state.closes.push_back(bar.close);
+                if state.closes.len() > 200 {
+                    state.closes.pop_front();
+                }
+                let sma = |period| {
+                    if state.closes.len() < period {
+                        f64::NAN
+                    } else {
+                        state
+                            .closes
+                            .iter()
+                            .skip(state.closes.len() - period)
+                            .sum::<f64>()
+                            / period as f64
+                    }
+                };
                 let (down, up) = match self.trend {
-                    PatternTrend::Sma50 => (b.close < sma50[k], b.close > sma50[k]),
-                    PatternTrend::Sma50Sma200 => (
-                        b.close < sma50[k] && sma50[k] < sma200[k],
-                        b.close > sma50[k] && sma50[k] > sma200[k],
-                    ),
+                    PatternTrend::Sma50 => {
+                        let mean = sma(50);
+                        (bar.close < mean, bar.close > mean)
+                    }
+                    PatternTrend::Sma50Sma200 => {
+                        let (fast, slow) = (sma(50), sma(200));
+                        (
+                            bar.close < fast && fast < slow,
+                            bar.close > fast && fast > slow,
+                        )
+                    }
                     PatternTrend::NoDetection => (true, true),
                 };
-                Candle {
-                    open: b.open,
-                    high: b.high,
-                    low: b.low,
-                    close: b.close,
-                    average: average[k],
+                let body = (bar.close - bar.open).abs();
+                state.bodies.push_back(body);
+                if state.bodies.len() > BODY_AVERAGE {
+                    state.bodies.pop_front();
+                }
+                let average = match state.average {
+                    Some(previous) => {
+                        previous + (2.0 / (BODY_AVERAGE + 1) as f64) * (body - previous)
+                    }
+                    None if state.bodies.len() == BODY_AVERAGE => {
+                        if state.bodies.iter().all(|v| v.is_finite()) {
+                            state.bodies.iter().sum::<f64>() / BODY_AVERAGE as f64
+                        } else {
+                            f64::NAN
+                        }
+                    }
+                    None => f64::NAN,
+                };
+                if state.bodies.len() == BODY_AVERAGE {
+                    state.average = Some(average);
+                }
+                state.candles.push_back(Candle {
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    average,
                     down,
                     up,
+                });
+                let max_bars = PATTERNS.iter().map(|pattern| pattern.bars).max().unwrap();
+                if state.candles.len() > max_bars {
+                    state.candles.pop_front();
                 }
-            })
-            .collect();
+                let candles = state.candles.make_contiguous();
+                let marked = |side| match self.pattern_type {
+                    PatternType::Both => true,
+                    PatternType::Bullish => side == Bullish,
+                    PatternType::Bearish => side == Bearish,
+                };
+                let mut bits = 0;
+                for (bit, pattern) in PATTERNS.iter().enumerate() {
+                    if self.patterns[bit]
+                        && marked(pattern.side)
+                        && candles.len() >= pattern.bars
+                        && (pattern.found)(&candles[candles.len() - pattern.bars..])
+                    {
+                        bits |= 1 << bit;
+                    }
+                }
+                self.found.push(bits);
+                let found = |side| {
+                    PATTERNS
+                        .iter()
+                        .enumerate()
+                        .any(|(bit, pattern)| bits >> bit & 1 == 1 && pattern.side == side)
+                };
+                let (bull, bear, neutral) = (found(Bullish), found(Bearish), found(Neutral));
+                IndicatorValue::Multiple(vec![
+                    if bull { bar.low } else { f64::NAN },
+                    if bear { bar.high } else { f64::NAN },
+                    if neutral && !bear { bar.high } else { f64::NAN },
+                ])
+            });
+    }
 
-        let marked = |side| match self.pattern_type {
-            PatternType::Both => true,
-            PatternType::Bullish => side == Bullish,
-            PatternType::Bearish => side == Bearish,
-        };
-        self.found = vec![0; data.len()];
-        for (k, &i) in kept.iter().enumerate() {
-            for (bit, pattern) in PATTERNS.iter().enumerate() {
-                if self.patterns[bit]
-                    && marked(pattern.side)
-                    && k + 1 >= pattern.bars
-                    && (pattern.found)(&candles[k + 1 - pattern.bars..=k])
-                {
-                    self.found[i] |= 1 << bit;
-                }
-            }
-        }
-        self.values = IndicatorValues::new();
-        for (i, bar) in data.iter().enumerate() {
-            let at = |side, price| {
-                if self.found(i, side).next().is_some() {
-                    price
-                } else {
-                    f64::NAN
-                }
-            };
-            self.values.push_lines(&[
-                at(Bullish, bar.low),
-                at(Bearish, bar.high),
-                if self.found(i, Bearish).next().is_some() {
-                    f64::NAN
-                } else {
-                    at(Neutral, bar.high)
-                },
-            ]);
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

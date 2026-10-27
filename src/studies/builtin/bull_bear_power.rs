@@ -25,9 +25,10 @@
 //! assert!(power.values().value(0, 12).is_some());
 //! ```
 
-use super::ElderRay;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -36,6 +37,7 @@ use egui::Color32;
 pub struct BullBearPower {
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<Smoothing>,
     positive_color: Color32,
     negative_color: Color32,
     visible: bool,
@@ -47,6 +49,7 @@ impl BullBearPower {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             positive_color: palette::GREEN,
             negative_color: palette::RED,
             visible: true,
@@ -97,15 +100,27 @@ impl Indicator for BullBearPower {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let mut rays = ElderRay::new(self.period);
-        rays.calculate(data);
-        let lines = rays.values();
-        self.values = (0..data.len())
-            .map(|bar| match (lines.value(0, bar), lines.value(1, bar)) {
-                (Some(bull), Some(bear)) => IndicatorValue::Single(bull + bear),
-                _ => IndicatorValue::None,
-            })
-            .collect();
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let ema = state.next(bar.close, self.period, 2.0 / (self.period as f64 + 1.0));
+                let (bull, bear) = (bar.high - ema, bar.low - ema);
+                if bull.is_finite() && bear.is_finite() {
+                    IndicatorValue::Single(bull + bear)
+                } else {
+                    IndicatorValue::None
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

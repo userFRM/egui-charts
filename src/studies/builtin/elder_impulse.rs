@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -30,6 +30,7 @@ pub struct ElderImpulseSystem {
     /// MACD signal period
     macd_signal: usize,
     values: IndicatorValues,
+    stepper: Stepper<(usize, [Smoothing; 4], [f64; 2])>,
     /// Colors: [Bullish, Bearish, Neutral]
     colors: Vec<Color32>,
     visible: bool,
@@ -45,6 +46,7 @@ impl ElderImpulseSystem {
             macd_slow: macd_slow.max(1),
             macd_signal: macd_signal.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::GREEN, // Green - Bullish
                 palette::RED,   // Red - Bearish
@@ -64,66 +66,6 @@ impl ElderImpulseSystem {
 impl Default for ElderImpulseSystem {
     fn default() -> Self {
         Self::new(13, 12, 26, 9)
-    }
-}
-
-impl ElderImpulseSystem {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        let min_period = self
-            .macd_slow
-            .max(self.ema_period)
-            .saturating_add(self.macd_signal);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate EMA for slope
-        let ema = helpers::ema(&closes, self.ema_period);
-
-        // Calculate MACD
-        let ema_fast = helpers::ema(&closes, self.macd_fast);
-        let ema_slow = helpers::ema(&closes, self.macd_slow);
-
-        let mut macd: Vec<f64> = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            macd.push(ema_fast[i] - ema_slow[i]);
-        }
-
-        let signal = helpers::ema(&macd, self.macd_signal);
-
-        let mut histogram: Vec<f64> = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            histogram.push(macd[i] - signal[i]);
-        }
-
-        for i in 0..data.len() {
-            if i < min_period - 1 || i == 0 {
-                values.push(IndicatorValue::None);
-            } else {
-                let ema_rising = ema[i] > ema[i - 1];
-                let hist_rising = histogram[i] > histogram[i - 1];
-
-                // Signal encoding: 1.0 = bullish, -1.0 = bearish, 0.0 = neutral
-                let signal_val = if ema_rising && hist_rising {
-                    1.0 // Bullish
-                } else if !ema_rising && !hist_rising {
-                    -1.0 // Bearish
-                } else {
-                    0.0 // Neutral
-                };
-
-                values.push(IndicatorValue::Single(signal_val));
-            }
-        }
-
-        values
     }
 }
 
@@ -150,7 +92,44 @@ impl Indicator for ElderImpulseSystem {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.0 += 1;
+                let ema = state.1[0].next(bar.close, 1, 2.0 / (self.ema_period as f64 + 1.0));
+                let fast = state.1[1].next(bar.close, 1, 2.0 / (self.macd_fast as f64 + 1.0));
+                let slow = state.1[2].next(bar.close, 1, 2.0 / (self.macd_slow as f64 + 1.0));
+                let macd = fast - slow;
+                let signal = state.1[3].next(macd, 1, 2.0 / (self.macd_signal as f64 + 1.0));
+                let histogram = macd - signal;
+                let previous = std::mem::replace(&mut state.2, [ema, histogram]);
+                let required = self
+                    .macd_slow
+                    .max(self.ema_period)
+                    .saturating_add(self.macd_signal);
+                if state.0 < required || state.0 <= 1 {
+                    return IndicatorValue::None;
+                }
+                let rising = ema > previous[0];
+                let hist_rising = histogram > previous[1];
+                IndicatorValue::Single(if rising && hist_rising {
+                    1.0
+                } else if !rising && !hist_rising {
+                    -1.0
+                } else {
+                    0.0
+                })
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

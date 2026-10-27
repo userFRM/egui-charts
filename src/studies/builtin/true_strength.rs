@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -19,6 +19,7 @@ pub struct TrueStrengthIndex {
     /// Signal line period (typically 7)
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(usize, Option<f64>, [Smoothing; 5])>,
     /// Colors: [TSI, Signal]
     colors: Vec<Color32>,
     visible: bool,
@@ -33,6 +34,7 @@ impl TrueStrengthIndex {
             short_period: short_period.max(1),
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,        // Blue - TSI
                 palette::DEEP_ORANGE, // Deep Orange - Signal
@@ -45,59 +47,6 @@ impl TrueStrengthIndex {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let min_period = self
-            .long_period
-            .saturating_add(self.short_period)
-            .saturating_add(1);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Price changes start at bar 1; there is no change on bar 0, and pc[k] belongs to bar k + 1
-        let pc: Vec<f64> = data.windows(2).map(|w| w[1].close - w[0].close).collect();
-
-        let abs_pc: Vec<f64> = pc.iter().map(|x| x.abs()).collect();
-
-        // Double smooth the price change
-        let pc_smooth1 = helpers::ema(&pc, self.long_period);
-        let pc_smooth2 = helpers::ema(&pc_smooth1, self.short_period);
-
-        // Double smooth the absolute price change
-        let abs_pc_smooth1 = helpers::ema(&abs_pc, self.long_period);
-        let abs_pc_smooth2 = helpers::ema(&abs_pc_smooth1, self.short_period);
-
-        // Calculate TSI values
-        let mut tsi_values: Vec<f64> = Vec::with_capacity(pc.len());
-        for i in 0..pc.len() {
-            if abs_pc_smooth2[i] != 0.0 {
-                tsi_values.push(100.0 * pc_smooth2[i] / abs_pc_smooth2[i]);
-            } else {
-                tsi_values.push(0.0);
-            }
-        }
-
-        // Calculate signal line
-        let signal = helpers::ema(&tsi_values, self.signal_period);
-
-        // Build output
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push_lines(&[tsi_values[i - 1], signal[i - 1]]);
-            }
-        }
-
-        values
     }
 }
 
@@ -129,7 +78,48 @@ impl Indicator for TrueStrengthIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.0 += 1;
+                let previous = state.1.replace(bar.close);
+                let Some(previous) = previous else {
+                    return IndicatorValue::None;
+                };
+                let change = bar.close - previous;
+                let first_alpha = 2.0 / (self.long_period as f64 + 1.0);
+                let second_alpha = 2.0 / (self.short_period as f64 + 1.0);
+                let first = state.2[0].next(change, 1, first_alpha);
+                let second = state.2[1].next(first, 1, second_alpha);
+                let abs_first = state.2[2].next(change.abs(), 1, first_alpha);
+                let abs_second = state.2[3].next(abs_first, 1, second_alpha);
+                let tsi = if abs_second != 0.0 {
+                    100.0 * second / abs_second
+                } else {
+                    0.0
+                };
+                let signal = state.2[4].next(tsi, 1, 2.0 / (self.signal_period as f64 + 1.0));
+                if state.0
+                    < self
+                        .long_period
+                        .saturating_add(self.short_period)
+                        .saturating_add(1)
+                {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![tsi, signal])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

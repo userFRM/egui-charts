@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -43,33 +44,15 @@ impl Default for CenterOfGravity {
     }
 }
 
-impl Indicator for CenterOfGravity {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "COG"
-    }
-
-    fn desc(&self) -> &str {
-        "Center of Gravity - Identifies price reversal points"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl CenterOfGravity {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get closes
@@ -111,11 +94,52 @@ impl Indicator for CenterOfGravity {
         // Store results
         for (cog, signal) in &cog_values {
             if cog.is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push_lines(&[*cog, *signal]);
+                values.push_lines(&[*cog, *signal]);
             }
         }
+        values
+    }
+}
+
+impl Indicator for CenterOfGravity {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "COG"
+    }
+
+    fn desc(&self) -> &str {
+        "Center of Gravity - Identifies price reversal points"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

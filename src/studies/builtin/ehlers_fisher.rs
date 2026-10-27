@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -15,6 +15,7 @@ pub struct EhlersFisher {
     /// Lookback period (typically 10)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(std::collections::VecDeque<f64>, f64, f64, bool)>,
     /// Colors: [Fisher, Trigger]
     colors: Vec<Color32>,
     visible: bool,
@@ -26,6 +27,7 @@ impl EhlersFisher {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - Fisher
                 palette::ORANGE, // Orange - Trigger
@@ -38,71 +40,6 @@ impl EhlersFisher {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate midprice (HL2)
-        let hl2: Vec<f64> = data.iter().map(|b| (b.high + b.low) / 2.0).collect();
-
-        let mut fisher_values = Vec::with_capacity(data.len());
-        let mut value1 = 0.0;
-        let mut fisher = 0.0;
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                fisher_values.push((f64::NAN, f64::NAN));
-                continue;
-            }
-
-            // Find highest and lowest midprice in period
-            let window = &hl2[i + 1 - self.period..=i];
-            let highest = window.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let lowest = window.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-
-            let range = highest - lowest;
-
-            // Normalize to range [-1, 1]
-            let normalized = if range != 0.0 {
-                2.0 * (hl2[i] - lowest) / range - 1.0
-            } else {
-                0.0
-            };
-
-            // Smoothing
-            let new_value1 = 0.33 * normalized.clamp(-0.999, 0.999) + 0.67 * value1;
-
-            // Fisher transform
-            // The first value has no previous one to trigger on.
-            let prev_fisher = if i + 1 == self.period {
-                f64::NAN
-            } else {
-                fisher
-            };
-            fisher = 0.5 * ((1.0 + new_value1) / (1.0 - new_value1)).ln() + 0.5 * fisher;
-
-            value1 = new_value1;
-            fisher_values.push((fisher, prev_fisher));
-        }
-
-        // Store results
-        for (fisher, trigger) in fisher_values {
-            if fisher.is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push_lines(&[fisher, trigger]);
-            }
-        }
-        values
     }
 }
 
@@ -132,11 +69,46 @@ impl Indicator for EhlersFisher {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let price = (bar.high + bar.low) / 2.0;
+                state.0.push_back(price);
+                if state.0.len() > self.period {
+                    state.0.pop_front();
+                }
+                if state.0.len() < self.period {
+                    return IndicatorValue::None;
+                }
+                let high = state.0.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let low = state.0.iter().copied().fold(f64::INFINITY, f64::min);
+                let range = high - low;
+                let normalized = if range != 0.0 {
+                    2.0 * (price - low) / range - 1.0
+                } else {
+                    0.0
+                };
+                let value = 0.33 * normalized.clamp(-0.999, 0.999) + 0.67 * state.1;
+                let signal = if state.3 { state.2 } else { f64::NAN };
+                state.2 = 0.5 * ((1.0 + value) / (1.0 - value)).ln() + 0.5 * state.2;
+                state.1 = value;
+                state.3 = true;
+                if state.2.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![state.2, signal])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

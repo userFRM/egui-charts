@@ -48,13 +48,25 @@ impl Drawing {
             &[]
         };
         let exit = position_exit(after_entry, entry_price, target_price, stop_price, is_long);
-        let qty = self
-            .position_size
-            .unwrap_or_default()
-            .quantity(entry_price, stop_price);
+        let qty = self.position_size.unwrap_or_default().quantity_with_sizing(
+            entry_price,
+            stop_price,
+            &self.position_sizing,
+        );
         let qty_text = qty.map_or_else(
             || "n/a".to_owned(),
             |qty| {
+                if self.position_sizing.quantity_step > 0.0 {
+                    let step = self.position_sizing.quantity_step.to_string();
+                    let decimals = step
+                        .split_once('.')
+                        .map_or(0, |(_, fraction)| fraction.len());
+                    return if decimals <= 19 && qty < 1e15 {
+                        format!("{qty:.decimals$}")
+                    } else {
+                        format!("{qty:e}")
+                    };
+                }
                 // Four decimals, or four significant digits below 0.1, where that
                 // rounding is exact; an exponent beyond it.
                 let scale = 10f64.powi(3 - qty.log10().floor() as i32).max(1e4);
@@ -104,8 +116,15 @@ impl Drawing {
         let (summary, summary_color) = match exit {
             Some((exit_price, closed)) => {
                 let change = side * (exit_price - entry_price);
-                let pnl =
-                    qty.map_or_else(|| "n/a".to_owned(), |qty| format!("{:.2}", change * qty));
+                let pnl = qty
+                    .map(|qty| {
+                        change
+                            * qty
+                            * self.position_sizing.point_value
+                            * self.position_sizing.lot_size
+                    })
+                    .filter(|pnl| pnl.is_finite())
+                    .map_or_else(|| "n/a".to_owned(), |pnl| format!("{pnl:.2}"));
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
                 let summary = format!(
                     "{} P&L: {pnl} ({:.2}%)  •  Risk/Reward: {risk_reward:.2}  •  Qty: {qty_text}",
@@ -124,6 +143,10 @@ impl Drawing {
                 entry_color,
             ),
         };
+        let capital = qty
+            .and_then(|qty| self.position_sizing.required_capital(entry_price, qty))
+            .map_or_else(|| "n/a".to_owned(), |capital| format!("{capital:.2}"));
+        let summary = format!("{summary}  •  Capital: {capital}");
         let target_label = format!("Target: {target_price:.2} ({:.2}%)", pct(target_price));
         let stop_label = format!("Stop: {stop_price:.2} ({:.2}%)", pct(stop_price));
         self.draw_position_labels(
@@ -249,25 +272,34 @@ impl Drawing {
         target_label: String,
         stop_label: String,
     ) {
+        if !painter.clip_rect().is_positive() {
+            return;
+        }
         let font_small = egui::FontId::proportional(typography::SM);
         let font_large = egui::FontId::proportional(typography::MD);
 
-        // Top info box (above profit zone) - background with rounded corners
-        let info_y =
-            target_y - DESIGN_TOKENS.sizing.position_tool.label_offset_y - DESIGN_TOKENS.spacing.xl;
-        let info_rect = Rect::from_min_max(
+        let sizing = &DESIGN_TOKENS.sizing.position_tool;
+        let width = sizing.label_info_width.min(painter.clip_rect().width());
+        let galley = painter.layout(summary, font_large, summary_color, (width - 10.0).max(1.0));
+        let height = (galley.size().y + 10.0).max(sizing.label_info_height);
+        let info_rect = Rect::from_min_size(
             Pos2::new(
-                entry.x + DESIGN_TOKENS.sizing.position_tool.label_offset_x,
-                info_y,
+                entry.x + sizing.label_offset_x,
+                target_y - sizing.label_offset_y - height,
             ),
-            Pos2::new(
-                entry.x + DESIGN_TOKENS.sizing.position_tool.label_info_width,
-                info_y + DESIGN_TOKENS.sizing.position_tool.label_info_height,
-            ),
+            egui::vec2(width, height),
         );
-
-        // Visibility check for info box
         if painter.clip_rect().intersects(info_rect) {
+            let clip = painter.clip_rect();
+            let info_rect = Rect::from_min_size(
+                Pos2::new(
+                    info_rect.left().clamp(clip.left(), clip.right() - width),
+                    info_rect
+                        .top()
+                        .clamp(clip.top(), (clip.bottom() - height).max(clip.top())),
+                ),
+                info_rect.size(),
+            );
             painter.rect_filled(
                 info_rect,
                 DESIGN_TOKENS.rounding.md,
@@ -277,18 +309,7 @@ impl Drawing {
                     .chart_axis_bg
                     .gamma_multiply(0.9),
             );
-
-            // P&L and Risk/Reward in info box
-            painter.text(
-                Pos2::new(
-                    entry.x + DESIGN_TOKENS.sizing.position_tool.text_offset_x,
-                    info_y + DESIGN_TOKENS.spacing.xl,
-                ),
-                egui::Align2::LEFT_CENTER,
-                summary,
-                font_large,
-                summary_color,
-            );
+            painter.galley(info_rect.min + egui::vec2(5.0, 5.0), galley, summary_color);
         }
 
         // Target label (on right side of line)
@@ -412,6 +433,123 @@ fn position_exit(
 mod tests {
     use super::*;
     use crate::drawings::rendering::sample_bars;
+
+    /// Risk 230 / (2.5 points * 50 per point * 10 units) = 0.184 lots, rounded
+    /// down to 0.18. A five-point gain pays 450; capital is 100 * 50 * 10 * 0.18 / 5 = 1800.
+    #[test]
+    fn position_labels_use_lot_economics_and_leveraged_capital() {
+        use crate::drawings::{ChartPoint, DrawingToolType, PositionSize};
+        use crate::widget::test_frames::chart;
+        for (tool, target, stop, low, high) in [
+            (DrawingToolType::LongPos, 105.0, 97.5, 99.0, 106.0),
+            (DrawingToolType::ShortPos, 95.0, 102.5, 94.0, 101.0),
+        ] {
+            for (size, step, labels) in [
+                (
+                    PositionSize::RiskAmount(230.0),
+                    0.01,
+                    ["Qty: 0.18", "Closed P&L: 450.00", "Capital: 1800.00"],
+                ),
+                (
+                    PositionSize::RiskAmount(230.40125),
+                    0.000001,
+                    ["Qty: 0.184321", "Closed P&L: 460.80", "Capital: 1843.21"],
+                ),
+                (
+                    PositionSize::Quantity(1e20),
+                    0.01,
+                    ["Qty: 1e20", "Closed P&L:", "Capital:"],
+                ),
+                (
+                    PositionSize::Quantity(1e-25),
+                    1e-27,
+                    ["Qty: 1e-25", "Closed P&L:", "Capital:"],
+                ),
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.position_sizing = crate::drawings::PositionSizing {
+                    point_value: 50.0,
+                    lot_size: 10.0,
+                    quantity_step: step,
+                    leverage: 5.0,
+                };
+                drawing.position_size = Some(size);
+                drawing.chart_points = vec![
+                    ChartPoint::new(30.0, 100.0),
+                    ChartPoint::new(50.0, target),
+                    ChartPoint::new(50.0, stop),
+                ];
+                drawing.completed = true;
+                for (dark, width) in [(false, 800.0), (true, 800.0), (false, 320.0), (true, 320.0)]
+                {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[low], &[high]);
+                    chart.set_theme(
+                        &ctx,
+                        &if dark {
+                            crate::theme::Theme::dark()
+                        } else {
+                            crate::theme::Theme::light()
+                        },
+                    );
+                    let render = |chart: &mut crate::Chart| {
+                        ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    egui::vec2(width, 600.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                            },
+                        )
+                    };
+                    render(&mut chart).drop_without_applying_deltas();
+                    chart.set_visible_logical_range(crate::model::LogicalRange {
+                        left: 10.0,
+                        right: 70.0,
+                    });
+                    chart.drawings_mut().drawings.push(drawing.clone());
+                    let output = render(&mut chart);
+                    let summary = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) if t.galley.job.text.contains("Qty:") => Some(t),
+                            _ => None,
+                        })
+                        .expect("position summary");
+                    for label in labels {
+                        assert!(
+                            summary.galley.job.text.contains(label),
+                            "{tool:?}: missing {label}: {}",
+                            summary.galley.job.text
+                        );
+                    }
+                    assert!(
+                        chart
+                            .get_rendered_price_rect()
+                            .contains_rect(summary.visual_bounding_rect()),
+                        "{tool:?}, width {width}: {:?}",
+                        summary.visual_bounding_rect()
+                    );
+                    output.drop_without_applying_deltas();
+                    chart.set_visible_logical_range(crate::model::LogicalRange {
+                        left: 90.0,
+                        right: 130.0,
+                    });
+                    let output = render(&mut chart);
+                    assert!(
+                        !output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains("Qty:"))),
+                        "{tool:?}, width {width}: offscreen summary"
+                    );
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 
     /// Expected exits read off the sample bars by hand.
     #[test]

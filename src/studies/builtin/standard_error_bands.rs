@@ -1,6 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -81,6 +82,35 @@ impl Default for StandardErrorBands {
     }
 }
 
+impl StandardErrorBands {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.is_empty() {
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+                continue;
+            }
+
+            let start = i + 1 - self.period;
+            let prices: Vec<f64> = data[start..=i].iter().map(|b| b.close).collect();
+            let (slope, intercept, se) = Self::linreg_with_se(&prices);
+
+            // Middle = linear regression value at end of window
+            let middle = intercept + slope * (self.period - 1) as f64;
+            let upper = middle + self.multiplier * se;
+            let lower = middle - self.multiplier * se;
+
+            values.push_lines(&[upper, middle, lower]);
+        }
+        values
+    }
+}
+
 impl Indicator for StandardErrorBands {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -102,29 +132,23 @@ impl Indicator for StandardErrorBands {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.is_empty() {
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let start = i + 1 - self.period;
-            let prices: Vec<f64> = data[start..=i].iter().map(|b| b.close).collect();
-            let (slope, intercept, se) = Self::linreg_with_se(&prices);
-
-            // Middle = linear regression value at end of window
-            let middle = intercept + slope * (self.period - 1) as f64;
-            let upper = middle + self.multiplier * se;
-            let lower = middle - self.multiplier * se;
-
-            self.values.push_lines(&[upper, middle, lower]);
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

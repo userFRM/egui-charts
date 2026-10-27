@@ -1,6 +1,7 @@
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -14,6 +15,8 @@ pub struct ChandelierExit {
     /// ATR multiplier (typically 3.0)
     multiplier: f64,
     values: IndicatorValues,
+    atr: ATR,
+    stepper: Stepper<(usize, std::collections::VecDeque<[f64; 2]>)>,
     /// Colors: [Long exit, Short exit]
     colors: Vec<Color32>,
     visible: bool,
@@ -26,6 +29,8 @@ impl ChandelierExit {
             period: period.max(1),
             multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             values: IndicatorValues::new(),
+            atr: ATR::new(period),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::GREEN, // Green - Long exit
                 palette::RED,   // Red - Short exit
@@ -38,37 +43,6 @@ impl ChandelierExit {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let mut atr = ATR::new(self.period);
-        atr.calculate(data);
-
-        for i in 0..data.len() {
-            match atr.values().value(0, i) {
-                Some(atr) => {
-                    // Find highest high and lowest low in period
-                    let window = &data[i + 1 - self.period..=i];
-                    let highest = window
-                        .iter()
-                        .map(|b| b.high)
-                        .fold(f64::NEG_INFINITY, f64::max);
-                    let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-
-                    // Long exit = Highest High - ATR * multiplier
-                    let long_exit = highest - atr * self.multiplier;
-                    // Short exit = Lowest Low + ATR * multiplier
-                    let short_exit = lowest + atr * self.multiplier;
-
-                    values.push_lines(&[long_exit, short_exit]);
-                }
-                _ => values.push(IndicatorValue::None),
-            }
-        }
-        values
     }
 }
 
@@ -93,11 +67,43 @@ impl Indicator for ChandelierExit {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.atr = ATR::new(self.period);
+        }
+        self.atr.update(data, from);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.0;
+                state.0 += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.1.push_back([bar.high, bar.low]);
+                if state.1.len() > self.period {
+                    state.1.pop_front();
+                }
+                let Some(atr) = self.atr.values().value(0, index) else {
+                    return IndicatorValue::None;
+                };
+                let high = state
+                    .1
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = state.1.iter().map(|v| v[1]).fold(f64::INFINITY, f64::min);
+                IndicatorValue::Multiple(vec![
+                    high - atr * self.multiplier,
+                    low + atr * self.multiplier,
+                ])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

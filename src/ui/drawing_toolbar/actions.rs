@@ -55,6 +55,9 @@ pub enum DrawingToolbarAction {
     RemoveAllStudies,
     /// Change magnet type (Weak/Strong/OHLC)
     SetMagnetType(MagnetType),
+    /// Include or exclude visible study plots from drawing magnet targets.
+    /// Hosts set `DrawingManagerOptions::snap_to_indicators` to this value.
+    SetSnapToIndicators(bool),
     /// Zoom in (save current state to history)
     ZoomIn,
     /// Zoom out (restore previous state from history)

@@ -37,8 +37,8 @@ mod validation;
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
     DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
-    TimeframeVisibility,
+    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 
 // Re-export manager types
