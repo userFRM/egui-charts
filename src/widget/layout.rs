@@ -486,6 +486,8 @@ impl ChartLayout {
             .take(count)
             .position(|c| c.hover_time().is_some());
         let time = hovered.and_then(|source| charts[source].hover_time());
+        // The source's main-pane price, or `None` over volume and indicator panes.
+        let price = hovered.and_then(|source| charts[source].last_crosshair?.1);
         let range = charts[self.active].visible_time_range();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             chart.set_synced_crosshair_time(None);
@@ -494,7 +496,10 @@ impl ChartLayout {
                 && index != source
                 && self.same_group(index, source)
             {
-                chart.set_synced_crosshair_time(time);
+                match time.zip(price) {
+                    Some(position) => chart.set_crosshair_position(Some(position)),
+                    None => chart.set_synced_crosshair_time(time),
+                }
             }
             if index != self.active
                 && self.same_group(index, self.active)
@@ -839,9 +844,17 @@ mod tests {
         );
         // The hovered chart emits crosshairs without becoming the selected chart.
         refs[1].last_hover_bar_idx = Some(2.0);
+        let time = refs[1].hover_time().unwrap();
+        refs[1].last_crosshair = Some((time, Some(10.5)));
         layout.sync_view(&mut refs, 4, false);
         assert_eq!(refs[0].synced_crosshair_bar_idx, Some(4.0));
+        assert_eq!(refs[0].synced_crosshair_price, Some(10.5));
         assert_eq!(refs[2].synced_crosshair_bar_idx, None);
+        refs[1].last_hover_bar_idx = None;
+        layout.sync_view(&mut refs, 4, false);
+        assert_eq!(refs[0].synced_crosshair_bar_idx, None);
+        assert_eq!(refs[0].synced_crosshair_price, None);
+        refs[1].last_hover_bar_idx = Some(2.0);
         layout.sync.sync_crosshair = false;
         layout.sync_view(&mut refs, 4, false);
         assert_eq!(refs[0].synced_crosshair_bar_idx, None);
