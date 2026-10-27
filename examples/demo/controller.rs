@@ -2849,17 +2849,16 @@ impl DemoApp {
                     A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
                     A::OpenLayout => self.open_layout = true,
                     A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
-                    A::ToggleSession => {
-                        let session = match self.timeframe_toolbar.state.session_type {
-                            SessionType::RTH => SessionType::ETH,
-                            SessionType::ETH => SessionType::RTH,
-                            other => other,
-                        };
-                        if session != self.timeframe_toolbar.state.session_type {
-                            self.timeframe_toolbar.set_session(session);
-                            self.stop_replay();
-                            self.apply_session();
-                        }
+                    A::ToggleSession if self.state.symbol == "SAMPLE" => {
+                        let session =
+                            if self.timeframe_toolbar.state.session_type == SessionType::RTH {
+                                SessionType::ETH
+                            } else {
+                                SessionType::RTH
+                            };
+                        self.timeframe_toolbar.set_session(session);
+                        self.stop_replay();
+                        self.apply_session();
                     }
                     A::CreateAlert => {
                         let mapping = self.chart.get_chart_mapping();
@@ -4178,6 +4177,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn session_shortcut_switches_the_default_sample_and_keeps_continuous_markets() {
+        for (symbol, initial, expected) in [
+            ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
+            ("SAMPLE", SessionType::RTH, SessionType::ETH),
+            ("SAMPLE", SessionType::ETH, SessionType::RTH),
+            ("BTCUSD", SessionType::Full24x7, SessionType::Full24x7),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            if symbol != "SAMPLE" {
+                app.switch_symbol(symbol);
+            }
+            app.timeframe_toolbar.set_session(initial);
+            app.apply_session();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::E,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::ALT.plus(egui::Modifiers::SHIFT),
+                    }],
+                    ..Default::default()
+                },
+                |ui| app.handle_keyboard(ui.ctx()),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(
+                app.timeframe_toolbar.state.session_type, expected,
+                "{symbol} / {initial:?}"
+            );
+            assert_eq!(app.chart.extended_hours(), expected != SessionType::RTH);
+            assert_eq!(app.live.view(app.chart.extended_hours()).0, expected);
+        }
+    }
+
     /// The dialog gets Escape before the chart or replay transport.
     #[test]
     fn dialogs_keep_drawing_and_replay_keys_with_their_owner() {
@@ -4347,6 +4385,35 @@ mod tests {
         assert!(app.chart.can_undo());
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
         assert_eq!(app.chart.chart_type(), ChartType::Line);
+
+        // A long catalogue and long names must fit the shortcut's chooser on small screens.
+        app.top_toolbar.layout_menu.layouts = (0..40)
+            .map(|i| format!("Saved layout {i}: {}", "a long name ".repeat(10)))
+            .collect();
+        for theme in [Theme::light(), Theme::dark()] {
+            egui_charts::theme::apply_to_egui(&ctx, &theme);
+            for size in [egui::vec2(320.0, 360.0), egui::vec2(1440.0, 900.0)] {
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                app.open_layout = true;
+                for _ in 0..3 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| app.show_open_layout(ui.ctx()),
+                    );
+                    output.drop_without_applying_deltas();
+                }
+                let bounds = ctx
+                    .memory(|memory| memory.area_rect(egui::Id::unique("open_layout")))
+                    .unwrap();
+                assert!(
+                    screen.contains_rect(bounds),
+                    "Open layout exceeds {size:?}: {bounds:?}"
+                );
+            }
+        }
     }
 
     #[test]

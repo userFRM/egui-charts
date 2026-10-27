@@ -393,15 +393,25 @@ impl DemoApp {
         let mut chosen = None;
         egui_charts::ui_kit::modal::Modal::new("open_layout", "Open layout")
             .width(320.0)
+            .height(400.0)
             .show(ctx, &mut open, |ui| {
                 if self.top_toolbar.layout_menu.layouts.is_empty() {
                     ui.label("No saved layouts");
                 }
-                for name in &self.top_toolbar.layout_menu.layouts {
-                    if ui.button(name).clicked() {
-                        chosen = Some(name.clone());
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for name in &self.top_toolbar.layout_menu.layouts {
+                        if ui
+                            .add_sized(
+                                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                egui::Button::new(name).frame(false).truncate(),
+                            )
+                            .on_hover_text(name)
+                            .clicked()
+                        {
+                            chosen = Some(name.clone());
+                        }
                     }
-                }
+                });
             });
         self.open_layout = open && chosen.is_none();
         if let Some(name) = chosen {
