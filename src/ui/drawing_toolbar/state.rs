@@ -36,6 +36,8 @@ pub struct ToolbarState {
     pub magnet_mode: bool,
     /// Type of magnet snapping when magnet mode is enabled
     pub magnet_type: MagnetType,
+    /// Whether magnet targets include visible study plots; independent of its strength.
+    pub snap_to_indicators: bool,
     /// Stay in drawing mode after placing tool
     pub stay_in_drawing_mode: bool,
     /// Currently selected drawing color
@@ -104,6 +106,7 @@ impl Default for ToolbarState {
             recent: VecDeque::with_capacity(5),
             magnet_mode: false,
             magnet_type: MagnetType::Strong, // Default to strong magnet
+            snap_to_indicators: true,
             stay_in_drawing_mode: false,
             drawing_color: [242, 54, 69, 255], // Default red
             show_color_picker: false,

@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -13,9 +13,20 @@ pub struct TRIX {
     period: usize,
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     /// Colors: [TRIX line, Signal line]
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    ema: [Smoothing; 3],
+    signal: Smoothing,
+    previous: Option<f64>,
+    count: usize,
+    bars: usize,
+    pending: Vec<(usize, [f64; 2])>,
 }
 
 impl TRIX {
@@ -25,6 +36,7 @@ impl TRIX {
             period: period.max(1),
             signal_period: 9,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - TRIX
                 palette::ORANGE, // Orange - Signal
@@ -43,52 +55,6 @@ impl TRIX {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let required = self.period.saturating_mul(3).saturating_add(1);
-        if data.len() < required {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Get close prices
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-
-        // Calculate triple EMA
-        let ema1 = helpers::ema_sma(&closes, self.period);
-        let ema2 = helpers::ema_sma(&ema1, self.period);
-        let ema3 = helpers::ema_sma(&ema2, self.period);
-
-        // Calculate TRIX (percent rate of change of ema3)
-        let mut trix_values = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i < 1 || ema3[i].is_nan() || ema3[i - 1].is_nan() || ema3[i - 1] == 0.0 {
-                trix_values.push(f64::NAN);
-            } else {
-                let roc = (ema3[i] - ema3[i - 1]) / ema3[i - 1] * 100.0;
-                trix_values.push(roc);
-            }
-        }
-
-        // Calculate signal line (EMA of TRIX)
-        let signal = helpers::ema_sma(&trix_values, self.signal_period);
-
-        // Store results
-        for i in 0..data.len() {
-            if trix_values[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push_lines(&[trix_values[i], signal[i]]);
-            }
-        }
-
-        values
     }
 }
 
@@ -124,7 +90,58 @@ impl Indicator for TRIX {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let required = self.period.saturating_mul(3).saturating_add(1);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bars;
+                state.bars += 1;
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                let alpha = 2.0 / (self.period as f64 + 1.0);
+                let ema1 = state.ema[0].next(bar.close, self.period, alpha);
+                let ema2 = state.ema[1].next(ema1, self.period, alpha);
+                let ema3 = state.ema[2].next(ema2, self.period, alpha);
+                let previous = state.previous.replace(ema3).unwrap_or(f64::NAN);
+                let trix = if previous == 0.0 {
+                    f64::NAN
+                } else {
+                    (ema3 - previous) / previous * 100.0
+                };
+                let signal = state.signal.next(
+                    trix,
+                    self.signal_period,
+                    2.0 / (self.signal_period as f64 + 1.0),
+                );
+                if state.count < required {
+                    if trix.is_finite() {
+                        state.pending.push((index, [trix, signal]));
+                    }
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(vec![trix, signal])
+                }
+            });
+        // Crossing the batch warm-up threshold reveals the preceding TRIX values too.
+        for &(index, row) in &self.stepper.state().pending {
+            self.values.set(
+                index,
+                if self.stepper.state().count < required {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Multiple(row.to_vec())
+                },
+            );
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

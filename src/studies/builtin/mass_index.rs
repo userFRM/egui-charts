@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -15,8 +15,18 @@ pub struct MassIndex {
     /// Summation period (typically 25)
     sum_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    index: usize,
+    count: usize,
+    ema: [Smoothing; 2],
+    ratios: std::collections::VecDeque<f64>,
+    pending: Vec<(usize, f64)>,
 }
 
 impl MassIndex {
@@ -26,6 +36,7 @@ impl MassIndex {
             ema_period: 9,
             sum_period: 25,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::DEEP_ORANGE,
             visible: true,
         }
@@ -42,71 +53,6 @@ impl MassIndex {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let required = self
-            .ema_period
-            .saturating_mul(2)
-            .saturating_add(self.sum_period);
-        if data.len() < required {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate range (High - Low)
-        let ranges: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
-
-        // Calculate single EMA of range
-        let ema1 = helpers::ema_sma(&ranges, self.ema_period);
-
-        // Calculate double EMA of range
-        let ema2 = helpers::ema_sma(&ema1, self.ema_period);
-
-        // Calculate EMA ratio (single/double)
-        let ratio: Vec<f64> = ema1
-            .iter()
-            .zip(ema2.iter())
-            .map(|(e1, e2)| {
-                if e1.is_nan() || e2.is_nan() || *e2 == 0.0 {
-                    f64::NAN
-                } else {
-                    e1 / e2
-                }
-            })
-            .collect();
-
-        // Sum the ratio over sum_period
-        for i in 0..data.len() {
-            if i < self.sum_period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                let window = &ratio[i + 1 - self.sum_period..=i];
-                let mut sum = 0.0;
-                let mut has_nan = false;
-
-                for &v in window {
-                    if v.is_nan() {
-                        has_nan = true;
-                        break;
-                    }
-                    sum += v;
-                }
-
-                if has_nan {
-                    values.push(IndicatorValue::None);
-                } else {
-                    values.push(IndicatorValue::Single(sum));
-                }
-            }
-        }
-
-        values
     }
 }
 
@@ -131,11 +77,71 @@ impl Indicator for MassIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.index;
+                state.index += 1;
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                let alpha = 2.0 / (self.ema_period as f64 + 1.0);
+                let first = state.ema[0].next(bar.high - bar.low, self.ema_period, alpha);
+                let second = state.ema[1].next(first, self.ema_period, alpha);
+                let ratio = if first.is_nan() || second.is_nan() || second == 0.0 {
+                    f64::NAN
+                } else {
+                    first / second
+                };
+                state.ratios.push_back(ratio);
+                if state.ratios.len() > self.sum_period {
+                    state.ratios.pop_front();
+                }
+                let mut sum = 0.0;
+                if state.ratios.len() < self.sum_period {
+                    return IndicatorValue::None;
+                }
+                for &value in &state.ratios {
+                    if value.is_nan() {
+                        return IndicatorValue::None;
+                    }
+                    sum += value;
+                }
+                let required = self
+                    .ema_period
+                    .saturating_mul(2)
+                    .saturating_add(self.sum_period);
+                if state.count < required {
+                    if sum.is_finite() {
+                        state.pending.push((index, sum));
+                    }
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(sum)
+                }
+            });
+        let required = self
+            .ema_period
+            .saturating_mul(2)
+            .saturating_add(self.sum_period);
+        for &(index, value) in &self.stepper.state().pending {
+            self.values.set(
+                index,
+                if self.stepper.state().count < required {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(value)
+                },
+            );
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

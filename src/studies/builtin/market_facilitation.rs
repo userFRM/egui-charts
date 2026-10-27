@@ -60,9 +60,13 @@ impl Indicator for MarketFacilitationIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        self.values.truncate(from);
+        for bar in &data[from..] {
             let range = bar.high - bar.low;
             let volume = bar.volume / self.divisor;
 
@@ -73,6 +77,10 @@ impl Indicator for MarketFacilitationIndex {
                 self.values.push(IndicatorValue::Single(mfi));
             }
         }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

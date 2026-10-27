@@ -19,6 +19,7 @@
 use super::RankCorrelationIndex;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
@@ -51,6 +52,25 @@ impl Default for RciRibbon {
     }
 }
 
+impl RciRibbon {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let lines = self.lengths.map(|length| {
+            let mut rci = RankCorrelationIndex::new(length);
+            rci.calculate(data);
+            rci
+        });
+        let mut values = IndicatorValues::new();
+        for bar in 0..data.len() {
+            values.push_lines(
+                &lines
+                    .each_ref()
+                    .map(|rci| rci.values().value(0, bar).unwrap_or(f64::NAN)),
+            );
+        }
+        values
+    }
+}
+
 impl Indicator for RciRibbon {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -73,19 +93,25 @@ impl Indicator for RciRibbon {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let lines = self.lengths.map(|length| {
-            let mut rci = RankCorrelationIndex::new(length);
-            rci.calculate(data);
-            rci
-        });
-        self.values = IndicatorValues::new();
-        for bar in 0..data.len() {
-            self.values.push_lines(
-                &lines
-                    .each_ref()
-                    .map(|rci| rci.values().value(0, bar).unwrap_or(f64::NAN)),
-            );
-        }
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(self.lengths.into_iter().max().unwrap() - 1, |b| {
+                b.close.is_finite()
+            }),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

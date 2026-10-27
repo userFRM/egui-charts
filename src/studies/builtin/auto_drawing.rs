@@ -3,7 +3,7 @@
 use super::ZigZag;
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig};
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValues, InputValue, StudyInput};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, InputValue, StudyInput};
 use egui::Color32;
 
 /// Construction to place on the latest Zig Zag pivots.
@@ -114,9 +114,23 @@ impl Indicator for AutoDrawing {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.zigzag.calculate(data);
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.values = IndicatorValues::missing(data.len());
+        } else {
+            // Clear the old anchors by their exact source indices before the swings move.
+            for pivot in self.zigzag.pivots().iter().rev().take(4) {
+                if pivot.bar_index < self.values.len() {
+                    self.values.set(pivot.bar_index, IndicatorValue::None);
+                }
+            }
+            self.values.resize(data.len(), IndicatorValue::None);
+        }
+        self.zigzag.update_swings(data, from);
         self.drawings.clear();
-        self.values = IndicatorValues::missing(data.len());
         let pivots = self.zigzag.pivots();
         let pivots = if self.kind == AutoDrawingKind::FibonacciRetracement {
             &pivots[..pivots.len().saturating_sub(1)]
@@ -156,6 +170,10 @@ impl Indicator for AutoDrawing {
             drawing.fib_config = Some(self.fibonacci.clone());
         }
         self.drawings.push(drawing);
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

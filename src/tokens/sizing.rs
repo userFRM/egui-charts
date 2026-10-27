@@ -509,7 +509,7 @@ pub struct PositionToolSizingTokens {
     pub min_width: f32,
     /// Label info width, in egui logical points.
     pub label_info_width: f32,
-    /// Label info height, in egui logical points.
+    /// Minimum label info height, in egui logical points.
     pub label_info_height: f32,
     /// Label target width, in egui logical points.
     pub label_target_width: f32,
