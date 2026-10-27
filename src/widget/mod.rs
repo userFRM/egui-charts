@@ -251,6 +251,8 @@ pub struct Chart {
     pub(crate) feed: FeedState,
     /// Times of main bars built from ticks, which a history bar of the same slot replaces.
     pub(crate) from_ticks: BTreeSet<DateTime<Utc>>,
+    /// Optional oldest-bar eviction limits, unlimited when absent.
+    bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
     study_data: studies_data::StudyDataCache,
