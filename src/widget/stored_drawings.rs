@@ -12,7 +12,7 @@ pub(super) struct DrawingStore {
     sync: fn(&mut Chart, &egui::Context),
     save: fn(&mut Chart),
     storage: Arc<dyn Storage>,
-    /// The document of each symbol shown since storage was attached.
+    /// The active document and inactive documents with retained drawings or edits.
     documents: HashMap<String, StoredDocument>,
     /// Drawings read for a symbol that was no longer shown when they arrived.
     loaded: HashMap<String, String>,
@@ -21,6 +21,24 @@ pub(super) struct DrawingStore {
     /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
     pending: HashMap<String, (DrawingStorage, bool)>,
     error: Option<String>,
+}
+
+impl DrawingStore {
+    pub(super) fn forget(&mut self, symbol: &str) -> bool {
+        if self.pending.contains_key(symbol)
+            || self
+                .documents
+                .get(symbol)
+                .is_some_and(StoredDocument::saving)
+        {
+            return false;
+        }
+        self.documents.remove(symbol);
+        self.loaded.remove(symbol);
+        self.documents.shrink_to_fit();
+        self.loaded.shrink_to_fit();
+        true
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -127,7 +145,13 @@ impl Chart {
                                             ))
                                         }
                                     }
-                                } else if let Some(json) = json {
+                                } else if let Some(json) = json
+                                    && (name == &symbol
+                                        || self.symbol_drawings.contains_key(name)
+                                        || loaded.is_some_and(|(drawings, _)| {
+                                            !drawings.drawings().is_empty()
+                                        }))
+                                {
                                     store.loaded.insert(name.clone(), json);
                                 }
                             }
@@ -138,6 +162,13 @@ impl Chart {
                 }
             }
         }
+        store.documents.retain(|name, document| {
+            name == &symbol
+                || self.symbol_drawings.contains_key(name)
+                || store.loaded.contains_key(name)
+                || store.pending.contains_key(name)
+                || document.saving()
+        });
         if let Some(json) = store.loaded.remove(&symbol) {
             self.restore_stored_drawings(&json);
         }
@@ -247,6 +278,8 @@ mod tests {
         fail_writes: AtomicBool,
         delay_loads: AtomicBool,
         loads: Mutex<Vec<(String, Reply<Option<String>>)>>,
+        delay_writes: AtomicBool,
+        writes: Mutex<Vec<Reply<()>>>,
     }
 
     impl Storage for Host {
@@ -266,7 +299,11 @@ mod tests {
                 return reply.send(Err(FeedError::NotSupported));
             }
             self.documents.lock().unwrap().insert(name.into(), document);
-            reply.send(Ok(()));
+            if self.delay_writes.load(Ordering::Relaxed) {
+                self.writes.lock().unwrap().push(reply);
+            } else {
+                reply.send(Ok(()));
+            }
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
@@ -311,6 +348,23 @@ mod tests {
             .lock()
             .unwrap()
             .insert("B".into(), "{\"version\": 99}".into());
+        let mut scanner = new_chart(&host);
+        for i in 0..16 {
+            let symbol = format!("EMPTY-{i}");
+            if i % 2 == 0 {
+                host.documents.lock().unwrap().insert(
+                    symbol.clone(),
+                    DrawingStorage::new(&symbol).to_json().unwrap(),
+                );
+            }
+            scanner.set_symbol(symbol);
+            frame(&mut scanner);
+        }
+        assert_eq!(
+            scanner.drawing_store.as_ref().unwrap().documents.len(),
+            1,
+            "empty scans must retain only the active storage reader"
+        );
         let mut chart = new_chart(&host);
         frame(&mut chart);
         draw(&mut chart);
@@ -333,6 +387,47 @@ mod tests {
             assert!(skipped.is_empty());
             assert_eq!(saved.drawings().len(), 1, "transient drawing was saved");
         }
+
+        chart.set_symbol("away");
+        assert!(chart.forget_symbol("A"));
+        assert!(
+            !chart
+                .drawing_store
+                .as_ref()
+                .unwrap()
+                .documents
+                .contains_key("A")
+        );
+        assert!(host.documents.lock().unwrap().contains_key("A"));
+        chart.set_symbol("A");
+        frame(&mut chart);
+        assert_eq!(
+            chart.drawings().drawings.len(),
+            1,
+            "forgotten state reloads storage"
+        );
+
+        // Empty state must keep its writer until both an edit and its deletion are acknowledged.
+        chart.set_symbol("SAVING");
+        frame(&mut chart);
+        host.delay_writes.store(true, Ordering::Relaxed);
+        draw(&mut chart);
+        frame(&mut chart);
+        chart.user_action(|chart| chart.drawings_mut().clear_all());
+        chart.set_symbol("away");
+        assert!(!chart.forget_symbol("SAVING"));
+        for _ in 0..2 {
+            for reply in std::mem::take(&mut *host.writes.lock().unwrap()) {
+                reply.send(Ok(()));
+            }
+            frame(&mut chart);
+        }
+        assert!(chart.forget_symbol("SAVING"));
+        let (saved, skipped) =
+            DrawingStorage::from_json(&host.documents.lock().unwrap()["SAVING"]).unwrap();
+        assert!(saved.drawings().is_empty());
+        assert!(skipped.is_empty());
+        host.delay_writes.store(false, Ordering::Relaxed);
 
         let mut restarted = new_chart(&host);
         frame(&mut restarted);
@@ -377,6 +472,10 @@ mod tests {
         );
         draw(&mut delayed);
         delayed.set_symbol("D");
+        assert!(
+            !delayed.forget_symbol("A"),
+            "pending edits must finish loading"
+        );
         frame(&mut delayed);
         for (symbol, reply) in std::mem::take(&mut *host.loads.lock().unwrap()) {
             reply.send(Ok(host.documents.lock().unwrap().get(&symbol).cloned()));
