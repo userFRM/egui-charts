@@ -225,8 +225,12 @@ impl IndicatorDialog {
         true
     }
 
-    /// Open the dialog on `tab` with the search field focused
+    /// Open the dialog on `tab` with the search field focused. Profiles and patterns open
+    /// among the built-ins; a page without studies opens on the indicators.
     pub fn open_tab(&mut self, tab: IndicatorTab) {
+        if tab != IndicatorTab::Indicators {
+            self.sel_category = IndicatorCategory::BuiltIns;
+        }
         self.source = None;
         self.source_error = None;
         self.active_tab = tab;
@@ -317,21 +321,21 @@ impl IndicatorDialog {
         self.focus_first_row = search.has_focus() && ui.input(|i| i.key_pressed(Key::ArrowDown));
         ui.add_space(theme.spacing.lg);
 
-        // Profiles and patterns have no categories.
-        if self.active_tab != IndicatorTab::Indicators {
-            TabBar::new(IndicatorTab::all(), &mut self.active_tab)
-                .pills()
-                .show(ui);
-            self.draw_empty_state(ui);
-            return IndicatorDialogAction::None;
+        // Only destinations with studies are offered.
+        let offered: Vec<_> = IndicatorCategory::all()
+            .iter()
+            .copied()
+            .filter(|category| self.offers(*category))
+            .collect();
+        if !offered.contains(&self.sel_category) {
+            self.sel_category = IndicatorCategory::BuiltIns;
         }
-
         let mut action = IndicatorDialogAction::None;
         if ui.available_width() < 600.0 {
             egui::ComboBox::from_label(l10n::text(ui.ctx(), "Category"))
                 .selected_text(l10n::text(ui.ctx(), self.sel_category.name()))
                 .show_ui(ui, |ui| {
-                    for category in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
+                    for &category in &offered {
                         ui.selectable_value(
                             &mut self.sel_category,
                             category,
@@ -339,6 +343,7 @@ impl IndicatorDialog {
                         );
                     }
                 });
+            self.draw_tabs(ui, theme);
             return self.draw_indicator_list(ui, config, theme);
         }
         // The sidebar runs before the list, so the list shows a category clicked this frame.
@@ -348,42 +353,92 @@ impl IndicatorDialog {
             |ui| {
                 ui.visuals_mut().selection.bg_fill = theme.ui.btn_bg_hover;
                 ui.visuals_mut().selection.stroke.color = theme.ui.text;
-                for item in [IndicatorCategory::Favorites, IndicatorCategory::BuiltIns] {
+                use IndicatorCategory as C;
+                for (heading, items) in [
+                    ("PERSONAL", &[C::Favorites, C::MyScripts][..]),
+                    ("BUILT-IN", &[C::BuiltIns]),
+                    ("COMMUNITY", &[C::Community]),
+                ] {
+                    let items: Vec<_> = items.iter().filter(|c| offered.contains(c)).collect();
+                    if items.is_empty() {
+                        continue;
+                    }
                     ui.add_space(theme.spacing.xxl);
                     ui.label(
-                        RichText::new(l10n::text(
-                            ui.ctx(),
-                            if item == IndicatorCategory::Favorites {
-                                "PERSONAL"
-                            } else {
-                                "BUILT-IN"
-                            },
-                        ))
-                        .size(theme.text.small)
-                        .color(theme.ui.text_secondary),
+                        RichText::new(l10n::text(ui.ctx(), heading))
+                            .size(theme.text.small)
+                            .color(theme.ui.text_secondary),
                     );
                     ui.add_space(theme.spacing.lg);
-                    if SidebarTab::new(item.name(), category.get() == item)
-                        .icon(item.icon())
-                        .show(ui)
-                    {
-                        category.set(item);
+                    for &item in items {
+                        if SidebarTab::new(item.name(), category.get() == item)
+                            .icon(item.icon())
+                            .show(ui)
+                        {
+                            category.set(item);
+                        }
                     }
                 }
             },
             |ui| {
                 self.sel_category = category.get();
-                TabBar::new(IndicatorTab::all(), &mut self.active_tab)
-                    .pills()
-                    .show(ui);
-                ui.add_space(theme.spacing.xl);
+                self.draw_tabs(ui, theme);
                 action = self.draw_indicator_list(ui, config, theme);
             },
         );
         action
     }
 
-    /// Whether `ind` belongs to the active tab and category and matches the search.
+    /// The sidebar category and built-in page that list `ind`, from its factory category.
+    fn destination(ind: &IndicatorInfo) -> (IndicatorCategory, IndicatorTab) {
+        use {IndicatorCategory as C, IndicatorTab as T};
+        match ind.category.as_str() {
+            IndicatorFactory::PERSONAL => (C::MyScripts, T::Indicators),
+            IndicatorFactory::COMMUNITY => (C::Community, T::Indicators),
+            IndicatorFactory::PROFILES => (C::BuiltIns, T::Profiles),
+            IndicatorFactory::PATTERNS => (C::BuiltIns, T::Patterns),
+            _ => (C::BuiltIns, T::Indicators),
+        }
+    }
+
+    /// Whether the sidebar offers `category`: favourites and built-ins always, the user's
+    /// scripts and community studies while the factory registers some.
+    fn offers(&self, category: IndicatorCategory) -> bool {
+        matches!(
+            category,
+            IndicatorCategory::Favorites | IndicatorCategory::BuiltIns
+        ) || self
+            .indicators
+            .iter()
+            .any(|ind| Self::destination(ind).0 == category)
+    }
+
+    /// The built-in pages that have studies, above the built-in results. A search covers
+    /// every page, so they are hidden while one is typed.
+    fn draw_tabs(&mut self, ui: &mut Ui, theme: &Theme) {
+        let tabs: Vec<_> = IndicatorTab::all()
+            .iter()
+            .copied()
+            .filter(|tab| {
+                self.indicators
+                    .iter()
+                    .any(|ind| Self::destination(ind) == (IndicatorCategory::BuiltIns, *tab))
+            })
+            .collect();
+        if !tabs.contains(&self.active_tab) {
+            self.active_tab = IndicatorTab::Indicators;
+        }
+        if self.sel_category == IndicatorCategory::BuiltIns
+            && tabs.len() > 1
+            && self.search.is_empty()
+        {
+            TabBar::new(&tabs, &mut self.active_tab).pills().show(ui);
+            ui.add_space(theme.spacing.xl);
+        }
+    }
+
+    /// Whether `ind` belongs to the active category, and page for the built-ins, and matches
+    /// the search.
     fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
         if self.source.is_some()
             && self
@@ -400,15 +455,16 @@ impl IndicatorDialog {
             return false;
         }
 
-        match (self.active_tab, self.sel_category) {
-            (IndicatorTab::Indicators, IndicatorCategory::Favorites) => {
-                self.favorites.contains(&ind.id)
+        let (category, tab) = Self::destination(ind);
+        match self.sel_category {
+            IndicatorCategory::Favorites => self.favorites.contains(&ind.id),
+            IndicatorCategory::Premium => ind.is_premium,
+            IndicatorCategory::BuiltIns => {
+                category == IndicatorCategory::BuiltIns
+                    && !ind.is_premium
+                    && (!self.search.is_empty() || tab == self.active_tab)
             }
-            (IndicatorTab::Indicators, IndicatorCategory::BuiltIns) => !ind.is_premium,
-            (IndicatorTab::Indicators, IndicatorCategory::Premium) => ind.is_premium,
-            // No source supplies community indicators, saved profiles or patterns yet.
-            (IndicatorTab::Indicators, IndicatorCategory::Community)
-            | (IndicatorTab::Profiles | IndicatorTab::Patterns, _) => false,
+            selected => category == selected,
         }
     }
 
@@ -455,16 +511,12 @@ impl IndicatorDialog {
     fn draw_empty_state(&self, ui: &mut Ui) {
         let query = self.search.query();
         let no_match = format!("No indicators match \"{query}\"");
-        let state = match (self.active_tab, self.sel_category) {
-            (IndicatorTab::Profiles, _) => EmptyState::new("No saved profiles"),
-            (IndicatorTab::Patterns, _) => EmptyState::new("Nothing here yet"),
+        let state = match self.sel_category {
             _ if !query.is_empty() => EmptyState::new(&no_match)
                 .description("Check the spelling or try another category."),
-            (IndicatorTab::Indicators, IndicatorCategory::Favorites) => {
-                EmptyState::new("No favorites yet")
-                    .icon(&icons::STAR_EMPTY)
-                    .description("Star an indicator to keep it here.")
-            }
+            IndicatorCategory::Favorites => EmptyState::new("No favorites yet")
+                .icon(&icons::STAR_EMPTY)
+                .description("Star an indicator to keep it here."),
             _ => EmptyState::new("Nothing here yet"),
         };
         state.fill_height().show(ui);
@@ -892,18 +944,77 @@ mod tests {
     fn each_tab_and_category_lists_only_its_own_indicators() {
         use IndicatorCategory::*;
         use IndicatorTab::*;
-        // (tab, category, whether every study of the factory is listed); the other rows list none.
-        let cases = [
-            (Indicators, BuiltIns, true),
-            (Indicators, Community, false),
-            (Profiles, BuiltIns, false),
-            (Patterns, BuiltIns, false),
+        // (tab, category, search, studies listed, studies not listed). A search covers every
+        // built-in page.
+        let cases: [(_, _, _, &[&str], &[&str]); 6] = [
+            (
+                Indicators,
+                BuiltIns,
+                "",
+                &["RSI", "Host SMA"],
+                &[
+                    "Vol Profile VR",
+                    "All Candlestick Patterns",
+                    "My SMA",
+                    "Shared SMA",
+                ],
+            ),
+            (
+                Profiles,
+                BuiltIns,
+                "",
+                &["Vol Profile VR"],
+                &["RSI", "All Candlestick Patterns"],
+            ),
+            (
+                Patterns,
+                BuiltIns,
+                "",
+                &["All Candlestick Patterns"],
+                &["RSI", "Vol Profile VR"],
+            ),
+            (
+                Indicators,
+                BuiltIns,
+                "Vol Profile VR",
+                &["Vol Profile VR"],
+                &["RSI"],
+            ),
+            (
+                Indicators,
+                MyScripts,
+                "",
+                &["My SMA"],
+                &["Host SMA", "Shared SMA", "RSI"],
+            ),
+            (
+                Indicators,
+                Community,
+                "",
+                &["Shared SMA"],
+                &["My SMA", "RSI"],
+            ),
         ];
         let factory = || {
             let mut factory = IndicatorFactory::new();
             factory.register("Host SMA", || Box::new(SMA::new(42)));
+            factory.register_in(IndicatorFactory::PERSONAL, "My SMA", || {
+                Box::new(SMA::new(42))
+            });
+            factory.register_in(IndicatorFactory::COMMUNITY, "Shared SMA", || {
+                Box::new(SMA::new(42))
+            });
             factory
         };
+        // The user's scripts and community studies are offered only while a host supplies some.
+        let builtin = IndicatorDialog::new();
+        let hosted = IndicatorDialog::new().with_factory(factory());
+        for category in [MyScripts, Community] {
+            assert!(
+                !builtin.offers(category) && hosted.offers(category),
+                "{category:?}"
+            );
+        }
         let mut searched = IndicatorDialog::new().with_factory(factory());
         let study = searched
             .indicators
@@ -920,20 +1031,21 @@ mod tests {
             *searched.search.query_mut() = query.into();
             assert!(searched.matches(&ctx, &study), "{query}");
         }
-        for (tab, category, all) in cases {
+        for (tab, category, query, listed, unlisted) in cases {
             let mut dialog = IndicatorDialog::new().with_factory(factory());
             dialog.active_tab = tab;
             dialog.sel_category = category;
-            let mut listed: Vec<String> = dialog
-                .indicators
-                .iter()
-                .filter(|i| dialog.matches(&ctx, i))
-                .map(|i| i.id.clone())
-                .collect();
-            listed.sort();
-            let mut expected = if all { factory().list() } else { Vec::new() };
-            expected.sort();
-            assert_eq!(listed, expected, "{tab:?} / {category:?}");
+            *dialog.search.query_mut() = query.into();
+            let lists = |id: &str| {
+                let ind = dialog.indicators.iter().find(|i| i.id == id).unwrap();
+                dialog.matches(&ctx, ind)
+            };
+            for id in listed {
+                assert!(lists(id), "{tab:?} / {category:?} / {query:?} lists {id}");
+            }
+            for id in unlisted {
+                assert!(!lists(id), "{tab:?} / {category:?} / {query:?} omits {id}");
+            }
         }
 
         // A study the host registers, under a new name or a built-in's, is added through the
