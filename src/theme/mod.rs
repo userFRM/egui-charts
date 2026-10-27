@@ -422,11 +422,10 @@ impl Theme {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "serde")]
     #[test]
     fn partial_light_palettes_are_rejected_instead_of_mixing_presets() {
         let partial = serde_json::json!({"dark": false, "ui": {
@@ -444,7 +443,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "serde")]
     #[test]
     fn saved_text_roles_default_when_missing_and_keep_overrides_when_scaled() {
         for (role, default) in [
