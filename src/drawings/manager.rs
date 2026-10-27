@@ -39,10 +39,6 @@ pub enum DrawingSyncAction {
     /// A batch of drawings should be restored from backend storage. The manager never
     /// queues it.
     RestoreDrawings(Vec<crate::drawings::persistence::StoredDrawing>),
-    /// The queue overflowed or notifications were re-enabled. Replace the host's complete
-    /// stored drawing set with the manager's current saveable drawings, removing absent records.
-    /// Further notifications coalesce into this signal until the host drains it.
-    ResyncRequired,
 }
 
 /// Snapshot of drawing-related state from the central application state.
@@ -303,8 +299,7 @@ pub struct DrawingManager {
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
-    /// [`DrawingSyncAction`]. At most [`Self::SYNC_QUEUE_LIMIT`] actions are queued; overflow
-    /// replaces them with [`DrawingSyncAction::ResyncRequired`] until drained.
+    /// [`DrawingSyncAction`].
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
@@ -317,24 +312,16 @@ impl Default for DrawingManager {
 }
 
 impl DrawingManager {
-    /// Maximum queued drawing notifications before a full replacement is required.
-    pub const SYNC_QUEUE_LIMIT: usize = 1024;
-
     /// Enables or disables per-drawing storage notifications. Disabling clears pending actions.
     /// Automatic chart storage disables them; enable them again to also consume notifications.
-    /// Enabling requests a full replacement so changes made while disabled are included.
+    /// Changes made while disabled are not reported.
     pub fn set_sync_enabled(&mut self, enabled: bool) {
-        if self.sync_enabled == enabled {
-            return;
-        }
         self.sync_enabled = enabled;
-        let mut sync = self
-            .pending_sync
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        sync.clear();
-        if enabled {
-            sync.push(DrawingSyncAction::ResyncRequired);
+        if !enabled {
+            self.pending_sync
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
         }
     }
 
@@ -1233,7 +1220,7 @@ impl DrawingManager {
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. A locked drawing accepts only visibility and name changes, or an edit that unlocks it.
+    /// saved. A locked drawing accepts only visibility, name and folder changes, or an edit that unlocks it.
     /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
@@ -1242,12 +1229,14 @@ impl DrawingManager {
             if old.locked && drawing.locked {
                 let visible = drawing.visible;
                 let label = drawing.label.clone();
+                let folder = drawing.folder.clone();
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label {
+                if visible == old.visible && label == old.label && folder == old.folder {
                     return;
                 }
                 drawing.visible = visible;
                 drawing.label = label;
+                drawing.folder = folder;
             }
             if !drawing.selectable {
                 self.selection.deselect(id);
@@ -1259,6 +1248,46 @@ impl DrawingManager {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|p| p.id != id);
         }
+    }
+
+    /// Edits live drawing ids as one undo step and queues their saved changes.
+    /// Locked drawings accept visibility, name and folder changes, or an edit that unlocks them.
+    pub fn edit_drawings(&mut self, ids: &[usize], mut edit: impl FnMut(&mut Drawing)) {
+        if ids.is_empty() {
+            return;
+        }
+        let ids: HashSet<_> = ids.iter().copied().collect();
+        let mut before = Vec::new();
+        for drawing in self.drawings.iter_mut().filter(|d| ids.contains(&d.id)) {
+            let old = drawing.clone();
+            edit(drawing);
+            if old.locked && drawing.locked {
+                let (visible, label, folder) = (
+                    drawing.visible,
+                    drawing.label.clone(),
+                    drawing.folder.clone(),
+                );
+                *drawing = old.clone();
+                if visible == old.visible && label == old.label && folder == old.folder {
+                    continue;
+                }
+                drawing.visible = visible;
+                drawing.label = label;
+                drawing.folder = folder;
+            }
+            if !drawing.selectable {
+                self.selection.deselect(old.id);
+            }
+            before.push(old);
+        }
+        for old in &before {
+            self.queue_edit(old);
+        }
+        self.history.push_snapshot(before);
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| !ids.contains(&p.id));
     }
 
     /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
@@ -1803,18 +1832,12 @@ impl DrawingManager {
     }
 }
 
-/// Coalesces notifications without losing deletes, and makes overflow explicit.
+/// Coalesces repeated saves and updates of a drawing without reordering them across its delete.
 fn queue_sync(
     sync: &mut Vec<DrawingSyncAction>,
     action: DrawingSyncAction,
     stored_id: Option<&str>,
 ) {
-    if sync
-        .iter()
-        .any(|pending| matches!(pending, DrawingSyncAction::ResyncRequired))
-    {
-        return;
-    }
     if let DrawingSyncAction::SaveDrawing(id) | DrawingSyncAction::UpdateDrawing(id) = &action {
         for pending in sync.iter_mut().rev() {
             match pending {
@@ -1831,12 +1854,7 @@ fn queue_sync(
             }
         }
     }
-    if sync.len() >= DrawingManager::SYNC_QUEUE_LIMIT {
-        sync.clear();
-        sync.push(DrawingSyncAction::ResyncRequired);
-    } else {
-        sync.push(action);
-    }
+    sync.push(action);
 }
 
 /// The id a drawing is stored under.
@@ -1850,33 +1868,6 @@ fn sync_id(drawing: &Drawing) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sync_queue_overflow_requests_a_full_replacement_until_drained() {
-        let mut manager = DrawingManager::new();
-        for id in 0..=DrawingManager::SYNC_QUEUE_LIMIT {
-            manager.queue(DrawingSyncAction::Delete(id.to_string()));
-        }
-        assert!(matches!(
-            manager.pending_sync.lock().unwrap().as_slice(),
-            [DrawingSyncAction::ResyncRequired]
-        ));
-        manager.queue(DrawingSyncAction::Delete("later".into()));
-        assert_eq!(manager.pending_sync.lock().unwrap().len(), 1);
-        manager.pending_sync.lock().unwrap().clear();
-        manager.queue(DrawingSyncAction::Delete("next".into()));
-        assert!(
-            matches!(manager.pending_sync.lock().unwrap().as_slice(), [DrawingSyncAction::Delete(id)] if id == "next")
-        );
-        manager.set_sync_enabled(false);
-        manager.queue(DrawingSyncAction::Delete("disabled".into()));
-        assert!(manager.pending_sync.lock().unwrap().is_empty());
-        manager.set_sync_enabled(true);
-        assert!(matches!(
-            manager.pending_sync.lock().unwrap().as_slice(),
-            [DrawingSyncAction::ResyncRequired]
-        ));
-    }
 
     /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
     /// selectable away from every anchor, using their actual paint geometry.
@@ -2133,46 +2124,92 @@ mod tests {
     /// delete or style edit, until it is explicitly unlocked.
     #[test]
     fn a_locked_drawing_is_neither_moved_nor_deleted() {
-        let mut manager = DrawingManager::new();
-        let mut line = Drawing::new(3, DrawingToolType::TrendLine);
-        line.chart_points = vec![ChartPoint::new(10.0, 10.0), ChartPoint::new(20.0, 20.0)];
-        line.update_screen_coords(|bar| bar, |price| price as f32);
-        line.locked = true;
-        manager.drawings.push(line);
+        for bulk in [false, true] {
+            let edit = |manager: &mut DrawingManager, change: fn(&mut Drawing)| {
+                if bulk {
+                    manager.edit_drawings(&[3], change);
+                } else {
+                    manager.edit_drawing(3, change);
+                }
+            };
+            let mut manager = DrawingManager::new();
+            let mut line = Drawing::new(3, DrawingToolType::TrendLine);
+            line.chart_points = vec![ChartPoint::new(10.0, 10.0), ChartPoint::new(20.0, 20.0)];
+            line.update_screen_coords(|bar| bar, |price| price as f32);
+            line.locked = true;
+            manager.drawings.push(line);
 
-        manager.start_drag_handle(3, HandlePos::Start);
-        manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
-        manager.end_drag_handle();
-        manager.delete_drawing(3);
-        manager.edit_drawing(3, |d| d.font_size = 30.0);
-        manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
-        manager.end_drag_handle();
-        assert_eq!(manager.drawings[0].font_size, 12.0);
-        assert!(!manager.can_undo());
-        assert!(manager.pending_sync.lock().unwrap().is_empty());
-        // Tree metadata can change without unlocking geometry or style edits.
-        manager.edit_drawing(3, |d| {
-            d.visible = false;
-            d.label = Some("Support".into());
-            d.font_size = 30.0;
-        });
-        assert!(!manager.drawings[0].visible);
-        assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
-        assert_eq!(manager.drawings[0].font_size, 12.0);
-        assert!(manager.drawings[0].locked);
-        assert!(manager.undo());
-        assert!(manager.drawings[0].visible);
-        assert_eq!(manager.drawings[0].label, None);
-        assert!(manager.drawings[0].locked);
-        manager.edit_drawing(3, |d| d.locked = false);
-        manager.edit_drawing(3, |d| d.font_size = 30.0);
-        assert_eq!(manager.drawings[0].font_size, 30.0);
+            manager.start_drag_handle(3, HandlePos::Start);
+            manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
+            manager.end_drag_handle();
+            manager.delete_drawing(3);
+            edit(&mut manager, |d| d.font_size = 30.0);
+            manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+            manager.end_drag_handle();
+            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert!(!manager.can_undo());
+            assert!(manager.pending_sync.lock().unwrap().is_empty());
+            // Tree metadata can change without unlocking geometry or style edits.
+            edit(&mut manager, |d| {
+                d.visible = false;
+                d.label = Some("Support".into());
+                d.folder = vec!["Analysis".into()];
+                d.font_size = 30.0;
+            });
+            assert!(!manager.drawings[0].visible);
+            assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
+            assert_eq!(manager.drawings[0].folder, ["Analysis"]);
+            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert!(manager.drawings[0].locked);
+            assert!(manager.undo());
+            assert!(manager.drawings[0].visible);
+            assert_eq!(manager.drawings[0].label, None);
+            assert!(manager.drawings[0].folder.is_empty());
+            assert!(manager.drawings[0].locked);
+            edit(&mut manager, |d| d.locked = false);
+            edit(&mut manager, |d| d.font_size = 30.0);
+            assert_eq!(manager.drawings[0].font_size, 30.0);
 
-        assert_eq!(manager.drawings.len(), 1);
-        assert_eq!(
-            manager.drawings[0].chart_points[0],
-            ChartPoint::new(10.0, 10.0)
-        );
+            assert_eq!(manager.drawings.len(), 1);
+            assert_eq!(
+                manager.drawings[0].chart_points[0],
+                ChartPoint::new(10.0, 10.0)
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
+        for edit in [
+            (|d: &mut Drawing| d.folder = vec!["Analysis".into()]) as fn(&mut Drawing),
+            |d| d.visible = false,
+            |d| d.locked = true,
+        ] {
+            let mut manager = DrawingManager::new();
+            manager.drawings = (0..3)
+                .map(|id| Drawing::new(id, DrawingToolType::HorizontalLine))
+                .collect();
+            manager.edit_drawings(&[2], edit);
+            manager.pending_sync.lock().unwrap().clear();
+            // Host updates outside this edit must survive both history directions.
+            manager.drawings[0].label = Some("Host update".into());
+            manager.drawings.remove(1);
+            manager
+                .drawings
+                .push(Drawing::new(3, DrawingToolType::HorizontalLine));
+            for step in [DrawingManager::undo, DrawingManager::redo] {
+                assert!(step(&mut manager));
+                assert_eq!(
+                    manager.drawings.iter().map(|d| d.id).collect::<Vec<_>>(),
+                    [0, 2, 3]
+                );
+                assert_eq!(manager.drawings[0].label.as_deref(), Some("Host update"));
+                assert!(matches!(
+                    manager.pending_sync.lock().unwrap().as_slice(),
+                    [DrawingSyncAction::UpdateDrawing(2)]
+                ));
+            }
+        }
     }
 
     /// Of two overlapping drawings, the one with the higher `z_order` is hit, whichever was
@@ -2347,7 +2384,6 @@ mod tests {
                     DrawingSyncAction::UpdateDrawing(id) => format!("Update({id})"),
                     DrawingSyncAction::Delete(id) => format!("Delete({id})"),
                     DrawingSyncAction::RestoreDrawings(_) => "Restore".into(),
-                    DrawingSyncAction::ResyncRequired => "Resync".into(),
                 })
                 .collect();
             assert_eq!(queued, expected);

@@ -9,9 +9,19 @@ use egui::Color32;
 // Settings State
 // ============================================================================
 
-/// Candle color configuration (body, border, wick for up/down candles)
+/// Candle color configuration (body, border, wick for up/down candles) and which parts are drawn.
+/// Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CandleColorConfig {
+    /// Colour each candle by its close against the previous close instead of its open.
+    pub color_by_previous_close: bool,
+    /// Whether candle bodies are filled.
+    pub show_body: bool,
+    /// Whether candle borders are drawn.
+    pub show_border: bool,
+    /// Whether candle wicks are drawn.
+    pub show_wick: bool,
     /// Body color of rising candles.
     pub body_up: Color32,
     /// Body color of falling candles.
@@ -31,6 +41,10 @@ impl CandleColorConfig {
     pub fn from_theme(theme: &crate::theme::Theme) -> Self {
         let chart = &theme.chart;
         Self {
+            color_by_previous_close: false,
+            show_body: true,
+            show_border: false,
+            show_wick: true,
             body_up: chart.candle_up,
             body_down: chart.candle_down,
             border_up: chart.candle_up,
@@ -47,9 +61,12 @@ impl Default for CandleColorConfig {
     }
 }
 
-/// Status line display options
+/// Status line display options. Saved settings without a field take its default.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct StatusLineOptions {
+    /// Whether the legend shows the host's instrument logo before the title.
+    pub show_logo: bool,
     /// Whether the legend shows the instrument title.
     pub show_symbol: bool,
     /// Display the description instead of the ticker.
@@ -70,11 +87,16 @@ pub struct StatusLineOptions {
     pub show_change_percent: bool,
     /// Whether the legend shows volume.
     pub show_volume: bool,
+    /// Whether the legend shows the change of the last price from the previous session's close.
+    pub show_last_day_change: bool,
+    /// Opacity of the study rows' backdrop, from 0 to 100 percent.
+    pub indicator_background_opacity: u8,
 }
 
 impl Default for StatusLineOptions {
     fn default() -> Self {
         Self {
+            show_logo: true,
             show_symbol: true,
             title_as_description: true,
             show_quote_boxes: true,
@@ -85,6 +107,8 @@ impl Default for StatusLineOptions {
             show_change: true,
             show_change_percent: true,
             show_volume: true,
+            show_last_day_change: false,
+            indicator_background_opacity: 100,
         }
     }
 }
@@ -238,7 +262,32 @@ impl Default for MarginsSettings {
 
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ScalesAndLinesSettings {
+    /// Display host-supplied currency metadata.
+    pub show_currency: bool,
+    /// Display host-supplied price unit metadata.
+    pub show_unit: bool,
+    /// Display Auto, Log and Percent navigation buttons.
+    pub show_scale_mode_buttons: bool,
+    /// Display the price-axis host action button.
+    pub show_plus_button: bool,
+    /// Let value tags overlap instead of moving them apart.
+    pub allow_label_overlap: bool,
+    /// Lock scale units per bar to `price_to_bar_ratio`.
+    pub lock_price_to_bar_ratio: bool,
+    /// Positive scale units per bar while locked; log scales use natural logarithms of prices.
+    pub price_to_bar_ratio: f64,
+    /// Last price tag and line colour, or the candle direction colour when unset.
+    pub symbol_price_color: Option<Color32>,
+    /// Display the last values of studies on their price axes.
+    pub show_study_values: bool,
+    /// Study value tag colour, or each plot's colour when unset.
+    pub study_value_color: Option<Color32>,
+    /// Display the host-supplied extended-session price tag.
+    pub show_extended_session_price: bool,
+    /// Extended-session price tag colour.
+    pub extended_session_price_color: Color32,
     /// Whether visible prices determine the scale range.
     pub auto_scale: bool,
     /// Whether prices use a logarithmic scale.
@@ -268,6 +317,18 @@ pub struct ScalesAndLinesSettings {
 impl Default for ScalesAndLinesSettings {
     fn default() -> Self {
         Self {
+            show_currency: true,
+            show_unit: true,
+            show_scale_mode_buttons: true,
+            show_plus_button: true,
+            allow_label_overlap: false,
+            lock_price_to_bar_ratio: false,
+            price_to_bar_ratio: 1.0,
+            symbol_price_color: None,
+            show_study_values: true,
+            study_value_color: None,
+            show_extended_session_price: true,
+            extended_session_price_color: Color32::from_rgb(251, 142, 1),
             auto_scale: true,
             log_scale: false,
             percentage_scale: false,
@@ -399,6 +460,10 @@ pub struct AlertsSettings {
     pub show_alert_labels: bool,
     /// Alert color.
     pub alert_color: Color32,
+    /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
+    pub show_active_only: bool,
+    /// Seconds an alert notification stays on screen.
+    pub notification_seconds: u32,
 }
 
 impl Default for AlertsSettings {
@@ -410,6 +475,8 @@ impl Default for AlertsSettings {
             show_alerts: true,
             show_alert_labels: true,
             alert_color: crate::studies::palette::ORANGE, // Orange
+            show_active_only: true,
+            notification_seconds: 5,
         }
     }
 }
@@ -436,6 +503,11 @@ pub struct ChartSettingsState {
     /// Show analyst estimates answered by the host feed.
     #[serde(default)]
     pub show_price_targets: bool,
+    /// Ask the host for history adjusted for dividends. The host owns the data, so
+    /// [`apply_to_chart`](Self::apply_to_chart) leaves it to the host, which reloads the
+    /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
+    #[serde(default)]
+    pub adjust_for_dividends: bool,
 
     // Status line tab
     /// Legend content and quote controls.
@@ -487,6 +559,7 @@ impl Default for ChartSettingsState {
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
             show_price_targets: false,
+            adjust_for_dividends: false,
 
             status_line: StatusLineOptions::default(),
 

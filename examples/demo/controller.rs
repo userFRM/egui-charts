@@ -320,6 +320,8 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
+    /// No explicit choice follows the system appearance without saving its current value.
+    theme_choice: Option<bool>,
 
     // Persistent toolbars.
     top_toolbar: TopToolbar,
@@ -452,9 +454,15 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let dark = cc
+        let theme_choice = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, "dark_theme"))
+            .and_then(|storage| eframe::get_value(storage, "dark_theme"));
+        let dark = theme_choice
+            .or_else(|| {
+                cc.egui_ctx
+                    .system_theme()
+                    .map(|theme| theme == egui::Theme::Dark)
+            })
             .unwrap_or(false);
         let theme = if dark { Theme::dark() } else { Theme::light() };
         let timeframe = Timeframe::Min1;
@@ -555,6 +563,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             theme,
+            theme_choice,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             timeframe_toolbar,
@@ -961,6 +970,8 @@ impl DemoApp {
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
         self.settings_state.trading = trading;
+        self.settings_state.adjust_for_dividends =
+            self.timeframe_toolbar.state.adjust_for_dividends;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1084,11 +1095,23 @@ impl DemoApp {
     }
 
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        let news_changed = state.events.show_news_notifications
+            != self.chart.event_visibility().show_news_notifications;
         self.chart.begin_user_action();
         self.settings_state = state.clone();
         self.trading.display = state.trading.clone();
+        self.alerts
+            .set_notification_seconds(state.alerts.notification_seconds as f32);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
+        if news_changed {
+            self.annotate();
+        }
+        if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
+            self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+            self.stop_replay();
+            self.apply_session();
+        }
     }
 
     fn remove_all_indicators(&mut self) {
@@ -1218,6 +1241,7 @@ impl eframe::App for DemoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.update_theme(&ctx);
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
@@ -1993,6 +2017,7 @@ impl DemoApp {
             item.locked = d.locked;
             item.z_index = d.z_order;
             item.label = d.label.clone();
+            item.folder = d.folder.clone();
             items.push(item);
         }
         items
@@ -2472,6 +2497,7 @@ impl DemoApp {
                             .filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
                         self.settings_state.alerts.alert_color,
                         self.settings_state.alerts.show_alert_labels,
+                        self.settings_state.alerts.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),
                     ) {
                         self.alerts.save(alert);
@@ -3536,28 +3562,82 @@ mod tests {
     #[test]
     fn theme_selection_survives_restart_and_initializes_the_chart() {
         use eframe::App;
-        let ctx = egui::Context::default();
-        let mut storage = AppStorage::default();
-        for dark in [true, false] {
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let mut app = DemoApp::new(&cc);
-            app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
-            assert_eq!(app.theme.dark, dark);
-            app.save(&mut storage);
-            drop(app);
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let restored = DemoApp::new(&cc);
-            assert_eq!(restored.theme.dark, dark);
-            assert_eq!(
-                restored.chart.config().background_color,
-                restored.theme.chart.bg
-            );
-            assert_eq!(
-                restored.chart.config().bearish_color,
-                restored.theme.chart.candle_down
-            );
+        for initial in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            let ctx = egui::Context::default();
+            ctx.run_ui(
+                egui::RawInput {
+                    system_theme: initial,
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .drop_without_applying_deltas();
+            let mut storage = AppStorage::default();
+            for explicit in [false, true, true] {
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let mut app = DemoApp::new(&cc);
+                if !explicit {
+                    assert_eq!(app.theme.dark, initial == Some(egui::Theme::Dark));
+                }
+                if explicit {
+                    app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+                }
+                let choice = explicit.then_some(app.theme.dark);
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                for system in [egui::Theme::Dark, egui::Theme::Light, egui::Theme::Dark] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            system_theme: Some(system),
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(393.0, 852.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                    )
+                    .drop_without_applying_deltas();
+                    let expected = if choice.unwrap_or(system == egui::Theme::Dark) {
+                        Theme::dark()
+                    } else {
+                        Theme::light()
+                    };
+                    assert_eq!(app.theme, expected);
+                    assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                    assert_eq!(
+                        app.extra_charts[0].chart.config().background_color,
+                        expected.chart.bg
+                    );
+                    assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
+                }
+                app.save(&mut storage);
+                drop(app);
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(egui::Theme::Light),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, choice.unwrap_or(false));
+                assert_eq!(
+                    restored.user_settings().theme,
+                    choice.map(|dark| if dark { "dark" } else { "light" }.into())
+                );
+                assert_eq!(
+                    restored.chart.config().background_color,
+                    restored.theme.chart.bg
+                );
+                assert_eq!(
+                    restored.chart.config().bearish_color,
+                    restored.theme.chart.candle_down
+                );
+            }
         }
     }
 
@@ -4458,10 +4538,17 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
         assert_eq!(app.layout_tabs.len(), 1);
+        // Opening a layout keeps the host's alert preferences and applied toast lifetime.
+        let mut settings = app.settings_state.clone();
+        settings.alerts.notification_seconds = 12;
+        settings.alerts.show_active_only = false;
+        settings.alerts.sound_volume = 0.35;
+        app.apply_chart_settings(settings.clone());
         // Opening the current layout again returns to it as saved.
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
         app.poll_storage(&ctx);
+        assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.comparisons.len(), 2);
@@ -4765,8 +4852,12 @@ mod tests {
         use egui_charts::config::BackgroundStyle;
         use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        app.chart.set_size(Some(egui::vec2(800.0, 600.0)));
         let mut state = app.settings_state.clone();
+        state.candle_colors = serde_json::from_str("{}").unwrap();
         state.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
         state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
         state.chart_basic_styles.background_gradient_bottom = egui::Color32::BLUE;
@@ -4786,6 +4877,11 @@ mod tests {
         state.trading.show_execution_labels = true;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
+        assert_eq!(
+            app.chart.config().candle_border_width,
+            0.0,
+            "older settings retain borderless candles"
+        );
         assert_eq!(
             app.chart.config().background_style,
             BackgroundStyle::VerticalGradient {
@@ -4853,6 +4949,34 @@ mod tests {
             apply_settings_state(&invalid, &mut app.chart, &mut app.timeframe_toolbar);
             app.open_chart_settings_dialog();
             assert_eq!(app.settings_state, before);
+        }
+        app.notifications.poll(&ctx);
+        let initial = app.notifications.unread();
+        let mut received = initial;
+        for enabled in [false, true, true, false] {
+            let mut state = app.settings_state.clone();
+            state.events.show_news = false;
+            state.events.show_news_notifications = enabled;
+            app.apply_chart_settings(state);
+            app.chart.reload_marks();
+            for _ in 0..4 {
+                app.chart.fit_content();
+                ctx.run_ui(Default::default(), |ui| {
+                    app.chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+                app.notifications.poll(&ctx);
+            }
+            let unread = app.notifications.unread();
+            if enabled && received == initial {
+                assert!(
+                    unread > initial,
+                    "hidden news markers still allow notifications"
+                );
+            } else {
+                assert_eq!(unread, received, "quiet or repeated news must not notify");
+            }
+            received = unread;
         }
     }
 

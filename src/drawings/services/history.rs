@@ -44,7 +44,7 @@ use std::collections::HashSet;
 /// Command representing a reversible drawing operation
 #[derive(Debug, Clone)]
 pub enum DrawingCommand {
-    /// All drawings before one bulk edit, including their list order.
+    /// Drawings owned by one bulk edit, including their list order.
     Snapshot {
         /// Drawings at this side of the bulk edit, in their original list order.
         drawings: Vec<Drawing>,
@@ -154,7 +154,7 @@ impl HistoryService {
         }
     }
 
-    /// Record all drawings before a bulk edit, as one undo step.
+    /// Record the drawings owned by a bulk edit, as one undo step.
     pub fn push_snapshot(&mut self, drawings: Vec<Drawing>) {
         if !drawings.is_empty() {
             let ids = drawings.iter().map(|drawing| drawing.id).collect();
@@ -397,17 +397,23 @@ impl HistoryService {
     }
 }
 
-// Host-restored drawings added after a bulk command are outside that command's history.
-fn restore_snapshot(
-    live: &mut Vec<Drawing>,
-    mut before: Vec<Drawing>,
-    ids: &[usize],
-) -> Vec<Drawing> {
-    let (current, independent): (Vec<_>, Vec<_>) = live
-        .drain(..)
-        .partition(|drawing| ids.contains(&drawing.id));
-    before.extend(independent);
-    *live = before;
+// Keep independent drawings and their list positions outside the bulk command's history.
+fn restore_snapshot(live: &mut Vec<Drawing>, before: Vec<Drawing>, ids: &[usize]) -> Vec<Drawing> {
+    let mut before = before.into_iter();
+    let mut current = Vec::new();
+    let mut restored = Vec::new();
+    let mut insert_at = 0;
+    for drawing in live.drain(..) {
+        if ids.contains(&drawing.id) {
+            current.push(drawing);
+            restored.extend(before.next());
+            insert_at = restored.len();
+        } else {
+            restored.push(drawing);
+        }
+    }
+    restored.splice(insert_at..insert_at, before);
+    *live = restored;
     current
 }
 
@@ -443,7 +449,13 @@ mod tests {
     #[test]
     fn undo_and_redo_restore_each_command() {
         type Record = fn(&mut HistoryService);
-        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 5] = [
+        let cases: [(&str, Vec<Drawing>, Vec<Drawing>, Record); 6] = [
+            (
+                "partial bulk edit",
+                vec![drawing(2, 9.0), drawing(1, 2.0)],
+                vec![drawing(2, 9.0), drawing(1, 8.0)],
+                |h| h.push_snapshot(vec![drawing(1, 2.0)]),
+            ),
             (
                 "bulk edit and order",
                 vec![drawing(1, 2.0), drawing(2, 3.0)],
@@ -499,7 +511,7 @@ mod tests {
 
             assert_eq!(history.undo(&mut drawings), Some(1), "{name}: undo id");
             assert_eq!(state(&drawings), state(&before), "{name}: after undo");
-            if name == "bulk edit and order" {
+            if matches!(name, "bulk edit and order" | "partial bulk edit") {
                 assert_eq!(
                     drawings
                         .iter()

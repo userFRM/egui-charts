@@ -40,7 +40,7 @@ pub use labels::{
     render_time_labels,
 };
 pub(crate) use labels::{price_marks, render_time_grid, study_controls, time_axis_marks};
-pub(crate) use markers::render_change_mark;
+pub(crate) use markers::{render_change_mark, render_event_breaks};
 pub use markers::{render_event_band, render_markers};
 pub use session_breaks::{
     SessionBackgroundRenderer, SessionBreakRenderConfig, SessionBreakRenderer,
