@@ -313,6 +313,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Point and Figure columns retain their price endpoints and saturate inclusive box counts at `usize::MAX` rather than overflowing, including on 32-bit targets. `PnfColumn::boxes` rejects invalid geometry or expansion above two million boxes and reports allocation failures. Migration: `boxes()` now returns `Result<Vec<f64>, String>`; handle the error before using the prices, or use the column endpoints without expanding. ([#943](https://github.com/userFRM/egui-charts/issues/943))
+
+- Cached Renko and range chart updates apply the same two-million-size work bound as fresh builds, reseeding after an excessive price move and resuming from that price on later bars. Whitespace does not bypass the bound. ([#941](https://github.com/userFRM/egui-charts/issues/941))
 - Custom intervals retain positive week and calendar-month counts, with 3, 6 and 12 month presets. Bar boundaries follow the configured calendar timezone, so April 15 belongs to the quarter opening on April 1; session closes and strategy comparisons also retain calendar months. Month durations remain approximate for sizing, and previously saved `Custom(seconds)` intervals keep their fixed-duration meaning. ([#963](https://github.com/userFRM/egui-charts/issues/963))
 - The drawing rail optically sizes its trend, Fibonacci and ruler glyphs within their existing button slots. Default light ink is black; dark and custom theme colours, disabled contrast and selected utility fills are retained. ([#1001](https://github.com/userFRM/egui-charts/issues/1001))
 
