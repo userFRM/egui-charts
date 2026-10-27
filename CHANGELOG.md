@@ -339,6 +339,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The demo follows the system light or dark appearance at startup and live until a theme is explicitly selected. Explicit choices remain saved between sessions, and the web loading screen uses the same saved choice or system appearance before the app starts. ([#1032](https://github.com/userFRM/egui-charts/issues/1032))
+
 - Drawing sync notifications coalesce repeated saves and updates per drawing, and automatic storage disables them, so the queue no longer grows with every edit. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`. ([#948](https://github.com/userFRM/egui-charts/issues/948))
 - Saving an alert with unchanged expiry fields preserves its exact saved instant, including seconds and the later occurrence of a repeated local time when clocks go back. Edited date/time fields still resolve in the explicit entry zone and validate before saving. ([#981](https://github.com/userFRM/egui-charts/issues/981))
 
