@@ -15,8 +15,6 @@ const TILE: egui::Vec2 = vec2(164.0, 152.0);
 const GAP: f32 = 8.0;
 /// Width of a column of the comparison view.
 const COLUMN: f32 = 200.0;
-/// Brokers compared at once.
-const MAX_COMPARED: usize = 3;
 
 /// One row of a broker in the picker's comparison view.
 #[derive(Clone, Debug, PartialEq)]
@@ -552,7 +550,7 @@ fn comparison(ui: &mut Ui, tiles: &[BrokerTile], compared: &mut Vec<String>) -> 
                 .iter()
                 .filter(|tile| !compared.contains(&tile.id))
                 .collect();
-            if compared.len() < MAX_COMPARED && !others.is_empty() {
+            if !others.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.set_width(COLUMN);
                     ui.add_space(12.0);
@@ -700,7 +698,7 @@ mod tests {
         ];
         let mut b = BrokerTile::new("b", "B");
         b.facts = vec![("Crypto".to_owned(), BrokerFact::Supported(true))];
-        let tiles = [a, b];
+        let tiles = [a, b, BrokerTile::new("c", "C"), BrokerTile::new("d", "D")];
         let mut compared = vec!["a".to_owned(), "b".to_owned()];
         let mut harness = Harness::builder()
             .with_context_setup(egui_extras::install_image_loaders)
@@ -732,6 +730,19 @@ mod tests {
         assert!(
             cell.clip_rect.width() <= COLUMN,
             "values stay in their column"
+        );
+        drop(harness);
+        compared.push("c".to_owned());
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(vec2(1200.0, 600.0))
+            .build_ui(|ui| {
+                comparison(ui, &tiles, &mut compared);
+            });
+        harness.run();
+        assert!(
+            harness.query_by_label("Add broker").is_some(),
+            "a fourth offered broker can still be added"
         );
     }
 }
