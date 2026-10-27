@@ -55,6 +55,8 @@ pub struct DrawingToolbarDomainState {
     pub magnet_mode: bool,
     /// The snapping strength, retained while snapping is off.
     pub magnet_type: MagnetType,
+    /// Whether magnet targets include visible study plots.
+    pub snap_to_indicators: bool,
     /// The chart cursor used while the eraser is off.
     pub current_cursor_type: CursorType,
     /// Whether the chart is erasing drawings.
@@ -129,6 +131,7 @@ impl DrawingToolbar {
         self.state.sel_tool = domain.sel_tool;
         self.state.magnet_mode = domain.magnet_mode;
         self.state.magnet_type = domain.magnet_type;
+        self.state.snap_to_indicators = domain.snap_to_indicators;
         self.state.current_cursor_type = domain.current_cursor_type;
         self.state.eraser_mode_enabled = domain.eraser_mode_enabled;
         self.state.stay_in_drawing_mode = domain.stay_in_drawing_mode;
@@ -141,6 +144,7 @@ impl DrawingToolbar {
             sel_tool: self.state.sel_tool,
             magnet_mode: self.state.magnet_mode,
             magnet_type: self.state.magnet_type,
+            snap_to_indicators: self.state.snap_to_indicators,
             current_cursor_type: self.state.current_cursor_type,
             eraser_mode_enabled: self.state.eraser_mode_enabled,
             stay_in_drawing_mode: self.state.stay_in_drawing_mode,
@@ -601,7 +605,12 @@ impl DrawingToolbar {
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
-            "Magnet" => MagnetButton::show_submenu(ui, state.magnet_mode, state.magnet_type),
+            "Magnet" => MagnetButton::show_submenu(
+                ui,
+                state.magnet_mode,
+                state.magnet_type,
+                state.snap_to_indicators,
+            ),
             "Hide" => {
                 let mut action = HideMenu::show_submenu(ui, trading, state);
                 if templates {
@@ -677,6 +686,7 @@ impl DrawingToolbar {
             A::ToggleValuesTooltip => {
                 self.state.values_tooltip_on_long_press = !self.state.values_tooltip_on_long_press;
             }
+            A::SetSnapToIndicators(enabled) => self.state.snap_to_indicators = *enabled,
             A::SetMagnetType(kind) => {
                 self.state.magnet_type = *kind;
                 self.state.magnet_mode = true;
@@ -1269,6 +1279,7 @@ mod tests {
             let mut source = DrawingToolbar::new();
             source.state.magnet_mode = true;
             source.state.magnet_type = magnet;
+            source.state.snap_to_indicators = magnet != MagnetType::Weak;
             source.state.current_cursor_type = cursor;
             source.state.eraser_mode_enabled = eraser;
             source.state.sel_tool = tool;
@@ -1276,9 +1287,14 @@ mod tests {
             target.select_tool(DrawingToolType::TrendLine);
             target.clear_selection();
             target.state.zoom_mode_active = true;
+            target.state.snap_to_indicators = !source.state.snap_to_indicators;
             target.state.expanded_category = Some("Magnet".into());
             target.sync_from_domain_state(&source.get_domain_state());
             assert_eq!(target.state.magnet_type, magnet);
+            assert_eq!(
+                target.state.snap_to_indicators,
+                source.state.snap_to_indicators
+            );
             assert_eq!(target.state.current_cursor_type, cursor);
             assert_eq!(target.state.eraser_mode_enabled, eraser);
             assert!(target.state.magnet_mode);
@@ -1312,6 +1328,15 @@ mod tests {
             assert_eq!(toolbar.state.sel_tool, tool);
             assert_eq!(toolbar.state.eraser_mode_enabled, eraser);
             assert_eq!(toolbar.state.current_cursor_type, CursorType::Dot);
+        }
+        for enabled in [false, true] {
+            let mode = toolbar.state.magnet_type;
+            let on = toolbar.state.magnet_mode;
+            let action = DrawingToolbarAction::SetSnapToIndicators(enabled);
+            assert_eq!(toolbar.apply_pick(action.clone()), Some(action));
+            assert_eq!(toolbar.state.snap_to_indicators, enabled);
+            assert_eq!(toolbar.state.magnet_type, mode);
+            assert_eq!(toolbar.state.magnet_mode, on);
         }
         toolbar.registry.set_availability(
             TrendLine,
@@ -1347,6 +1372,7 @@ mod tests {
     /// The bar keeps its grid and utility order, with distinct selection and magnet fills.
     #[test]
     fn drawing_bar_icons_keep_their_grid_pitch_and_state_colours() {
+        use egui::emath::GuiRounding;
         use egui::{Color32, Pos2, Shape, vec2};
 
         let mut custom = crate::theme::Theme::dark();
@@ -1354,7 +1380,7 @@ mod tests {
         custom.ui.accent_text = Color32::YELLOW;
         for (theme, text) in [
             (crate::theme::Theme::dark(), Color32::from_gray(219)),
-            (crate::theme::Theme::light(), Color32::from_gray(26)),
+            (crate::theme::Theme::light(), Color32::BLACK),
             (custom, Color32::GREEN),
         ] {
             for (selected, magnet) in [
@@ -1416,7 +1442,16 @@ mod tests {
                     assert_eq!(
                         icons[i],
                         (
-                            Rect::from_center_size(origin + vec2(26.0, y), vec2(24.0, 24.0)),
+                            Rect::from_center_size(
+                                origin + vec2(26.0, y),
+                                match i {
+                                    1 => vec2(29.0, 29.0),
+                                    2 => vec2(34.0, 27.0),
+                                    8 => vec2(31.0, 31.0),
+                                    _ => vec2(24.0, 24.0),
+                                }
+                            )
+                            .round_to_pixels(1.0),
                             colour
                         ),
                         "icon {i}, selected {selected:?}"

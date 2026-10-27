@@ -115,6 +115,8 @@ jobs:
       - name: Run doc tests (all features)
         if: matrix.full
         run: cargo test --doc --all-features
+      - name: Run doc tests (no default features)
+        run: cargo test --doc --no-default-features
 
   wasm-test:
     if: github.event.pull_request.draft != true
@@ -323,11 +325,11 @@ jobs:
           if [ -n "$banned" ]; then echo "::error::--features studies depends on: $banned"; exit 1; fi
           # The deployed demo must build the versions its committed lockfile pins.
           (cd examples/demo && cargo tree --locked > /dev/null)
-      - name: Check duplicate versions and licences
+      - name: Check advisories, duplicate versions and licences
         run: |
           cargo install cargo-deny --locked --version 0.19.0
-          cargo deny --all-features --locked check bans licenses
-          cargo deny --manifest-path examples/demo/Cargo.toml --all-features --locked check bans licenses
+          cargo deny --all-features --locked check advisories bans licenses
+          cargo deny --manifest-path examples/demo/Cargo.toml --all-features --locked check advisories bans licenses
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Audit dependencies

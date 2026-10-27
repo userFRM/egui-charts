@@ -6,13 +6,19 @@
 //! [`VolumeFormatter`], [`PercentageFormatter`], [`ScientificFormatter`]) and
 //! supports closures via [`CustomPriceFormatter`].
 //!
+//! Built-in formatters cap precision at 324 decimal places, enough to display the
+//! smallest positive `f64`. This also applies when public fields are set directly.
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
 use crate::model::{Instrument, percent_change};
 use std::sync::Arc;
 
-// Inspect the rounded digits so rounding ties and very large precisions follow Rust's formatter.
+// Enough decimal places to keep even the smallest positive f64 from rounding to zero.
+const MAX_PRECISION: usize = 324;
+
+// Inspect the rounded digits so rounding ties follow Rust's formatter.
 pub(super) fn format_decimal(value: f64, precision: usize) -> String {
+    let precision = precision.min(MAX_PRECISION);
     let mut formatted = format!("{value:.precision$}");
     if formatted
         .strip_prefix('-')
@@ -65,7 +71,7 @@ pub trait PriceFormatter: Send + Sync {
 /// Default price formatter with configurable precision
 #[derive(Debug, Clone)]
 pub struct DefaultPriceFormatter {
-    /// Number of decimal places
+    /// Number of decimal places, capped at 324 when formatting.
     pub precision: usize,
 
     /// Min number of decimal places (0 = auto)
@@ -125,7 +131,7 @@ impl PriceFormatter for DefaultPriceFormatter {
 /// Percentage price formatter
 #[derive(Debug, Clone)]
 pub struct PercentageFormatter {
-    /// Number of decimal places for percentage
+    /// Number of decimal places for percentage, capped at 324 when formatting.
     pub precision: usize,
 
     /// Base value for percentage calculation (100.0 = 100%)
@@ -162,7 +168,7 @@ pub struct CurrencyFormatter {
     /// Currency symbol (e.g., "$", "€", "£", "¥")
     pub symbol: String,
 
-    /// Number of decimal places
+    /// Number of decimal places, capped at 324 when formatting.
     pub precision: usize,
 
     /// Whether to place symbol before or after price
@@ -289,7 +295,7 @@ impl CurrencyFormatter {
 /// Volume formatter (K, M, B suffixes)
 #[derive(Debug, Clone)]
 pub struct VolumeFormatter {
-    /// Number of decimal places
+    /// Number of decimal places, capped at 324 when formatting.
     pub precision: usize,
 }
 
@@ -302,13 +308,14 @@ impl Default for VolumeFormatter {
 impl PriceFormatter for VolumeFormatter {
     fn format(&self, value: f64) -> String {
         let abs_val = value.abs();
+        let precision = self.precision.min(MAX_PRECISION);
 
         if abs_val >= 1_000_000_000.0 {
-            format!("{:.prec$}B", value / 1_000_000_000.0, prec = self.precision)
+            format!("{:.prec$}B", value / 1_000_000_000.0, prec = precision)
         } else if abs_val >= 1_000_000.0 {
-            format!("{:.prec$}M", value / 1_000_000.0, prec = self.precision)
+            format!("{:.prec$}M", value / 1_000_000.0, prec = precision)
         } else if abs_val >= 1_000.0 {
-            format!("{:.prec$}K", value / 1_000.0, prec = self.precision)
+            format!("{:.prec$}K", value / 1_000.0, prec = precision)
         } else {
             format_decimal(value, self.precision)
         }
@@ -322,7 +329,7 @@ impl PriceFormatter for VolumeFormatter {
 /// Scientific notation formatter
 #[derive(Debug, Clone)]
 pub struct ScientificFormatter {
-    /// Number of significant digits
+    /// Number of digits after the decimal point, capped at 324 when formatting.
     pub precision: usize,
 }
 
@@ -335,7 +342,11 @@ impl Default for ScientificFormatter {
 impl PriceFormatter for ScientificFormatter {
     fn format(&self, price: f64) -> String {
         let price = if price == 0.0 { 0.0 } else { price };
-        format!("{:.prec$e}", price, prec = self.precision)
+        format!(
+            "{:.prec$e}",
+            price,
+            prec = self.precision.min(MAX_PRECISION)
+        )
     }
 
     fn clone_box(&self) -> Box<dyn PriceFormatter> {
@@ -479,6 +490,52 @@ mod tests {
             );
         }
         assert_eq!(formatter.format(-0.006), "-0.01");
+    }
+
+    #[test]
+    fn extreme_precision_is_bounded() {
+        let decimals = "0".repeat(324);
+        for precision in [324, 325, usize::MAX] {
+            assert_eq!(
+                DefaultPriceFormatter::with_precision(precision).format(100.0),
+                format!("100.{decimals}")
+            );
+            assert_eq!(
+                DefaultPriceFormatter {
+                    precision,
+                    min_precision: 0,
+                }
+                .format(100.0),
+                "100"
+            );
+            assert_eq!(
+                CurrencyFormatter::new("$", precision).format(100.0),
+                format!("$100.{decimals}")
+            );
+            assert_eq!(
+                PercentageFormatter {
+                    precision,
+                    base_val: 100.0
+                }
+                .format(200.0),
+                format!("+100.{decimals}%")
+            );
+            for (value, suffix) in [
+                (100.0, ""),
+                (100_000.0, "K"),
+                (100_000_000.0, "M"),
+                (100_000_000_000.0, "B"),
+            ] {
+                assert_eq!(
+                    VolumeFormatter { precision }.format(value),
+                    format!("100.{decimals}{suffix}")
+                );
+            }
+            assert_eq!(
+                ScientificFormatter { precision }.format(100.0),
+                format!("1.{decimals}e2")
+            );
+        }
     }
 
     #[test]
