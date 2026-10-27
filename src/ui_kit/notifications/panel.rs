@@ -184,10 +184,6 @@ impl NotificationPanel {
             l10n::text(ui.ctx(), toast.title.clone().unwrap_or_default()),
             title_format,
         );
-        let title = ui.painter().layout_job(title_job.clone());
-        let symbol = ui
-            .painter()
-            .layout_no_wrap(trade.symbol.clone(), font.clone(), theme.ui.text);
         let side_text = if theme.dark {
             side_color.lerp_to_gamma(theme.ui.text, 0.25)
         } else {
@@ -209,9 +205,9 @@ impl NotificationPanel {
             font,
             theme.ui.text,
         );
-        let width = (62.0 + title.size().x + symbol.size().x + 44.0)
-            .max(62.0 + side.size().x + price.size().x + 30.0)
-            .max(self.config.width)
+        let width = self
+            .config
+            .width
             .min(ui.ctx().content_rect().width() - 32.0)
             .floor();
         let content_width = (width - 80.0).max(1.0);
@@ -413,7 +409,7 @@ mod tests {
     #[test]
     fn toasts_stack_8_px_apart_16_px_from_the_corner() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for width in [1000.0, 320.0] {
+            for (width, panel_width) in [(1000.0, 340.0), (640.0, 200.0), (320.0, 340.0)] {
                 for (position, corner, direction) in [
                     (None, Align2::LEFT_BOTTOM, -1.0),
                     (
@@ -453,9 +449,11 @@ mod tests {
                                     ..Default::default()
                                 },
                                 |ui| {
-                                    let panel = NotificationPanel::new();
+                                    let panel = NotificationPanel::new().width(panel_width);
                                     let panel = position.map_or(panel, |position| {
-                                        NotificationPanel::new().position(position)
+                                        NotificationPanel::new()
+                                            .width(panel_width)
+                                            .position(position)
                                     });
                                     panel.show_with_toasts(ui.ctx(), &mut toasts);
                                 },
@@ -498,6 +496,9 @@ mod tests {
                         };
                         assert_eq!(gap, 8.0);
                         assert!(screen.shrink(15.0).contains_rect(newer));
+                        if trading {
+                            assert!(newer.width() <= panel_width);
+                        }
                         if !trading {
                             let button = newer.right()
                                 - ctx.active_theme().spacing.lg
