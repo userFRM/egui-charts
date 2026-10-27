@@ -41,11 +41,11 @@
 //! }
 //! ```
 
-use super::over_finite_bars;
-use super::pivot_points_high_low::pivots;
+use super::rsi::State as RsiState;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Text of the marks on outputs 5 to 8.
@@ -64,10 +64,38 @@ pub struct RsiDivergence {
     bearish: bool,
     hidden_bearish: bool,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    undo: Vec<(usize, usize, f64)>,
     rsi_color: Color32,
     bull_color: Color32,
     bear_color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Pivot {
+    source: usize,
+    position: usize,
+    rsi: f64,
+    high: f64,
+    low: f64,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    source: usize,
+    position: usize,
+    rsi: RsiState,
+    window: std::collections::VecDeque<Pivot>,
+    previous: [Option<Pivot>; 2],
+}
+
+struct Segment {
+    line: usize,
+    sources: Vec<usize>,
+    from: f64,
+    to: f64,
+    confirming: usize,
 }
 
 impl RsiDivergence {
@@ -91,6 +119,8 @@ impl RsiDivergence {
             bearish: true,
             hidden_bearish: false,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            undo: Vec::new(),
             rsi_color: palette::ACCENT,
             bull_color: palette::GREEN,
             bear_color: palette::RED,
@@ -114,69 +144,6 @@ impl RsiDivergence {
             self.hidden_bearish,
         ) = (bullish, hidden_bullish, bearish, hidden_bearish);
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close, high and low.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::missing(data.len());
-        let mut rsi = super::RSI::new(self.period);
-        rsi.calculate(data);
-        let rsi = rsi.values().line(0);
-        if rsi.len() != data.len() || data.is_empty() {
-            return values;
-        }
-        // Every column exists, so a bar has a value per line.
-        values.set_value(8, 0, f64::NAN);
-        for (bar, &value) in rsi.iter().enumerate() {
-            values.set_value(0, bar, value);
-        }
-        // (pivot highs, price, [(shown, line, RSI rises, price rises)])
-        let kinds = [
-            (
-                false,
-                data.iter().map(|b| b.low).collect::<Vec<_>>(),
-                [
-                    (self.bullish, 1, true, false),
-                    (self.hidden_bullish, 2, false, true),
-                ],
-            ),
-            (
-                true,
-                data.iter().map(|b| b.high).collect(),
-                [
-                    (self.bearish, 3, false, true),
-                    (self.hidden_bearish, 4, true, false),
-                ],
-            ),
-        ];
-        for (high, price, divergences) in kinds {
-            let mut previous: Option<usize> = None;
-            let found = pivots(rsi, self.left, self.right, high);
-            for p in (0..rsi.len()).filter(|&p| found[p]) {
-                let Some(q) = previous.replace(p) else {
-                    continue;
-                };
-                if !(self.min_range..=self.max_range).contains(&(p - q - 1)) {
-                    continue;
-                }
-                for (shown, line, rsi_rises, price_rises) in divergences {
-                    let moved = |rises: bool, from: f64, to: f64| {
-                        if rises { to > from } else { to < from }
-                    };
-                    if shown
-                        && moved(rsi_rises, rsi[q], rsi[p])
-                        && moved(price_rises, price[q], price[p])
-                    {
-                        for bar in q..=p {
-                            let t = (bar - q) as f64 / (p - q) as f64;
-                            values.set_value(line, bar, rsi[q] + (rsi[p] - rsi[q]) * t);
-                        }
-                        values.set_value(line + 4, p, rsi[p]);
-                    }
-                }
-            }
-        }
-        values
     }
 }
 
@@ -209,11 +176,155 @@ impl Indicator for RsiDivergence {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        if len > 0 && from == len && data.len() == len {
+            return;
+        }
+        if len > 0 && from == len - 1 && data.len() >= len {
+            // A developing confirmation can be withdrawn, restoring the earlier segment it replaced.
+            for &(line, bar, value) in &self.undo {
+                self.values.set_value(line, bar, value);
+            }
+        }
+        self.undo.clear();
+        let mut segments = Vec::new();
+        let keep = self
+            .left
+            .max(self.max_range.saturating_add(1))
+            .saturating_add(self.right)
+            .saturating_add(1);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let source = state.source;
+                state.source += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let rsi = match state.rsi.next(bar, self.period) {
+                    IndicatorValue::Single(value) if value.is_finite() => value,
+                    _ => f64::NAN,
+                };
+                let current = Pivot {
+                    source,
+                    position: state.position,
+                    rsi,
+                    high: bar.high,
+                    low: bar.low,
+                };
+                state.position += 1;
+                state.window.push_back(current);
+                if state.window.len() > keep {
+                    state.window.pop_front();
+                }
+                if let Some(at) = state
+                    .window
+                    .len()
+                    .checked_sub(self.right.saturating_add(1))
+                    .filter(|&at| at >= self.left)
+                {
+                    let p = state.window[at];
+                    let window = state.window.range(at - self.left..);
+                    if window.clone().all(|pivot| pivot.rsi.is_finite()) {
+                        for high in [false, true] {
+                            let before = state
+                                .window
+                                .range(at - self.left..at)
+                                .all(|v| if high { v.rsi <= p.rsi } else { v.rsi >= p.rsi });
+                            let after = state
+                                .window
+                                .range(at + 1..)
+                                .all(|v| if high { v.rsi < p.rsi } else { v.rsi > p.rsi });
+                            if !(before && after) {
+                                continue;
+                            }
+                            let previous = state.previous[usize::from(high)].replace(p);
+                            let Some(q) = previous else {
+                                continue;
+                            };
+                            if !(self.min_range..=self.max_range)
+                                .contains(&(p.position - q.position - 1))
+                            {
+                                continue;
+                            }
+                            let divergences = if high {
+                                [
+                                    (self.bearish, 3, false, true),
+                                    (self.hidden_bearish, 4, true, false),
+                                ]
+                            } else {
+                                [
+                                    (self.bullish, 1, true, false),
+                                    (self.hidden_bullish, 2, false, true),
+                                ]
+                            };
+                            for (shown, line, rsi_rises, price_rises) in divergences {
+                                let moved = |rises: bool, from: f64, to: f64| {
+                                    if rises { to > from } else { to < from }
+                                };
+                                let price =
+                                    |pivot: Pivot| if high { pivot.high } else { pivot.low };
+                                if shown
+                                    && moved(rsi_rises, q.rsi, p.rsi)
+                                    && moved(price_rises, price(q), price(p))
+                                {
+                                    segments.push(Segment {
+                                        line,
+                                        sources: state
+                                            .window
+                                            .iter()
+                                            .filter(|v| {
+                                                (q.position..=p.position).contains(&v.position)
+                                            })
+                                            .map(|v| v.source)
+                                            .collect(),
+                                        from: q.rsi,
+                                        to: p.rsi,
+                                        confirming: source,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut row = vec![f64::NAN; 9];
+                row[0] = rsi;
+                IndicatorValue::Multiple(row)
+            });
+        for segment in segments {
+            let last = segment.sources.len() - 1;
+            for (position, &bar) in segment.sources.iter().enumerate() {
+                if segment.confirming + 1 == data.len() {
+                    self.undo.push((
+                        segment.line,
+                        bar,
+                        self.values.value(segment.line, bar).unwrap_or(f64::NAN),
+                    ));
+                }
+                let t = position as f64 / last as f64;
+                self.values.set_value(
+                    segment.line,
+                    bar,
+                    segment.from + (segment.to - segment.from) * t,
+                );
+            }
+            let bar = segment.sources[last];
+            if segment.confirming + 1 == data.len() {
+                self.undo.push((
+                    segment.line + 4,
+                    bar,
+                    self.values.value(segment.line + 4, bar).unwrap_or(f64::NAN),
+                ));
+            }
+            self.values.set_value(segment.line + 4, bar, segment.to);
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {

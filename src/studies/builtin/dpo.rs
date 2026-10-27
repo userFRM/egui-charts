@@ -33,7 +33,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::rolling_mean;
+use crate::studies::stepper::{rolling_mean, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -76,7 +76,7 @@ impl DetrendedPriceOscillator {
     }
 
     /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+    fn finite_compute(&self, data: &[Bar]) -> IndicatorValues {
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
         let average = rolling_mean(&closes, self.period);
         (0..data.len())
@@ -95,6 +95,34 @@ impl DetrendedPriceOscillator {
 impl Default for DetrendedPriceOscillator {
     fn default() -> Self {
         Self::new(21)
+    }
+}
+
+impl DetrendedPriceOscillator {
+    fn replay(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = over_finite_bars(
+            data,
+            |b| b.close.is_finite(),
+            |data| self.finite_compute(data),
+        );
+        if self.centered {
+            // Drawn back over a skipped bar, a value would sit beside the close it uses.
+            let mut skipped = None;
+            values = (0..data.len())
+                .map(|i| {
+                    if !data[i].close.is_finite() {
+                        skipped = Some(i);
+                    }
+                    let near = skipped.is_some_and(|s| i - s <= self.shift());
+                    IndicatorValue::Single(if near {
+                        f64::NAN
+                    } else {
+                        values.value(0, i).unwrap_or(f64::NAN)
+                    })
+                })
+                .collect();
+        }
+        values
     }
 }
 
@@ -131,24 +159,26 @@ impl Indicator for DetrendedPriceOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
-        if self.centered {
-            // Drawn back over a skipped bar, a value would sit beside the close it uses.
-            let mut skipped = None;
-            self.values = (0..data.len())
-                .map(|i| {
-                    if !data[i].close.is_finite() {
-                        skipped = Some(i);
-                    }
-                    let near = skipped.is_some_and(|s| i - s <= self.shift());
-                    IndicatorValue::Single(if near {
-                        f64::NAN
-                    } else {
-                        self.values.value(0, i).unwrap_or(f64::NAN)
-                    })
-                })
-                .collect();
-        }
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(
+                self.period.saturating_sub(1).saturating_add(self.shift()),
+                |b| b.close.is_finite(),
+            ),
+            |data| self.replay(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

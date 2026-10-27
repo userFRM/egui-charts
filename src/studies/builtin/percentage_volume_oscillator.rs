@@ -1,9 +1,10 @@
-use super::over_finite_bars;
 use super::price_oscillator::percentage_oscillator;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::Indicator;
 use crate::studies::IndicatorValues;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue};
 use egui::Color32;
 
 /// Percentage Volume Oscillator (PVO): the [`PriceOscillator`](super::PriceOscillator)
@@ -23,6 +24,7 @@ pub struct PercentageVolumeOscillator {
     long_period: usize,
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<[Smoothing; 3]>,
     /// Colors: [PVO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -37,6 +39,7 @@ impl PercentageVolumeOscillator {
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - PVO
                 palette::ORANGE, // Orange - Signal
@@ -50,17 +53,6 @@ impl PercentageVolumeOscillator {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.set_colors(colors);
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let volumes: Vec<f64> = data.iter().map(|b| b.volume).collect();
-        percentage_oscillator(
-            &volumes,
-            self.short_period,
-            self.long_period,
-            self.signal_period,
-        )
     }
 }
 
@@ -91,7 +83,27 @@ impl Indicator for PercentageVolumeOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.volume.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                percentage_oscillator(
+                    state,
+                    bar.volume,
+                    self.short_period,
+                    self.long_period,
+                    self.signal_period,
+                )
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

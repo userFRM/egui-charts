@@ -15,6 +15,30 @@ pub(super) struct ReplayWindow {
     pub session_quote: Option<crate::model::quote::SessionQuote>,
 }
 
+impl ReplayWindow {
+    pub(super) fn remove_oldest_bars(
+        &mut self,
+        id: SeriesId,
+        count: usize,
+        clock: &BarClock,
+    ) -> Vec<Bar> {
+        let bars = self.bars.entry(id).or_default();
+        let count = count.min(bars.len());
+        if id == SeriesId::MAIN
+            && count > 0
+            && let Some((source, _)) = &mut self.source
+        {
+            let through = clock.bar_open(bars[count - 1].time);
+            let end = source.partition_point(|bar| clock.bar_open(bar.time) <= through);
+            source.drain(..end);
+            super::series::shrink_bars(source);
+        }
+        let removed = bars.drain(..count).collect();
+        super::series::shrink_bars(bars);
+        removed
+    }
+}
+
 impl Chart {
     /// The exclusive replay cutoff, or `None` when showing live data.
     pub fn replay_time(&self) -> Option<DateTime<Utc>> {
@@ -111,12 +135,24 @@ impl Chart {
     }
 
     pub(super) fn apply_replay_window(&mut self) {
-        let Some(replay) = self.replay.take() else {
+        let Some(mut replay) = self.replay.take() else {
             return;
         };
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
+        for (&id, &limit) in &self.bar_limits {
+            let count = replay
+                .bars
+                .get(&id)
+                .map_or(0, |bars| bars.len().saturating_sub(limit.get()));
+            if count > 0 {
+                replay.remove_oldest_bars(id, count, &clock);
+                if id == SeriesId::MAIN {
+                    self.feed.history_complete = false;
+                }
+            }
+        }
         if let Some(bars) = replay.bars.get(&SeriesId::MAIN) {
             let mut visible = completed(bars, &clock, replay.time).to_vec();
             if let Some((source, source_clock)) = &replay.source
@@ -330,6 +366,25 @@ mod tests {
         assert_eq!(b.bars(SeriesId::MAIN), &minutes[..2]);
         b.set_replay_time(None);
         assert_eq!(b.bars(SeriesId::MAIN), &minutes[..3]);
+
+        for limit in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(a.bars(SeriesId::MAIN).to_vec()));
+            chart.set_timeframe(Timeframe::Min5);
+            chart.set_replay_time(Some(time(2)));
+            assert!(chart.set_replay_source(minutes.clone(), BarClock::new(Timeframe::Min1)));
+            assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
+            if limit {
+                chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(1));
+            } else {
+                assert_eq!(chart.remove_oldest_bars(SeriesId::MAIN, 1), coarse);
+            }
+            assert!(
+                chart.bars(SeriesId::MAIN).is_empty(),
+                "finer replay source must not rebuild evicted bars; limit={limit}"
+            );
+            chart.set_replay_time(Some(time(10)));
+            assert_eq!(chart.bars(SeriesId::MAIN), &a.bars(SeriesId::MAIN)[1..]);
+        }
     }
 
     #[cfg(feature = "studies")]

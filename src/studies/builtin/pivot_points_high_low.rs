@@ -37,7 +37,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::rolling_max;
+use crate::studies::stepper::{rolling_max, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
@@ -146,11 +146,35 @@ impl Indicator for PivotPointsHighLow {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        // Confirmation of a right-hand window can change earlier pivot bars.
+        let from = usable_behind(self.high_right.max(self.low_right), |b| {
+            b.high.is_finite() && b.low.is_finite()
+        })(data, from.min(self.values.len()).min(data.len()));
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(self.high_left.max(self.low_left), |b| {
+                b.high.is_finite() && b.low.is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| b.high.is_finite() && b.low.is_finite(),
+                    |data| self.compute(data),
+                )
+            },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {

@@ -29,9 +29,9 @@
 //! assert!(pmo.values().value(1, 63).is_some());
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -42,12 +42,22 @@ pub struct PriceMomentumOscillator {
     second_length: usize,
     signal_length: usize,
     values: IndicatorValues,
+    stepper: Stepper<Option<State>>,
     /// Colors: [PMO, Signal]
     colors: Vec<Color32>,
     visible: bool,
 }
 
+#[derive(Clone)]
+struct State {
+    previous: Option<f64>,
+    first: Smoothing,
+    second: Smoothing,
+    signal: Smoothing,
+}
+
 /// Recursive smoothing `prev + (x - prev) * alpha`, starting at the mean of the first `length` inputs.
+#[derive(Clone)]
 struct Smoothing {
     length: usize,
     alpha: f64,
@@ -84,34 +94,10 @@ impl PriceMomentumOscillator {
             second_length: second_length.max(2),
             signal_length: signal_length.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![palette::BLUE, palette::ORANGE],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        let mut first = Smoothing::new(self.first_length, 2.0 / self.first_length as f64);
-        let mut second = Smoothing::new(self.second_length, 2.0 / self.second_length as f64);
-        let mut signal =
-            Smoothing::new(self.signal_length, 2.0 / (self.signal_length as f64 + 1.0));
-        let mut previous: Option<f64> = None;
-        for bar in data {
-            let roc = previous.map(|previous| (bar.close / previous - 1.0) * 100.0);
-            previous = Some(bar.close);
-            let pmo = roc
-                .filter(|roc| roc.is_finite())
-                .and_then(|roc| first.push(roc))
-                .and_then(|smoothed| second.push(10.0 * smoothed));
-            match pmo {
-                Some(pmo) => {
-                    values.push_lines(&[pmo, signal.push(pmo).unwrap_or(f64::NAN)]);
-                }
-                None => values.push(IndicatorValue::None),
-            }
-        }
-        values
     }
 }
 
@@ -143,7 +129,44 @@ impl Indicator for PriceMomentumOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let state = state.get_or_insert_with(|| State {
+                    previous: None,
+                    first: Smoothing::new(self.first_length, 2.0 / self.first_length as f64),
+                    second: Smoothing::new(self.second_length, 2.0 / self.second_length as f64),
+                    signal: Smoothing::new(
+                        self.signal_length,
+                        2.0 / (self.signal_length as f64 + 1.0),
+                    ),
+                });
+                let roc = state
+                    .previous
+                    .map(|previous| (bar.close / previous - 1.0) * 100.0);
+                state.previous = Some(bar.close);
+                let pmo = roc
+                    .filter(|roc| roc.is_finite())
+                    .and_then(|roc| state.first.push(roc))
+                    .and_then(|smoothed| state.second.push(10.0 * smoothed));
+                match pmo {
+                    Some(pmo) => IndicatorValue::Multiple(vec![
+                        pmo,
+                        state.signal.push(pmo).unwrap_or(f64::NAN),
+                    ]),
+                    None => IndicatorValue::None,
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

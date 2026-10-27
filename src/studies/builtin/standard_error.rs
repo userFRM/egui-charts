@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -55,35 +56,17 @@ impl Default for StandardError {
     }
 }
 
-impl Indicator for StandardError {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 2, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "StdErr"
-    }
-
-    fn desc(&self) -> &str {
-        "Standard Error - Standard error of linear regression of close prices"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl StandardError {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
 
@@ -108,8 +91,49 @@ impl Indicator for StandardError {
                 0.0
             };
 
-            self.values.push(IndicatorValue::Single(se));
+            values.push(IndicatorValue::Single(se));
         }
+        values
+    }
+}
+
+impl Indicator for StandardError {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "StdErr"
+    }
+
+    fn desc(&self) -> &str {
+        "Standard Error - Standard error of linear regression of close prices"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

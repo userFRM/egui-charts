@@ -192,6 +192,8 @@ impl Chart {
                 && margins.top >= 0.0
                 && margins.bottom >= 0.0
                 && margins.top + margins.bottom < 1.0
+                && scale.options().tick_marks.max_marks
+                    <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
         };
         if snapshot
             .price_scale
@@ -442,6 +444,7 @@ mod tests {
         options.time_scale.min_bar_spacing = 0.1;
         options.time_scale.max_bar_spacing = 12.0;
         options.time_scale.right_offset = 7.0;
+        options.tooltip.show_volume_details = true;
         chart.set_chart_options(options);
         chart.apply_synced_time_scale(0.25, 4.0);
         let empty = chart.add_pane();
@@ -547,6 +550,21 @@ mod tests {
             assert!(restored.restore(&snapshot).is_err());
             assert_eq!(restored.symbol(), "A");
         }
+        for key in ["price_scale", "panes"] {
+            let mut invalid: serde_json::Value = serde_json::from_str(&json).unwrap();
+            invalid["charts"][0]["symbol"] = "Invalid".into();
+            invalid["charts"][0]["drawings"] = serde_json::Value::Null;
+            let scale = if key == "price_scale" {
+                &mut invalid["charts"][0]["price_scale"]
+            } else {
+                &mut invalid["charts"][0]["panes"][0]["scale"]
+            };
+            scale["options"]["tick_marks"]["max_marks"] = usize::MAX.into();
+            let invalid = SavedLayout::from_json(&invalid.to_string()).unwrap();
+            assert!(restored.restore(&invalid.charts[0]).is_err());
+            assert_eq!(restored.symbol(), "A");
+            assert_eq!(restored.timeframe(), None);
+        }
         // Both theme palettes survive instead of being replaced by dialog defaults.
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             chart.set_theme(&egui::Context::default(), &theme);
@@ -555,6 +573,13 @@ mod tests {
             assert_eq!(restored.config(), chart.config());
         }
         let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        legacy["charts"][0]["options"]["tooltip"]
+            .as_object_mut()
+            .unwrap()
+            .remove("show_volume_details");
+        let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
+        restored.restore(&migrated.charts[0]).unwrap();
+        assert!(!restored.chart_options().tooltip.show_volume_details);
         legacy["version"] = 1.into();
         for key in ["config", "options", "price_scale", "maximized"] {
             legacy["charts"][0].as_object_mut().unwrap().remove(key);

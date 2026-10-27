@@ -28,9 +28,9 @@
 //! assert!((0.0..=100.0).contains(&value));
 //! ```
 
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -42,8 +42,16 @@ const SMOOTHING: f64 = 14.0;
 pub struct RelativeVolatilityIndex {
     length: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    closes: std::collections::VecDeque<f64>,
+    previous: Option<f64>,
+    smoothed: Option<(f64, f64)>,
 }
 
 impl RelativeVolatilityIndex {
@@ -52,45 +60,10 @@ impl RelativeVolatilityIndex {
         Self {
             length: length.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::DEEP_PURPLE,
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let alpha = 2.0 / (SMOOTHING + 1.0);
-        let mut averages: Option<(f64, f64)> = None;
-        let mut values = IndicatorValues::new();
-        for (i, bar) in data.iter().enumerate() {
-            let (Some(start), Some(previous)) =
-                ((i + 1).checked_sub(self.length), i.checked_sub(1))
-            else {
-                values.push(IndicatorValue::None);
-                continue;
-            };
-            let window = &data[start..=i];
-            let mean = window.iter().map(|b| b.close).sum::<f64>() / self.length as f64;
-            let variance =
-                window.iter().map(|b| (b.close - mean).powi(2)).sum::<f64>() / self.length as f64;
-            let sd = variance.sqrt();
-            let (up, down) = if bar.close > data[previous].close {
-                (sd, 0.0)
-            } else {
-                (0.0, sd)
-            };
-            let (up, down) = match averages {
-                Some((u, d)) => (u + (up - u) * alpha, d + (down - d) * alpha),
-                None => (up, down),
-            };
-            averages = Some((up, down));
-            values.push(if up + down > 0.0 {
-                IndicatorValue::Single(100.0 * up / (up + down))
-            } else {
-                IndicatorValue::None
-            });
-        }
-        values
     }
 }
 
@@ -120,7 +93,52 @@ impl Indicator for RelativeVolatilityIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let previous = state.previous.replace(bar.close);
+                state.closes.push_back(bar.close);
+                if state.closes.len() > self.length {
+                    state.closes.pop_front();
+                }
+                let Some(previous) = previous.filter(|_| state.closes.len() == self.length) else {
+                    return IndicatorValue::None;
+                };
+                let mean = state.closes.iter().sum::<f64>() / self.length as f64;
+                let variance = state
+                    .closes
+                    .iter()
+                    .map(|close| (close - mean).powi(2))
+                    .sum::<f64>()
+                    / self.length as f64;
+                let sd = variance.sqrt();
+                let (up, down) = if bar.close > previous {
+                    (sd, 0.0)
+                } else {
+                    (0.0, sd)
+                };
+                let alpha = 2.0 / (SMOOTHING + 1.0);
+                let (up, down) = match state.smoothed {
+                    Some((u, d)) => (u + (up - u) * alpha, d + (down - d) * alpha),
+                    None => (up, down),
+                };
+                state.smoothed = Some((up, down));
+                if up + down > 0.0 {
+                    IndicatorValue::Single(100.0 * up / (up + down))
+                } else {
+                    IndicatorValue::None
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -35,11 +35,10 @@
 //! assert!(zone.plot_color(0, 59).is_some());
 //! ```
 
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
-use crate::studies::stepper::{rolling_max, rolling_min};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -50,6 +49,7 @@ const RANGE_LENGTH: usize = 30;
 #[derive(Clone)]
 pub struct ChopZone {
     values: IndicatorValues,
+    stepper: Stepper<State>,
     /// The angle in whole degrees at each source bar.
     angles: IndicatorValues,
     /// Band colours from the steepest rise to the steepest fall.
@@ -57,11 +57,20 @@ pub struct ChopZone {
     visible: bool,
 }
 
+#[derive(Clone, Default)]
+struct State {
+    count: usize,
+    prices: std::collections::VecDeque<[f64; 2]>,
+    ema: Smoothing,
+    previous: f64,
+}
+
 impl ChopZone {
     /// Create the Chop Zone; its lengths are fixed by the definition.
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             angles: IndicatorValues::new(),
             colors: [
                 palette::CYAN,
@@ -76,27 +85,6 @@ impl ChopZone {
             ],
             visible: true,
         }
-    }
-
-    /// The angles over `data`, every bar of which has a finite high, low and close.
-    fn compute(data: &[Bar]) -> IndicatorValues {
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-        let ema = helpers::ema_sma(&closes, EMA_LENGTH);
-        let highest = rolling_max(data.iter().map(|b| b.high), RANGE_LENGTH);
-        let lowest = rolling_min(data.iter().map(|b| b.low), RANGE_LENGTH);
-        (0..data.len())
-            .map(|i| {
-                let range = highest[i] - lowest[i];
-                if i < RANGE_LENGTH.max(EMA_LENGTH) || range == 0.0 {
-                    return IndicatorValue::None;
-                }
-                let span = 25.0 / range * lowest[i];
-                let hlc3 = (data[i].high + data[i].low + data[i].close) / 3.0;
-                let y = (ema[i - 1] - ema[i]) / hlc3 * span;
-                let angle = y.abs().atan().to_degrees().round();
-                IndicatorValue::Single(if y > 0.0 { -angle } else { angle })
-            })
-            .collect()
     }
 }
 
@@ -147,17 +135,60 @@ impl Indicator for ChopZone {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.angles = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            Self::compute,
-        );
-        self.values = (0..data.len())
-            .map(|bar| match self.angles.value(0, bar) {
-                Some(_) => IndicatorValue::Single(1.0),
-                None => IndicatorValue::None,
-            })
-            .collect();
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.angles, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                state.prices.push_back([bar.high, bar.low]);
+                if state.prices.len() > RANGE_LENGTH {
+                    state.prices.pop_front();
+                }
+                let ema = state
+                    .ema
+                    .next(bar.close, EMA_LENGTH, 2.0 / (EMA_LENGTH as f64 + 1.0));
+                let previous = std::mem::replace(&mut state.previous, ema);
+                if state.count <= RANGE_LENGTH.max(EMA_LENGTH) {
+                    return IndicatorValue::None;
+                }
+                let high = state
+                    .prices
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = state
+                    .prices
+                    .iter()
+                    .map(|v| v[1])
+                    .fold(f64::INFINITY, f64::min);
+                let range = high - low;
+                if range == 0.0 {
+                    return IndicatorValue::None;
+                }
+                let span = 25.0 / range * low;
+                let hlc3 = (bar.high + bar.low + bar.close) / 3.0;
+                let y = (previous - ema) / hlc3 * span;
+                let angle = y.abs().atan().to_degrees().round();
+                IndicatorValue::Single(if y > 0.0 { -angle } else { angle })
+            });
+        let start = from.min(self.values.len()).min(data.len());
+        self.values.truncate(start);
+        for i in start..data.len() {
+            self.values.push(if self.angles.value(0, i).is_some() {
+                IndicatorValue::Single(1.0)
+            } else {
+                IndicatorValue::None
+            });
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

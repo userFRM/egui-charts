@@ -1,6 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -50,33 +51,20 @@ impl Default for AccelerationBands {
     }
 }
 
-impl Indicator for AccelerationBands {
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        factor: number("Factor", 0.0, f64::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "AccBands"
-    }
-
-    fn desc(&self) -> &str {
-        "Acceleration Bands - Volatility-based price envelope"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl AccelerationBands {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.len() < self.period {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         for i in 0..data.len() {
             if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
                 let window = &data[i + 1 - self.period..=i];
 
@@ -93,9 +81,45 @@ impl Indicator for AccelerationBands {
                     lower += b.low * (1.0 - self.factor * r);
                 }
 
-                self.values.push_lines(&[upper / n, middle / n, lower / n]);
+                values.push_lines(&[upper / n, middle / n, lower / n]);
             }
         }
+        values
+    }
+}
+
+impl Indicator for AccelerationBands {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX),
+        factor: number("Factor", 0.0, f64::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "AccBands"
+    }
+
+    fn desc(&self) -> &str {
+        "Acceleration Bands - Volatility-based price envelope"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

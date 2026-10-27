@@ -1210,8 +1210,10 @@ impl Chart {
             .max_by(f64::total_cmp)
             .unwrap_or(1.0);
 
-        // Draw grid
-        if self.config.show_grid && self.config.show_horizontal_grid {
+        // Time and price grid lines sharing a style are painted together.
+        let horizontal_grid = self.config.show_grid && self.config.show_horizontal_grid;
+        let time_grid = time_based && self.config.show_grid && self.config.show_vertical_grid;
+        if horizontal_grid && !time_grid {
             rendering::render_grid(
                 &painter,
                 price_rect,
@@ -1256,7 +1258,6 @@ impl Chart {
         let host_scale = self.horizontal_scale.clone();
         let scale: &dyn crate::scales::HorizontalScale =
             host_scale.as_deref().unwrap_or(&time_scale);
-        let time_grid = time_based && self.config.show_grid && self.config.show_vertical_grid;
         // The grid and the labels share one set of marks and the merged bars' mapping.
         let (time_marks, time_points) = if time_grid || self.config.show_time_labels {
             renderers::time_axis_marks(
@@ -1285,6 +1286,8 @@ impl Chart {
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
                     style,
+                    horizontal_grid
+                        .then_some((self.config.grid_color, self.config.grid_line_style)),
                 );
             } else {
                 rendering::render_vertical_grid(
@@ -2793,7 +2796,22 @@ impl Chart {
                         visible_data,
                         scale,
                         bar_seconds,
-                        &self.study_values_at(start_idx + local_idx),
+                        &self
+                            .study_rows_at(start_idx + local_idx)
+                            .into_iter()
+                            .filter(|(id, _)| {
+                                !tooltip_options.on_long_press
+                                    || tooltip_options.show_volume_details
+                                    || self
+                                        .study_ids
+                                        .iter()
+                                        .zip(self.rendered_studies().indicators())
+                                        .any(|(study_id, study)| {
+                                            study_id == id && !study.is_volume()
+                                        })
+                            })
+                            .map(|(_, row)| row)
+                            .collect::<Vec<_>>(),
                         self.instrument(),
                         self.value_formatters(),
                     );
@@ -3649,17 +3667,21 @@ mod tests {
             chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
             chart.chart_options.tooltip.on_long_press = true;
             chart.chart_options.tooltip.show_time = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
             frame(&ctx, &mut chart, 0.0, vec![]);
             let map = chart.get_chart_mapping();
             let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
-            for (step, enabled, pressed, expected) in [
-                (1, true, false, false),
-                (2, true, true, true),
-                (3, true, false, false),
-                (4, false, true, false),
-                (5, false, false, false),
+            for (step, enabled, pressed, expected, volume_details) in [
+                (1, true, false, false, false),
+                (2, true, true, true, false),
+                (3, true, true, true, true),
+                (4, true, false, false, false),
+                (5, false, true, false, false),
+                (6, false, false, false, false),
             ] {
                 chart.set_tooltip_enabled(enabled);
+                chart.chart_options.tooltip.show_volume_details = volume_details;
                 let painted = shapes(
                     &ctx,
                     &mut chart,
@@ -3690,8 +3712,24 @@ mod tests {
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
                 if expected {
-                    assert!(labels.contains(&"-10.00 (-8.33%)"));
+                    assert_eq!(
+                        labels.iter().any(|label| label.starts_with("Volume:")),
+                        volume_details && cfg!(feature = "studies"),
+                        "volume study details are opt-in"
+                    );
+                    assert!(labels.contains(&"Time"));
+                    assert!(!labels.contains(&"Change"));
                     assert!(labels.contains(&"Vol"));
+                    #[cfg(feature = "studies")]
+                    {
+                        assert!(labels.contains(&"SMA"), "other study values remain visible");
+                        assert!(
+                            chart
+                                .study_values_at(50)
+                                .iter()
+                                .any(|row| row.study == "Volume")
+                        );
+                    }
                     let legend = labels
                         .iter()
                         .position(|label| *label == "O 100.00")

@@ -1,6 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -25,6 +26,7 @@ pub struct PriceOscillator {
     /// Signal line EMA period (typically 9)
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<[Smoothing; 3]>,
     /// Colors: [PPO line, Signal line, Histogram]
     colors: Vec<Color32>,
     visible: bool,
@@ -39,6 +41,7 @@ impl PriceOscillator {
             long_period: long_period.max(1),
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - PPO
                 palette::ORANGE, // Orange - Signal
@@ -53,55 +56,29 @@ impl PriceOscillator {
         self.set_colors(colors);
         self
     }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-        percentage_oscillator(
-            &closes,
-            self.short_period,
-            self.long_period,
-            self.signal_period,
-        )
-    }
 }
 
-/// The percentage oscillator of `values` as MACD defines it, taken as a percentage of the long
-/// average: `100 * (EMA(short) - EMA(long)) / EMA(long)`, its signal `EMA(signal)` over the bars
-/// where it is defined, and the histogram. A bar has no value until the oscillator is defined,
-/// only the oscillator until the signal is, and all three lines from then on.
+/// Resume the percentage difference, its signal over defined values, and histogram.
 pub(super) fn percentage_oscillator(
-    values: &[f64],
+    state: &mut [Smoothing; 3],
+    value: f64,
     short: usize,
     long: usize,
     signal: usize,
-) -> IndicatorValues {
-    let (short, long) = (
-        crate::studies::helpers::ema_sma(values, short),
-        crate::studies::helpers::ema_sma(values, long),
-    );
-    let line: Vec<_> = short
-        .iter()
-        .zip(&long)
-        .map(|(s, l)| {
-            if *l == 0.0 {
-                f64::NAN
-            } else {
-                (s - l) / l * 100.0
-            }
-        })
-        .collect();
-    let signal = crate::studies::helpers::ema_sma(&line, signal);
-    line.iter()
-        .zip(&signal)
-        .map(|(&line, &signal)| {
-            if line.is_finite() {
-                IndicatorValue::Multiple(vec![line, signal, line - signal])
-            } else {
-                IndicatorValue::None
-            }
-        })
-        .collect()
+) -> IndicatorValue {
+    let short_value = state[0].next(value, short, 2.0 / (short as f64 + 1.0));
+    let long_value = state[1].next(value, long, 2.0 / (long as f64 + 1.0));
+    let line = if long_value == 0.0 {
+        f64::NAN
+    } else {
+        (short_value - long_value) / long_value * 100.0
+    };
+    let signal = state[2].next(line, signal, 2.0 / (signal as f64 + 1.0));
+    if line.is_finite() {
+        IndicatorValue::Multiple(vec![line, signal, line - signal])
+    } else {
+        IndicatorValue::None
+    }
 }
 
 /// Construct with the conventional default parameters.
@@ -137,7 +114,27 @@ impl Indicator for PriceOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                percentage_oscillator(
+                    state,
+                    bar.close,
+                    self.short_period,
+                    self.long_period,
+                    self.signal_period,
+                )
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

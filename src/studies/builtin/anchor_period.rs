@@ -69,19 +69,19 @@ impl ExchangeDays {
         let daily = data
             .windows(2)
             .all(|pair| pair[0].time.date_naive() != pair[1].time.date_naive());
+        data.iter().map(|bar| self.day(bar, daily)).collect()
+    }
+
+    /// Trading day with the caller's already established daily/intraday classification.
+    pub(super) fn day(&self, bar: &Bar, daily: bool) -> NaiveDate {
+        if daily {
+            return bar.time.date_naive();
+        }
         let (zone, windows) = self.0.as_ref().map_or(
             (crate::model::TimezoneId::utc(), &[][..]),
             |(zone, windows)| (zone.clone(), windows.as_slice()),
         );
-        data.iter()
-            .map(|bar| {
-                if daily {
-                    bar.time.date_naive()
-                } else {
-                    trading_day(bar.time, &zone, windows)
-                }
-            })
-            .collect()
+        trading_day(bar.time, &zone, windows)
     }
 }
 

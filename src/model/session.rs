@@ -60,7 +60,8 @@ pub trait SessionProvider: Send + Sync {
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak>;
 
-    /// Get all session breaks within a time range
+    /// Get all session breaks within a time range, checking at most one minute at a time.
+    /// The final check stops at `end`; an empty or reversed range has no breaks.
     fn session_breaks_in_range(
         &self,
         start: &DateTime<Utc>,
@@ -70,7 +71,10 @@ pub trait SessionProvider: Send + Sync {
         let mut current = *start;
 
         while current < *end {
-            let next = current + Duration::minutes(1);
+            let next = current
+                .checked_add_signed(Duration::minutes(1))
+                .unwrap_or(*end)
+                .min(*end);
             if let Some(session_break) = self.session_break_between(&current, &next) {
                 breaks.push(session_break);
             }
@@ -340,17 +344,29 @@ impl ExchangeSessionProvider {
             return self.session_close(open, extended);
         }
         let session = self.session.as_ref()?;
-        let mut date = open.date_naive();
+        if session.windows.is_empty() && (!extended || session.extended_windows.is_empty()) {
+            return None;
+        }
+        let date = open.date_naive();
         let end = match timeframe {
             Timeframe::Day1 => date.succ_opt()?,
             Timeframe::Week1 => date.checked_add_days(chrono::Days::new(7))?,
             Timeframe::Month1 => date
                 .with_day(1)?
                 .checked_add_months(chrono::Months::new(1))?,
+            Timeframe::Weeks(count) => {
+                date.checked_add_days(chrono::Days::new(u64::from(count.get()) * 7))?
+            }
+            Timeframe::Months(count) => date
+                .with_day(1)?
+                .checked_add_months(chrono::Months::new(count.get()))?,
             _ => return None,
         };
-        let mut close = None;
-        while date < end {
+        let start = date;
+        let mut date = end.pred_opt()?;
+        // Only the final trading date is needed, even for long calendar intervals.
+        while date >= start {
+            let mut close = None;
             for window in session
                 .windows
                 .iter()
@@ -364,9 +380,12 @@ impl ExchangeSessionProvider {
                     close = Some(close.map_or(end, |previous: DateTime<Utc>| previous.max(end)));
                 }
             }
-            date = date.succ_opt()?;
+            if close.is_some() {
+                return close;
+            }
+            date = date.pred_opt()?;
         }
-        close
+        None
     }
 
     fn window_close(
@@ -817,6 +836,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_range_stays_within_its_end_at_timestamp_limits() {
+        let midnight = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let max = DateTime::<Utc>::MAX_UTC;
+        let min = DateTime::<Utc>::MIN_UTC;
+        for (start, end, expected) in [
+            (max - Duration::seconds(1), max, None),
+            (min, min + Duration::seconds(1), None),
+            (max, max, None),
+            (max, min, None),
+            (
+                midnight - Duration::seconds(30),
+                midnight - Duration::seconds(1),
+                None,
+            ),
+            (midnight - Duration::seconds(30), midnight, Some(midnight)),
+            (
+                midnight - Duration::seconds(30),
+                midnight + Duration::seconds(10),
+                Some(midnight + Duration::seconds(10)),
+            ),
+        ] {
+            let breaks = DailySessionProvider::continuous().session_breaks_in_range(&start, &end);
+            assert_eq!(
+                breaks.iter().map(|item| item.ts).collect::<Vec<_>>(),
+                expected.into_iter().collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[cfg(feature = "timezones")]
     #[test]
     fn exchange_dates_follow_dst_windows_and_holidays() {
@@ -1056,6 +1105,16 @@ mod tests {
                 "2024-03-01T00:00:00Z",
                 Timeframe::Month1,
                 Some("2024-03-29T20:00:00Z"),
+            ),
+            (
+                "2024-03-04T00:00:00Z",
+                "2w".parse().unwrap(),
+                Some("2024-03-15T20:00:00Z"),
+            ),
+            (
+                "2024-04-01T00:00:00Z",
+                "3month".parse().unwrap(),
+                Some("2024-06-28T20:00:00Z"),
             ),
             (
                 "2024-03-11T19:59:00Z",
