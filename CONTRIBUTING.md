@@ -190,6 +190,24 @@ cd examples/demo && trunk build --release
 
 CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. It also checks the dependency tree and runs `cargo deny` for advisories, duplicate versions and licences.
 
+## Feature status
+
+When a change completes or advances a planned feature, update its row in
+[`docs/progress/features.csv`](docs/progress/features.csv) in the same commit.
+Use `done` for complete behaviour, `partial` for remaining gaps and `missing`
+for unavailable behaviour. Keep names short, use `library` or `host` for
+`provided_by`, and list existing implementation paths without line numbers,
+separated by semicolons. Missing rows have an empty source field. Keep rows
+unique and sorted by area, group and feature.
+
+The [status page](https://userfrm.github.io/egui-charts/docs/progress/) and its
+badges are computed from this file; partial features do not count as done.
+Host features describe the interfaces and UI supplied by the library, while
+the application supplies data, accounts and storage. Keep strategy execution
+work under Strategy tester. Run `npm run build` in `docs/site` to check the
+list and page. Use a checkout with full git history to include every recorded
+change in the history chart.
+
 ## Code style
 
 - **Idiomatic Rust.** Match the conventions already in the surrounding code; `cargo fmt` is the source of truth for formatting.

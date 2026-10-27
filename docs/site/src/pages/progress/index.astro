@@ -1,0 +1,152 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { areas, counts, features, history, percentage, slug, statuses, treemap } from '../../lib/progress';
+
+const total = counts(features);
+const snapshots = history();
+const chart = { left: 52, top: 20, width: 800, height: 190 };
+const dates = snapshots.map((point) => Date.parse(point.date));
+const start = Math.min(...dates), end = Math.max(...dates);
+const maximum = Math.max(1, ...snapshots.flatMap((point) => statuses.map((status) => point[status])));
+const x = (index: number) => start === end ? chart.left + chart.width / 2
+  : chart.left + (dates[index] - start) / (end - start) * chart.width;
+const y = (count: number) => chart.top + chart.height * (1 - count / maximum);
+const dateLabel = (date: string) => date.slice(0, 10);
+---
+
+<StarlightPage frontmatter={{
+  title: 'Status',
+  description: 'Feature completion by area and its history, computed from the maintained feature list.',
+  tableOfContents: false,
+  editUrl: 'https://github.com/userFRM/egui-charts/edit/main/docs/progress/features.csv',
+  lastUpdated: false,
+}}>
+  <div class="progress">
+    <div class="badges" aria-label="Share of features done">
+      <a href="#areas"><img src="./overall.svg" alt={`Overall: ${percentage(features)}% done`} width="123" height="20" /></a>
+      {areas.map((area) => <a href={`#${slug(area)}`}><img src={`./${slug(area)}.svg`} alt={`${area}: ${percentage(features.filter((row) => row.area === area))}% done`} width={area.length * 7 + 74} height="20" /></a>)}
+    </div>
+    <p class="intro">
+      <strong>{total.done} of {total.total} features done.</strong>
+      {' '}{total.partial} partial · {total.missing} missing. Partial features do not count toward completion.
+      {' '}Built from the <a href="https://github.com/userFRM/egui-charts/blob/main/docs/progress/features.csv">maintained feature list</a>.
+    </p>
+    <div class="legend" aria-label="Feature status colours">
+      {statuses.map((status) => <span><i class={status}></i>{status}</span>)}
+      <span><i class="host"></i>Dashed outline: host-provided</span>
+    </div>
+    <p class="scope">Hosts supply their own data, accounts and storage. A done host feature has the library interface and UI it needs; the application supplies the service. Each cell represents one feature. Hover for its name and status.</p>
+
+    <div id="areas" class="areas">
+      {areas.map((area) => {
+        const rows = features.filter((row) => row.area === area);
+        const summary = counts(rows);
+        const height = Math.max(250, rows.length * 1.9);
+        const groups = treemap(rows, 900, height);
+        return <section id={slug(area)} class="panel">
+          <div class="panel-heading">
+            <h2>{area}</h2>
+            <p><strong>{percentage(rows)}%</strong> · {summary.done} done · {summary.partial} partial · {summary.missing} missing</p>
+          </div>
+          <svg class="treemap" viewBox={`0 0 900 ${height}`} role="img" aria-label={`${area}: ${summary.done} done, ${summary.partial} partial, ${summary.missing} missing`}>
+            {groups.map((group) => <g>
+              {group.features.map((feature, index) => <rect
+                {...group.cells[index]}
+                class:list={[feature.status, { 'host-cell': feature.provided_by === 'host' }]}
+                data-feature={feature.feature}
+              ><title>{feature.feature}: {feature.status}</title></rect>)}
+              <rect {...group.box} class="group-border" />
+              <foreignObject {...group.box} class="group-caption">
+                <div class="group-label"><span>{group.name}</span></div>
+              </foreignObject>
+            </g>)}
+          </svg>
+        </section>;
+      })}
+    </div>
+
+    <section id="history" class="panel history">
+      <div class="panel-heading"><h2>Progress history</h2></div>
+      <p>Counts at each commit of the feature list, by commit date. Hover over a point for its date, count and commit.</p>
+      {snapshots.length ? <>
+        <svg viewBox="0 0 900 250" role="img" aria-label={`Feature counts across ${snapshots.length} commits`}>
+          {[0, 0.5, 1].map((fraction) => <g class="axis">
+            <line x1={chart.left} x2={chart.left + chart.width} y1={y(maximum * fraction)} y2={y(maximum * fraction)} />
+            <text x={chart.left - 10} y={y(maximum * fraction) + 4} text-anchor="end">{Math.round(maximum * fraction)}</text>
+          </g>)}
+          {statuses.map((status) => <g class={status}>
+            <polyline class="history-line" points={snapshots.map((point, index) => `${x(index)},${y(point[status])}`).join(' ')} />
+            {snapshots.map((point, index) => <circle cx={x(index)} cy={y(point[status])} r="4">
+              <title>{dateLabel(point.date)}: {point[status]} {status} ({point.commit.slice(0, 8)})</title>
+            </circle>)}
+          </g>)}
+          <g class="axis dates">
+            <text x={chart.left} y="239">{dateLabel(snapshots[0].date)}</text>
+            {snapshots.length > 1 && <text x={chart.left + chart.width} y="239" text-anchor="end">{dateLabel(snapshots.at(-1)!.date)}</text>}
+          </g>
+        </svg>
+        <div class="legend">{statuses.map((status) => <span><i class={status}></i>{status}</span>)}</div>
+        {snapshots.length === 1 && <p>The first committed feature list establishes the starting counts. Later commits extend these lines.</p>}
+        <details>
+          <summary>History counts</summary>
+          <div class="history-table"><table>
+            <thead><tr><th>Date</th><th>Commit</th><th>Done</th><th>Partial</th><th>Missing</th></tr></thead>
+            <tbody>{snapshots.map((point) => <tr>
+              <td><time datetime={point.date}>{dateLabel(point.date)}</time></td>
+              <td><a href={`https://github.com/userFRM/egui-charts/commit/${point.commit}`}>{point.commit.slice(0, 8)}</a></td>
+              <td>{point.done}</td><td>{point.partial}</td><td>{point.missing}</td>
+            </tr>)}</tbody>
+          </table></div>
+        </details>
+      </> : <p>History starts with the first committed feature list.</p>}
+    </section>
+  </div>
+</StarlightPage>
+
+<style>
+  :global(body:has(.progress)) { --sl-content-width: 68rem; }
+  .progress { --done: #39a871; --partial: #dba134; --missing: var(--sl-color-gray-5); }
+  :global([data-theme='light']) .progress { --done: #278852; --partial: #b77710; }
+  .progress p { color: var(--sl-color-gray-2); font-size: 0.875rem; }
+  .badges { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .badges a { display: flex; }
+  .badges img { margin: 0; }
+  .intro { margin-block: 1rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; font-size: 0.8rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 0.5rem; }
+  .legend i { display: inline-block; width: 0.875rem; height: 0.875rem; border-radius: 2px; background: var(--colour); }
+  .legend .host { border: 1px dashed var(--sl-color-text); background: transparent; }
+  .scope { margin-block: 0.75rem 1.5rem; }
+  .areas { display: grid; gap: 1rem; }
+  .panel { background: var(--sl-color-gray-6); border: 1px solid var(--sl-color-hairline); border-radius: 0.75rem; padding: 1rem; scroll-margin-top: 5rem; }
+  .panel-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin-bottom: 0.75rem; }
+  .panel h2 { font-size: 1.125rem; margin: 0; }
+  .panel-heading p { margin: 0; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+  .panel strong { color: var(--sl-color-text); }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .treemap { border-radius: 0.25rem; overflow: hidden; }
+  .done { --colour: var(--done); }
+  .partial { --colour: var(--partial); }
+  .missing { --colour: var(--missing); }
+  .treemap rect { fill: var(--colour); stroke: var(--sl-color-gray-6); stroke-width: 1; }
+  .treemap .host-cell { stroke: var(--sl-color-white); stroke-width: 1.25; stroke-dasharray: 3 2; paint-order: fill stroke; }
+  .treemap rect[data-feature]:hover { filter: brightness(1.25); stroke: var(--sl-color-text); stroke-width: 2; }
+  .treemap .group-border { fill: none; stroke: var(--sl-color-gray-6); stroke-width: 3; pointer-events: none; }
+  .group-caption { pointer-events: none; }
+  .group-label { display: flex; height: 100%; align-items: center; justify-content: center; padding: 0.5rem; }
+  .group-label span { max-width: 100%; padding: 0.2rem 0.45rem; border-radius: 0.25rem; background: var(--sl-color-gray-6); color: var(--sl-color-text); text-align: center; font-size: 12px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+  .history { margin-top: 1.5rem; }
+  .history > p { margin-block: 0.5rem 1rem; }
+  .history-line { fill: none; stroke: var(--colour); stroke-width: 2; }
+  circle { fill: var(--colour); stroke: var(--sl-color-text); stroke-width: 1; }
+  .axis line { stroke: var(--sl-color-hairline); }
+  .axis text { fill: var(--sl-color-gray-2); font-size: 12px; }
+  details { margin-top: 1rem; font-size: 0.875rem; }
+  .history-table { overflow-x: auto; }
+  table { width: 100%; font-variant-numeric: tabular-nums; }
+  @media (max-width: 30rem) {
+    .panel { padding: 0.625rem; }
+    .panel-heading { display: block; }
+    .panel-heading p { margin-top: 0.25rem; }
+  }
+</style>
