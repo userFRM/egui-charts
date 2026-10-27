@@ -810,6 +810,13 @@ mod tests {
                         let last = data.len() - 1;
                         data[last] = bars(last as i64, &[2_000_102.0], None).remove(0);
                     }
+                    if source == PriceBasedSource::HighLow || kind == ChartType::Range {
+                        // A large wick must be bounded even when the close is unchanged.
+                        let last = data.last_mut().unwrap();
+                        last.open = 101.0;
+                        last.low = 101.0;
+                        last.close = 101.0;
+                    }
                     let cached = build(&data);
                     assert_eq!(
                         cached.0.len(),
@@ -817,6 +824,9 @@ mod tests {
                         "{kind:?} {source:?} {append} {whitespace}"
                     );
                     assert!(cached.1);
+                    // Settle at the new price after the wide bar has only seeded the state.
+                    data.extend(bars(data.len() as i64, &[2_000_102.0], None));
+                    build(&data);
                     data.extend(bars(data.len() as i64, &[2_000_105.0], None));
                     let resumed = build(&data);
                     assert_eq!(
