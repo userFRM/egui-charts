@@ -339,6 +339,7 @@ pub struct DemoApp {
     // A finished host-run sample, independent of subsequent chart navigation.
     strategy_report: egui_charts::ui::strategy_report::StrategyReportPanel,
     strategy_trade: Option<usize>,
+    strategy_session: SessionType,
 
     // Right-hand side panel.
     object_tree: ObjectTreePanel,
@@ -567,6 +568,7 @@ impl DemoApp {
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
             strategy_trade: None,
+            strategy_session: SessionType::Full24x7,
             object_tree: ObjectTreePanel::new(),
             open_panel: Some(SidePanel::Watchlist),
             data_window_expanded: true,
