@@ -127,6 +127,9 @@ pub struct SourceItem {
     pub parameters: Option<String>,
     /// Panes a drawing row's Move to menu offers, by stable id and title; empty leaves it out.
     pub panes: Vec<(crate::widget::PaneId, String)>,
+    /// Drawing folder path, copied from [`crate::drawings::Drawing::folder`].
+    /// Non-drawing rows ignore this field.
+    pub folder: Vec<String>,
 }
 
 impl SourceItem {
@@ -157,6 +160,7 @@ impl SourceItem {
             }),
             parameters: None,
             panes: Vec::new(),
+            folder: Vec::new(),
         }
     }
 
@@ -184,6 +188,7 @@ impl SourceItem {
             properties: None,
             parameters: None,
             panes: Vec::new(),
+            folder: Vec::new(),
         }
     }
 
@@ -224,6 +229,7 @@ impl SourceItem {
             properties: None,
             parameters: None,
             panes: Vec::new(),
+            folder: Vec::new(),
         }
     }
 
@@ -250,6 +256,7 @@ impl SourceItem {
             properties: None,
             parameters: None,
             panes: Vec::new(),
+            folder: Vec::new(),
         }
     }
 

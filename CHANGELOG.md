@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The object tree creates named folders from selected drawings, nests folders and moves selected drawings between folders or back to the root. Folder visibility and locking apply to all descendants as one undoable edit. Drawing folder paths persist with drawing identities, independently of host groups; hosts retain empty folders through `ObjectTreeState::folders`. Migration: `Drawing` and `SourceItem` literals add `folder: Vec::new()`; `ObjectTreeState` literals use `..Default::default()` for its folder and rendered-order state; copy `Drawing::folder` into live drawing rows. Older saved drawings start at the root. ([#978](https://github.com/userFRM/egui-charts/issues/978))
+
 - The indicator templates menu has Indicators and Templates pages for one-click study additions and saved-template application. Hosts supply starred studies through `TopToolbar::favorite_indicators` and handle `TopToolbarAction::AddIndicator`. Save indicator template remains available, and empty pages explain how to fill them. ([#1004](https://github.com/userFRM/egui-charts/issues/1004))
 
 - Alt+Shift+Left and Home navigate to the first bar; Alt+Shift+Right and End return to the latest, preserving zoom. Period, Alt+D and Alt+Shift+E request Open layout, Data window and session switching through `ShortcutMap`; text fields keep their keys. The demo scrolls its saved-layout chooser and toggles SAMPLE between regular and extended hours, including from its initial 24/7 session. Continuous markets retain their session. ([#983](https://github.com/userFRM/egui-charts/issues/983))

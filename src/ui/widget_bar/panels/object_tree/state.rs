@@ -2,14 +2,24 @@
 //!
 //! Tracks selection, expansion, filtering, and other UI state.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::types::SourceType;
 
 /// State for the Object Tree panel
 #[derive(Clone, Debug, Default)]
 pub struct ObjectTreeState {
+    /// Known folder paths, including empty folders. Hosts may save and restore this set
+    /// per chart; nonempty folders are also recovered from source rows on each frame.
+    pub folders: BTreeSet<Vec<String>>,
+    /// Collapsed folder paths. Search temporarily expands matching descendants.
+    pub collapsed_folders: BTreeSet<Vec<String>>,
+    /// Parent of the folder being created by the name prompt.
+    pub creating_folder: Option<Vec<String>>,
+
     // === Selection ===
+    /// Drawing and source ids in the rendered order, used for range selection.
+    pub visible_ids: Vec<usize>,
     /// Currently selected item IDs
     pub selected_ids: HashSet<usize>,
     /// Last selected ID (for shift-click range selection)
@@ -159,6 +169,7 @@ impl ObjectTreeState {
 
     /// Expand all groups
     pub fn expand_all_groups(&mut self) {
+        self.collapsed_folders.clear();
         self.expanded_groups.insert("Indicators".to_string());
         self.expanded_groups.insert("Drawings".to_string());
         self.expanded_groups.insert("Templates".to_string());
@@ -167,6 +178,7 @@ impl ObjectTreeState {
     /// Collapse all groups
     pub fn collapse_all_groups(&mut self) {
         self.expanded_groups.clear();
+        self.collapsed_folders = self.folders.clone();
     }
 
     // === Filter Methods ===

@@ -25,6 +25,7 @@ pub fn render_item_row(
     indent_level: usize,
 ) -> ObjectTreeAction {
     let id = item.id;
+    state.visible_ids.push(id);
 
     // Calculate indentation
     let indent_width = if config.indent_width == ObjectTreeConfig::default().indent_width {

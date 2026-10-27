@@ -100,6 +100,11 @@ impl ObjectTreePanel {
         sources: &mut [SourceItem],
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
+        for item in sources.iter().filter(|s| s.is_drawing()) {
+            for depth in 1..=item.folder.len() {
+                self.state.folders.insert(item.folder[..depth].to_vec());
+            }
+        }
 
         if self.config.group_by_type {
             sources.sort_by_key(|s| {
@@ -159,6 +164,24 @@ impl ObjectTreePanel {
             });
         });
 
+        if let Some(parent) = self.state.creating_folder.clone() {
+            use crate::ui_kit::modal::dialogs::{PromptDialog, PromptResult};
+            let mut open = true;
+            match PromptDialog::new(ui.scope_id().with("new_folder"), "New folder")
+                .placeholder("Folder name")
+                .show(ui.ctx(), &mut open)
+            {
+                PromptResult::Submitted(name) => {
+                    self.state.creating_folder = None;
+                    if !name.trim().is_empty() {
+                        action = ObjectTreeAction::CreateFolder(parent, name);
+                    }
+                }
+                PromptResult::Cancelled => self.state.creating_folder = None,
+                PromptResult::None => {}
+            }
+        }
+
         if let Some(id) = self.state.renaming_id {
             use crate::ui_kit::modal::dialogs::{PromptDialog, PromptResult};
             let mut open = true;
@@ -187,6 +210,13 @@ impl ObjectTreePanel {
             .strong()
             .no_separator()
             .show(ui, |ui| {
+                if IconButton::new(&icons::PLUS)
+                    .tooltip("New folder with selected drawings")
+                    .show(ui)
+                    .clicked()
+                {
+                    self.state.creating_folder = Some(Vec::new());
+                }
                 // Settings menu
                 let settings = IconButton::new(&icons::SETTINGS)
                     .tooltip("Object tree settings")
@@ -358,7 +388,12 @@ impl ObjectTreePanel {
                 self.state.toggle_selection(*id);
             }
             ObjectTreeAction::RangeSelect(id) => {
-                self.state.range_select(*id, &source_ids);
+                let ordered = if self.state.visible_ids.is_empty() {
+                    source_ids
+                } else {
+                    self.state.visible_ids.clone()
+                };
+                self.state.range_select(*id, &ordered);
             }
             ObjectTreeAction::ClearSelection => {
                 self.state.clear_selection();
@@ -384,6 +419,186 @@ impl ObjectTreePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_drawings_can_be_nested_hidden_locked_and_moved_without_replacing_them() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_kittest::{Harness, kittest::Queryable};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut chart = crate::widget::ChartBuilder::new().build();
+            for name in ["Support", "Resistance", "Outside"] {
+                let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                drawing.label = Some(name.into());
+                drawing.stored_id = Some(name.into());
+                drawing.z_order = match name {
+                    "Resistance" => 3,
+                    "Outside" => 2,
+                    _ => 0,
+                };
+                drawing.chart_points =
+                    vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+                drawing.completed = true;
+                chart.drawings_mut().add_synced_drawing(drawing);
+            }
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            let mut panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+                show_data_window: false,
+                ..Default::default()
+            });
+            panel.state_mut().select_all(&ids[..2]);
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(320.0, 600.0))
+                .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                .build_ui_state(
+                    |ui, (panel, chart): &mut (ObjectTreePanel, crate::Chart)| {
+                        let mut sources: Vec<_> = chart
+                            .drawings()
+                            .drawings
+                            .iter()
+                            .map(|d| {
+                                let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                                item.label = d.label.clone();
+                                item.folder = d.folder.clone();
+                                item.visible = d.visible;
+                                item.locked = d.locked;
+                                item.z_index = d.z_order;
+                                item
+                            })
+                            .collect();
+                        let action = panel.show(ui, None, &mut sources);
+                        assert!(panel.apply_to_chart(chart, &action, &sources));
+                    },
+                    (panel, chart),
+                );
+            h.run();
+            h.get_by_label("New folder with selected drawings").click();
+            h.run();
+            h.event(egui::Event::Text("Analysis / one".into()));
+            h.key_press(egui::Key::Enter);
+            h.run();
+            let caret_right = h.get_by_label("Toggle folder").rect().right();
+            let name_left = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Analysis / one" => {
+                        Some(text.pos.x)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                name_left - caret_right <= 12.0,
+                "folder name must follow its expand control"
+            );
+            h.get_by_label("Analysis / one").click_secondary();
+            h.run();
+            h.get_by_label("New subfolder with selected drawings")
+                .click();
+            h.run();
+            h.event(egui::Event::Text("Levels".into()));
+            h.key_press(egui::Key::Enter);
+            h.run();
+            let saved = |h: &Harness<'_, (ObjectTreePanel, crate::Chart)>| {
+                h.state()
+                    .1
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| serde_json::to_value(d).unwrap())
+                    .collect::<Vec<_>>()
+            };
+            h.get_by_label("Resistance").click();
+            h.run();
+            h.get_by_label("Support").click_modifiers(egui::Modifiers {
+                shift: true,
+                ..Default::default()
+            });
+            h.run();
+            assert_eq!(h.state().0.state().selection_count(), 2);
+            h.query_all_by_label("Toggle folder")
+                .next()
+                .unwrap()
+                .click();
+            h.run();
+            assert!(h.query_by_label("Support").is_none());
+            h.state_mut().0.state_mut().filter_text = "Support".into();
+            h.run();
+            h.get_by_label("Support");
+            assert!(h.query_by_label("Outside").is_none());
+            h.state_mut().0.state_mut().filter_text.clear();
+            h.run();
+            h.query_all_by_label("Toggle folder")
+                .next()
+                .unwrap()
+                .click();
+            h.run();
+            let nested = saved(&h);
+            for (index, name) in ["Support", "Resistance", "Outside"].iter().enumerate() {
+                assert_eq!(nested[index]["label"], *name);
+                assert_eq!(
+                    h.state().1.drawings().drawings[index].stored_id.as_deref(),
+                    Some(*name)
+                );
+                assert_eq!(
+                    nested[index]["folder"],
+                    if index < 2 {
+                        serde_json::json!(["Analysis / one", "Levels"])
+                    } else {
+                        serde_json::json!([])
+                    }
+                );
+            }
+            h.query_all_by_label("Hide folder").next().unwrap().click();
+            h.run();
+            assert_eq!(
+                saved(&h)
+                    .iter()
+                    .map(|d| d["visible"].as_bool().unwrap())
+                    .collect::<Vec<_>>(),
+                [false, false, true]
+            );
+            h.query_all_by_label("Lock folder").next().unwrap().click();
+            h.run();
+            assert_eq!(
+                saved(&h)
+                    .iter()
+                    .map(|d| d["locked"].as_bool().unwrap())
+                    .collect::<Vec<_>>(),
+                [true, true, false]
+            );
+            assert!(h.state_mut().1.drawings_mut().undo());
+            assert_eq!(
+                saved(&h)
+                    .iter()
+                    .map(|d| d["locked"].as_bool().unwrap())
+                    .collect::<Vec<_>>(),
+                [false, false, false]
+            );
+            assert!(h.state_mut().1.drawings_mut().redo());
+            h.run();
+            h.get_by_label("Support").click_secondary();
+            h.run();
+            h.get_by_label("Move to folder").click();
+            h.run();
+            h.get_by_label("Root").click();
+            h.run();
+            assert!(
+                saved(&h)
+                    .iter()
+                    .all(|d| d["folder"] == serde_json::json!([]))
+            );
+            assert!(h.state_mut().1.drawings_mut().undo());
+            assert_eq!(saved(&h)[0]["folder"], nested[0]["folder"]);
+            assert_eq!(saved(&h)[1]["folder"], nested[1]["folder"]);
+            assert_eq!(
+                h.state().1.drawings().drawings[0].chart_points,
+                [ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)]
+            );
+        }
+    }
 
     #[test]
     fn select_all_and_range_selection_respect_the_filter() {

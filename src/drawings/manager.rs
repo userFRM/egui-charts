@@ -1233,7 +1233,7 @@ impl DrawingManager {
 
     /// Applies `edit` to the drawing with the given ID, records it for undo and queues it to
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
-    /// saved. A locked drawing accepts only visibility and name changes, or an edit that unlocks it.
+    /// saved. A locked drawing accepts only visibility, name and folder changes, or an edit that unlocks it.
     /// Does nothing if there is no such drawing.
     pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
@@ -1242,12 +1242,14 @@ impl DrawingManager {
             if old.locked && drawing.locked {
                 let visible = drawing.visible;
                 let label = drawing.label.clone();
+                let folder = drawing.folder.clone();
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label {
+                if visible == old.visible && label == old.label && folder == old.folder {
                     return;
                 }
                 drawing.visible = visible;
                 drawing.label = label;
+                drawing.folder = folder;
             }
             if !drawing.selectable {
                 self.selection.deselect(id);
@@ -1259,6 +1261,39 @@ impl DrawingManager {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|p| p.id != id);
         }
+    }
+
+    /// Edits live drawing ids as one undo step and queues their saved changes.
+    /// Locked drawings accept visibility, name and folder changes, or an edit that unlocks them.
+    pub fn edit_drawings(&mut self, ids: &[usize], mut edit: impl FnMut(&mut Drawing)) {
+        let before = self.drawings.clone();
+        if !before.iter().any(|d| ids.contains(&d.id)) {
+            return;
+        }
+        for old in before.iter().filter(|d| ids.contains(&d.id)) {
+            let drawing = self.drawings.iter_mut().find(|d| d.id == old.id).unwrap();
+            edit(drawing);
+            if old.locked && drawing.locked {
+                let (visible, label, folder) = (
+                    drawing.visible,
+                    drawing.label.clone(),
+                    drawing.folder.clone(),
+                );
+                *drawing = old.clone();
+                drawing.visible = visible;
+                drawing.label = label;
+                drawing.folder = folder;
+            }
+            if !drawing.selectable {
+                self.selection.deselect(old.id);
+            }
+            self.queue_edit(old);
+        }
+        self.history.push_snapshot(before);
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| !ids.contains(&p.id));
     }
 
     /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
