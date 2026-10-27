@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape};
 
 use super::volume::render_volume_bars;
 use crate::chart::renderers::{RenderContext, StyleColors};
-use crate::model::{Bar, RangeBar};
+use crate::model::Bar;
 
 use super::japanese::calc_brick_rect;
 
@@ -66,7 +66,7 @@ pub(super) fn render_high_low(
 /// Range bars at their element slots.
 pub(super) fn render_range_bars(
     painter: &Painter,
-    range_bars: &[RangeBar],
+    range_bars: &[Bar],
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
@@ -80,7 +80,7 @@ pub(super) fn render_range_bars(
         } else {
             bearish_color
         };
-        let rect = calc_brick_rect(x, &range_bar.to_bar(), price_scale, bar_width);
+        let rect = calc_brick_rect(x, range_bar, price_scale, bar_width);
         painter.add(Shape::rect_filled(rect, 0.0, color));
     }
 }

@@ -87,7 +87,9 @@ pub use quote::{
     ExtendedHoursQuote, ExtendedSession, Level1Quote, OrderBook, OrderBookLevel, Quote, Tick,
     TradeConditions,
 };
-pub use range_bar::{RangeBar, RangeBarConfig, to_range_bars_from_ohlc, to_range_bars_from_ticks};
+pub use range_bar::{
+    RangeBar, RangeBarConfig, RangeBarSource, to_range_bars_from_ohlc, to_range_bars_from_ticks,
+};
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub(crate) use revision::next_revision;
 pub use series_scale::SeriesScale;

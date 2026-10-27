@@ -7,7 +7,7 @@
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
 //! sharing the boundary instant may be lost but are never counted twice.
 
-use crate::model::{OrderSide, Tick};
+use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -92,6 +92,8 @@ pub(crate) struct Trades {
     /// Time of the newest trade without an id a page added: any live trade at or before it may
     /// repeat it.
     paged_without_id_until: Option<DateTime<Utc>>,
+    /// Changes whenever a trade is added or evicted.
+    revision: u64,
 }
 
 impl Trades {
@@ -102,7 +104,13 @@ impl Trades {
             ids: HashSet::new(),
             paged_until: None,
             paged_without_id_until: None,
+            revision: next_revision(),
         }
+    }
+
+    /// Identifies the held trades: it differs after any trade was added or evicted.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -127,6 +135,7 @@ impl Trades {
             self.annotate(&trade);
             return;
         }
+        self.revision = next_revision();
         changed(&trade, true);
         self.trades.push_back(trade);
         if self.trades.len() > self.capacity
@@ -199,6 +208,7 @@ impl Trades {
             if trade.id.is_none() {
                 self.paged_without_id_until = self.paged_without_id_until.max(Some(trade.ts));
             }
+            self.revision = next_revision();
             changed(&trade, true);
             self.trades.push_front(trade);
         }
