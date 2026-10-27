@@ -312,11 +312,7 @@ pub struct DemoApp {
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     /// Spreads picked in symbol search, with feeds of their symbols.
-    spreads: Vec<(
-        egui_charts::services::SymbolExpression,
-        SeriesId,
-        Vec<Arc<LiveFeed>>,
-    )>,
+    spreads: Vec<comparison::Spread>,
     storage: Arc<storage::DemoStorage>,
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
@@ -1244,6 +1240,7 @@ impl eframe::App for DemoApp {
                 feed.advance(chrono::Utc::now());
                 comparison::refresh(&mut extra.chart, *id, feed);
             }
+            comparison::refresh_spreads(&mut extra.chart, &mut extra.spreads, extra.live.paused());
             if !extra.live.paused() {
                 ctx.request_repaint_after(delay);
             }

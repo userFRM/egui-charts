@@ -660,14 +660,14 @@ impl SymbolSearchDialog {
         let expression = match SymbolExpression::parse(text) {
             Ok(expression) if !expression.is_spread() => return,
             Ok(expression) => self.search.resolve(ctx, text, expression, all_symbols),
-            Err(error) => Some(Err(error)),
+            Err(error) => Some(Err(error.to_string())),
         };
         match expression {
             Some(Ok(expression)) => self.filtered_symbols.insert(
                 0,
                 Instrument::new(expression.to_string()).with_symbol_type(SymbolType::Spread),
             ),
-            Some(Err(error)) => self.expression_status = Some((error.to_string(), true)),
+            Some(Err(error)) => self.expression_status = Some((error, true)),
             None => self.expression_status = Some(("Checking symbols…".into(), false)),
         }
     }

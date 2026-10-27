@@ -9,7 +9,8 @@ use std::fmt;
 /// Symbols, decimal numbers, `+`, `-`, `*`, `/`, a leading minus and parentheses are accepted,
 /// with the usual precedence; spaces are ignored. A symbol is a run of letters, digits and
 /// `.`, `:`, `_` or `!`, such as `NASDAQ:AAPL`, `BRK.B` or `ES1!`, that is not a number. The
-/// text it formats to is the symbol of its [`Instrument`](crate::model::Instrument).
+/// text it formats to is the symbol of its [`Instrument`](crate::model::Instrument). At most
+/// 256 tokens are accepted to bound recursive parsing and evaluation of user input.
 ///
 /// ```
 /// use chrono::{TimeZone, Utc};
@@ -87,6 +88,8 @@ pub enum ExpressionError {
     NoSymbol,
     /// A symbol the instrument catalog or the supplied history does not know.
     UnknownSymbol(String),
+    /// More than 256 symbols, numbers, operators and parentheses.
+    TooComplex,
 }
 
 impl fmt::Display for ExpressionError {
@@ -98,6 +101,7 @@ impl fmt::Display for ExpressionError {
             Self::UnbalancedParenthesis => write!(f, "Unbalanced parentheses"),
             Self::NoSymbol => write!(f, "The expression has no symbol"),
             Self::UnknownSymbol(symbol) => write!(f, "Unknown symbol {symbol}"),
+            Self::TooComplex => write!(f, "The expression exceeds 256 tokens"),
         }
     }
 }
@@ -143,6 +147,9 @@ fn tokens(text: &str) -> Result<Vec<Token>, ExpressionError> {
             }
             _ => return Err(ExpressionError::UnexpectedCharacter(c)),
         };
+        if tokens.len() == 256 {
+            return Err(ExpressionError::TooComplex);
+        }
         tokens.push(token);
     }
     Ok(tokens)
@@ -278,7 +285,8 @@ impl SymbolExpression {
     }
 
     /// The value of the expression with each symbol replaced by `value(symbol)`, or `None` when
-    /// a symbol has no value or the result is not finite, as after a division by zero.
+    /// a symbol has no finite value or any intermediate result is not finite, as after a
+    /// division by zero.
     pub fn evaluate(&self, value: impl Fn(&str) -> Option<f64>) -> Option<f64> {
         fn walk(node: &Node, value: &impl Fn(&str) -> Option<f64>) -> Option<f64> {
             Some(match node {
@@ -295,8 +303,9 @@ impl SymbolExpression {
                     }
                 }
             })
+            .filter(|result| result.is_finite())
         }
-        walk(&self.root, &value).filter(|result| result.is_finite())
+        walk(&self.root, &value)
     }
 
     /// The synthetic series from the time-ordered bars `history` returns for each symbol.
@@ -305,8 +314,8 @@ impl SymbolExpression {
     /// expression to the components' opens and closes, its high and low to their highs and lows,
     /// and the high and low then widen to cover all four results, since a difference or a
     /// quotient of highs need not be the highest value. Times whose result is not finite are left
-    /// out, and volume is unknown. A symbol without history is an
-    /// [`ExpressionError::UnknownSymbol`].
+    /// out. Volume is zero because the components have no shared traded volume. A symbol without
+    /// history is an [`ExpressionError::UnknownSymbol`].
     pub fn bars<'a>(
         &self,
         history: impl Fn(&str) -> Option<&'a [Bar]>,
@@ -358,7 +367,7 @@ impl SymbolExpression {
                 values.into_iter().fold(f64::MIN, f64::max),
                 values.into_iter().fold(f64::MAX, f64::min),
                 close,
-                f64::NAN,
+                0.0,
             ));
         }
         Ok(bars)
@@ -433,6 +442,16 @@ mod tests {
             let parsed = SymbolExpression::parse(text).map(|e| e.to_string());
             assert_eq!(parsed, expected.map(str::to_owned), "{text:?}");
         }
+        for text in [
+            format!("{}A{}", "(".repeat(300), ")".repeat(300)),
+            ["A"; 300].join("+"),
+            format!("{}A", "-".repeat(300)),
+        ] {
+            assert!(
+                SymbolExpression::parse(&text).is_err(),
+                "unbounded recursion"
+            );
+        }
     }
 
     /// The synthetic bars against hand-computed values: only times every symbol trades, the
@@ -460,6 +479,7 @@ mod tests {
                 .unwrap()
                 .bars(history)
                 .map(|bars| {
+                    assert!(bars.iter().all(crate::data::merge::valid));
                     bars.iter()
                         .map(|bar| (bar.time, bar.open, bar.high, bar.low, bar.close))
                         .collect::<Vec<_>>()
@@ -479,5 +499,7 @@ mod tests {
             Ok(vec![(day(1), 2.5, 2.5714285714285716, 1.75, 2.4)])
         );
         assert_eq!(ohlc("A-C"), Err(ExpressionError::UnknownSymbol("C".into())));
+        // A/0 is undefined; taking its reciprocal cannot turn it into a valid zero price.
+        assert_eq!(ohlc("1/(A/0)"), Ok(vec![]));
     }
 }

@@ -53,8 +53,8 @@ pub(super) struct Search {
 struct Components {
     text: String,
     inbox: Arc<Inbox>,
-    /// Per symbol: `None` while unanswered, then the catalog's spelling if the catalog has it.
-    found: Vec<Option<Option<String>>>,
+    /// Per symbol: `None` while unanswered, then the catalog's spelling or its lookup error.
+    found: Vec<Option<Result<String, String>>>,
 }
 
 impl Default for Search {
@@ -249,7 +249,7 @@ impl Search {
         text: &str,
         mut expression: SymbolExpression,
         fallback: &[Instrument],
-    ) -> Option<Result<SymbolExpression, ExpressionError>> {
+    ) -> Option<Result<SymbolExpression, String>> {
         let symbols: Vec<String> = expression.symbols().into_iter().map(Into::into).collect();
         if self.components.text != text {
             self.components = Components {
@@ -282,25 +282,29 @@ impl Search {
             let rows = *answer
                 .downcast::<Result<Vec<Instrument>, FeedError>>()
                 .expect("symbol search");
-            self.components.found[at] = Some(rows.ok().and_then(|rows| {
-                rows.into_iter()
-                    .map(|row| row.symbol)
-                    .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
-            }));
+            self.components.found[at] =
+                Some(rows.map_err(|error| error.to_string()).and_then(|rows| {
+                    rows.into_iter()
+                        .map(|row| row.symbol)
+                        .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
+                        .ok_or_else(|| {
+                            ExpressionError::UnknownSymbol(symbols[at].clone()).to_string()
+                        })
+                }));
         }
-        let found = &self.components.found;
-        if found.iter().any(Option::is_none) {
-            return None;
-        }
-        if let Some(at) = found.iter().position(|name| name == &Some(None)) {
-            return Some(Err(ExpressionError::UnknownSymbol(symbols[at].clone())));
-        }
+        let found = match self
+            .components
+            .found
+            .iter()
+            .cloned()
+            .collect::<Option<Result<Vec<_>, _>>>()?
+        {
+            Ok(found) => found,
+            Err(error) => return Some(Err(error)),
+        };
         expression.rename_symbols(|symbol| {
             let at = symbols.iter().position(|name| name == symbol);
-            found[at.expect("symbol of the expression")]
-                .clone()
-                .flatten()
-                .expect("resolved symbol")
+            found[at.expect("symbol of the expression")].clone()
         });
         Some(Ok(expression))
     }
@@ -386,6 +390,32 @@ mod tests {
             "empty page ends pagination"
         );
     }
+    #[test]
+    fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
+        let ctx = egui::Context::default();
+        let source = Arc::new(Source::default());
+        let mut search = Search::default();
+        search.set_service(Some(source.clone()));
+        let expression = SymbolExpression::parse("A-B").unwrap();
+        assert!(
+            search
+                .resolve(&ctx, "A-B", expression.clone(), &[])
+                .is_none()
+        );
+        let requests = std::mem::take(&mut *source.0.lock().unwrap());
+        let failure = FeedError::Network("offline".into());
+        let expected = failure.to_string();
+        for (query, reply) in requests {
+            if query.text == "A" {
+                reply.send(Err(failure.clone()));
+            } else {
+                reply.send(Ok(vec![Instrument::new("B")]));
+            }
+        }
+        let result = search.resolve(&ctx, "A-B", expression, &[]).unwrap();
+        assert_eq!(result.unwrap_err().to_string(), expected);
+    }
+
     #[test]
     fn listings_keep_their_exchange_in_results_and_recents() {
         let ctx = egui::Context::default();

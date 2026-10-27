@@ -8,6 +8,26 @@ use egui_charts::ui::top_toolbar::{CompareAction, ComparePlacement, CompareSymbo
 use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
 use std::sync::Arc;
 
+pub(super) struct Spread {
+    expression: SymbolExpression,
+    id: SeriesId,
+    feeds: Vec<Arc<LiveFeed>>,
+}
+
+impl Spread {
+    pub(super) fn copy(&self, chart: &mut Chart, source: &Chart) -> Option<Self> {
+        Some(Self {
+            expression: self.expression.clone(),
+            id: copy_series(chart, source, self.id)?,
+            feeds: self
+                .feeds
+                .iter()
+                .map(|feed| Arc::new(feed.fork()))
+                .collect(),
+        })
+    }
+}
+
 pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
     let bars = feed.snapshot(timeframe, BarClock::new(timeframe), chart.extended_hours());
@@ -21,30 +41,59 @@ pub(super) fn copy(
 ) -> Vec<(String, SeriesId, Arc<LiveFeed>)> {
     let mut copied = Vec::new();
     for (symbol, id, feed) in comparisons {
-        let Some((_, options)) = source.series().find(|(current, _)| *current == *id) else {
+        let Some(next) = copy_series(chart, source, *id) else {
             continue;
         };
         let feed = Arc::new(feed.fork());
-        let next = chart.add_series(options.clone());
-        if let Some(pane) = source.series_pane(*id).filter(|pane| *pane != PaneId::MAIN) {
-            let target = chart.add_pane();
-            chart.move_series_to_pane(next, target);
-            if let Some(factor) = source.pane_stretch_factor(pane) {
-                chart.set_pane_stretch_factor(target, factor);
-            }
-            if let Some(at) = source.panes().iter().position(|item| *item == pane) {
-                chart.move_pane(target, at);
-            }
-        }
-        chart.set_data(next, source.bars(*id).to_vec());
-        chart.set_series_visible(next, source.is_series_visible(*id));
-        *chart.series_price_scale_mut(next).expect("copied series") = source
-            .series_price_scale(*id)
-            .expect("source series")
-            .clone();
         copied.push((symbol.clone(), next, feed));
     }
     copied
+}
+
+fn copy_series(chart: &mut Chart, source: &Chart, id: SeriesId) -> Option<SeriesId> {
+    let (_, options) = source.series().find(|(current, _)| *current == id)?;
+    let next = chart.add_series(options.clone());
+    if let Some(pane) = source.series_pane(id).filter(|pane| *pane != PaneId::MAIN) {
+        let target = chart.add_pane();
+        chart.move_series_to_pane(next, target);
+        if let Some(factor) = source.pane_stretch_factor(pane) {
+            chart.set_pane_stretch_factor(target, factor);
+        }
+        if let Some(at) = source.panes().iter().position(|item| *item == pane) {
+            chart.move_pane(target, at);
+        }
+    }
+    chart.set_data(next, source.bars(id).to_vec());
+    chart.set_series_visible(next, source.is_series_visible(id));
+    *chart.series_price_scale_mut(next).expect("copied series") = source
+        .series_price_scale(id)
+        .expect("source series")
+        .clone();
+    Some(next)
+}
+
+pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut Vec<Spread>, paused: bool) {
+    spreads.retain(|spread| chart.series().any(|(id, _)| id == spread.id));
+    let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+    for spread in spreads {
+        let histories: Vec<_> = spread
+            .feeds
+            .iter()
+            .map(|feed| {
+                feed.set_paused(paused);
+                feed.advance(chrono::Utc::now());
+                feed.snapshot(timeframe, BarClock::new(timeframe), chart.extended_hours())
+            })
+            .collect();
+        let symbols = spread.expression.symbols();
+        let history = |symbol: &str| {
+            let at = symbols.iter().position(|current| *current == symbol)?;
+            Some(&histories[at][..])
+        };
+        if let Ok(bars) = spread.expression.bars(history) {
+            chart.set_data(spread.id, bars);
+        }
+    }
 }
 
 impl DemoApp {
@@ -66,31 +115,11 @@ impl DemoApp {
                 Some(entry)
             })
             .collect();
-        self.spreads
-            .retain(|(_, id, _)| self.chart.series().any(|(current, _)| current == *id));
-        let timeframe = self.chart.timeframe().unwrap_or(Timeframe::Hour1);
-        for (expression, id, feeds) in &self.spreads {
-            let histories: Vec<_> = feeds
-                .iter()
-                .map(|feed| {
-                    feed.set_paused(self.live.paused() || self.replay.is_some());
-                    feed.advance(chrono::Utc::now());
-                    feed.snapshot(
-                        timeframe,
-                        BarClock::new(timeframe),
-                        self.chart.extended_hours(),
-                    )
-                })
-                .collect();
-            let symbols = expression.symbols();
-            let history = |symbol: &str| {
-                let at = symbols.iter().position(|current| *current == symbol)?;
-                Some(&histories[at][..])
-            };
-            if let Ok(bars) = expression.bars(history) {
-                self.chart.set_data(*id, bars);
-            }
-        }
+        refresh_spreads(
+            &mut self.chart,
+            &mut self.spreads,
+            self.live.paused() || self.replay.is_some(),
+        );
     }
 
     /// Charts a spread picked in symbol search, such as `AAPL-MSFT`, as candles in a pane of its
@@ -115,7 +144,11 @@ impl DemoApp {
         });
         let pane = self.chart.add_pane();
         self.chart.move_series_to_pane(id, pane);
-        self.spreads.push((expression, id, feeds));
+        self.spreads.push(Spread {
+            expression,
+            id,
+            feeds,
+        });
         self.sync_comparisons();
     }
 

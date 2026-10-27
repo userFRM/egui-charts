@@ -318,6 +318,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Spread bars use zero volume so the chart accepts them. Evaluation rejects undefined intermediate values instead of turning a reciprocal of an invalid division into zero prices, and parsing accepts at most 256 tokens to bound recursion. Symbol lookup failures retain the host service's error. The demo keeps spread feeds with their chart when copying or switching slots and layout tabs. ([#976](https://github.com/userFRM/egui-charts/issues/976))
+
 - Symbol search keeps separate exchange listings of the same ticker in results and recents, and recent instruments retain their root for contract drilldown. Compare also lists recents when the host supplies a local catalog without a search service. ([#975](https://github.com/userFRM/egui-charts/issues/975), [#999](https://github.com/userFRM/egui-charts/issues/999))
 
 - Symbol search opens 840 by 680 points, centred in the window and within smaller ones, and the symbol search and compare dialogs share a 20-point corner radius over a faint backdrop on light themes, #F1F1F1 over white; dark themes keep their scrim. Result rows stay 32 points tall and show the instrument's mark, or its initial, and its exchange's mark beside the exchange name. Category pills wrap onto further rows instead of scrolling out of view. `Instrument::logo` and `exchange_logo` carry the marks as image URIs for the host's installed image loaders, and `Modal::backdrop` overrides a modal's backdrop colour. ([#998](https://github.com/userFRM/egui-charts/issues/998), [#1012](https://github.com/userFRM/egui-charts/issues/1012))
