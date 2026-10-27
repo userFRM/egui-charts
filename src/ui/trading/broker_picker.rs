@@ -534,6 +534,12 @@ fn comparison(ui: &mut Ui, tiles: &[BrokerTile], compared: &mut Vec<String>) -> 
                             RichText::new(format!("{rating:.1} / 5"))
                                 .color(theme.ui.text_secondary),
                         );
+                    } else {
+                        // Keeps the Connect buttons of rated and unrated brokers in line.
+                        ui.add_space(
+                            ui.text_style_height(&egui::TextStyle::Body)
+                                + ui.spacing().item_spacing.y,
+                        );
                     }
                     ui.add_space(4.0);
                     if ui.button(l10n::text(ui.ctx(), "Connect")).clicked() {
