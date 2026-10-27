@@ -1666,9 +1666,11 @@ mod tests {
                 }
             }
             assert!(centres.windows(2).all(|pair| pair[0] < pair[1]));
-            let mut options = crate::widget::ImageExportOptions::default();
-            options.size = [480, 320];
-            options.include_timestamp = false;
+            let options = crate::widget::ImageExportOptions {
+                size: [480, 320],
+                include_timestamp: false,
+                ..Default::default()
+            };
             let before = chart.get_time_scale_state();
             let plain = chart.export_png(&ctx, &options).unwrap();
             assert_eq!(trading.export_png(&chart, &ctx, &options).unwrap(), plain);
