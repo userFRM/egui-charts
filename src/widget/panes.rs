@@ -732,10 +732,10 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = maximized_plot
-                        .as_ref()
-                        .unwrap_or(&pane_response)
-                        .interact(Sense::click_and_drag());
+                    let pane_response = match &maximized_plot {
+                        Some(plot) => pane_response.union(plot.clone()),
+                        None => pane_response.interact(Sense::click_and_drag()),
+                    };
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
@@ -1228,12 +1228,20 @@ mod tests {
         pointer(ctx, chart, to, None);
     }
 
+    /// Maximized panes retain shared navigation and leave the hidden price range alone.
     #[test]
     fn maximized_panes_keep_pointer_navigation() {
         use crate::widget::test_frames::{frame, shapes};
-        for left in [false, true] {
+        for (theme, width, left, above) in [
+            (crate::theme::Theme::light(), 760.0, false, false),
+            (crate::theme::Theme::dark(), 760.0, true, true),
+            (crate::theme::Theme::light(), 320.0, true, false),
+            (crate::theme::Theme::dark(), 320.0, false, true),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(Vec2::new(width, 580.0)));
             chart.config.show_right_axis = !left;
             chart.config.show_left_axis = left;
             chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
@@ -1241,7 +1249,7 @@ mod tests {
             chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
             let study = chart.add_indicator(Box::new(RSI::new(14)));
             frame(&ctx, &mut chart, 0.0, Vec::new());
-            if left {
+            if above {
                 chart.move_pane(chart.series_pane(study).unwrap(), 0);
             }
             chart.pane_layout.maximized = chart.series_pane(study);
@@ -1347,16 +1355,27 @@ mod tests {
         use crate::drawings::DrawingToolType;
         use crate::scales::PriceScaleMode;
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for (mode, inverted, low, high, middle) in [
-                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
-                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
-                (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
+            for (mode, inverted, low, high, middle, maximized) in [
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0, false),
+                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0, false),
+                (
+                    PriceScaleMode::Logarithmic,
+                    false,
+                    10.0,
+                    1000.0,
+                    100.0,
+                    false,
+                ),
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0, true),
             ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[1000.0], &[1100.0]);
                 chart.set_theme(&ctx, &theme);
                 let study = chart.add_indicator(Box::new(RSI::new(14)));
                 chart.sync_panes();
+                if maximized {
+                    chart.pane_layout.maximized = chart.series_pane(study);
+                }
                 let scale = &mut chart.pane_layout.panes[1].scale;
                 scale.options_mut().mode = mode;
                 scale.options_mut().invert_scale = inverted;
@@ -1368,6 +1387,7 @@ mod tests {
                 // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
                 let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
                 let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+                let viewport = chart.get_time_scale_state();
                 chart
                     .drawings_mut()
                     .set_active_tool(Some(DrawingToolType::TrendLine));
@@ -1394,6 +1414,7 @@ mod tests {
                 drag(&ctx, &mut chart, first, to);
                 let moved = chart.drawings().drawings[0].chart_points[0].price;
                 assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
+                assert_eq!(chart.get_time_scale_state(), viewport);
                 assert!(chart.undo());
                 assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
                 assert!(chart.redo());

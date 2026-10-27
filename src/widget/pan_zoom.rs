@@ -708,19 +708,35 @@ mod tests {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_and_contact_pinch_keep_the_zoom_anchor() {
-        for (contacts, native, enabled, tracking, kinetic) in [
-            (false, true, true, false, false),
-            (true, false, true, false, false),
-            (true, true, true, false, false),
-            (false, true, false, false, false),
-            (false, true, true, true, false),
-            (false, true, true, false, true),
+        for (contacts, native, enabled, tracking, kinetic, maximized) in [
+            (false, true, true, false, false, false),
+            (true, false, true, false, false, false),
+            (true, true, true, false, false, false),
+            (false, true, false, false, false, false),
+            (false, true, true, true, false, false),
+            (false, true, true, false, true, false),
+            (false, true, true, false, false, true),
+            (true, false, true, false, false, true),
         ] {
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
             chart.chart_options.handle_scale.pinch = enabled;
+            if maximized {
+                let study = chart.add_indicator(Box::new(
+                    crate::studies::CustomIndicator::new("Pane", |bars| {
+                        vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
+                    })
+                    .with_overlay(false),
+                ));
+                chart.sync_panes();
+                chart.pane_layout.maximized = chart.series_pane(study);
+            }
             frame(&ctx, &mut chart, 0.0, vec![]);
-            let rect = chart.last_rendered_price_rect;
+            let rect = if maximized {
+                chart.get_rendered_indicator_panes()[0].chart_rect
+            } else {
+                chart.last_rendered_price_rect
+            };
             let pointer = Pos2::new(rect.left() + rect.width() * 0.25, rect.center().y);
             frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
             let touch = |id, phase, x| Event::Touch {
