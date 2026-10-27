@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+
+- The snapshot menu offers Download image, Copy image and Open in new tab through typed host intents. Hosts with image publishing enable `TopToolbarState::can_publish_image` to offer Copy link and Post image, then deliver their service's result. The demo copies PNG images and opens them in a browser tab or native viewer; publishing remains host-owned. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
+
 - The save menu offers Save layout, Download chart data, Create new layout and Open layout as 32 point rows, retaining rename, save-as, image export and autosave. Hosts handle `LayoutAction::DownloadData` with `Chart::export_csv` and `LayoutAction::OpenLayout` with their saved-layout chooser; the demo routes both to its existing paths. The menu scrolls in short windows. ([#1005](https://github.com/userFRM/egui-charts/issues/1005))
 
 - The indicator templates menu has Indicators and Templates pages for one-click study additions and saved-template application. Hosts supply starred studies through `TopToolbar::favorite_indicators` and handle `TopToolbarAction::AddIndicator`. Save indicator template remains available, and empty pages explain how to fill them. ([#1004](https://github.com/userFRM/egui-charts/issues/1004))

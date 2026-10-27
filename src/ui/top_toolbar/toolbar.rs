@@ -10,7 +10,7 @@ use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
-use crate::ui_kit::list_item::ListItem;
+use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::Ui;
 
@@ -598,13 +598,30 @@ impl TopToolbar {
                                 .size(11.0)
                                 .color(ui.active_theme().ui.text_secondary),
                         );
-                        if ListItem::new()
-                            .height(32.0)
-                            .show_with_icon(ui, "Download image", &embedded_icons::IMAGE)
-                            .clicked()
-                        {
-                            *action = TopToolbarAction::TakeScreenshot;
-                            ui.close();
+                        for (label, value, available) in [
+                            ("Download image", TopToolbarAction::TakeScreenshot, true),
+                            ("Copy image", TopToolbarAction::CopyImage, true),
+                            ("Open in new tab", TopToolbarAction::OpenImage, true),
+                            (
+                                "Copy link",
+                                TopToolbarAction::CopyImageLink,
+                                self.state.can_publish_image,
+                            ),
+                            (
+                                "Post image",
+                                TopToolbarAction::Publish,
+                                self.state.can_publish_image,
+                            ),
+                        ] {
+                            if available
+                                && ListItem::new()
+                                    .height(32.0)
+                                    .show(ui, LabelContent::new(label))
+                                    .clicked()
+                            {
+                                *action = value;
+                                ui.close();
+                            }
                         }
                     });
                 return;
@@ -1137,6 +1154,14 @@ mod tests {
                     "Download image",
                     TopToolbarAction::TakeScreenshot,
                 ),
+                (S::Screenshot, "Copy image", TopToolbarAction::CopyImage),
+                (
+                    S::Screenshot,
+                    "Open in new tab",
+                    TopToolbarAction::OpenImage,
+                ),
+                (S::Screenshot, "Copy link", TopToolbarAction::CopyImageLink),
+                (S::Screenshot, "Post image", TopToolbarAction::Publish),
                 (
                     S::Save,
                     "Save layout",
@@ -1204,6 +1229,7 @@ mod tests {
             ] {
                 let direct = matches!(slot, S::Undo | S::Redo | S::Replay | S::Publish | S::Trade);
                 let mut toolbar = TopToolbar::new();
+                toolbar.state.can_publish_image = matches!(label, "Copy link" | "Post image");
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
                 toolbar
@@ -1298,6 +1324,16 @@ mod tests {
                 );
                 frame(vec![]);
                 let (_, _, labels) = frame(vec![]);
+                if slot == S::Screenshot {
+                    assert_eq!(
+                        labels.iter().any(|(text, _)| text == "Copy link"),
+                        matches!(label, "Copy link" | "Post image")
+                    );
+                    assert_eq!(
+                        labels.iter().any(|(text, _)| text == "Post image"),
+                        matches!(label, "Copy link" | "Post image")
+                    );
+                }
                 let pos = labels
                     .iter()
                     .find(|(text, _)| text == label)
