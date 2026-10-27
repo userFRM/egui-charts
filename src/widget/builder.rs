@@ -188,7 +188,7 @@ impl Chart {
             time_scale_events: Vec::new(),
             event_visibility: Default::default(),
             mark_source: None,
-            signal_source: None,
+            signal_sources: Vec::new(),
             targets: Default::default(),
             show_price_targets: false,
             hidden_signal_categories: Default::default(),

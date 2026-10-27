@@ -337,7 +337,7 @@ pub struct Chart {
     time_scale_events: Vec<crate::model::TimeScaleEvent>,
     event_visibility: crate::model::EventVisibility,
     mark_source: Option<marks::MarkSource>,
-    signal_source: Option<signals::SignalSource>,
+    signal_sources: Vec<signals::SignalSource>,
     targets: targets::TargetState,
     show_price_targets: bool,
     hidden_signal_categories: std::collections::BTreeSet<String>,

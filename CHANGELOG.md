@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `ui::terminal::Terminal` assembles the top toolbar, the chart context menus and one or more chart slots in a `ChartLayout` on the host's `Datafeed`, and performs their actions: chart type, undo and redo across the whole chart history, the light and dark theme (following the system appearance until the user chooses one, on every slot) and fullscreen. `Terminal::show` performs what the controls emitted in that frame, in order, and returns the actions the host intercepted through `with_intercept`, the `Host` entries of the toolbar and menus, and every action the terminal has no default for; `Terminal::run` performs an action whatever the intercept says, waiting for the first frame when called before it. `Action` wraps each component's own action enum unchanged. Services are passed as `Arc<dyn Trait>` (`with_storage`, `with_marks`, repeatable `with_signals`, `with_symbol_search`, `with_alerts`, repeatable `with_broker`, `with_quotes`, `with_notifications`, `with_chats`) and files and sounds as callbacks (`with_file_export`, `with_sounds`); with `with_storage` the theme, symbol and interval persist through `SettingsStore`. Controls of features the terminal does not perform yet stay hidden, and `hide` hides any other. `examples/terminal.rs` runs it on the synthetic feed. ([#205](https://github.com/userFRM/egui-charts/issues/205))
+- `Chart::set_signal_sources` connects several `Signals` services to one chart, each with its own stream, so that a `Clear` or a lagged stream of one source leaves the signals of the others. `set_signal_source` remains for a single source.
+- `UserSettings` keeps indicator and interval favourites, drawing tool defaults, watchlists and the replay session to resume; documents written before read with their defaults.
+
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 
 - The snapshot menu offers Download image, Copy image and Open in new tab. Hosts with publishing enable `TopToolbarState::can_publish_image` and handle Copy link, Post image and Publish through their service. The demo copies images or opens them in a browser tab or native viewer. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
@@ -972,6 +976,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `UserSettings` is `#[non_exhaustive]`, so that fields can be added without a breaking change. Migration: build `UserSettings` with `Default` and assign fields. `IndicatorDialogAction` implements `Clone` and `Debug`, and `SettingsAction` implements `Debug`.
 
 - Migration for scale settings: `ScalesAndLinesSettings`, `ChartConfig` and `PriceAxisOptions` literals add the new display fields or use `..Default::default()`. Older saved settings take their defaults. `chart::render_axis_currency` takes an optional unit before the currency choices; pass `None` for the previous header. `PriceScale::set_bar_ratio` accepts a positive finite number of scale units per bar, with `None` unlocking it; logarithmic axes measure natural logarithms of prices.
 

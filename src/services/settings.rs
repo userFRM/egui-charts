@@ -5,13 +5,17 @@ use super::{Storage, StoreKind};
 use crate::config::DrawingToolType;
 use crate::model::Timeframe;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// What the library keeps of the user between sessions, in the [`StoreKind::Settings`] document
 /// `settings` that [`SettingsStore`] reads and writes.
+///
+/// Build it with `Default` and assign fields: later releases add fields without a breaking change.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct UserSettings {
     /// Name of the theme preset, as listed by [`presets`](crate::theme::presets).
     pub theme: Option<String>,
@@ -27,6 +31,20 @@ pub struct UserSettings {
     pub layout: Option<String>,
     /// Whether the open layout is saved after each change.
     pub layout_autosave: bool,
+    /// Factory names of the starred studies of the indicator dialog, in order.
+    pub indicator_favorites: Vec<String>,
+    /// The intervals starred in the interval menu, in order.
+    pub interval_favorites: Vec<Timeframe>,
+    /// The properties each drawing tool starts with, keyed by tool, as the JSON of
+    /// its `DrawingTemplate`. A tool without an entry starts with
+    /// the built-in defaults.
+    pub drawing_defaults: BTreeMap<String, serde_json::Value>,
+    /// The watchlists, in order.
+    #[cfg(feature = "ui")]
+    pub watchlists: Vec<crate::ui::widget_bar::Watchlist>,
+    /// The replay position to resume, with the interval its history was fetched at.
+    #[cfg(feature = "ui")]
+    pub replay_session: Option<(crate::ui::replay::ReplaySession, Timeframe)>,
 }
 
 fn known_tools<'de, D: Deserializer<'de>>(
