@@ -701,11 +701,6 @@ impl DemoApp {
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
-        self.theme_choice = match settings.theme.as_deref() {
-            Some("dark") => Some(true),
-            Some("light") => Some(false),
-            _ => None,
-        };
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings

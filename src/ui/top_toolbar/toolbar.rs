@@ -21,7 +21,7 @@ use super::{
         chart_grid_selector::ChartGridSelector,
         chart_type_selector::{ChartTypeAction, ChartTypeSelector},
         layout_menu::{LayoutAction, LayoutMenu},
-        timeframe_selector::{self, TimeframeAction, TimeframeSelector},
+        timeframe_selector::{TimeframeAction, TimeframeSelector},
     },
     config::TopToolbarConfig,
     state::TopToolbarState,
@@ -517,7 +517,6 @@ impl TopToolbar {
                 if let TimeframeAction::Select(tf) = self.timeframe_selector.show(ui) {
                     *action = TopToolbarAction::IntervalSelected(tf);
                 }
-                self.show_favorite_intervals(ui, action);
                 return;
             }
             S::ChartType => {
@@ -662,36 +661,6 @@ impl TopToolbar {
                 self.state.toggle_replay();
             }
             *action = clicked_action;
-        }
-    }
-
-    /// A one-click button for each starred interval the source serves, in the interval menu's
-    /// order; the current interval's button is shown pressed.
-    fn show_favorite_intervals(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
-        let theme = ui.active_theme();
-        let selector = &mut self.timeframe_selector;
-        for tf in selector.preferences().favorites {
-            if !selector.supports(tf) {
-                continue;
-            }
-            let label = timeframe_selector::display(tf);
-            let text = ui.painter().layout_no_wrap(
-                l10n::text(ui.ctx(), &label),
-                egui::FontId::proportional(theme.text.title),
-                egui::Color32::PLACEHOLDER,
-            );
-            let button = Trigger {
-                icon: None,
-                label,
-                name: timeframe_selector::display_long(tf),
-                // Whole points, so the strip still ends where whole-pixel scrolling can reach.
-                min_width: (text.size().x + 2.0 * theme.spacing.lg).ceil(),
-                filled: false,
-            };
-            if button.show(ui, tf == selector.current).clicked() {
-                selector.current = tf;
-                *action = TopToolbarAction::IntervalSelected(tf);
-            }
         }
     }
 
@@ -1115,12 +1084,6 @@ mod tests {
                         "Symbol search",
                         "Compare symbols",
                         "1 hour",
-                        "1 minute",
-                        "5 minutes",
-                        "15 minutes",
-                        "1 hour",
-                        "4 hours",
-                        "1 day",
                         "Candles",
                         "Indicators",
                         "Indicator templates",
@@ -1461,6 +1424,7 @@ mod tests {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
             toolbar.state.can_publish_image = true;
+            toolbar.timeframe_selector.favorites.insert(Timeframe::Min5);
             toolbar
         };
         let on = click_along(&ctx, &mut broker());

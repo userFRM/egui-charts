@@ -1,5 +1,7 @@
 # egui-charts Roadmap
 
+[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/)
+
 The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. The demo assembles the components and shows their action routing; an assembled terminal with library-owned action handling is still planned.
 
 ## Chart Rendering Engine
