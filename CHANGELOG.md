@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Point and Figure builds from high/low input, as before, or from closes through `ChartTypeParams::pnf_source` and the series settings Symbol tab. The choice is part of the cached build, so a change rebuilds the columns, and it persists with the chart type parameters. Migration: `ChartTypeParams` literals add `pnf_source: PriceBasedSource::HighLow` or use `..Default::default()`. ([#1062](https://github.com/userFRM/egui-charts/issues/1062))
+
 - The HLC area chart's fill opacity and close line width are set through `ChartTypeStyles::hlc_area` and the series settings Symbol tab, and persist with the chart type parameters. Defaults keep the former look; opacities outside 0 to 1 are clamped and a non-positive width hides the line. Migration: `ChartTypeStyles` literals add `hlc_area: HlcAreaStyle::default()` or use `..Default::default()`. ([#1103](https://github.com/userFRM/egui-charts/issues/1103))
 
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))

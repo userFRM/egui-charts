@@ -81,7 +81,7 @@ thread_local! {
     static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, (f64, PriceBasedSource, bool)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static KAGI: RefCell<SpanCache<Built<KagiBuilder>, (f64, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, (usize, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static RANGE: RefCell<SpanCache<Built<RangeBarBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
 }
 
@@ -230,10 +230,13 @@ pub(super) fn point_and_figure(
     params: &ChartTypeParams,
 ) -> Rc<Built<PnfBuilder>> {
     let (box_size, reversal) = (params.pnf_box_size, params.pnf_reversal);
-    let config = PointFigureConfig::new(box_size, reversal as usize);
+    let config = PointFigureConfig {
+        use_close: params.pnf_source == PriceBasedSource::Close,
+        ..PointFigureConfig::new(box_size, reversal as usize)
+    };
     cached(
         &POINT_AND_FIGURE,
-        (box_size, reversal),
+        (box_size, reversal, params.pnf_source),
         full,
         revision,
         point_figure::MAX_COLUMNS,
@@ -746,6 +749,25 @@ mod tests {
             assert_eq!((built[count - 1].open, built[count - 1].close), last);
             let restored = elements(kind, &close, &data, 0);
             assert!(restored.is_none_or(|(bars, _)| bars.len() == 1));
+        }
+        // Point and Figure with 1-point boxes and 3-box reversals: the high of 104 lifts the
+        // first column to 104 and the same bar's low of 100 reverses it to a column from 103
+        // down to 100; close-only input sees neither.
+        let mut data = bars(0, &[100.0, 100.0], None);
+        data[1].high = 104.0;
+        for (source, count, first, last) in [
+            (PriceBasedSource::HighLow, 2, (100.0, 104.0), (103.0, 100.0)),
+            (PriceBasedSource::Close, 1, (100.0, 100.0), (100.0, 100.0)),
+        ] {
+            let params = ChartTypeParams {
+                pnf_source: source,
+                ..Default::default()
+            };
+            let (built, _) = elements(ChartType::PointAndFigure, &params, &data, 0).unwrap();
+            assert_eq!(built.len(), count, "{source:?}");
+            assert_eq!((built[0].open, built[0].close), first, "{source:?}");
+            let end = &built[count - 1];
+            assert_eq!((end.open, end.close), last, "{source:?}");
         }
         let data = bars(10, &[100.0, 103.0, 101.5, 104.0], None);
         let mut params = ChartTypeParams::default();

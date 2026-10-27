@@ -377,6 +377,8 @@ pub struct ChartTypeParams {
     pub kagi_source: super::PriceBasedSource,
     /// Line Break: close or high/low input.
     pub line_break_source: super::PriceBasedSource,
+    /// Point and Figure: high/low, the traditional method, or close input.
+    pub pnf_source: super::PriceBasedSource,
     /// Draw Renko wicks from the brick's actual high and low.
     pub renko_wicks: bool,
     /// Renko: size of a brick.
@@ -422,6 +424,7 @@ impl Default for ChartTypeParams {
             renko_source: super::PriceBasedSource::Close,
             kagi_source: super::PriceBasedSource::Close,
             line_break_source: super::PriceBasedSource::Close,
+            pnf_source: super::PriceBasedSource::HighLow,
             renko_wicks: false,
             renko_brick_size: 1.0,
             kagi_reversal: 1.0,

@@ -112,6 +112,7 @@ impl SymbolTab {
             }
             ChartType::PointAndFigure => {
                 Self::box_size(ui, &mut params.pnf_size_method, &mut params.pnf_box_size);
+                Self::transform_source(ui, &mut params.pnf_source);
                 let label = ui.label(l10n::text(ui.ctx(), "Reversal boxes"));
                 ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
                     .labelled_by(label.id);
