@@ -8,7 +8,7 @@ use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use crate::data::Footprint;
 use crate::localization as l10n;
-use crate::model::{MarkerZOrder, PriceLine};
+use crate::model::{ChartType, MarkerZOrder, PriceLine};
 use crate::scales::TimeFormatterBuilder;
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
@@ -1699,7 +1699,7 @@ impl Chart {
                     );
                 } else {
                     // Share the renderer instantiation between ordinary and merged bars.
-                    let (data, params) = match &merged {
+                    let (mut data, params) = match &merged {
                         Some((merged, _)) => (
                             rendering::CandleDataContext {
                                 visible_data: &merged.bars[merged.start..],
@@ -1714,12 +1714,78 @@ impl Chart {
                             &render_params,
                         ),
                     };
+                    // Bars from the first execution on are drawn from executions, those before as
+                    // candles.
+                    let executions = self
+                        .feed_link
+                        .as_ref()
+                        .and_then(|link| link.footprint.as_ref())
+                        .filter(|_| time_based && self.replay.is_none())
+                        .map(|flow| {
+                            let first = flow.bars().keys().next();
+                            let candles = first.map_or(visible_data.len(), |first| {
+                                visible_data.partition_point(|bar| bar.time < *first)
+                            });
+                            (flow, candles)
+                        });
+                    if let Some((_, candles)) = executions {
+                        data.visible_data = &visible_data[..candles];
+                    }
                     rendering::render_chart_type(self.chart_type, &data, params, |index, min_x| {
                         match &merged {
                             Some((merged, _)) => merged_x(merged, index, min_x),
                             None => idx_to_coord(index, min_x),
                         }
                     });
+                    if let Some((flow, candles)) = executions {
+                        if params.show_volume() {
+                            rendering::candles::volume::render_volume_bars(
+                                &clipped_volume_ctx,
+                                &visible_data[candles..],
+                                start_idx + candles,
+                                max_volume,
+                                &colors,
+                                chart_rect.min.x,
+                                idx_to_coord,
+                            );
+                        }
+                        let config = FootprintConfig {
+                            text_color: colors.text,
+                            neutral_color: colors.text,
+                            ask_color: colors.bullish,
+                            bid_color: colors.bearish,
+                            ..Default::default()
+                        };
+                        let mapping = self.get_chart_mapping();
+                        let bars = self.bars(super::SeriesId::MAIN);
+                        if self.chart_type == ChartType::VolumeFootprint {
+                            crate::chart::overlays::render_footprint(
+                                &clipped_painter,
+                                &mapping,
+                                bars,
+                                flow,
+                                &config,
+                            );
+                        }
+                        #[cfg(feature = "studies")]
+                        if self.chart_type == ChartType::SessionVolumeProfile
+                            && let Some(ranges) = session_ranges(
+                                bars,
+                                start_idx + candles..start_idx + visible_data.len(),
+                                &bar_clock,
+                            )
+                        {
+                            let profiles = crate::studies::trade_profiles(flow, &ranges);
+                            crate::chart::overlays::render_trade_profiles(
+                                &clipped_painter,
+                                &mapping,
+                                bars,
+                                &profiles,
+                                flow.price_step(),
+                                &config,
+                            );
+                        }
+                    }
                     if let Some((_, Some(volume))) = &merged {
                         rendering::candles::volume::render_volume_bars(
                             &clipped_volume_ctx,
@@ -2971,6 +3037,48 @@ impl Chart {
         self.record_host_click(ui, &response);
         shown
     }
+}
+
+/// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
+/// first bar to the next session's.
+#[cfg(feature = "studies")]
+fn session_ranges(
+    bars: &[crate::model::Bar],
+    shown: std::ops::Range<usize>,
+    clock: &crate::model::BarClock,
+) -> Option<crate::studies::TradeProfileRanges> {
+    use crate::model::SessionProvider;
+    let in_view = bars.get(shown.clone())?;
+    let (first, last) = (in_view.first()?, in_view.last()?);
+    let sessions = clock.sessions();
+    let starts: Vec<_> = std::iter::once(bars[..shown.start].partition_point(|bar| {
+        sessions
+            .session_break_between(&bar.time, &first.time)
+            .is_some()
+    }))
+    .chain(
+        sessions
+            .session_breaks(in_view)
+            .into_iter()
+            .map(|(i, _)| shown.start + i),
+    )
+    .collect();
+    let end = shown.end
+        + bars[shown.end..].partition_point(|bar| {
+            sessions
+                .session_break_between(&last.time, &bar.time)
+                .is_none()
+        });
+    let close = bars
+        .get(end)
+        .map_or(chrono::DateTime::<chrono::Utc>::MAX_UTC, |bar| bar.time);
+    let ends = starts.iter().skip(1).map(|&next| bars[next].time);
+    let ranges = starts
+        .iter()
+        .zip(ends.chain([close]))
+        .map(|(&start, end)| bars[start].time..end)
+        .collect();
+    crate::studies::TradeProfileRanges::new(ranges).ok()
 }
 
 #[cfg(test)]
@@ -5138,6 +5246,32 @@ mod tests {
                 Some(ChartElementId::Series(SeriesId::MAIN))
             );
             assert!(chart.drawings.curr_drawing.is_none());
+        }
+    }
+
+    /// Session volume profiles sum whole sessions, from the first bar of a session that is only
+    /// partly shown up to the open of the next one, and the last session holds the live bar.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn session_ranges_cover_the_whole_sessions_shown() {
+        use crate::model::{Bar, BarClock, Timeframe};
+        let open = chrono::DateTime::parse_from_rfc3339("2026-01-05T20:00:00Z")
+            .unwrap()
+            .to_utc();
+        let hour = |h| open + chrono::TimeDelta::hours(h);
+        let bars: Vec<_> = (0..9)
+            .map(|h| Bar::new(hour(h), 1.0, 1.0, 1.0, 1.0, 1.0))
+            .collect();
+        let clock = BarClock::new(Timeframe::Hour1);
+        let max = chrono::DateTime::<chrono::Utc>::MAX_UTC;
+        for (shown, expected) in [
+            (2..5, Some(vec![hour(0)..hour(4), hour(4)..max])),
+            (0..2, Some(vec![hour(0)..hour(4)])),
+            (6..6, None),
+        ] {
+            let ranges = super::session_ranges(&bars, shown.clone(), &clock);
+            let ranges = ranges.map(|ranges| ranges.ranges().to_vec());
+            assert_eq!(ranges, expected, "{shown:?}");
         }
     }
 }

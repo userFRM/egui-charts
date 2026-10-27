@@ -314,6 +314,12 @@ pub mod icons {
     pub const CHART_HIGH_LOW: Icon = crate::icon_from_path!("chart-types/chart-high-low.svg");
     /// Chart tpo SVG icon.
     pub const CHART_TPO: Icon = crate::icon_from_path!("chart-types/chart-tpo.svg");
+    /// Chart volume footprint SVG icon.
+    pub const CHART_VOLUME_FOOTPRINT: Icon =
+        crate::icon_from_path!("chart-types/chart-volume-footprint.svg");
+    /// Chart session volume profile SVG icon.
+    pub const CHART_SESSION_VOLUME_PROFILE: Icon =
+        crate::icon_from_path!("chart-types/chart-session-volume-profile.svg");
     /// Chart line break SVG icon.
     pub const CHART_LINE_BREAK: Icon = crate::icon_from_path!("chart-types/chart-line-break.svg");
     /// Chart kagi SVG icon.
