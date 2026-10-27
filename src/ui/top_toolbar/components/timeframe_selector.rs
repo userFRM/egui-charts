@@ -214,7 +214,7 @@ const PRESETS: &[Timeframe] = &[
 /// Configuration for timeframe selector
 #[derive(Debug, Clone)]
 pub struct TimeframeSelectorConfig {
-    /// Minimum width of the button; it is otherwise sized to its label.
+    /// Minimum width of each interval button; it is otherwise sized to its label.
     pub btn_width: f32,
     /// Minimum menu content width; the expanded custom form reserves at least 232 px.
     pub dropdown_width: f32,
@@ -508,15 +508,16 @@ impl TimeframeSelector {
         {
             self.last_non_favorite = None;
         }
-        let mut favorites = self.preferences().favorites;
-        favorites.retain(|tf| self.supports(*tf) && !self.hidden_timeframes.contains(tf));
-        favorites.sort_by_key(|tf| {
-            PRESETS
-                .iter()
-                .chain(&self.custom_timeframes)
-                .position(|entry| entry == tf)
-                .unwrap_or(usize::MAX)
-        });
+        let favorites: Vec<_> = PRESETS
+            .iter()
+            .chain(&self.custom_timeframes)
+            .copied()
+            .filter(|tf| {
+                self.favorites.contains(tf)
+                    && self.supports(*tf)
+                    && !self.hidden_timeframes.contains(tf)
+            })
+            .collect();
         let mut selected = TimeframeAction::None;
         let btn_res = if favorites.is_empty() {
             self.interval_button(ui, self.current)
@@ -562,6 +563,7 @@ impl TimeframeSelector {
         }
     }
 
+    /// A toolbar button showing `tf`'s short label, named by its long form.
     fn interval_button(&self, ui: &Ui, tf: Timeframe) -> Trigger<'static> {
         let theme = ui.active_theme();
         let label = display(tf);
