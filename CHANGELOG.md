@@ -346,6 +346,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Three drives labels each correction's retracement of the drive before it and each drive's extension of the correction before it, measured in price, and omits a ratio over a zero-length leg. The reversal zone is the price interval 1.272 to 1.618 second-correction lengths beyond the correction's end, painted through the active price scale, in place of a fixed-size badge. ([#1071](https://github.com/userFRM/egui-charts/issues/1071))
+
 - Fibonacci retracement and extension fills span the same horizontal bounds as their level lines and hit regions. Channel levels extended left or right run on to the visible pane edge on that side and keep the anchor on a side that is not extended. ([#1069](https://github.com/userFRM/egui-charts/issues/1069))
 
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))

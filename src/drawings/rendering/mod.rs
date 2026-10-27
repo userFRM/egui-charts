@@ -388,7 +388,7 @@ impl Drawing {
             DrawingToolType::HeadAndShoulders => self.render_head_and_shoulders(painter),
             DrawingToolType::ABCDPattern => self.render_abcd_pattern(painter),
             DrawingToolType::TrianglePattern => self.render_triangle_pattern(painter),
-            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter),
+            DrawingToolType::ThreeDrivesPattern => self.render_three_drives_pattern(painter, view),
 
             // Elliott Wave (5 tools)
             DrawingToolType::ElliottImpulse => self.render_elliott_impulse(painter),
@@ -510,7 +510,6 @@ impl Drawing {
                 | T::HeadAndShoulders
                 | T::ABCDPattern
                 | T::TrianglePattern
-                | T::ThreeDrivesPattern
                 | T::ElliottImpulse
                 | T::ElliottCorrection
                 | T::ElliottTriangle

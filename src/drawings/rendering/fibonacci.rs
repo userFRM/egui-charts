@@ -42,8 +42,7 @@ impl Drawing {
                     level1.color[2],
                     config.background_opacity,
                 );
-                let fill_rect =
-                    Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
+                let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             }
         }
@@ -127,8 +126,7 @@ impl Drawing {
                         level1.color[2],
                         config.background_opacity,
                     );
-                    let fill_rect =
-                        Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
+                    let fill_rect = Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                     painter.rect_filled(fill_rect, 0.0, fill_color);
                 }
             }
@@ -740,7 +738,11 @@ impl Drawing {
             .get(2)
             .copied()
             .unwrap_or_else(|| start + egui::vec2(-d.y, d.x) * 0.5);
-        let forward = if d.x.abs() < 1e-6 { d.y >= 0.0 } else { d.x > 0.0 };
+        let forward = if d.x.abs() < 1e-6 {
+            d.y >= 0.0
+        } else {
+            d.x > 0.0
+        };
         let lines = config
             .visible_levels()
             .map(|level| {
