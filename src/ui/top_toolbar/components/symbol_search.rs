@@ -1345,8 +1345,13 @@ impl CompareSymbolsDialog {
         }
 
         self.search.query(ui.ctx(), &self.search_query, None, 20);
-        let found = self.search.results();
-        let symbols = if self.search.connected() {
+        let recent = self.search_query.is_empty() && self.search.has_recents();
+        let found = if recent {
+            self.search.recent_results()
+        } else {
+            self.search.results()
+        };
+        let symbols = if self.search.connected() || recent {
             found.as_slice()
         } else {
             symbols
@@ -1354,13 +1359,7 @@ impl CompareSymbolsDialog {
         self.search.status(ui);
         let mut next_page = false;
         // Suggestions
-        let heading =
-            if self.search.connected() && self.search_query.is_empty() && self.search.has_recents()
-            {
-                "Recent symbols"
-            } else {
-                "Symbols"
-            };
+        let heading = if recent { "Recent symbols" } else { "Symbols" };
         ui.label(RichText::new(l10n::text(ui.ctx(), heading)).color(config.muted_color));
         ui.space_lg();
 
@@ -1621,6 +1620,46 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn compare_recents_do_not_require_a_search_service() {
+        let symbols = create_test_symbols();
+        for connected in [false, true] {
+            let ctx = Context::default();
+            let mut dialog = CompareSymbolsDialog::new();
+            if connected {
+                dialog.set_search_service(Some(Arc::new(symbols.clone())));
+            }
+            dialog.search.record(&symbols[0]);
+            dialog.search.poll(&ctx);
+            let config = dialog.config.resolved(&ctx.global_style().visuals);
+            for (query, heading, listed, absent) in [
+                ("", "Recent symbols", "BTCUSDT", "TSLA"),
+                ("tsla", "Symbols", "TSLA", "BTCUSDT"),
+            ] {
+                dialog.search_query = query.into();
+                for frame in 0..2 {
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        dialog.draw_content(ui, &symbols, &config);
+                    });
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    if frame > 0 {
+                        assert!(texts.contains(&heading), "connected {connected}: {texts:?}");
+                        assert!(texts.contains(&listed));
+                        assert!(!texts.contains(&absent));
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_symbol_search_creation() {
         let dialog = SymbolSearchDialog::new();

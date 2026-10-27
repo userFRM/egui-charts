@@ -17,6 +17,7 @@ pub(super) struct Recent {
     logo: Option<String>,
     exchange_logo: Option<String>,
     country: Option<String>,
+    root: Option<String>,
 }
 
 impl Recent {
@@ -27,6 +28,7 @@ impl Recent {
         symbol.logo = self.logo.clone();
         symbol.exchange_logo = self.exchange_logo.clone();
         symbol.country = self.country.clone();
+        symbol.root = self.root.clone();
         symbol
     }
 }
@@ -96,18 +98,21 @@ impl Search {
     }
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
-        self.opened.retain(|row| row.name != symbol.symbol);
+        let exchange = symbol.exchange.clone().unwrap_or_default();
+        self.opened
+            .retain(|row| row.name != symbol.symbol || row.exchange != exchange);
         self.opened.push(Recent {
             name: symbol.symbol.clone(),
             description: symbol
                 .description
                 .clone()
                 .unwrap_or_else(|| symbol.symbol.clone()),
-            exchange: symbol.exchange.clone().unwrap_or_default(),
+            exchange,
             kind: symbol.symbol_type,
             logo: symbol.logo.clone(),
             exchange_logo: symbol.exchange_logo.clone(),
             country: symbol.country.clone(),
+            root: symbol.root.clone(),
         });
     }
 
@@ -121,7 +126,7 @@ impl Search {
                 .cloned()
                 .unwrap_or_default();
             for row in self.opened.drain(..) {
-                recent.retain(|old| old.name != row.name);
+                recent.retain(|old| old.name != row.name || old.exchange != row.exchange);
                 recent.insert(0, row);
             }
             recent.truncate(20);
@@ -144,7 +149,9 @@ impl Search {
                     self.more = rows.len() >= limit && limit > 0;
                     self.offset += rows.len();
                     for instrument in rows.into_iter().take(limit) {
-                        if self.rows.iter().any(|row| row.symbol == instrument.symbol) {
+                        if self.rows.iter().any(|row| {
+                            row.symbol == instrument.symbol && row.exchange == instrument.exchange
+                        }) {
                             continue;
                         }
                         self.rows.push(instrument);
@@ -172,6 +179,16 @@ impl Search {
             .into_iter()
             .flatten()
             .map(|row| row.name.clone())
+            .collect()
+    }
+
+    pub(super) fn recent_results(&self) -> Vec<Instrument> {
+        self.recents
+            .entries()
+            .get("recent")
+            .into_iter()
+            .flatten()
+            .map(Recent::symbol)
             .collect()
     }
 
@@ -203,10 +220,7 @@ impl Search {
             }
         }
         if recent {
-            self.rows = self.recents.entries()["recent"]
-                .iter()
-                .map(Recent::symbol)
-                .collect();
+            self.rows = self.recent_results();
             self.more = false;
             self.loading = false;
             self.inbox = Arc::default();
@@ -372,6 +386,29 @@ mod tests {
             "empty page ends pagination"
         );
     }
+    #[test]
+    fn listings_keep_their_exchange_in_results_and_recents() {
+        let ctx = egui::Context::default();
+        let listings = vec![
+            Instrument::new("ABC").with_exchange("X").with_root("ABC"),
+            Instrument::new("ABC").with_exchange("Y").with_root("ABC"),
+        ];
+        let mut search = Search::default();
+        search.set_service(Some(Arc::new(listings.clone())));
+        search.query(&ctx, "ABC", None, 20);
+        assert_eq!(search.results(), listings);
+        for listing in [&listings[0], &listings[1], &listings[0]] {
+            search.record(listing);
+        }
+        search.poll(&ctx);
+        search.query(&ctx, "", None, 20);
+        for (actual, expected) in search.results().iter().zip(&listings) {
+            assert_eq!(actual.exchange, expected.exchange);
+            assert_eq!(actual.root, expected.root);
+        }
+        assert_eq!(search.results().len(), 2);
+    }
+
     #[derive(Default)]
     struct Vault(Mutex<Option<String>>);
     impl crate::services::Storage for Vault {
