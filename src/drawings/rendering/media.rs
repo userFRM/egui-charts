@@ -5,8 +5,10 @@
 //! content the host or user supplies, its first line naming the author or the title.
 
 use crate::drawings::domain::Drawing;
+use crate::localization as l10n;
 use crate::painting::dashed_line::finite_clip;
 use crate::styles::{stroke, typography};
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind, load::TexturePoll};
 
@@ -173,7 +175,7 @@ impl Drawing {
 
         // White reads on the dark frame and its checkers in every theme.
         let status = painter.layout(
-            status.to_owned(),
+            l10n::text(painter.ctx(), status),
             egui::FontId::proportional(typography::XS),
             Color32::WHITE,
             frame_rect.width() - 2.0 * DESIGN_TOKENS.spacing.sm,
@@ -195,23 +197,25 @@ impl Drawing {
             return;
         }
         let pos = self.points[0];
-        let accent = DESIGN_TOKENS.semantic.extended.info;
+        let theme = painter.ctx().active_theme();
+        let accent = theme.ui.info;
         let card_width = DESIGN_TOKENS.sizing.media.tweet_card_width;
         let padding = DESIGN_TOKENS.spacing.lg;
         let (author, body) = self.content(
+            painter.ctx(),
             "Post",
             "Double-click to add the author on the first line, then the post",
         );
         let author = painter.layout(
             author,
             egui::FontId::proportional(typography::LG),
-            Color32::BLACK,
+            theme.ui.text,
             card_width - 2.0 * padding,
         );
         let body = painter.layout(
             body,
             egui::FontId::proportional(typography::SM),
-            DESIGN_TOKENS.semantic.extended.gray,
+            theme.ui.text_secondary,
             card_width - 2.0 * padding,
         );
         let gap = DESIGN_TOKENS.spacing.sm;
@@ -222,17 +226,17 @@ impl Drawing {
             .max(2.0 * padding + author.size().y + gap + body.size().y);
         let card_rect = Rect::from_min_size(pos, egui::vec2(card_width, card_height));
 
-        painter.rect_filled(card_rect, DESIGN_TOKENS.rounding.xl, Color32::WHITE);
+        painter.rect_filled(card_rect, DESIGN_TOKENS.rounding.xl, theme.ui.panel_bg);
         painter.rect_stroke(
             card_rect,
             DESIGN_TOKENS.rounding.xl,
-            Stroke::new(stroke::HAIRLINE, DESIGN_TOKENS.semantic.extended.light_gray),
+            Stroke::new(stroke::HAIRLINE, theme.ui.border),
             StrokeKind::Outside,
         );
         let text = card_rect.min + egui::vec2(padding, padding);
         let below = text + egui::vec2(0.0, author.size().y + gap);
-        painter.galley(text, author, Color32::BLACK);
-        painter.galley(below, body, Color32::BLACK);
+        painter.galley(text, author, theme.ui.text);
+        painter.galley(below, body, theme.ui.text);
 
         // Anchor point
         painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, accent);
@@ -245,25 +249,27 @@ impl Drawing {
             return;
         }
         let pos = self.points[0];
-        let accent = DESIGN_TOKENS.semantic.extended.accent;
+        let theme = painter.ctx().active_theme();
+        let accent = theme.ui.accent;
         let card_width = DESIGN_TOKENS.sizing.media.idea_card_width;
         let text_left = 60.0;
         let padding = DESIGN_TOKENS.spacing.lg;
         let wrap = card_width - text_left - padding;
         let (title, description) = self.content(
+            painter.ctx(),
             "Idea",
             "Double-click to add the title on the first line, then the idea",
         );
         let title = painter.layout(
             title,
             egui::FontId::proportional(typography::LG),
-            Color32::WHITE,
+            theme.ui.text,
             wrap,
         );
         let description = painter.layout(
             description,
             egui::FontId::proportional(typography::SM),
-            DESIGN_TOKENS.semantic.extended.gray,
+            theme.ui.text_secondary,
             wrap,
         );
         let gap = DESIGN_TOKENS.spacing.xs;
@@ -275,15 +281,7 @@ impl Drawing {
         let card_rect = Rect::from_min_size(pos, egui::vec2(card_width, card_height));
 
         // Card background
-        painter.rect_filled(
-            card_rect,
-            DESIGN_TOKENS.rounding.lg,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.94),
-        );
+        painter.rect_filled(card_rect, DESIGN_TOKENS.rounding.lg, theme.ui.panel_bg);
         painter.rect_stroke(
             card_rect,
             DESIGN_TOKENS.rounding.lg,
@@ -326,27 +324,27 @@ impl Drawing {
             painter.hline(
                 egui::Rangef::new(base_rect.min.x + 2.0, base_rect.max.x - 2.0),
                 y,
-                Stroke::new(stroke::HAIRLINE, DESIGN_TOKENS.semantic.extended.gray),
+                Stroke::new(stroke::HAIRLINE, theme.ui.text_secondary),
             );
         }
 
         let text = Pos2::new(card_rect.min.x + text_left, card_rect.min.y + padding);
         let below = text + egui::vec2(0.0, title.size().y + gap);
-        painter.galley(text, title, Color32::WHITE);
-        painter.galley(below, description, Color32::WHITE);
+        painter.galley(text, title, theme.ui.text);
+        painter.galley(below, description, theme.ui.text);
 
         // Anchor point
         painter.circle_filled(pos, DESIGN_TOKENS.rounding.md, accent);
         painter.circle_stroke(
             pos,
             DESIGN_TOKENS.rounding.md,
-            Stroke::new(stroke::MEDIUM, Color32::WHITE),
+            Stroke::new(stroke::MEDIUM, theme.ui.text),
         );
     }
 
     /// The first line of the drawing's text and the lines after it, or `empty` and `prompt`
     /// while it has no text.
-    fn content(&self, empty: &str, prompt: &str) -> (String, String) {
+    fn content(&self, ctx: &egui::Context, empty: &str, prompt: &str) -> (String, String) {
         match self
             .text
             .as_deref()
@@ -357,7 +355,7 @@ impl Drawing {
                 let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
                 (first.trim().to_owned(), rest.trim().to_owned())
             }
-            None => (empty.to_owned(), prompt.to_owned()),
+            None => (l10n::text(ctx, empty), l10n::text(ctx, prompt)),
         }
     }
 
@@ -463,74 +461,109 @@ mod tests {
     #[test]
     fn media_drawings_show_their_content() {
         let fitted = Rect::from_min_max(Pos2::new(50.0, 0.0), Pos2::new(150.0, 100.0));
-        for (tool, text, texts, picture) in [
-            (
-                DrawingToolType::Image,
-                None,
-                vec!["Double-click to add"],
-                None,
-            ),
-            (
-                DrawingToolType::Image,
-                Some("test://pending"),
-                vec!["Loading image…"],
-                None,
-            ),
-            (
-                DrawingToolType::Image,
-                Some("other://picture.png"),
-                vec!["Could not load image"],
-                None,
-            ),
-            // The square picture fills the 100 px height of the 200 x 100 frame, centred.
-            (
-                DrawingToolType::Image,
-                Some(" test://square\n"),
-                vec![],
-                Some(fitted),
-            ),
-            (
-                DrawingToolType::Tweet,
-                Some("Ada\nRates hold\nfor now"),
-                vec!["Ada", "Rates hold\nfor now"],
-                None,
-            ),
-            (
-                DrawingToolType::Idea,
-                None,
-                vec![
-                    "Idea",
-                    "Double-click to add the title on the first line, then the idea",
-                ],
-                None,
-            ),
-        ] {
-            let mut drawing = Drawing::new(1, tool);
-            drawing.points = vec![Pos2::ZERO, Pos2::new(200.0, 100.0)];
-            drawing.text = text.map(Into::into);
-            let ctx = Context::default();
-            ctx.add_image_loader(Arc::new(Pictures));
-            let output = ctx.run_ui(RawInput::default(), |_| {
-                let painter = Painter::new(ctx.clone(), LayerId::background(), Rect::EVERYTHING);
-                match tool {
-                    DrawingToolType::Image => drawing.render_image(&painter),
-                    DrawingToolType::Tweet => drawing.render_post(&painter),
-                    _ => drawing.render_idea(&painter),
-                }
-            });
-            let (mut shown, mut pictures) = (Vec::new(), Vec::new());
-            for shape in &output.shapes {
-                match &shape.shape {
-                    Shape::Text(text) => shown.push(text.galley.text().to_owned()),
-                    Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
-                        pictures.push(mesh.calc_bounds());
+        for (_, theme) in crate::theme::presets() {
+            for (tool, text, texts, picture) in [
+                (
+                    DrawingToolType::Image,
+                    None,
+                    vec!["Double-click to add"],
+                    None,
+                ),
+                (
+                    DrawingToolType::Image,
+                    Some("test://pending"),
+                    vec!["Loading image…"],
+                    None,
+                ),
+                (
+                    DrawingToolType::Image,
+                    Some("other://picture.png"),
+                    vec!["Image unavailable"],
+                    None,
+                ),
+                // The square picture fills the 100 px height of the 200 x 100 frame, centred.
+                (
+                    DrawingToolType::Image,
+                    Some(" test://square\n"),
+                    vec![],
+                    Some(fitted),
+                ),
+                (
+                    DrawingToolType::Tweet,
+                    Some("Ada\nRates hold\nfor now"),
+                    vec!["Ada", "Rates hold\nfor now"],
+                    None,
+                ),
+                (
+                    DrawingToolType::Idea,
+                    Some("Supplied title\nSupplied description"),
+                    vec!["Supplied title", "Supplied description"],
+                    None,
+                ),
+                (
+                    DrawingToolType::Idea,
+                    None,
+                    vec![
+                        "Idea",
+                        "Double-click to add the title on the first line, then the idea",
+                    ],
+                    None,
+                ),
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.points = vec![Pos2::ZERO, Pos2::new(200.0, 100.0)];
+                drawing.text = text.map(Into::into);
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                crate::localization::set_translator(&ctx, |key| {
+                    (key == "Could not load image").then(|| "Image unavailable".into())
+                });
+                ctx.add_image_loader(Arc::new(Pictures));
+                let mut output = ctx.run_ui(RawInput::default(), |_| {
+                    let painter =
+                        Painter::new(ctx.clone(), LayerId::background(), Rect::EVERYTHING);
+                    match tool {
+                        DrawingToolType::Image => drawing.render_image(&painter),
+                        DrawingToolType::Tweet => drawing.render_post(&painter),
+                        _ => drawing.render_idea(&painter),
                     }
-                    _ => {}
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                if tool != DrawingToolType::Image {
+                    assert!(shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::Rect(rect) if rect.rect.min == Pos2::ZERO && rect.fill == theme.ui.panel_bg
+                )), "cards follow the theme");
+                    for shape in &shapes {
+                        if let Shape::Text(text) = &shape.shape {
+                            let expected = if text.galley.text() == texts[0] {
+                                theme.ui.text
+                            } else {
+                                theme.ui.text_secondary
+                            };
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|section| section.format.color == expected)
+                            );
+                        }
+                    }
                 }
+                let (mut shown, mut pictures) = (Vec::new(), Vec::new());
+                for shape in &shapes {
+                    match &shape.shape {
+                        Shape::Text(text) => shown.push(text.galley.text().to_owned()),
+                        Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                            pictures.push(mesh.calc_bounds());
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(shown, texts, "{tool:?} {text:?}");
+                assert_eq!(pictures, Vec::from_iter(picture), "{tool:?} {text:?}");
             }
-            output.drop_without_applying_deltas();
-            assert_eq!(shown, texts, "{tool:?} {text:?}");
-            assert_eq!(pictures, Vec::from_iter(picture), "{tool:?} {text:?}");
         }
     }
 

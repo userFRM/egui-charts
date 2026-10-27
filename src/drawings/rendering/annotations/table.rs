@@ -6,6 +6,7 @@
 use crate::drawings::domain::Drawing;
 use crate::localization as l10n;
 use crate::styles::stroke;
+use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
@@ -118,7 +119,8 @@ impl Drawing {
             self.color[3],
         );
         let font = self.annotation_font();
-        let cell_text_color = DESIGN_TOKENS.semantic.extended.chart_text;
+        let theme = painter.ctx().active_theme();
+        let cell_text_color = theme.ui.text;
         let rows: Vec<Vec<_>> = cells(&self.table_text())
             .into_iter()
             .enumerate()
@@ -174,15 +176,7 @@ impl Drawing {
         let table_rect = Rect::from_min_size(pos, egui::vec2(table_width, table_height));
 
         // Background
-        painter.rect_filled(
-            table_rect,
-            DESIGN_TOKENS.rounding.md,
-            DESIGN_TOKENS
-                .semantic
-                .extended
-                .chart_axis_bg
-                .gamma_multiply(0.94),
-        );
+        painter.rect_filled(table_rect, DESIGN_TOKENS.rounding.md, theme.ui.panel_bg);
 
         // Header row background
         let header_rect = Rect::from_min_size(pos, egui::vec2(table_width, header_height));
@@ -196,11 +190,7 @@ impl Drawing {
                     egui::vec2(table_width, cell_height),
                 ),
                 0.0,
-                DESIGN_TOKENS
-                    .semantic
-                    .extended
-                    .chart_axis_bg
-                    .gamma_multiply(0.5),
+                theme.ui.btn_bg_hover,
             );
         }
 
@@ -255,43 +245,67 @@ mod tests {
     fn tables_paint_their_own_cells() {
         let mut table = Drawing::new(1, DrawingToolType::Table);
         table.points = vec![Pos2::new(10.0, 10.0)];
-        for (text, rows, height, cells) in [
-            (None, 4, 92.0, vec![]),
-            (
-                Some("Symbol\tLast\tChange\nAAPL\t189.50\nMSFT\t402.10\t+1.2%"),
-                3,
-                70.0,
-                vec![
-                    "Symbol", "Last", "Change", "AAPL", "189.50", "MSFT", "402.10", "+1.2%",
-                ],
-            ),
-        ] {
-            table.text = text.map(Into::into);
-            let ctx = Context::default();
-            let output = ctx.run_ui(RawInput::default(), |_| {
-                table.render_table(&Painter::new(
-                    ctx.clone(),
-                    LayerId::background(),
-                    Rect::EVERYTHING,
-                ));
-            });
-            let (mut texts, mut row_rules, mut column_rules) = (Vec::new(), 0, Vec::new());
-            for shape in &output.shapes {
-                match &shape.shape {
-                    Shape::Text(text) if !text.galley.text().is_empty() => {
-                        texts.push(text.galley.text().to_owned());
+        for (_, theme) in crate::theme::presets() {
+            for (text, rows, height, cells) in [
+                (None, 4, 92.0, vec![]),
+                (
+                    Some("Symbol\tLast\tChange\nAAPL\t189.50\nMSFT\t402.10\t+1.2%"),
+                    3,
+                    70.0,
+                    vec![
+                        "Symbol", "Last", "Change", "AAPL", "189.50", "MSFT", "402.10", "+1.2%",
+                    ],
+                ),
+            ] {
+                table.text = text.map(Into::into);
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut output = ctx.run_ui(RawInput::default(), |_| {
+                    table.render_table(&Painter::new(
+                        ctx.clone(),
+                        LayerId::background(),
+                        Rect::EVERYTHING,
+                    ));
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let (mut texts, mut row_rules, mut column_rules) = (Vec::new(), 0, Vec::new());
+                for shape in &shapes {
+                    match &shape.shape {
+                        Shape::Text(text) if !text.galley.text().is_empty() => {
+                            texts.push(text.galley.text().to_owned());
+                        }
+                        Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
+                            column_rules.push(points[1].y - points[0].y);
+                        }
+                        Shape::LineSegment { .. } => row_rules += 1,
+                        _ => {}
                     }
-                    Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
-                        column_rules.push(points[1].y - points[0].y);
-                    }
-                    Shape::LineSegment { .. } => row_rules += 1,
-                    _ => {}
                 }
+                assert!(
+                    shapes.iter().any(|shape| matches!(&shape.shape,
+                        Shape::Rect(rect) if rect.rect.min == table.points[0]
+                            && rect.rect.height() == height && rect.fill == theme.ui.panel_bg
+                    )),
+                    "the table surface follows the theme"
+                );
+                for shape in &shapes {
+                    if let Shape::Text(text) = &shape.shape
+                        && text.galley.text() == "AAPL"
+                    {
+                        assert!(
+                            text.galley
+                                .job
+                                .sections
+                                .iter()
+                                .all(|section| section.format.color == theme.ui.text)
+                        );
+                    }
+                }
+                assert_eq!(texts, cells);
+                assert_eq!(row_rules, rows + 1);
+                assert_eq!(column_rules, [height; 4], "column rules span the table");
             }
-            output.drop_without_applying_deltas();
-            assert_eq!(texts, cells);
-            assert_eq!(row_rules, rows + 1);
-            assert_eq!(column_rules, [height; 4], "column rules span the table");
         }
     }
 }

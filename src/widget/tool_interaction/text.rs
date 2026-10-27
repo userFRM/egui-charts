@@ -228,7 +228,7 @@ mod tests {
         }
     }
 
-    /// Completing a text, note or callout focuses an inline field. Commit is one undoable
+    /// Completing an annotation focuses its inline editor. Commit is one undoable
     /// edit; double-click reopens it, and Escape discards the draft without deselecting.
     #[test]
     fn placement_and_double_click_edit_annotation_text() {
@@ -238,6 +238,10 @@ mod tests {
             DrawingToolType::Note,
             DrawingToolType::AnchoredNote,
             DrawingToolType::Callout,
+            DrawingToolType::Table,
+            DrawingToolType::Image,
+            DrawingToolType::Tweet,
+            DrawingToolType::Idea,
         ]
         .into_iter()
         .flat_map(|tool| [(tool, false), (tool, true)])
@@ -292,14 +296,22 @@ mod tests {
                 step(&mut chart, vec![button(from, false)]);
             }
             assert_eq!(chart.drawings().drawings.len(), 1, "{tool:?}");
-            step(
-                &mut chart,
-                vec![
-                    Event::Text("First".into()),
-                    key(Key::Enter, Modifiers::NONE),
-                    Event::Text("Second".into()),
-                ],
-            );
+            let expected = if tool == DrawingToolType::Table {
+                step(&mut chart, vec![Event::Text("First".into())]);
+                step(&mut chart, vec![key(Key::Tab, Modifiers::NONE)]);
+                step(&mut chart, vec![Event::Text("Second".into())]);
+                "First\tSecond\t\n\t\t\n\t\t\n\t\t"
+            } else {
+                step(
+                    &mut chart,
+                    vec![
+                        Event::Text("First".into()),
+                        key(Key::Enter, Modifiers::NONE),
+                        Event::Text("Second".into()),
+                    ],
+                );
+                "First\nSecond"
+            };
             if tool == DrawingToolType::Note {
                 let outside = pos2(700.0, 450.0);
                 step(
@@ -312,8 +324,15 @@ mod tests {
             }
             assert_eq!(
                 chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond"),
+                Some(expected),
                 "{tool:?}"
+            );
+            let saved = chart.save_drawings().unwrap().to_json().unwrap();
+            let mut restored = crate::Chart::new(crate::model::BarData::default());
+            restored.load_drawings(&saved).unwrap();
+            assert_eq!(
+                restored.drawings().drawings[0].text.as_deref(),
+                Some(expected)
             );
             assert!(chart.undo());
             assert_eq!(chart.drawings().drawings[0].text, None);
@@ -349,7 +368,7 @@ mod tests {
             step(&mut chart, vec![key(Key::Escape, Modifiers::NONE)]);
             assert_eq!(
                 chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond"),
+                Some(expected),
                 "{tool:?}"
             );
             assert_eq!(chart.drawings().sel_drawing(), Some(id), "{tool:?}");
@@ -370,10 +389,7 @@ mod tests {
                     key(Key::Enter, Modifiers::COMMAND),
                 ],
             );
-            assert_eq!(
-                chart.drawings().drawings[0].text.as_deref(),
-                Some("First\nSecond")
-            );
+            assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
         }
     }
 
