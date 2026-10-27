@@ -213,10 +213,11 @@ impl DemoApp {
                     // The lowest additional scale id no series uses yet.
                     ComparePlacement::NewPriceScale => {
                         (1..).map(SeriesScale::Separate).find(|scale| {
-                            !self
-                                .chart
-                                .series()
-                                .any(|(_, series)| series.scale == *scale)
+                            self.chart.series_scale(SeriesId::MAIN) != Some(*scale)
+                                && !self
+                                    .chart
+                                    .series()
+                                    .any(|(_, series)| series.scale == *scale)
                         })
                     }
                     ComparePlacement::NewPane => Some(SeriesScale::Right),

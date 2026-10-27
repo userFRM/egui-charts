@@ -242,7 +242,8 @@ impl SymbolExpression {
     }
 
     /// Whether the expression is more than one symbol, which is what a spread chart needs.
-    pub fn is_spread(&self) -> bool {
+    #[cfg(feature = "ui")]
+    pub(crate) fn is_spread(&self) -> bool {
         !matches!(self.root, Node::Symbol(_))
     }
 
@@ -269,7 +270,8 @@ impl SymbolExpression {
     }
 
     /// Replaces each symbol by `rename(symbol)`, such as the spelling of the instrument catalog.
-    pub fn rename_symbols(&mut self, mut rename: impl FnMut(&str) -> String) {
+    #[cfg(feature = "ui")]
+    pub(crate) fn rename_symbols(&mut self, mut rename: impl FnMut(&str) -> String) {
         fn walk(node: &mut Node, rename: &mut impl FnMut(&str) -> String) {
             match node {
                 Node::Number(_) => {}
@@ -329,9 +331,7 @@ impl SymbolExpression {
                     .ok_or_else(|| ExpressionError::UnknownSymbol(symbol.to_owned()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let Some((_, timeline)) = components.first() else {
-            return Ok(Vec::new());
-        };
+        let timeline = components[0].1;
         let mut bars = Vec::new();
         for bar in timeline.iter() {
             let Some(aligned) = components

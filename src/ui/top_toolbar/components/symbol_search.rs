@@ -180,7 +180,7 @@ pub struct SymbolSearchDialog {
 
 /// A listed result: its index in the results and, for the first instrument of a root, how many
 /// others share that root.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy)]
 struct Row {
     index: usize,
     members: usize,
@@ -648,7 +648,9 @@ impl SymbolSearchDialog {
     fn list_expression(&mut self, ctx: &Context, all_symbols: &[Instrument]) {
         self.expression_status = None;
         let text = self.search_query.trim();
-        if !text.contains(['+', '-', '*', '/', '(', ')'])
+        if self.config.max_results == 0
+            || self.search_query.chars().count() < self.config.min_search_len
+            || !text.contains(['+', '-', '*', '/', '(', ')'])
             || !matches!(self.category.0, None | Some(SymbolType::Spread))
             || self
                 .filtered_symbols
@@ -663,10 +665,13 @@ impl SymbolSearchDialog {
             Err(error) => Some(Err(error.to_string())),
         };
         match expression {
-            Some(Ok(expression)) => self.filtered_symbols.insert(
-                0,
-                Instrument::new(expression.to_string()).with_symbol_type(SymbolType::Spread),
-            ),
+            Some(Ok(expression)) => {
+                self.filtered_symbols.insert(
+                    0,
+                    Instrument::new(expression.to_string()).with_symbol_type(SymbolType::Spread),
+                );
+                self.filtered_symbols.truncate(self.config.max_results);
+            }
             Some(Err(error)) => self.expression_status = Some((error, true)),
             None => self.expression_status = Some(("Checking symbols…".into(), false)),
         }
@@ -1116,10 +1121,10 @@ pub enum ComparePlacement {
 
 impl ComparePlacement {
     /// Every placement, in the order the dialog offers them.
-    pub const ALL: [Self; 3] = [Self::SamePercentScale, Self::NewPriceScale, Self::NewPane];
+    const ALL: [Self; 3] = [Self::SamePercentScale, Self::NewPriceScale, Self::NewPane];
 
     /// The label of the placement's button.
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             Self::SamePercentScale => "Same % scale",
             Self::NewPriceScale => "New price scale",
@@ -1426,8 +1431,11 @@ impl CompareSymbolsDialog {
 
         // The placement buttons follow the pointer or the keyboard focus into the row.
         let placement_ids = ComparePlacement::ALL.map(|placement| response.id.with(placement));
+        let menu_id = response.id.with("placements");
         let engaged = response.contains_pointer()
             || response.has_focus()
+            || egui::Popup::is_id_open(ui.ctx(), menu_id.with("popup"))
+            || ui.memory(|m| m.has_focus(menu_id))
             || ui.memory(|m| placement_ids.iter().any(|id| m.has_focus(*id)));
         if engaged && !is_compared {
             ui.painter()
@@ -1472,41 +1480,84 @@ impl CompareSymbolsDialog {
 
         let mut action = None;
         if engaged && !is_compared {
-            for (placement, id) in ComparePlacement::ALL.into_iter().zip(placement_ids).rev() {
-                let galley = ui.painter().layout_no_wrap(
+            let placements = ComparePlacement::ALL.map(|placement| {
+                let label = ui.painter().layout_no_wrap(
                     l10n::text(ui.ctx(), placement.label()),
                     egui::FontId::proportional(theme.text.small),
                     config.text_color,
                 );
-                let button = egui::Rect::from_min_max(
-                    Pos2::new(right - galley.size().x - 16.0, rect.center().y - 12.0),
-                    Pos2::new(right, rect.center().y + 12.0),
+                (placement, label)
+            });
+            let buttons_width: f32 = placements
+                .iter()
+                .map(|(_, label)| label.size().x + 20.0)
+                .sum();
+            if right - left < buttons_width + 80.0 {
+                let button = egui::Rect::from_center_size(
+                    Pos2::new(right - 20.0, rect.center().y),
+                    Vec2::new(40.0, 24.0),
                 );
                 right = button.left() - 4.0;
-                let clicked = ui.interact(button, id, Sense::click());
-                clicked.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, galley.text())
-                });
-                let fill = if clicked.hovered() {
-                    theme.ui.btn_bg_hover
-                } else {
-                    config.bg_color
-                };
+                let menu = ui.interact(button, menu_id, Sense::click());
+                let label = l10n::text(ui.ctx(), "Add");
+                menu.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                let visuals = ui.style().interact(&menu);
                 ui.painter().rect(
                     button,
-                    button.height() / 2.0,
-                    fill,
-                    ui.visuals().widgets.inactive.bg_stroke,
+                    12.0,
+                    visuals.weak_bg_fill,
+                    visuals.bg_stroke,
                     egui::StrokeKind::Inside,
                 );
-                crate::styles::focus::draw_focus_ring(ui, &clicked, button.height() / 2.0);
-                ui.painter().galley(
-                    button.center() - galley.size() / 2.0,
-                    galley,
+                ui.painter().text(
+                    button.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(theme.text.small),
                     config.text_color,
                 );
-                if clicked.clicked() {
-                    action = Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                crate::styles::focus::draw_focus_ring(ui, &menu, 12.0);
+                egui::Popup::menu(&menu).show(|ui| {
+                    for placement in ComparePlacement::ALL {
+                        if ui.button(l10n::text(ui.ctx(), placement.label())).clicked() {
+                            action =
+                                Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                            ui.close();
+                        }
+                    }
+                });
+            } else {
+                for ((placement, galley), id) in placements.into_iter().zip(placement_ids).rev() {
+                    let button = egui::Rect::from_min_max(
+                        Pos2::new(right - galley.size().x - 16.0, rect.center().y - 12.0),
+                        Pos2::new(right, rect.center().y + 12.0),
+                    );
+                    right = button.left() - 4.0;
+                    let clicked = ui.interact(button, id, Sense::click());
+                    clicked.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, galley.text())
+                    });
+                    let fill = if clicked.hovered() {
+                        theme.ui.btn_bg_hover
+                    } else {
+                        config.bg_color
+                    };
+                    ui.painter().rect(
+                        button,
+                        button.height() / 2.0,
+                        fill,
+                        ui.visuals().widgets.inactive.bg_stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                    crate::styles::focus::draw_focus_ring(ui, &clicked, button.height() / 2.0);
+                    ui.painter().galley(
+                        button.center() - galley.size() / 2.0,
+                        galley,
+                        config.text_color,
+                    );
+                    if clicked.clicked() {
+                        action = Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                    }
                 }
             }
         }
@@ -1890,14 +1941,24 @@ mod tests {
     #[test]
     fn spread_queries_list_the_expression_or_report_why_not() {
         let symbols = create_test_symbols();
-        for (query, expected, status) in [
-            ("aapl - tsla", Some("AAPL-TSLA"), None),
-            ("(btcusdt+ethusdt)/2", Some("(BTCUSDT+ETHUSDT)/2"), None),
-            ("aapl-xyz", None, Some("Unknown symbol xyz")),
-            ("aapl-", None, Some("A symbol or number is missing")),
+        for (query, min_length, limit, expected, status) in [
+            ("aapl - tsla", 1, 20, Some("AAPL-TSLA"), None),
+            (
+                "(btcusdt+ethusdt)/2",
+                1,
+                20,
+                Some("(BTCUSDT+ETHUSDT)/2"),
+                None,
+            ),
+            ("aapl-xyz", 1, 20, None, Some("Unknown symbol xyz")),
+            ("aapl-", 1, 20, None, Some("A symbol or number is missing")),
+            ("aapl-tsla", 20, 20, None, None),
+            ("aapl-tsla", 1, 0, None, None),
         ] {
             let ctx = Context::default();
             let mut dialog = SymbolSearchDialog::new();
+            dialog.config.min_search_len = min_length;
+            dialog.config.max_results = limit;
             dialog.search_query = query.into();
             dialog.refresh_results(&ctx, &symbols);
             let spread = dialog
@@ -2072,84 +2133,121 @@ mod tests {
         assert!(!dialog.is_open);
         let symbols = create_test_symbols();
         let add = |placement| CompareAction::AddSymbol("AAPL".into(), placement);
-        for (hover, label, expected, populated) in [
-            (None, "AAPL", add(ComparePlacement::SamePercentScale), false),
-            (
-                Some("AAPL"),
-                "New price scale",
-                add(ComparePlacement::NewPriceScale),
-                false,
-            ),
-            (
-                Some("AAPL"),
-                "New pane",
-                add(ComparePlacement::NewPane),
-                false,
-            ),
-            (None, "X", CompareAction::RemoveSymbol("AAPL".into()), true),
-            (
-                None,
-                "Hide",
-                CompareAction::ToggleVisibility("AAPL".into()),
-                true,
-            ),
-        ] {
-            let ctx = Context::default();
-            let mut dialog = CompareSymbolsDialog::new();
-            if populated {
-                dialog.compared_symbols.push(CompareSymbol::new(
-                    "AAPL",
-                    "Apple",
-                    "Test",
-                    Color32::GOLD,
-                ));
-            }
-            let config = dialog.config.resolved(&ctx.global_style().visuals);
-            let mut frame = |events, label| {
-                let mut action = CompareAction::None;
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        action = dialog.draw_content(ui, &symbols, &config);
-                    },
-                );
-                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => {
-                        Some(text.pos + text.galley.size() / 2.0)
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [1440.0, 360.0] {
+                for (hover, label, expected, populated) in [
+                    (None, "AAPL", add(ComparePlacement::SamePercentScale), false),
+                    (
+                        Some("AAPL"),
+                        "Same % scale",
+                        add(ComparePlacement::SamePercentScale),
+                        false,
+                    ),
+                    (
+                        Some("AAPL"),
+                        "New price scale",
+                        add(ComparePlacement::NewPriceScale),
+                        false,
+                    ),
+                    (
+                        Some("AAPL"),
+                        "New pane",
+                        add(ComparePlacement::NewPane),
+                        false,
+                    ),
+                    (None, "X", CompareAction::RemoveSymbol("AAPL".into()), true),
+                    (
+                        None,
+                        "Hide",
+                        CompareAction::ToggleVisibility("AAPL".into()),
+                        true,
+                    ),
+                ] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut dialog = CompareSymbolsDialog::new();
+                    if populated {
+                        dialog.compared_symbols.push(CompareSymbol::new(
+                            "AAPL",
+                            "Apple",
+                            "Test",
+                            Color32::GOLD,
+                        ));
                     }
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                (action, pos)
-            };
-            frame(vec![], label);
-            if let Some(row) = hover {
-                let pos = frame(vec![], row).1.unwrap();
-                frame(vec![egui::Event::PointerMoved(pos)], row);
-            }
-            let pos = frame(vec![], label).1.unwrap();
-            frame(vec![egui::Event::PointerMoved(pos)], label);
-            let button = |pressed| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            frame(vec![button(true)], label);
-            assert_eq!(frame(vec![button(false)], label).0, expected);
-            assert_eq!(
-                dialog.compared_symbols.len(),
-                usize::from(populated),
-                "only the host updates chart membership"
-            );
-            if populated {
-                assert!(
-                    dialog.compared_symbols[0].visible,
-                    "only the host updates chart visibility"
-                );
+                    let config = dialog.config.resolved(&ctx.global_style().visuals);
+                    let mut frame = |events, label| {
+                        let mut action = CompareAction::None;
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(width, 640.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                action = dialog.draw_content(ui, &symbols, &config);
+                            },
+                        );
+                        let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                                assert!(!text.galley.elided, "{label} is unreadable at {width}");
+                                assert!(
+                                    shape.clip_rect.contains_rect(rect),
+                                    "{label} is clipped at {width}"
+                                );
+                                Some(rect.center())
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        (action, pos)
+                    };
+                    frame(vec![], label);
+                    if let Some(row) = hover {
+                        let pos = frame(vec![], row).1.unwrap();
+                        frame(vec![egui::Event::PointerMoved(pos)], row);
+                    }
+                    if hover.is_some()
+                        && let Some(pos) = frame(vec![], "Add").1
+                    {
+                        frame(vec![egui::Event::PointerMoved(pos)], "Add");
+                        for pressed in [true, false] {
+                            frame(
+                                vec![egui::Event::PointerButton {
+                                    pos,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                }],
+                                "Add",
+                            );
+                        }
+                    }
+                    let pos = frame(vec![], label).1.unwrap();
+                    frame(vec![egui::Event::PointerMoved(pos)], label);
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    frame(vec![button(true)], label);
+                    assert_eq!(frame(vec![button(false)], label).0, expected);
+                    assert_eq!(
+                        dialog.compared_symbols.len(),
+                        usize::from(populated),
+                        "only the host updates chart membership"
+                    );
+                    if populated {
+                        assert!(
+                            dialog.compared_symbols[0].visible,
+                            "only the host updates chart visibility"
+                        );
+                    }
+                }
             }
         }
     }

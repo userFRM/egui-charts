@@ -112,8 +112,8 @@ impl CommandPalette {
     /// Show the command palette modal
     ///
     /// The list stays empty, under an instruction to type, until the query matches commands; the
-    /// best match is then highlighted. Returns the ID of the executed command if any. Keyboard activation consumes its key so
-    /// the host can open another dialog in the same frame.
+    /// best match is then highlighted. Returns the ID of the executed command if any. Keyboard
+    /// activation consumes its key so the host can open another dialog in the same frame.
     pub fn show(&mut self, ctx: &Context, open: &mut bool) -> Option<String> {
         if !*open {
             return None;
@@ -546,21 +546,21 @@ mod tests {
             CommandPalette::new(
                 ["a", "b", "c"]
                     .into_iter()
-                    .map(|id| Command::new(id, id).category("Tools"))
+                    .map(|id| Command::new(id, id).category("Actions"))
                     .collect(),
             )
         };
 
         // A removal leaves no row past the end of the list.
         let (ctx, mut p) = (Context::default(), palette());
-        p.search_query = "tools".into();
+        p.search_query = "actions".into();
         frame(&ctx, &mut p, None);
         p.remove_command("b");
         assert_eq!(frame(&ctx, &mut p, None), None);
 
         // A removal above the highlighted command keeps the highlight on it.
         let (ctx, mut p) = (Context::default(), palette());
-        p.search_query = "tools".into();
+        p.search_query = "actions".into();
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("a");
