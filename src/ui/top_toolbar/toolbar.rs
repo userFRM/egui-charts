@@ -258,6 +258,7 @@ impl TopToolbar {
     fn is_shown(&self, slot: Slot) -> bool {
         !self.host_hidden.contains(&slot.host_control())
             && (slot != S::Trade || self.state.can_trade)
+            && (slot != S::Publish || self.state.can_publish_image)
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -851,6 +852,7 @@ mod tests {
                 toolbar.timeframe_selector.current = Timeframe::Hour1;
                 toolbar.state.can_undo = true;
                 toolbar.state.can_redo = true;
+                toolbar.state.can_publish_image = true;
                 ctx.global_style_mut(|style| {
                     style.scroll_animation = egui::style::ScrollAnimation::none();
                     style.spacing.scroll.kinetic.decay_time = 0.0;
@@ -1229,7 +1231,8 @@ mod tests {
             ] {
                 let direct = matches!(slot, S::Undo | S::Redo | S::Replay | S::Publish | S::Trade);
                 let mut toolbar = TopToolbar::new();
-                toolbar.state.can_publish_image = matches!(label, "Copy link" | "Post image");
+                toolbar.state.can_publish_image =
+                    matches!(label, "Copy link" | "Post image" | "Publish");
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
                 toolbar
@@ -1374,6 +1377,10 @@ mod tests {
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
             (
+                |t| t.state.can_publish_image = false,
+                &[TopToolbarAction::Publish],
+            ),
+            (
                 |t| t.set_control_visible(Control::SymbolSearch, false),
                 &[TopToolbarAction::OpenSymbolSearch],
             ),
@@ -1432,6 +1439,7 @@ mod tests {
         let broker = || {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
+            toolbar.state.can_publish_image = true;
             toolbar
         };
         let on = click_along(&ctx, &mut broker());
