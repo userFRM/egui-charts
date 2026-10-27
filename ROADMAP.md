@@ -1,574 +1,315 @@
 # egui-charts Roadmap
 
-Feature status and roadmap.
-Each item is marked as complete, partial, or missing.
-
----
+The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. The demo assembles the components and shows their action routing; an assembled terminal with library-owned action handling is still planned.
 
 ## Chart Rendering Engine
 
 ### Chart Types
 
-#### Standard OHLC
-- [x] **Candles**: Filled body with optional border, wicks, optional volume bars
-- [x] **Bars**: OHLC bars with tick marks
-- [x] **Hollow Candles**: Colored by the close versus the previous close, hollow when the close is above the open and filled otherwise
-- [x] **Volume Candles**: Bar width scaled 30-100% by relative volume
+`ChartType` offers 21 chart types, with the rendering limits listed below.
 
-#### Line-Based
-- [x] **Line**: Close-price line with configurable `PriceSource`
-- [x] **Line with Markers**: Line + circle markers at each data point
-- [x] **Step Line**: Staircase-style step interpolation
+- [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours.
+- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`.
+- [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
+- [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`.
+- [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
+- [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
+- [ ] Connect execution-based range construction to the Range chart type; it currently reconstructs a path from OHLC bars.
+- [ ] Offer proportional volume-candle widths without the current minimum width.
+- [ ] Expose HLC fill opacity and close-line width, and Kagi stroke widths.
+- [ ] Render the TPO single-print highlights already calculated by the engine.
 
-#### Area-Based
-- [x] **Area**: Filled polygon under the price line (about 20% alpha)
-- [x] **HLC Area**: Fill from high to close in the up color and from close to low in the down color, close line on top
-- [x] **Baseline**: Colored segments above/below a configurable baseline (a price or a share of the pane height), split where they cross it
-- [x] **Columns**: One column per bar from the pane bottom to the close, colored by the close versus the previous close
+### Pan, Zoom and Cursor
 
-#### Range-Based
-- [x] **High-Low**: Thin rects from high to low per bar
-- [x] **Range Bars**: Time-independent range bar transformation + rendering
+- [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom.
+- [x] Touch drags can start kinetic scrolling with configurable damping.
+- [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons.
+- [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping.
+- [x] Main-pane crosshair snapping includes visible studies on the main scale for time-based charts.
+- [x] Hover readouts and the data window show bar and study values.
+- [ ] Allow mouse drags to start kinetic scrolling.
+- [ ] Include comparison series and price-based chart studies in main-pane crosshair snapping.
+- [ ] Correct box-zoom overlay alpha and use theme colours.
+- [ ] Add the instrument title to the floating historical readout.
+- [ ] Provide a table view of loaded bars and study values.
 
-#### Japanese
-- [x] **Heikin-Ashi**: Full HA formula (HA_close, HA_open), rendered as candles
-- [x] **Renko**: Bricks built once over the whole history and extended with each new bar, brick size from `ChartTypeParams`, max 2000 drawn
-- [x] **Kagi**: Thick/thin line segments with shoulder/elbow logic
-- [x] **Line Break**: Line break bricks with a configurable line count (1 to 10), built once over the whole history
-- [x] **Point & Figure**: X/O column rendering, max 1000 columns
+### Scales and Panes
 
-#### Advanced
-- [x] **Time Price Opportunity (TPO)**: Rendered by the chart type dispatch (value area, POC, initial balance); period, ticks per row, value area and extended-hours split set in the Symbol tab, periods at least the bar interval, sessions following the chart's exchange sessions or calendar days, profiles built over the whole sessions of the visible bars, adjacent sessions merged or a composite built through `ChartTypeParams::tpo_composites`, at most about 1,000 rows, bars with a non-finite price skipped
-- [x] **Volume Footprint**: Bid and ask volume at each price of every bar, summed from the trades the feed sends on the instrument's tick, while the feed streams; bars before the first held trade draw as candles
-- [x] **Session Volume Profile**: Volume at each price of every session of the visible bars, from the same trades, with point of control, value area, developing point of control and volume nodes; needs the `studies` feature
-
-### Pan / Zoom
-- [x] Mouse wheel zoom (centered on cursor)
-- [x] Shift+wheel horizontal pan
-- [x] Click-drag pan (left button)
-- [x] Pinch-to-zoom (multi-touch)
-- [x] Two-finger pan
-- [x] Kinetic scrolling with exponential damping
-- [x] Price axis drag-scaling (the scale compounds per frame; needs a per-frame delta)
-- [x] Double-click to reset axes
-- [x] Box zoom (selection rectangle)
-
-### Crosshair / Cursor
-- [x] Normal mode (follows raw cursor)
-- [x] Magnet mode (snaps to nearest OHLC value)
-- [x] Full crosshair (vertical + horizontal lines)
-- [x] Dot crosshair
-- [x] Arrow mode (no crosshair)
-- [x] Line styles: solid, dashed, dotted
-- [x] Price label on the Y-axis at the crosshair and for the last price
-- [x] Time label on X-axis with adaptive format
-
-### Scales
-- [x] Linear (normal) price scale
-- [x] Logarithmic price scale
-- [x] Percentage price scale (relative to the first visible close)
-- [x] Indexed-to-100 price scale (relative to the first visible close)
-- [x] Auto-scale with a fixed 10% margin
-- [x] Manual range override
-- [x] Inverted scale
-- [x] Hierarchical time tick generation with weight system
-- [x] Price mark generation
-- [x] Host price and percentage formatters for axis ticks, crosshair labels and price tags (`Chart::set_price_formatter`, `set_percentage_formatter`); per-series formatters and locale number separators not yet
-- [x] Host time formatters for axis marks, crosshair and tooltip labels (`Chart::set_time_formatter`), with month and weekday names in the chart's locale (`set_locale`) and a date pattern (`set_date_format`)
-
-### Multi-Pane
-- [x] `IndicatorPane` widget for separate-pane indicators
-- [x] Predefined configs: RSI, MACD, etc.
-- [x] X-axis synchronization with main chart
-- [x] Panes created, filled, sized by stretch factor and reordered from the `Chart` API, the price pane included
-
----
+- [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options.
+- [x] Time-axis tick hierarchy, price marks, exchange time zones, session breaks and extended-hours shading.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters.
+- [x] Locale-aware date names and configurable date patterns.
+- [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
+- [x] Studies and added series can use separate panes and independent scales.
+- [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
+- [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
+- [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
+- [ ] Use configured scale precision for added-series value tags when no formatter is supplied.
+- [ ] Draw independent symbol-name and study-name tags on the price scale.
+- [ ] Apply scale font-size, scale-line colour and pane-button visibility settings.
 
 ## Drawing Tools
 
-Note: tools with a fixed point count (parallel channel, pitchforks, triangle, harmonic and chart patterns, Elliott waves) currently complete one click early with the last anchor duplicated; drag that handle to set the final point.
+### Geometry and Annotations
 
-### Lines
-- [x] Trend Line: Segment distance hit test, start/end/middle handles
-- [x] Ray: extends to the right edge; a ray drawn leftward points the wrong way
-- [x] Extended Line: Extends both directions
-- [x] Horizontal Line: Y-proximity hit test
-- [x] Horizontal Ray
-- [x] Vertical Line: X-proximity hit test
-- [x] Cross Line: Horizontal + vertical
-- [x] Trend Angle: Line + dashed reference + arc + angle/slope label
-- [x] Measure: colored rect, arrows and info box with price change, percent and bar count; pips assume a 0.01 tick, time assumes one-minute bars, volume not shown
+- [x] Trend lines, rays, extended lines, horizontal and vertical levels, cross lines, trend angle and info line.
+- [x] Parallel, flat-top/bottom, disjoint and regression channels; regression uses the selected closes and configurable deviation bands.
+- [x] Andrews, Schiff, modified Schiff and inside pitchforks, with configurable levels and fills; three-anchor pitchfans.
+- [x] Fibonacci retracement, three-anchor extension and channel, time zones, circles, arcs, speed fan, spiral, wedge and trend-based time projections.
+- [x] Gann fan, square, box and fixed-square drawings, with editable grid settings where supported.
+- [x] XABCD, ABCD, Cypher and head-and-shoulders drawings, with labels and price ratios or neckline projections as applicable.
+- [x] Triangle and three-drives patterns accept their required anchors and render labelled paths.
+- [x] Elliott impulse, correction, triangle and combination drawings render labelled waves.
+- [x] Cyclic lines, repeating time cycles and sine lines.
+- [x] Long/short position drawings expose entry, stop, target, instrument-aware risk sizing and bar-based profit/loss; forecasts, copied bars and three-anchor measured projections.
+- [x] Anchored VWAP with deviation bands; fixed and anchored volume-profile drawings estimate distributions from chart bars.
+- [x] Price, date and combined range measurements use actual bar timestamps; quick measure also reports volume and instrument ticks/pips when supplied.
+- [x] Brush, highlighter, arrows, rectangles, rotated rectangles, circles, ellipses, triangles, arcs, sectors, polylines, paths and quadratic/cubic curves.
+- [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
+- [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
+- [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
+- [ ] Bound Fibonacci retracement/extension fills to their configured horizontal span and extend channel levels to pane edges.
+- [ ] Build the triangle pattern's two boundaries and apex, and correct its polygon fill.
+- [ ] Calculate three-drives ratios and a price-based reversal zone.
+- [ ] Base Elliott impulse targets on the first price leg with the correct direction, independent of zoom and scale.
+- [ ] Add the origin anchor needed for a complete five-wave Elliott triangle.
+- [ ] Render projected bars for Ghost Feed, which currently draws a faded path.
+- [ ] Connect fixed and anchored profile drawings to finer bar data or execution-based profiles.
+- [ ] Expose configurable Gann-square fan and arc construction and visibility.
 
-### Channels
-- [x] Parallel Channel: Two parallel lines + connectors, explicit hit test
-- [x] Flat Top/Bottom: Trend line + horizontal + Support/Resistance labels
-- [x] Disjoint Channel: Two parallel segments + dashed connectors + width label
-- [x] Regression Trend: least-squares line through the closes between the anchors, bands a configurable number of standard deviations away, R² and Pearson correlation label
+### Interaction, Properties and Persistence
 
-### Pitchforks
-- [x] Pitchfork (Andrews)
-- [ ] Schiff Pitchfork: median origin not moved off the first anchor, so the geometry is wrong
-- [x] Modified Schiff Pitchfork
-- [ ] Inside Pitchfork: draws the same lines as the Andrews pitchfork
+- [x] Fixed-point placement keeps clicked anchors; free paths finish with Enter or double-click.
+- [x] Selection uses rendered strokes, fills and text, with geometry and anchor fallbacks before painting.
+- [x] Anchor handles, dragging, OHLC/study/drawing magnet snapping, repeated placement, locking and visibility controls.
+- [x] Undoable drawing creation, edits, deletion, ordering, flat groups and moves between panes.
+- [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates.
+- [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration.
+- [x] Per-drawing selection, saving and object-list flags; drawing change notifications and registry availability controls.
+- [x] Versioned drawing documents retain timestamp anchors, settings and flat groups, with migration and skipped-record reporting.
+- [x] `Chart::set_storage` loads and saves drawings per symbol and retains failed writes for retry.
+- [x] Drawing templates save, apply and delete reusable styles through `TemplateStore` and `Storage`.
+- [x] Demonstration cursor with a fading pointer trail.
+- [ ] Add nested drawing folders and folder management to the object tree.
+- [ ] Make sloping drawing alert levels agree with logarithmic rendering.
+- [ ] Add a separate magic cursor mode.
 
-### Fibonacci
-- [x] Fibonacci Retracement: default levels with price labels, level 0 on the second anchor and Reverse measuring from the first; custom levels, extend and Reverse only through the fib_config field set by host code
-- [x] Fibonacci Extension: two-point extension levels; no third anchor to project from
-- [x] Fibonacci Channel: levels parallel to the base line; always drawn on one side regardless of the third point
-- [ ] Pitchfan: two-point fan of 7 lines over a fixed 90 degree spread, not built from a pitchfork
-- [x] Fibonacci Time Zones: Vertical lines at Fibonacci sequence intervals
-- [x] Fibonacci Circles: Concentric circles at 8 ratios
-- [x] Fibonacci Speed Resistance Arcs: semicircular arcs at 6 ratios, always below the second anchor
-- [x] Fibonacci Speed Fan: 7 ratios with colored fills
-- [x] Fibonacci Spiral: logarithmic golden-ratio spiral drawn with straight segments around the first anchor
-- [ ] Fibonacci Wedge: placeholder of fixed-length rays at fractions of the anchor angle
-- [x] Trend-Based Fib Time: vertical lines at ratio multiples of the two-anchor span; no third anchor
+## Technical Indicators
 
-### Gann
-- [ ] Gann Fan: 9 lines at their labelled price to time ratios; a line whose end at the right edge of the chart is more than 200 px off the chart is skipped, and the fan always opens to the right of its first anchor
-- [x] Gann Square: Grid with diagonals, inscribed circle, degree labels
-- [x] Gann Box: 8x8 grid with diagonals; angle lines from the top-left corner only
-- [x] Gann Fixed: 1:1 forced-square with 4x4 grid
+### Calculations and Rendering
 
-### Patterns
-- [x] XABCD Pattern: Labels, filled triangles, Fibonacci ratio display
-- [ ] Head and Shoulders: labels drawn, but the neckline joins the shoulders instead of the troughs, so the target is wrong
-- [x] ABCD Pattern: Labels, fill, CD/AB ratio with color coding
-- [x] Triangle Pattern: numbered points and fill; apex lines use only the first 4 of 7 points
-- [ ] Three Drives: completes at 6 points, so the PRZ box (drawn at 7) never appears
-- [ ] **Cypher Pattern**: Delegates entirely to XABCD renderer; Cypher-specific ratios not visually distinct
+- [x] `IndicatorFactory` registers 177 indicators with default features and accepts downstream registrations; the study picker uses that registry.
+- [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
+- [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
+- [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
+- [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with point of control and value area.
+- [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
+- [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
+- [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature.
+- [x] Shared renderers support lines, steps, histograms, columns, dots, crosses, areas, shapes, bar/background colours and filled regions.
+- [x] MACD histogram columns, displaced Ichimoku cloud fills into visible future space, and separate Parabolic SAR dots.
+- [ ] Correct RSI zero-loss handling for very small price changes and the dependent divergence calculations.
+- [ ] Return the correct gain-only RSI values in Connors RSI's price and streak components.
+- [ ] Tighten both Tasuki Gap detectors' third-candle opening and closing constraints.
+- [ ] Correct Woodies CCI's price source and neutral/transition histogram colours.
+- [ ] Give PPO, PVO and Net Volume histogram outputs their histogram defaults; expose PPO/PVO average-type inputs.
+- [ ] Add selectable Bollinger basis averages and BandWidth expansion/contraction lookbacks.
+- [ ] Expose VWAP band multipliers and event dates in applied-study settings.
+- [ ] Request finer profile data and provide zoom-adaptive session profile detail.
+- [ ] Add dedicated two-symbol spread, ratio, Pearson correlation and log-return correlation studies.
+- [ ] Emit rolling price-to-bar-index correlation as a Trend Strength Index study.
+- [ ] Add automatic chart-pattern and key-level detection studies.
+- [ ] Add composite technical ratings, lunar phases and a dedicated volatility-index study.
+- [ ] Add the remaining specialised ADX-breakout, divergence, reversal and intraday/missed/ghost-pivot studies.
 
-### Elliott Waves
-- [x] Elliott Impulse: 6 points, motive/corrective fill, Fibonacci 1.618 target
-- [x] Elliott Correction: 4 points (5-A-B-C), corrective fill
-- [x] Elliott Triangle: 5 points (A-E), converging trendlines
-- [x] Elliott Double Combo: 5 points, only the first 3 labelled (W-X-Y)
-- [x] Elliott Triple Combo: 7 points, only the first 5 labelled (W-X-Y-X-Z)
+### Study API and Editing
 
-### Cycles
-- [x] Cyclic Lines: Repeating vertical lines, cycle numbers, period label
-- [x] Time Cycles: Concentric semicircular arcs (0.5x-3x), mesh fills
-- [x] Sine Line: Full sine wave with amplitude guides
+- [x] `Indicator` and `IndicatorRegistry` calculate without egui; `CustomIndicator` accepts downstream calculation code.
+- [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata.
+- [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment.
+- [x] Incremental updates or scheduled recalculation as chart data changes.
+- [x] Applied-study editor with Inputs, Style and Visibility pages and atomic validated changes.
+- [x] Study templates capture inputs and presentation; built-in studies reconstruct through `StudyTemplate`.
+- [ ] Offer interval and wait-for-close inputs for OHLC-based studies as well as source-aware studies.
+- [ ] Expose every supported plot type in the Style editor.
+- [ ] Add a configurable per-chart study limit and rejection feedback.
+- [ ] Restore custom registered studies and remap study-source dependencies through a library-owned template operation.
+- [ ] Provide a study editor surface with host callbacks for submitted content.
 
-### Projection / Trading
-- [x] Long Position: entry, target and independent stop zones; risk/reward from the levels, P&L from the bars after the entry, quantity fixed or sized from the amount or account share at risk
-- [x] Short Position
-- [x] Forecast: price change over the bar span, resolved against the bars up to the target bar
-- [ ] Ghost Feed: faded polyline through the clicked points; draws no bars
-- [x] Bars Pattern: copies the selected bars to the projection anchor
-- [x] Projection Tool: two-point measured move with labels; the AB=CD start point is synthesized, not user placed
+## Order Flow
 
-### Volume / VWAP
-- [x] Anchored VWAP: VWAP of the typical price from the anchor bar, with 1σ and 2σ volume-weighted bands
-- [x] Fixed Range Volume Profile: each bar's volume spread over its high-low range, POC and value area; row count and value area share are settings (24 rows, 70% by default)
-- [x] Anchored Volume Profile: the same profile from the anchor bar to the latest bar
+Execution-based calculations use supplied trades and their aggressor side. Unknown-side volume remains separate; chart-bar volume estimates do not reconstruct actual executions.
 
-### Measurements
-- [x] Price Range: Two hlines + vertical connector + price diff label
-- [x] Date Range: Two vlines + horizontal connector + bar count
-- [x] Date and Price Range: Filled rect + combined label
-- [x] Info Line: angled line and info box with price change, percent and bars; time assumes one-minute bars, angle sign inverted
+### Footprints, Delta and Profiles
 
-### Brushes / Freehand
-- [x] Brush: Freehand stroke with connected segments
-- [x] Highlighter: Wider semi-transparent stroke
+- [x] `Footprint` aggregates bid, ask and unknown volume by bar and integer tick row, with execution-size filtering.
+- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering and automatic row grouping.
+- [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting.
+- [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics.
+- [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping.
+- [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
+- [ ] Bound live footprint retention when trades are evicted, including accumulated bars and price levels.
+- [ ] Integrate size-filtered cumulative delta into a study pane with its own scale and labels.
+- [ ] Provide a combined multi-size-range delta study and rolling volume/delta histogram mode.
+- [ ] Add threshold highlights for delta percentage and bid/ask ratio, and a minimum filter for delta POC.
+- [ ] Add fixed-cell, delta-fade and dominant-side colouring, abbreviated values, zero-display controls and value-scaled text.
+- [ ] Add footprint extreme bid/ask-ratio annotations and pullback highlights.
+- [ ] Extend imbalance zones with horizontal mode, configurable duration and fresh/triggered state.
+- [ ] Correct unfinished-auction extreme tests and extend their levels beyond the originating bar.
+- [ ] Draw value-area boundary guides for execution-based profiles and expose node sensitivity, smoothing and empty-row valleys.
 
-### Arrows
-- [x] Arrow: Line + arrowhead
-- [x] Arrow Marker: two-point arrow with endpoint styling
-- [x] Arrow Mark Up
-- [x] Arrow Mark Down
-- [x] Arrow Mark Left
-- [x] Arrow Mark Right
+### Depth, Tape and Heatmap
 
-### Shapes
-- [x] Rectangle: Fill, dashed midlines, dimension labels, 4-corner handles
-- [x] Circle
-- [x] Ellipse: Path approximation
-- [x] Triangle: 3-point polygon
-- [x] Arc: circular arc through three anchors
-- [x] Sector: center, radius endpoint and end ray, with clockwise sweep and optional fill
-- [x] Polyline: Connected segments with vertex markers
-- [x] Path: connected segments ending in an arrowhead by default
-- [x] Curve: Quadratic bezier
-- [ ] **Rotated Rectangle**: Renders as axis-aligned only; rotation not implemented
-- [ ] **Double Curve**: Uses sine offset approximation, not true cubic bezier
+- [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
+- [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
+- [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
+- [x] Heatmap best bid/ask paths and a side profile of total resting size.
+- [x] Volume bubbles aggregate by chart bar and price, with side/delta colours, linear/square-root/logarithmic sizing and outlier limits.
+- [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
+- [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
+- [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
+- [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
+- [ ] Add dedicated ladder columns for observed size changes, traded bid/ask volume and order counts.
+- [ ] Add session/reset controls and delta/bid-ask modes for the ladder profile.
+- [ ] Expose largest-order side profiles and configurable resting-size highlight tiers in the ladder and heatmap.
+- [ ] Connect order-size filtering and aggregated/per-order source selection to heatmap sampling, including metadata for participant exclusions.
+- [ ] Benchmark and tune heatmap cadence, row count and update cost for large books.
+- [ ] Add fresh/persistent size filtering to book totals, execution-consumed level counts and price-reversal resets.
+- [ ] Add combined-parent-order counting to trade-rate studies and consumed passive-order details to reconstructed tape.
+- [ ] Expose raw footprint and book inputs through the general study context.
 
-### Annotations
-- [x] Text Label: Background box + border + text + anchor marker
-- [x] Anchored Text: Background box + anchor icon + text
-- [x] Note: Sticky note with folded corner + tooltip
-- [x] Anchored Note: Pin head + needle + expandable text box
-- [x] Flag Note: Flag pole + pennant + optional text
-- [x] Price Label: Arrow badge with price text
-- [x] Price Note: Dashed hline + note box
-- [x] Callout: Text box with auto-edge pointer triangle
-- [x] Comment: Speech bubble + expandable text
-- [ ] Table: fixed grid of 3 columns by 4 rows (header included) with placeholder headers and cell text
-- [x] Signpost: Dashed vertical + sign plate + arrow
+## Trading and Strategy Reports
 
-### Content / Media
-- [ ] **Image**: Decorative placeholder only (checkerboard + icon); no image loading
-- [ ] **Tweet**: Decorative card only; no API integration
-- [ ] **Idea**: Decorative card only; no service connection
+- [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
+- [x] Market, limit, stop and stop-limit tickets, units/value sizing, market-order risk sizing, time in force, presets and attached stop-loss/take-profit levels.
+- [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
+- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
+- [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
+- [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
+- [x] Execution markers, rejection/fill notifications and execution sound intents.
+- [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [ ] Extend risk-percent sizing to limit, stop and stop-limit tickets.
+- [ ] Add performance-summary CSV or spreadsheet export to strategy reports.
 
-### Icons
-- [x] Font Icon: searchable categories of bundled vector icons and Unicode emoji, with session recents first; the next click places the glyph at its independently saved size
-- [x] Sticker: bundled vector illustrations placed from the same picker
-- Note: Icons module is feature-gated behind `icons` feature (enabled by default)
+## Alerts
 
-### Cursors (4 modes, no rendering needed)
-- [x] Cross, Dot, Arrow, Eraser
-
-### Drawing System Infrastructure
-
-#### Hit Testing
-- [x] Geometry-accurate hit tests for: TrendLine, Measure, HorizontalLine, VerticalLine, Rect, Fibonacci (3 variants), GannFan, ParallelChannel
-- [ ] Every other tool uses the point-proximity fallback (click on an anchor point, not on the drawing body)
-
-#### Handle System
-- [x] Coordinate-aware handles for: TrendLine, Measure, Rect, HorizontalLine, VerticalLine, Fib Retracement/Extension/Channel, Gann Fan/Square/Box
-- [x] Generic indexed handle fallback for all other tools (functional but basic)
-
-#### Persistence
-- [x] Serializable `DrawingStorage` types: anchors as timestamps, every tool type by a stable identifier, and every drawing setting
-- [x] Restored drawings keep their anchors across frames
-- [x] Format version 2 with a migration from version 1; unknown versions are rejected
-- [ ] Nothing in the chart calls save or load
-
-#### Properties Dialog
-- [x] Multi-tab dialog: Style, Text, Visibility, Coordinates
-- [x] Style controls for color (with alpha), stroke width, line style, fill and extend; only color and width are applied when drawing
-- [ ] Per-timeframe visibility toggles: shown in the dialog, not applied when rendering
-- [ ] Direct point coordinate editing: tab with blank fields, not loaded from or applied to the drawing
-
----
-
-## Technical Indicators (177 registered)
-
-With default features, all 177 registered indicators have calculation code: no `todo!()` or `unimplemented!()` stubs.
-Some indicators appear in more than one category below (for example Standard Error in Volatility and Statistics).
-
-### Rendering Limitation
-Studies share line renderers. Overlays also support crossing markers, direction colours, bottom fills, right extensions and labels. The remaining rendering limits are:
-- [ ] MACD, PPO and PVO histograms render as a line instead of bars
-- [ ] Ichimoku cloud renders as 5 separate lines instead of filled cloud regions
-- [ ] Parabolic SAR renders as a connected line instead of individual dots
-- [x] Volume profiles expose price-row distributions through `Indicator::volume_profiles` and draw horizontal histograms with up/down volume, POC and value-area lines
-
-### Moving Averages
-- [x] SMA, EMA, WMA, DEMA, TEMA, HMA, ALMA, VWMA, LSMA, SWMA
-- [x] KAMA, Smoothed MA (Wilder), McGinley Dynamic, VIDYA, ZLEMA
-- [x] Hamming MA
-- [x] Guppy MA (GMMA): 12 EMAs (6 short, 6 long)
-- [x] Multiple MA: SMA 20/50/100/200
-- [x] MA Cross, EMA Cross, SMA/EMA Cross, Triple MA and MA Ribbon, backed by independently configured average types, lengths, sources and colours with crossing markers
-- [x] MA Channel, Envelopes
-
-### Momentum Oscillators
-- [x] RSI, MACD, VW-MACD, Stochastic, Stochastic RSI
-- [x] Williams %R, CCI, ROC, Momentum, Aroon, Awesome Oscillator
-- [x] Ultimate Oscillator, Connors RSI, Coppock Curve
-- [x] DPO, TRIX with its signal line, Mass Index, Chande Momentum (CMO)
-- [x] Know Sure Thing (KST) with its signal line
-- [x] True Strength Index (TSI) with its signal line, KDJ with its K, D and J lines
-- [x] Schaff Trend Cycle, Double Stochastic, Elder Ray (Bull and Bear Power)
-- [x] Fisher Transform with its trigger, Force Index
-- [x] Center of Gravity with its signal line, Pretty Good Oscillator, Rainbow Oscillator
-- [x] Relative Vigor Index, Stochastic Momentum Index, each with its signal line
-- [x] Ultimate Momentum, Trend Intensity Index, Qstick
-- [x] Elder Impulse System, Trend Detection Index
-
-### Trend / Overlay
-- [x] ADX: ADX, +DI, -DI lines
-- [x] SuperTrend: ATR-based trailing stop, drawn as an up and a down trend line
-- [x] Ichimoku Cloud: Tenkan and Kijun; Senkou A/B plotted the displacement ahead and Chikou the displacement behind; the part of the cloud projected past the last bar is not drawn
-- [x] Parabolic SAR: SAR values with acceleration factor, drawn as an uptrend and a downtrend line
-- [x] Directional Movement (DMI): +DI, -DI and ADX
-- [x] Vortex Indicator: VI+ and VI-
-- [x] Choppiness Index: ATR sum / range
-- [x] Linear Regression: Rolling LinReg endpoint overlay
-- [x] Linear Regression Channel: trailing fit with residual deviation bands, correlation, selectable source and optional right extension
-
-### Volatility
-- [x] Bollinger Bands: SMA +/- k*StdDev
-- [x] ATR: Wilder smoothed true range
-- [x] Keltner Channels: EMA +/- ATR*multiplier
-- [x] Donchian Channels: N-bar high/low
-- [x] Standard Deviation
-- [x] Bollinger Band Width (BBW), %B
-- [x] Chandelier Exit: N-bar high minus and N-bar low plus ATR*multiplier (long and short exits)
-- [x] Squeeze Momentum: momentum line and the BB-inside-KC flag (1 or 0) as a second line
-- [x] Historical Volatility: Annualized log-return std dev
-- [x] Chaikin Volatility
-- [x] Acceleration Bands
-- [x] OHLC Volatility (Garman-Klass), Parkinson Vol (high-low range), Zero-Trend Vol (zero-mean close-to-close log returns); annualisation assumes daily bars and 252 trading days per year (see #672)
-- [x] Standard Error, Standard Error Bands
-
-### Volume
-- [x] OBV, VWAP (session, week, month, quarter, year or host-event anchors, with deviation or percentage bands; dialog-created studies inherit the chart instrument's time zone and session), Anchored VWAP
-- [x] MFI, A/D Line, CMF, Klinger Oscillator
-- [x] Ease of Movement, Net Volume (volume signed by the change from the previous close, first bar blank), Volume ROC, Volume Oscillator
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles compute only their selected spans; fixed and anchored times survive prepended history
-- [x] Time Price Opportunity: each session's TPO profile beside its bars, as letters or blocks, with point of control, value area and initial balance, for the visible or the latest session; the chart builds the profiles with the TPO chart type's code and cache
-- [x] VWMA, Balance of Power
-- [x] Volume Price Trend, NVI, PVI
-- [x] Williams AD, PVT Enhanced
-- [x] Market Facilitation Index (Bill Williams)
-- [x] Commodity Selection Index
-
-### Correlation / Statistics
-- [x] Linear Regression, Linear Regression Slope
-- [x] Rank Correlation Index (Spearman)
-- [x] Standard Error, Standard Error Bands
-- [x] Majority Rule, Accumulation Swing Index
-
-### Price Derivatives
-- [x] Typical Price, Weighted Close, Median Price
-- [x] OHLC4
-- [x] True Range
-
-### Market Structure
-- [x] 52-Week High/Low % and 52W High/Low: a 364-day timestamp window on every interval, blank before 52 weeks of history; high and low draw as two overlay lines
-
-### Support / Resistance
-- [x] Pivot Points Standard: Traditional, Fibonacci, Woodie, Classic, DM and Camarilla levels from the previous day, week, month, quarter or year of trading days, up to R5 and S5
-- [x] ZigZag: percentage swing detection drawn as straight lines between consecutive pivots; public pivots include the moving last extreme
-- [x] Automatic trend line, parallel channel, Fibonacci retracement and extension, and pitchfork studies use those pivots and the existing drawing renderers (`drawings` feature)
-
-### Price Oscillators
-- [x] PPO and PVO (Percentage Volume Oscillator): oscillator, signal and histogram, drawn as three lines
-
-### Factory Coverage
-- [x] `IndicatorFactory` registers all 177 built-in indicators by name and category, each a distinct study; `CVD`, `CloseToCloseVol`, `HL2`, `HLC3` and `PriceChannel` repeat a registered study and `EhlersFisher` is a variant of Fisher Transform; these six types are built directly
-- [x] The indicator dialog lists every study its `IndicatorFactory` registers, including a host's own, and creates them through it
-
----
+- [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and multiple conditions.
+- [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; presets use storage.
+- [x] Toolbar, context-menu, price-scale and keyboard entry points, plus draggable chart alert levels.
+- [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
+- [ ] Add user-controlled sorting and cloning to the alerts panel.
+- [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
+- [ ] Add channel-drawing alert geometry.
+- [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
+- [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
 
 ## UI Components
 
-### Drawing Toolbar
-- [x] Full sidebar with all tool categories
-- [x] Submenu rendering with icons, section headers, shortcut labels
-- [ ] Cursor submenu (Cross, Dot, Arrow, Eraser) renders and the Eraser deletes the drawing it is clicked on; Cross, Dot and Arrow do not change chart behaviour
-- [ ] Color picker popup (4x5 grid exists in code but no control opens it)
-- [x] Magnet, StayInDrawing, Lock toggles (magnet and lock have no effect yet)
-- [ ] Drawing tool favorites (the flyout stars add and remove favourites; no favourites bar shows them and nothing persists them)
-- [x] Horizontal floating toolbar variant
-- [ ] Drawing template persistence (struct exists but no save/load backend)
+### Toolbars, Dialogs and Panels
 
-### Top Toolbar
-- [x] Symbol search pill (custom-drawn with icons)
-- [x] Compare/Add symbol button renders and emits OpenCompare (no compare overlay)
-- [x] Timeframe selector dropdown grouped by unit (every preset and custom interval emits a `Timeframe`)
-- [x] Chart type selector dropdown (all 19 types with icons + descriptions)
-- [x] Indicators button
-- [x] Alert, Replay, Undo, Redo buttons
-- [x] Right rail buttons render: Theme, Quick Search, Camera, Fullscreen, Settings, Save, Layout (Layout has no backing feature)
-- [ ] Quick settings menu (exists but not rendered by the toolbar; most fields it writes have no reader)
-- [ ] Settings "Scales Properties..." button closes menu but opens nothing
-- [ ] Save button has no dropdown/sub-options
-- [ ] Layout menu / chart grid selector not rendered inline
+- [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
+- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; comparisons use shared percentage scales, separate scales or panes.
+- [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests.
+- [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
+- [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
+- [x] Status settings control supplied logos, last day change and study backdrops; Symbol settings request dividend-adjusted history from the host.
+- [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
+- [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
+- [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
+- [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them.
+- [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
+- [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
+- [ ] Persist and restore indicator favourites in the assembled UI.
+- [ ] Show and route the standalone floating selection toolbar's settings, duplicate, lock, visibility, delete and colour actions.
+- [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
+- [ ] Handle the series context menu's Copy price action.
+- [ ] Complete default interval-entry, rectangle-tool and selected-chart-maximise shortcut routing.
+- [ ] Add main-symbol legend controls for visibility, settings and removal.
+- [ ] Add watchlist duplication, flag-filtered lists, chart-menu insertion and a working advanced watchlist view.
 
-### Indicator Dialog
-- [x] Modal overlay with dim background
-- [x] Left category sidebar
-- [x] Search bar with case-insensitive substring filtering
-- [x] Tabs: Indicators lists the studies; Profiles, Patterns and the Community and Premium categories show their empty states, as nothing supplies them yet
-- [ ] Favorite toggling: favourites live in `IndicatorDialog::favorites` for the session; persisting them is left to the host
-- [x] Configuration panel: each study starts from its own default parameters; the common studies' parameters are editable, the others are added with their defaults until studies declare their inputs
+### Replay
 
-### Symbol Search Dialog
-- [x] Real-time text filtering
-- [x] Keyboard navigation (Up/Down/Enter/Escape)
-- [x] Scrollable results with symbol name and description (no exchange badges)
-- [ ] Compare symbols dialog (two-column widget exists but is never shown; search does not filter)
-
-### Timeframe Toolbar
-- [x] Date range buttons (1D to All) render and emit DateRangeChanged; mapping to a time span is left to the host
-- [ ] Go-to-date navigation (picker exists; choosing a date does not scroll the chart)
-- [x] Clock display in UTC (timezone button opens nothing)
-- [ ] RTH/Session toggle (label renders; no session menu and no effect on data)
-- [ ] ADJ toggle (flips a flag nothing reads)
-
-### Floating Selection Toolbar
-- [x] FloatingSelectionToolbar widget with drag handle (not shown by chart or demo)
-- [x] Color slot pickers in the FloatingSelectionToolbar widget (not wired)
-- [ ] Settings, Duplicate, Lock, Visibility, Delete buttons (emit actions no code handles)
-- [x] Delete button with red hover in the FloatingSelectionToolbar widget (not wired)
-- [x] Viewport clamping in the FloatingSelectionToolbar widget (not wired)
-
-### Chart Controls
-- [ ] Chart control bar Zoom In/Out/Reset (widget exists, never rendered, actions unhandled)
-- [ ] Auto-scale toggle in chart control bar (unwired)
-- [ ] Log scale toggle in chart control bar (unwired)
-- [ ] Percentage toggle in chart control bar (unwired)
-
-### Replay System
-- [x] Play/Pause/Stop buttons
-- [x] Step forward/backward
-- [x] Speed control with presets
-- [x] Progress bar with seek (click/drag)
-- [x] Keyboard shortcuts via `ReplayKeyboardHandler` (Space, arrows, Home/End, M for marker, Ctrl+R, Escape)
-- [x] Compact variant
-- [ ] SVG icon replay toolbar (exists; actions not mapped to ReplayController, never rendered)
-
-### Dialogs
-- [x] **Alert Dialog**: 3 tabs (Price, Indicator, Volume) with form validation
-- [x] **Series Settings**: 7 tabs (Symbol, Status Line, Scales, Canvas, Trading, Alerts, Events)
-- [x] **Drawing Properties**: 4 tabs (Style, Coordinates, Visibility, Text); only color, width, line style, extend and label are applied
-- [x] **Keyboard Shortcuts**: help dialog listing the KeyboardAction table; chart and drawing keys are hardcoded in widget/interaction.rs and widget/tool_interaction/
-- [x] **Drawing Context Menu**
-- [x] **Series Context Menu** (Settings, Add indicator and Add alert work; Copy price does nothing)
-
-### Widget Bar (Right Sidebar)
-- [x] Vertical icon bar (Alerts, Object Tree, Help)
-- [x] Notification count badge
-- [x] Active state highlighting
-
-### Object Tree Panel
-- [x] Hierarchical tree with indicator/drawing rows
-- [x] Filter controls (text + type dropdown)
-- [x] Visibility/lock toggle icons per item
-- [x] Bulk actions: Show All, Hide All (Lock All, Unlock All, Delete Selected emitted but not handled)
-- [x] Object tree context menu with keyboard shortcuts (move, zoom to, rename, hide selected, duplicate selected, delete selected and lock all are not handled)
-- [x] Selection model (single, additive, range, Ctrl+A)
-- [x] Footer stats (total, indicators, drawings, visible, selected)
-- [x] Collapsible OHLCV data window
-
-### Alerts Panel
-- [ ] Alerts panel with 4 sections renders, but AlertManager cannot be populated and the demo does not use it
-- [ ] Inline add forms (inputs render, but Create clears the form before the host can read it)
-- [ ] Alert rows with status color and remove/toggle (unreachable: AlertManager has no add API)
-- [ ] Alert notification popup (defined, never shown)
+- [x] Bar replay hides future main-series bars, supports start-bar/date/random selection, stepping, autoplay, speed and seek, and restores live data on exit.
+- [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
+- [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
+- [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
+- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams.
+- [ ] Window additional-symbol/interval study histories to the replay cutoff.
+- [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
 
 ### Export
-- [x] Export dialog UI (format selection, path input)
-- [x] `Exportable` trait defined (`export`, `export_png`)
-- [ ] No `Exportable` implementation in-crate (host must implement)
-- [ ] Save path is typed by hand (no native file dialog)
-- [ ] No PNG rendering logic in-crate (the host captures the chart)
 
-### Other UI
-- [x] Context menu: entries with icons, shortcuts, disabled state, click-outside close
-- [x] Glyph picker: searchable icon, emoji and sticker categories, recent picks first, and an independent size setting
-- [ ] Multi-chart layout component (only ChartSyncOptions exists; module is a stub)
-- [x] Symbol header display
-- [x] Connection status indicator
-- [x] Replay status indicator widget (inline label, not an overlay; not used by the replay UI or demo)
+- [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
+- [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
+- [x] Export dialog and demo actions save images/data or copy images through application facilities.
+- [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
+- [ ] Add an export watermark switch, vector image output and print/PDF output.
+- [ ] Integrate a native save-file chooser and provide an `Exportable` adapter for direct chart export.
 
----
+## Layouts and Persistence
 
-## UI Kit (Reusable Components)
+- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time.
+- [x] Main-pane drawings synchronise between grouped charts by timestamp.
+- [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents.
+- [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
+- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations.
+- [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
+- [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
+- [ ] Add layout favourites to the catalogue and menu.
+- [ ] Synchronise crosshair price as well as time in `ChartLayout`.
+- [ ] Map study-pane drawings across charts and propagate mirrored updates, unlocking and deletion to locked receivers.
+- [ ] Include comparison membership/options and symbol navigation in terminal undo/redo.
 
-The ui_kit components are generic building blocks:
+## Data and Builder API
 
-- [x] Button (themed, variant-based: Primary/Secondary/Outlined/Danger/Ghost)
-- [x] IconButton (SVG icon + optional label)
-- [x] SplitButton (icon + dropdown arrow)
-- [x] ColorPicker (80 swatches: grayscale row, main row, 10 colors x 6 variations)
-- [x] CommandPalette (fuzzy search, keyboard nav, command registry)
-- [x] DialogFrame / DialogHeader / DialogFooter
-- [x] EmptyState placeholder
-- [x] Filter widget
-- [x] FormGrid (2-column layout for settings forms)
-- [x] Card frame
-- [x] ListItem (LabelContent, ButtonContent, PropertyContent variants)
-- [x] LoadingIndicator (spinner)
-- [x] Modal + ConfirmDialog + PromptDialog
-- [x] Notifications / Toast system (caller-owned Toasts collection, 4 severity levels)
-- [x] PanelHeader (section header with right-side content slot)
-- [x] Section (collapsible)
-- [x] SidebarLayout (left nav + right content)
-- [x] StatusMessage (inline status with icon)
-- [x] TabBar (generic over `T: TabLabel`)
-- [x] ResponsiveToolbar (horizontal scrollable)
-- [x] ButtonGroup (grouped toggle buttons)
-- [x] TradingLabels (PnlLabel, SideLabel for buy/sell/long/short)
-- [x] Autocomplete (text field + dropdown suggestions)
-- [x] Alert (inline banner)
-
----
+- [x] `Chart::new` embeds static bars; `ChartBuilder` configures a chart, feed, symbol, interval, studies, theme and drawing registry.
+- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with stale-response rejection and subscription cancellation.
+- [x] Scroll-back pages bar history; transient failures retry with bounded backoff and expose errors and status through `FeedState`.
+- [x] Shared validation sorts/deduplicates bars, rejects invalid OHLCV and counts rejected updates; out-of-order corrections update the affected history.
+- [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
+- [x] Optional per-series bar limits bound retained history; feed queues coalesce updates and bound pending trades/depth.
+- [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
+- [x] Public events report pointer, range, symbol, interval and data changes; custom menu entries and toolbar controls return application identifiers.
+- [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal.
+- [ ] Reset a stale manual price range when changing symbols.
+- [ ] Accept locale, formatters, storage and saved state as builder inputs.
+- [ ] Add bounded time-range requests for trades/depth and page older trades during scroll-back.
 
 ## Infrastructure
 
-### Data Layer
-- [x] `data::Datafeed`: charts load history, live bars, trades and depth through `ChartBuilder::with_feed`
-- [x] `services::Broker`: order tickets, one-click orders and confirmed chart-line actions use the host account, and its fills are drawn on the chart and announced with its rejections
-- [ ] `services::SymbolSearch` and `Signals` are defined, but nothing calls them yet
-- [ ] No in-crate `Datafeed` implementation: the host owns the transport
+- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
+- [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
+- [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones.
+- [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
+- [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
+- [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
+- [ ] Route remaining direct English UI labels through the translation lookup.
+- [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
+- [ ] Add a runnable desktop-webview integration example.
 
-### Configuration
-- [x] `ChartConfig`: chart configuration
-- [x] `ChartOptions`: User-facing options
-- [x] `CrosshairOptions`: Crosshair style/mode/color
-- [x] `KeyboardOptions` (enable, pan amount, zoom step); key bindings are fixed, `KeyboardAction` is a display table for the help dialog
+## Provided by the host
 
-### Theming
-- [x] `Theme` value with public fields
-- [x] Dark, light and high-contrast presets
-- [x] Design tokens as Rust constants (`tokens::DESIGN_TOKENS`), evaluated at compile time
-- [x] Token categories: sizing, spacing, rounding, stroke widths, semantic colors
-- [x] `ui.active_theme()` (`theme::ThemeExt`) returns the theme last applied with `apply_to_egui`
+The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
-### Data Validation
-- [x] Every bar update drops invalid bars (a non-finite value, a high or low on the wrong side of the open and close, negative volume) and counts them in `Chart::feed_state`
-- [x] Bars stay in time order, one per open time; an out-of-order bar is inserted in place
+- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps.
+- `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
+- `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
+- `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
+- `Signals` supplies markers, levels and zones with category visibility and click callbacks. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
+- `Notifications` and `Chats` supply notification records and conversation messages. Publishing and sharing actions are application intents; post/idea drawings display supplied local content.
+- `StrategyReport` supplies the trade list, equity and performance inputs for the report panel; `CompanyFinancials` supplies financial tables. Applications also provide translations, additional fonts, image loaders and platform save/clipboard facilities.
 
-### Templates
-- [x] Named chart, study and drawing templates use host storage (`ui/dialogs/templates`)
-- [ ] No template persistence or serialization
-- [ ] No user-facing template management UI (beyond drawing toolbar placeholder)
+## Next
 
----
+The order below prioritises correctness and complete library workflows. It carries no delivery dates.
 
-## Known Issues
-
-| Priority | Issue | Location |
-|----------|-------|----------|
-| Medium | MACD histogram renders as line, not bars | `chart/renderers/indicator.rs` |
-| Medium | Ichimoku cloud renders as lines, not filled regions | `chart/renderers/indicator.rs` |
-| Medium | Parabolic SAR renders as line, not dots | `chart/renderers/indicator.rs` |
-| Medium | Drawing tools without a geometric hit test use point proximity only | `drawings/services/interaction.rs` |
-| Medium | Magnet snapping never applied to drawings | `drawings/manager.rs` |
-| Medium | Rotated Rectangle renders as axis-aligned | `drawings/rendering/shapes.rs` |
-| Low | Double Curve uses sine offset, not bezier | `drawings/rendering/shapes.rs` |
-| Low | Cypher Pattern identical to XABCD | `drawings/rendering/patterns.rs` |
-
----
-
-## Feature Gap Summary
-
-### What's built
-- 21 of 21 chart types render
-- Pan/zoom and crosshair; linear, logarithmic, percentage, indexed and inverted price scales
-- `DrawingToolType` defines 98 drawing tool types counting the four cursor modes; the status of each is listed above, several with limits
-- 177 registered indicators with calculation code
-- UI component library (toolbars, dialogs, panels, controls); several widgets are not wired yet, see above
-- Reusable ui_kit building blocks
-- Theme system with design tokens and dark, light and high-contrast presets
-- Data validation, configuration
-
-### What needs work (P1: core functionality gaps)
-- [ ] Add indicator-specific rendering (histograms, filled clouds, dot plots)
-- [ ] Build multi-pane layout manager (`PaneManager`)
-
-### What needs work (P2: polish and completeness)
-- [ ] Improve drawing hit testing (line-body hit tests for all tools)
-- [ ] Implement Rotated Rectangle with actual rotation
-- [ ] Implement Double Curve with proper bezier geometry
-- [ ] Differentiate Cypher Pattern from XABCD
-- [ ] Export: integrate native file dialog, implement `Exportable`
-- [ ] Template system: persistence, serialization, user management UI
-
-### What's missing entirely (P3: new features)
-- [ ] Localization / i18n
-- [ ] Accessibility (a11y)
-- [ ] Image drawing tool (load and display user images on chart)
-- [ ] Social features (Tweet embed, Idea sharing)
-- [x] Charts consume `data::Datafeed` for live data
-- [ ] Server-side rendering for chart snapshots
-- [ ] Chart comparison / overlay mode
-- [ ] Multi-symbol data correlation
-- [ ] Alerts engine (evaluation, triggering, notification delivery)
-- [ ] Print / PDF export
+1. **Chart rendering and drawings:** correct Kagi transitions, Elliott targets, pattern geometry, Fibonacci bounds, logarithmic alert levels, pane input and scale settings.
+2. **Indicators and order flow:** correct RSI, Connors RSI, Tasuki, Woodies CCI and unfinished auctions; bound footprint retention and replay histories; finish histogram defaults and integrated delta/profile panes.
+3. **Terminal UI and alerts:** assemble component state and action handling with application interception; complete selection/favourites controls, alert configuration, watchlist actions and the study editor surface.
+4. **Layouts and data API:** broaden snapshot/template restoration, drawing/crosshair synchronisation and undo coverage; finish trade/depth range requests, paging, symbol scaling and builder inputs.
+5. **Trading and reports:** complete ticket sizing and report exports.
+6. **Presentation and extensions:** finish export capture/formats, translation/theme coverage, advanced order-flow controls, additional studies and the desktop-webview example.
