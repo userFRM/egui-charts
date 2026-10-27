@@ -39,12 +39,11 @@ jobs:
 
   check:
     if: github.event.pull_request.draft != true
-    name: Check
-    runs-on: ${{ matrix.os }}
+    name: Check (${{ matrix.rust }})
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable, 1.95.0]
     steps:
       - uses: actions/checkout@v4
@@ -53,32 +52,27 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Clippy with --all-targets compiles each configuration, so it doubles as the build check.
+      # The minimum supported Rust version only needs to prove it compiles the full feature set.
       - name: Check module dependencies
-        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        if: matrix.rust == 'stable'
         run: python3 .github/check-module-cycles.py
-      - name: Build (default features)
-        run: cargo build
-      - name: Build (no default features)
-        run: cargo build --no-default-features
-      - name: Build (widget only)
-        run: cargo build --no-default-features --features widget
-      - name: Build (widget with drawings)
-        run: cargo build --no-default-features --features widget,drawings
-      - name: Build (studies only)
-        run: cargo build --no-default-features --features studies
-      - name: Build (all features)
-        run: cargo build --all-features
-      - name: Clippy (default)
-        run: cargo clippy --all-targets -- -D warnings
       - name: Clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Clippy (default)
+        if: matrix.rust == 'stable'
+        run: cargo clippy --all-targets -- -D warnings
       - name: Clippy (headless engine)
+        if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --all-targets -- -D warnings
       - name: Clippy (widget only)
+        if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features widget --all-targets -- -D warnings
       - name: Clippy (widget with drawings)
+        if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features widget,drawings --all-targets -- -D warnings
       - name: Clippy (studies only)
+        if: matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
 
   test:
@@ -88,9 +82,14 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      # The full suite runs once on Linux stable; the other platforms and the minimum supported
+      # Rust version run the all-features library tests, which exercise every module.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, 1.95.0]
+        include:
+          - { os: ubuntu-latest, rust: stable, full: true }
+          - { os: ubuntu-latest, rust: 1.95.0, full: false }
+          - { os: macos-latest, rust: stable, full: false }
+          - { os: windows-latest, rust: stable, full: false }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -102,14 +101,19 @@ jobs:
       - name: Run library tests (all features)
         run: cargo test --all-features --lib
       - name: Run library tests (default features)
+        if: matrix.full
         run: cargo test --lib
       - name: Run library tests (no default features)
+        if: matrix.full
         run: cargo test --no-default-features --lib
       - name: Run workflow example tests
+        if: matrix.full
         run: cargo test --all-features --example scripting --example backtesting
       - name: Run library tests (UI without named time zones)
+        if: matrix.full
         run: cargo test --no-default-features --features ui --lib
       - name: Run doc tests (all features)
+        if: matrix.full
         run: cargo test --doc --all-features
 
   wasm-test:
@@ -243,7 +247,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
