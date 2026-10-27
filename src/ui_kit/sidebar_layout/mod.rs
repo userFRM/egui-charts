@@ -119,7 +119,7 @@ impl<'a> SidebarTab<'a> {
 
     /// Show the sidebar tab. Returns `true` if clicked.
     ///
-    /// The selected tab has the hover fill and a semibold label in the text colour.
+    /// The selected tab has a neutral fill and a semibold label in the text colour.
     pub fn show(self, ui: &mut Ui) -> bool {
         let theme = ui.active_theme();
         let width = ui.available_width();
@@ -134,7 +134,11 @@ impl<'a> SidebarTab<'a> {
             ui.painter().rect_filled(
                 rect,
                 theme.radius.md,
-                ui.style().visuals.widgets.hovered.bg_fill,
+                if self.is_active && !theme.dark {
+                    theme.ui.text.gamma_multiply(0.06)
+                } else {
+                    ui.style().visuals.widgets.hovered.bg_fill
+                },
             );
         }
 

@@ -21,6 +21,9 @@ use crate::ui_kit::buttons::{ButtonSize, IconButton};
 /// Height of the footer's action buttons.
 const FOOTER_BUTTON_HEIGHT: f32 = 34.0;
 
+/// Minimum width of a short footer action such as Ok.
+const FOOTER_BUTTON_MIN_WIDTH: f32 = 44.0;
+
 /// Marks the content Ui of a fixed-height [`DialogFrame`].
 const FIXED_HEIGHT_TAG: &str = "egui_charts::dialog_frame::fixed_height";
 
@@ -302,7 +305,7 @@ impl DialogFooter {
                             .size()
                             .x
                             + 2.0 * ui.spacing().button_padding.x)
-                            .max(FOOTER_BUTTON_HEIGHT)
+                            .max(FOOTER_BUTTON_MIN_WIDTH)
                     })
                     .sum::<f32>()
                     + if self.secondary_label.is_some() {
@@ -388,7 +391,7 @@ fn footer_button(
             .fill(fill[state])
             .stroke(stroke)
             .corner_radius(radius)
-            .min_size(Vec2::new(FOOTER_BUTTON_HEIGHT, FOOTER_BUTTON_HEIGHT)),
+            .min_size(Vec2::new(FOOTER_BUTTON_MIN_WIDTH, FOOTER_BUTTON_HEIGHT)),
     );
     crate::styles::focus::draw_focus_ring(ui, &response, radius);
     response
