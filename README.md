@@ -62,12 +62,6 @@ That chart pans, zooms and draws a crosshair. `set_data` replaces its bars and `
 cargo run --manifest-path examples/demo/Cargo.toml
 ```
 
-## Status
-
-[![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
-
-[![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
-
 ## Chart types
 
 Candles, bars, hollow and volume candles, line, step line, area, baseline and columns. Heikin-Ashi, Renko, Kagi, line break, point and figure and range bars are built from the same bars. Switch with `set_chart_type`, or let the user pick from the toolbar menu.
