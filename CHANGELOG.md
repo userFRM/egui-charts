@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- Interval entries have a hide button and the menu offers "Restore hidden intervals". Hiding unpins a favorite without changing the selected interval. Hidden entries survive source changes and round-trip through `TimeframePreferences::hidden_timeframes`; older saved preferences default to no hidden entries. Hosts continue to own storage. Migration: `TimeframePreferences` literals add `hidden_timeframes: Vec::new()` or use `..Default::default()`. ([#974](https://github.com/userFRM/egui-charts/issues/974))
+- Interval entries can be hidden and restored from the menu without changing the selected interval. Hidden entries are unpinned and persist through host-owned `TimeframePreferences`, including across source changes. Migration: `TimeframePreferences` literals add `hidden_timeframes: Vec::new()` or use `..Default::default()`; older saved preferences default to no hidden entries. ([#974](https://github.com/userFRM/egui-charts/issues/974))
 
 - The demo quick search runs a sample backtest on completed synthetic bars, marks equity at their closes and opens the strategy report below the chart. Reports can be replaced or cleared; selecting a trade restores its symbol and interval, scrolls to its bars and highlights its span. Entry and exit markers share the signals service with the API samples, including in newly added chart slots. Trades CSV is saved or downloaded by the host. Strategy execution, market data and storage remain host-owned. ([#225](https://github.com/userFRM/egui-charts/issues/225))
 
@@ -310,7 +310,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Custom intervals accept positive week and calendar-month counts, and the interval menu offers 3, 6 and 12 months. `Timeframe::Weeks` and `Months` retain calendar units through parsing and saved preferences. `BarClock` aligns multi-week bars to Monday 1970-01-05 and multi-month bars to January 1970 in its configured timezone, including daylight-saving changes; quarters open in January, April, July and October. Month durations remain approximate for sizing; bar boundaries use the calendar. Previously saved `Custom(seconds)` values keep their fixed-duration meaning. ([#963](https://github.com/userFRM/egui-charts/issues/963))
+- Custom intervals retain positive week and calendar-month counts, with 3, 6 and 12 month presets. Bar boundaries follow the configured calendar timezone, so April 15 belongs to the quarter opening on April 1; session closes and strategy comparisons also retain calendar months. Month durations remain approximate for sizing, and previously saved `Custom(seconds)` intervals keep their fixed-duration meaning. ([#963](https://github.com/userFRM/egui-charts/issues/963))
 
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
 

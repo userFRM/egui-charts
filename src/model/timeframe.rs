@@ -42,7 +42,7 @@ use std::str::FromStr;
 /// | Second      | `Sec1` .. `Sec30`                                      |
 /// | Minute      | `Min1`, `Min5`, `Min15`, `Min30`                       |
 /// | Hourly      | `Hour1`, `Hour4`                                       |
-/// | Daily+      | `Day1`, `Week1`, `Month1`                              |
+/// | Daily+      | `Day1`, `Week1`, `Month1`, `Weeks(count)`, `Months(count)` |
 /// | Custom      | `Custom(seconds)` -- any user-defined interval          |
 ///
 /// # Example
@@ -101,12 +101,6 @@ pub enum Timeframe {
     /// Monthly bars (approximated as 30 days for duration calculations).
     Month1,
 
-    /// Calendar weeks, aligned to Monday 1970-01-05 in the clock's timezone.
-    Weeks(NonZeroU32),
-    /// Calendar months, aligned to January 1970 in the clock's timezone.
-    /// Three, six and twelve months start on calendar quarters, half-years and years.
-    Months(NonZeroU32),
-
     /// Custom timeframe defined in seconds.
     /// Allows user-defined intervals (e.g., 45s, 3min, 2h). The interval is never zero.
     Custom(NonZeroU64),
@@ -121,6 +115,12 @@ pub enum Timeframe {
     /// Absolute buy minus sell volume per bar, in whole units. Fills split at the threshold;
     /// unknown sides contribute volume but no delta.
     Delta(NonZeroU64),
+
+    /// Calendar weeks, aligned to Monday 1970-01-05 in the clock's timezone.
+    Weeks(NonZeroU32),
+    /// Calendar months, aligned to January 1970 in the clock's timezone.
+    /// Three, six and twelve months start on calendar quarters, half-years and years.
+    Months(NonZeroU32),
 }
 
 impl Timeframe {
@@ -229,10 +229,10 @@ impl Timeframe {
 
     /// Returns true if this is a user-defined custom timeframe
     pub fn is_custom(&self) -> bool {
-        matches!(
-            self,
-            Timeframe::Custom(_) | Timeframe::Weeks(_) | Timeframe::Months(_)
-        )
+        match self {
+            Timeframe::Months(count) => !matches!(count.get(), 3 | 6 | 12),
+            _ => matches!(self, Timeframe::Custom(_) | Timeframe::Weeks(_)),
+        }
     }
 
     /// Convert a resolution string to Timeframe
@@ -430,6 +430,9 @@ mod tests {
         assert!(!Timeframe::Day1.is_custom());
         assert!(custom(45).is_custom());
         assert!(custom(180).is_custom());
+        for (text, expected) in [("2w", true), ("2month", true), ("3month", false)] {
+            assert_eq!(text.parse::<Timeframe>().unwrap().is_custom(), expected);
+        }
     }
 
     #[test]
@@ -474,7 +477,6 @@ mod tests {
             assert_eq!(label.parse::<Timeframe>(), Ok(timeframe));
             assert_eq!(Timeframe::from_resolution(label), Some(timeframe));
             assert_eq!(serde_json::from_str::<Timeframe>(saved).unwrap(), timeframe);
-            assert!(timeframe.is_custom());
         }
         for text in ["0w", "0month", "-1month", "4294967296month"] {
             assert!(text.parse::<Timeframe>().is_err());
@@ -516,5 +518,21 @@ mod tests {
         assert!(serde_json::from_str::<Timeframe>(r#"{"Custom":0}"#).is_err());
         let tf: Timeframe = serde_json::from_str(r#"{"Custom":45}"#).unwrap();
         assert_eq!(tf.duration_ms(), 45_000);
+        // Index-based formats must keep reading intervals saved before calendar counts existed.
+        for (index, expected) in [
+            (17_u32, custom(45)),
+            (18, Timeframe::Ticks(NonZeroU64::new(45).unwrap())),
+            (19, Timeframe::Volume(NonZeroU64::new(45).unwrap())),
+            (20, Timeframe::Range(NonZeroU64::new(45).unwrap())),
+            (21, Timeframe::Delta(NonZeroU64::new(45).unwrap())),
+        ] {
+            let map = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+                [(index, 45_u64)].into_iter(),
+            );
+            assert_eq!(
+                Timeframe::deserialize(serde::de::value::MapAccessDeserializer::new(map)).unwrap(),
+                expected,
+            );
+        }
     }
 }
