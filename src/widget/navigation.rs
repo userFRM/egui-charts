@@ -86,7 +86,11 @@ impl Chart {
             let response = ui.interact(
                 button_rect,
                 chart_id.with(("navigation", index)),
-                Sense::click_and_drag(),
+                if index >= 5 && !self.config.show_scale_mode_buttons {
+                    Sense::hover()
+                } else {
+                    Sense::click_and_drag()
+                },
             );
             if response.clicked() {
                 self.begin_user_action();

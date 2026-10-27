@@ -288,8 +288,6 @@ pub struct ChartConfig {
     pub show_legend_badge: bool,
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,
-    /// Draw a backdrop of the chart background behind the legend's study rows.
-    pub show_indicator_backdrop: bool,
     /// Opacity of the study rows' backdrop, from 0 to 1.
     pub indicator_backdrop_opacity: f32,
     /// Show the host-supplied currency above the price ticks.
@@ -464,7 +462,6 @@ impl Default for ChartConfig {
             show_indicator_inputs: true,
             show_legend_badge: true,
             show_last_day_change: false,
-            show_indicator_backdrop: true,
             indicator_backdrop_opacity: 1.0,
             show_currency: true,
             show_unit: true,

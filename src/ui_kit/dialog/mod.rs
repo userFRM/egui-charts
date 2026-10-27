@@ -374,27 +374,27 @@ fn footer_button(
     text: Color32,
     stroke: Stroke,
 ) -> Response {
-    // The fill follows the button's state on the previous frame; egui repaints when it changes.
-    let state = ui
-        .ctx()
-        .read_response(ui.next_auto_id())
-        .map_or(0, |response| {
-            if response.is_pointer_button_down_on() {
-                2
-            } else {
-                usize::from(response.hovered())
-            }
-        });
     let radius = ui.active_theme().radius.md;
-    let response = ui.add(
-        egui::Button::new(RichText::new(l10n::text(ui.ctx(), label)).color(text))
-            .fill(fill[state])
-            .stroke(stroke)
-            .corner_radius(radius)
-            .min_size(Vec2::new(FOOTER_BUTTON_MIN_WIDTH, FOOTER_BUTTON_HEIGHT)),
-    );
-    crate::styles::focus::draw_focus_ring(ui, &response, radius);
-    response
+    ui.scope(|ui| {
+        let widgets = &mut ui.visuals_mut().widgets;
+        for (visuals, fill) in [
+            (&mut widgets.inactive, fill[0]),
+            (&mut widgets.hovered, fill[1]),
+            (&mut widgets.active, fill[2]),
+        ] {
+            visuals.weak_bg_fill = fill;
+            visuals.bg_stroke = stroke;
+            visuals.fg_stroke.color = text;
+        }
+        let response = ui.add(
+            egui::Button::new(l10n::text(ui.ctx(), label))
+                .corner_radius(radius)
+                .min_size(Vec2::new(FOOTER_BUTTON_MIN_WIDTH, FOOTER_BUTTON_HEIGHT)),
+        );
+        crate::styles::focus::draw_focus_ring(ui, &response, radius);
+        response
+    })
+    .inner
 }
 
 #[cfg(test)]

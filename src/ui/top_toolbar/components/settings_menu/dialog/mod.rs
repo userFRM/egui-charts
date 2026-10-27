@@ -899,38 +899,45 @@ mod tests {
         }
     }
     #[test]
-    fn choosing_a_scale_mode_clears_the_other_mode() {
+    fn scale_controls_show_small_ratios_and_keep_modes_exclusive() {
         let ctx = Context::default();
         let mut dialog = SettingsDialog::new();
         let theme = Theme::light();
-        for (label, expected) in [
-            ("Log scale", (true, false)),
-            ("Percentage scale", (false, true)),
-            ("Log scale", (true, false)),
+        for (label, expected, ratio) in [
+            ("Log scale", (true, false), 0.005),
+            ("Percentage scale", (false, true), 0.00000001),
+            ("Log scale", (true, false), 1.0),
         ] {
-            let mut frame = |events| {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_scales_and_lines_tab(ui, &theme);
-                    },
-                );
-                let pos = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                output.drop_without_applying_deltas();
-                pos
-            };
+            dialog.settings.scales_and_lines.price_to_bar_ratio = ratio;
+            dialog.settings.scales_and_lines.lock_price_to_bar_ratio = true;
+            let mut frame =
+                |events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            dialog.draw_scales_and_lines_tab(ui, &theme);
+                        },
+                    );
+                    let ratio_shown = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().parse::<f64>() == Ok(ratio)
+                    ));
+                    assert!(ratio_shown, "entered ratio {ratio} must remain legible");
+                    let pos = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    output.drop_without_applying_deltas();
+                    pos
+                };
             let pos = frame(vec![]);
             frame(vec![egui::Event::PointerMoved(pos)]);
             for pressed in [true, false] {

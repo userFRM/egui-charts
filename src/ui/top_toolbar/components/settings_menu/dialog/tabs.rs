@@ -19,6 +19,9 @@ use crate::widget::settings::{
     BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode,
 };
 
+/// Height of a candle part row, giving a 50 point pitch with the spacing below it.
+const CANDLE_ROW_HEIGHT: f32 = 38.0;
+
 impl SettingsDialog {
     pub(super) fn draw_canvas_tab(&mut self, ui: &mut Ui, theme: &Theme) {
         ui.horizontal(|ui| {
@@ -322,12 +325,65 @@ impl SettingsDialog {
                     "Color bars based on previous close",
                     theme.ui.text,
                 );
-                for (label, part) in [
-                    ("Body", CandlePart::Body),
-                    ("Borders", CandlePart::Border),
-                    ("Wick", CandlePart::Wick),
+                let label_width = Self::label_width(ui, theme);
+                let colors = &mut self.settings.candle_colors;
+                let pickers = &mut self.color_picker_states;
+                for (label, shown, [up, down], [up_picker, down_picker], [up_id, down_id]) in [
+                    (
+                        "Body",
+                        &mut colors.show_body,
+                        [&mut colors.body_up, &mut colors.body_down],
+                        [&mut pickers.body_up, &mut pickers.body_down],
+                        ["body_up", "body_down"],
+                    ),
+                    (
+                        "Borders",
+                        &mut colors.show_border,
+                        [&mut colors.border_up, &mut colors.border_down],
+                        [&mut pickers.border_up, &mut pickers.border_down],
+                        ["border_up", "border_down"],
+                    ),
+                    (
+                        "Wick",
+                        &mut colors.show_wick,
+                        [&mut colors.wick_up, &mut colors.wick_down],
+                        [&mut pickers.wick_up, &mut pickers.wick_down],
+                        ["wick_up", "wick_down"],
+                    ),
                 ] {
-                    self.draw_candle_row(ui, label, part, theme);
+                    ui.horizontal(|ui| {
+                        let checkbox = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(label_width, CANDLE_ROW_HEIGHT),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_min_width(label_width);
+                                    ui.checkbox(
+                                        shown,
+                                        RichText::new(l10n::text(ui.ctx(), label))
+                                            .size(theme.text.title)
+                                            .color(theme.ui.text),
+                                    )
+                                },
+                            )
+                            .inner;
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.spacing_mut().interact_size.y = 32.0;
+                        ui.add_enabled_ui(*shown, |ui| {
+                            ui.label_inputs_by(checkbox.id, |ui| {
+                                for (color, picker, id) in
+                                    [(up, up_picker, up_id), (down, down_picker, down_id)]
+                                {
+                                    if let Some(picked) =
+                                        ColorPicker::new(picker, id).show(ui).inner
+                                    {
+                                        *color = picked;
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(theme.spacing.sm);
                 }
 
                 ui.add_space(ui.active_theme().spacing.xxl);
@@ -493,20 +549,17 @@ impl SettingsDialog {
                     "Values",
                     theme.ui.text,
                 );
-                let status_line = &mut self.settings.status_line;
-                let shown = status_line.show_indicator_background;
-                let opacity = &mut status_line.indicator_background_opacity;
-                trading_option(
-                    ui,
-                    0.0,
-                    &mut status_line.show_indicator_background,
-                    "Background",
-                    theme.ui.text,
-                    |ui| {
-                        ui.add_enabled(shown, egui::Slider::new(opacity, 0..=100).suffix("%"))
-                            .accessible_name(l10n::text(ui.ctx(), "Background opacity"));
-                    },
-                );
+                self.draw_setting_row_with_controls(ui, "Background", theme, |ui, dialog| {
+                    ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
+                    ui.add(
+                        egui::Slider::new(
+                            &mut dialog.settings.status_line.indicator_background_opacity,
+                            0..=100,
+                        )
+                        .suffix("%"),
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "Background opacity"));
+                });
             });
         });
     }
@@ -576,6 +629,7 @@ impl SettingsDialog {
                             locked,
                             egui::DragValue::new(&mut scales.price_to_bar_ratio)
                                 .speed(0.01)
+                                .custom_formatter(|value, _| value.to_string())
                                 .range(0.00000001..=f64::MAX),
                         )
                         .accessible_name(l10n::text(ui.ctx(), "Price-to-bar ratio"));
@@ -885,6 +939,7 @@ impl SettingsDialog {
                 self.draw_section_header(ui, "NOTIFICATIONS", theme);
 
                 self.draw_setting_row_with_controls(ui, "Sound volume", theme, |ui, dialog| {
+                    ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
                     ui.add(
                         egui::Slider::new(&mut dialog.settings.alerts.sound_volume, 0..=100)
                             .suffix("%"),
@@ -979,78 +1034,6 @@ impl SettingsDialog {
             });
         });
         ui.add_space(ui.active_theme().spacing.sm);
-    }
-}
-
-/// A part of the candles on the Symbol tab.
-#[derive(Clone, Copy)]
-enum CandlePart {
-    Body,
-    Border,
-    Wick,
-}
-
-/// Height of a candle part row, which with the spacing below it gives a 50 point pitch.
-const CANDLE_ROW_HEIGHT: f32 = 38.0;
-
-impl SettingsDialog {
-    /// A Symbol tab row for one candle part: its visibility checkbox in the label column, then
-    /// its rising and falling colours, which are disabled while the part is hidden.
-    fn draw_candle_row(&mut self, ui: &mut Ui, label: &str, part: CandlePart, theme: &Theme) {
-        let label_width = Self::label_width(ui, theme);
-        let colors = &mut self.settings.candle_colors;
-        let pickers = &mut self.color_picker_states;
-        let (shown, [up, down], [up_picker, down_picker], [up_id, down_id]) = match part {
-            CandlePart::Body => (
-                &mut colors.show_body,
-                [&mut colors.body_up, &mut colors.body_down],
-                [&mut pickers.body_up, &mut pickers.body_down],
-                ["body_up", "body_down"],
-            ),
-            CandlePart::Border => (
-                &mut colors.show_border,
-                [&mut colors.border_up, &mut colors.border_down],
-                [&mut pickers.border_up, &mut pickers.border_down],
-                ["border_up", "border_down"],
-            ),
-            CandlePart::Wick => (
-                &mut colors.show_wick,
-                [&mut colors.wick_up, &mut colors.wick_down],
-                [&mut pickers.wick_up, &mut pickers.wick_down],
-                ["wick_up", "wick_down"],
-            ),
-        };
-        ui.horizontal(|ui| {
-            let checkbox = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(label_width, CANDLE_ROW_HEIGHT),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_width(label_width);
-                        ui.checkbox(
-                            shown,
-                            RichText::new(l10n::text(ui.ctx(), label))
-                                .size(theme.text.title)
-                                .color(theme.ui.text),
-                        )
-                    },
-                )
-                .inner;
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.spacing_mut().interact_size.y = 32.0;
-            ui.add_enabled_ui(*shown, |ui| {
-                ui.label_inputs_by(checkbox.id, |ui| {
-                    for (color, picker, id) in
-                        [(up, up_picker, up_id), (down, down_picker, down_id)]
-                    {
-                        if let Some(picked) = ColorPicker::new(picker, id).show(ui).inner {
-                            *color = picked;
-                        }
-                    }
-                });
-            });
-        });
-        ui.add_space(theme.spacing.sm);
     }
 }
 

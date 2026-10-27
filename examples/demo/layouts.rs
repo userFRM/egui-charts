@@ -114,6 +114,10 @@ impl DemoApp {
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
             bars: chart.bars(SeriesId::MAIN).to_vec(),
             samples: self.api_samples,
+            notifications: source
+                .event_visibility()
+                .show_news_notifications
+                .then(|| self.notification_host.clone()),
         })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);

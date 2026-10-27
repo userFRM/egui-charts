@@ -43,7 +43,7 @@ impl CandleColorConfig {
         Self {
             color_by_previous_close: false,
             show_body: true,
-            show_border: true,
+            show_border: false,
             show_wick: true,
             body_up: chart.candle_up,
             body_down: chart.candle_down,
@@ -89,8 +89,6 @@ pub struct StatusLineOptions {
     pub show_volume: bool,
     /// Whether the legend shows the change of the last price from the previous session's close.
     pub show_last_day_change: bool,
-    /// Whether study rows in the legend sit on a backdrop of the chart background.
-    pub show_indicator_background: bool,
     /// Opacity of the study rows' backdrop, from 0 to 100 percent.
     pub indicator_background_opacity: u8,
 }
@@ -110,7 +108,6 @@ impl Default for StatusLineOptions {
             show_change_percent: true,
             show_volume: true,
             show_last_day_change: false,
-            show_indicator_background: true,
             indicator_background_opacity: 100,
         }
     }

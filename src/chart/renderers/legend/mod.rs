@@ -96,9 +96,8 @@ pub struct Legend<'a> {
     /// The previous session's close and the last price, shown after the bar change as the
     /// change between them.
     pub day_change: Option<(f64, f64)>,
-    /// Opacity from 0 to 1 of the chart background behind the volume and study rows; `None`
-    /// draws them without a backdrop.
-    pub study_backdrop: Option<f32>,
+    /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
+    pub study_backdrop: f32,
     /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
     /// to change it.
     pub(crate) quantity: Option<f64>,
@@ -130,7 +129,7 @@ impl<'a> Legend<'a> {
             show_indicator_inputs: true,
             show_indicator_values: true,
             day_change: None,
-            study_backdrop: Some(1.0),
+            study_backdrop: 1.0,
             quantity: None,
         }
     }
@@ -403,9 +402,10 @@ impl<'a> Legend<'a> {
             action
         });
 
-        layout.backdrop = self.study_backdrop.map_or(Color32::TRANSPARENT, |opacity| {
-            theme.chart.bg.gamma_multiply(opacity)
-        });
+        layout.backdrop = theme
+            .chart
+            .bg
+            .gamma_multiply(self.study_backdrop.clamp(0.0, 1.0));
         let mut study_settings = None;
         let collapsed = ui
             .ctx()

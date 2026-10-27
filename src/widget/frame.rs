@@ -2567,10 +2567,7 @@ impl Chart {
                 legend.show_indicator_values = self.config.show_indicator_last_val;
                 legend.day_change =
                     session_closes.filter(|_| values && self.config.show_last_day_change);
-                legend.study_backdrop = self
-                    .config
-                    .show_indicator_backdrop
-                    .then_some(self.config.indicator_backdrop_opacity.clamp(0.0, 1.0));
+                legend.study_backdrop = self.config.indicator_backdrop_opacity;
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =
@@ -5182,6 +5179,19 @@ mod tests {
         chart.config.navigation_buttons = Always;
         let painted = shapes(&ctx, &mut chart, 20.0, Vec::new());
         assert!(!painted.iter().any(|shape| matches!(shape, Shape::Text(text) if ["A", "log", "%"].contains(&text.galley.text()))));
+        ctx.run_ui(Default::default(), |ui| {
+            let plot = chart.last_rendered_price_rect;
+            let nav = chart.navigation_rect(ui, plot).unwrap();
+            let buttons =
+                chart.interact_navigation(ui, nav, plot, egui::Id::new("hidden_navigation"));
+            assert!(
+                buttons[5..]
+                    .iter()
+                    .all(|button| !button.sense.is_focusable()),
+                "hidden scale controls must not receive keyboard focus"
+            );
+        })
+        .drop_without_applying_deltas();
     }
 
     /// A drag starting on a button belongs to that button even after leaving the row.
