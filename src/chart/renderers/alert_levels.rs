@@ -155,3 +155,79 @@ pub fn alert_shortcut_price(ui: &mut Ui, mapping: &ChartMapping) -> Option<f64> 
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::AlertId;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::theme::Theme;
+
+    #[test]
+    fn inactive_levels_follow_the_filter_and_stay_dimmed() {
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            for status in [
+                AlertStatus::Active,
+                AlertStatus::Triggered,
+                AlertStatus::Disabled,
+                AlertStatus::Expired,
+            ] {
+                let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(100.0));
+                alert.id = Some(AlertId("level".into()));
+                alert.status = status;
+                for active_only in [false, true] {
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        let rect = ui.max_rect();
+                        let map = ChartMapping::new(
+                            rect,
+                            6.0,
+                            0,
+                            0,
+                            0.0,
+                            PriceMap::new(
+                                PriceTransform::default(),
+                                PriceRange::new(90.0, 110.0),
+                                rect.top(),
+                                rect.bottom(),
+                                false,
+                            ),
+                        );
+                        render_alert_levels(
+                            ui,
+                            &map,
+                            [&alert],
+                            Color32::GOLD,
+                            true,
+                            active_only,
+                            |price| price.to_string(),
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let visible = !active_only || status == AlertStatus::Active;
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s.shape {
+                            egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                            _ => None,
+                        })
+                        .collect();
+                    let expected = if status == AlertStatus::Active {
+                        Color32::GOLD
+                    } else {
+                        Color32::GOLD.gamma_multiply(0.5)
+                    };
+                    assert_eq!(
+                        lines,
+                        if visible { vec![expected] } else { vec![] },
+                        "{status:?}, active_only={active_only}"
+                    );
+                    let label = shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(text) if text.galley.text() == "Alert  100"));
+                    assert_eq!(label, visible);
+                }
+            }
+        }
+    }
+}

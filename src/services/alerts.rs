@@ -119,4 +119,16 @@ pub enum AlertEvent {
         /// Price observed by the host when the alert fired, when available.
         price: Option<f64>,
     },
+    /// A trigger with its actual subject, including a member of a watchlist alert.
+    /// The panel retains this symbol even after the alert or watchlist changes.
+    TriggeredForSymbol {
+        /// Identifier of the alert that fired.
+        id: AlertId,
+        /// Symbol whose live source satisfied the conditions.
+        symbol: String,
+        /// UTC instant of the trigger.
+        time: DateTime<Utc>,
+        /// Price observed by the host when available.
+        price: Option<f64>,
+    },
 }

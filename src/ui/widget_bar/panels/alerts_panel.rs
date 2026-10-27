@@ -74,8 +74,6 @@ pub struct AlertsPanel {
     error: Option<FeedError>,
     show_log: bool,
     notification_seconds: f32,
-    sound_volume: u8,
-    sound: Option<u8>,
 }
 
 impl Default for AlertsPanel {
@@ -98,8 +96,6 @@ impl AlertsPanel {
             error: None,
             show_log: false,
             notification_seconds: 5.0,
-            sound_volume: 100,
-            sound: None,
         }
     }
 
@@ -112,24 +108,12 @@ impl AlertsPanel {
         };
     }
 
-    /// Set trigger sound volume in percent, clamped to 100; zero mutes sounds.
-    pub fn set_sound_volume(&mut self, percent: u8) {
-        self.sound_volume = percent.min(100);
-    }
-
-    /// Take the requested trigger sound volume in percent after polling. The host plays it.
-    /// Multiple triggers between calls share one sound; muted triggers request none.
-    pub fn take_trigger_sound(&mut self) -> Option<u8> {
-        self.sound.take()
-    }
-
     /// Attach a host service, clearing the previous account's alerts and log.
     pub fn set_service(&mut self, service: Arc<dyn Alerts>) {
         self.listener = None;
         self.service = Some(service);
         self.alerts.clear();
         self.log.clear();
-        self.sound = None;
         self.error = None;
         self.inbox = Arc::default();
         self.watch();
@@ -209,33 +193,51 @@ impl AlertsPanel {
             }
             AlertEvent::Remove(id) => self.alerts.retain(|a| a.id.as_ref() != Some(&id)),
             AlertEvent::Clear => self.alerts.clear(),
+            AlertEvent::TriggeredForSymbol {
+                id,
+                symbol,
+                time,
+                price,
+            } => {
+                self.record_trigger(id, symbol, time, price, toasts);
+            }
             AlertEvent::Triggered { id, time, price } => {
-                self.sound = (self.sound_volume > 0).then_some(self.sound_volume);
                 let symbol = self
                     .alerts
                     .iter()
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                toasts.add(
-                    Toast::info(format!(
-                        "Alert triggered: {}",
-                        if symbol.is_empty() { &id.0 } else { &symbol }
-                    ))
-                    .duration(self.notification_seconds),
-                );
-                let extra = toasts.len().saturating_sub(5);
-                toasts.toasts_mut().drain(..extra);
-                self.log.push_back(AlertTrigger {
-                    id,
-                    symbol,
-                    time,
-                    price: price.filter(|p| p.is_finite()),
-                });
-                if self.log.len() > 10_000 {
-                    self.log.pop_front();
-                }
+                self.record_trigger(id, symbol, time, price, toasts);
             }
+        }
+    }
+
+    fn record_trigger(
+        &mut self,
+        id: AlertId,
+        symbol: String,
+        time: DateTime<Utc>,
+        price: Option<f64>,
+        toasts: &mut Toasts,
+    ) {
+        toasts.add(
+            Toast::info(format!(
+                "Alert triggered: {}",
+                if symbol.is_empty() { &id.0 } else { &symbol }
+            ))
+            .duration(self.notification_seconds),
+        );
+        let extra = toasts.len().saturating_sub(5);
+        toasts.toasts_mut().drain(..extra);
+        self.log.push_back(AlertTrigger {
+            id,
+            symbol,
+            time,
+            price: price.filter(|p| p.is_finite()),
+        });
+        if self.log.len() > 10_000 {
+            self.log.pop_front();
         }
     }
 
@@ -440,7 +442,6 @@ mod tests {
         let host = Arc::new(Host::default());
         let mut panel = AlertsPanel::default();
         panel.set_service(host.clone());
-        panel.set_sound_volume(35);
         panel.set_notification_seconds(12.0);
         let events = host.events.lock().unwrap().clone().unwrap();
         let ctx = egui::Context::default();
@@ -466,8 +467,6 @@ mod tests {
         frame(&mut panel);
         assert_eq!(panel.alerts(), &[alert.clone()]);
         assert_eq!(panel.alerts()[0].status, AlertStatus::Active);
-        assert_eq!(panel.take_trigger_sound(), Some(35));
-        assert_eq!(panel.take_trigger_sound(), None);
         assert_eq!(panel.log().len(), 1);
         assert_eq!(
             panel.log_csv(),
@@ -508,16 +507,17 @@ mod tests {
         assert_eq!(panel.error, Some(FeedError::Unanswered));
         assert_eq!(panel.log().len(), 1);
         assert_eq!(toasts.toasts()[0].duration, 12.0);
-        panel.set_sound_volume(0);
         panel.apply_event(
-            AlertEvent::Triggered {
-                id: AlertId("muted".into()),
+            AlertEvent::TriggeredForSymbol {
+                id: AlertId("watchlist".into()),
+                symbol: "AAPL".into(),
                 time: Utc::now(),
-                price: None,
+                price: Some(123.0),
             },
             &mut toasts,
         );
-        assert_eq!(panel.take_trigger_sound(), None);
+        assert!(toasts.toasts().iter().all(|toast| toast.duration == 12.0));
+        assert_eq!(panel.log().back().unwrap().symbol, "AAPL");
         drop(panel);
         assert!(!renewed.is_active());
     }

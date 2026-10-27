@@ -11,6 +11,7 @@ use egui::{Color32, FontId, RichText, Ui};
 use super::SettingsDialog;
 use crate::theme::Theme;
 use crate::ui_kit::ColorPicker;
+use crate::ui_kit::ext::UiExt;
 
 use crate::chart::PnlUnit;
 use crate::tokens::DESIGN_TOKENS;
@@ -317,76 +318,104 @@ impl SettingsDialog {
                     "Analyst price targets",
                     theme.ui.text,
                 );
-                // CANDLES
-                self.draw_section_header(ui, "CANDLES", theme);
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.candle_colors.color_by_previous_close,
-                    "Color bars based on previous close",
-                    theme.ui.text,
-                );
-                let label_width = Self::label_width(ui, theme);
-                let colors = &mut self.settings.candle_colors;
-                let pickers = &mut self.color_picker_states;
-                for (label, shown, [up, down], [up_picker, down_picker], [up_id, down_id]) in [
-                    (
-                        "Body",
-                        &mut colors.show_body,
-                        [&mut colors.body_up, &mut colors.body_down],
-                        [&mut pickers.body_up, &mut pickers.body_down],
-                        ["body_up", "body_down"],
-                    ),
-                    (
-                        "Borders",
-                        &mut colors.show_border,
-                        [&mut colors.border_up, &mut colors.border_down],
-                        [&mut pickers.border_up, &mut pickers.border_down],
-                        ["border_up", "border_down"],
-                    ),
-                    (
-                        "Wick",
-                        &mut colors.show_wick,
-                        [&mut colors.wick_up, &mut colors.wick_down],
-                        [&mut pickers.wick_up, &mut pickers.wick_down],
-                        ["wick_up", "wick_down"],
-                    ),
-                ] {
-                    ui.horizontal(|ui| {
-                        let checkbox = ui
-                            .allocate_ui_with_layout(
-                                egui::vec2(label_width, CANDLE_ROW_HEIGHT),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.set_min_width(label_width);
-                                    ui.checkbox(
-                                        shown,
-                                        RichText::new(l10n::text(ui.ctx(), label))
+                let kind = self.settings.chart_type;
+                if kind.is_time_independent()
+                    || !kind.uses_ohlc()
+                    || kind == crate::model::ChartType::TimePriceOpportunity
+                {
+                    let mut series = crate::chart::series::SeriesSettings {
+                        chart_type: kind,
+                        chart_type_params: self
+                            .settings
+                            .chart_type_params
+                            .clone()
+                            .unwrap_or_default(),
+                        price_source: self.settings.price_source.unwrap_or_default(),
+                        bullish_color: self.settings.candle_colors.body_up,
+                        bearish_color: self.settings.candle_colors.body_down,
+                        ..Default::default()
+                    };
+                    crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                    self.settings.chart_type_params = Some(series.chart_type_params);
+                    self.settings.price_source = Some(series.price_source);
+                    self.settings.candle_colors.body_up = series.bullish_color;
+                    self.settings.candle_colors.body_down = series.bearish_color;
+                } else {
+                    let candles = kind == crate::model::ChartType::Candles;
+                    self.draw_section_header(ui, if candles { "CANDLES" } else { "COLORS" }, theme);
+                    if candles {
+                        styled_checkbox(
+                            ui,
+                            &mut self.settings.candle_colors.color_by_previous_close,
+                            "Color bars based on previous close",
+                            theme.ui.text,
+                        );
+                    }
+                    let label_width = Self::label_width(ui, theme);
+                    let colors = &mut self.settings.candle_colors;
+                    let pickers = &mut self.color_picker_states;
+                    for (label, shown, [up, down], [up_picker, down_picker], [up_id, down_id]) in [
+                        (
+                            "Body",
+                            &mut colors.show_body,
+                            [&mut colors.body_up, &mut colors.body_down],
+                            [&mut pickers.body_up, &mut pickers.body_down],
+                            ["body_up", "body_down"],
+                        ),
+                        (
+                            "Borders",
+                            &mut colors.show_border,
+                            [&mut colors.border_up, &mut colors.border_down],
+                            [&mut pickers.border_up, &mut pickers.border_down],
+                            ["border_up", "border_down"],
+                        ),
+                        (
+                            "Wick",
+                            &mut colors.show_wick,
+                            [&mut colors.wick_up, &mut colors.wick_down],
+                            [&mut pickers.wick_up, &mut pickers.wick_down],
+                            ["wick_up", "wick_down"],
+                        ),
+                    ] {
+                        ui.horizontal(|ui| {
+                            let checkbox = ui
+                                .allocate_ui_with_layout(
+                                    egui::vec2(label_width, CANDLE_ROW_HEIGHT),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(label_width);
+                                        let label = RichText::new(l10n::text(ui.ctx(), label))
                                             .size(theme.text.title)
-                                            .color(theme.ui.text),
-                                    )
-                                },
-                            )
-                            .inner;
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.spacing_mut().interact_size.y = 32.0;
-                        ui.add_enabled_ui(*shown, |ui| {
-                            ui.label_inputs_by(checkbox.id, |ui| {
-                                for (color, picker, id) in
-                                    [(up, up_picker, up_id), (down, down_picker, down_id)]
-                                {
-                                    if let Some(picked) =
-                                        ColorPicker::new(picker, id).show(ui).inner
+                                            .color(theme.ui.text);
+                                        if candles {
+                                            ui.checkbox(shown, label)
+                                        } else {
+                                            ui.label(label)
+                                        }
+                                    },
+                                )
+                                .inner;
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.spacing_mut().interact_size.y = 32.0;
+                            ui.add_enabled_ui(!candles || *shown, |ui| {
+                                ui.label_inputs_by(checkbox.id, |ui| {
+                                    for (color, picker, id) in
+                                        [(up, up_picker, up_id), (down, down_picker, down_id)]
                                     {
-                                        *color = picked;
+                                        if let Some(picked) =
+                                            ColorPicker::new(picker, id).show(ui).inner
+                                        {
+                                            *color = picked;
+                                        }
                                     }
-                                }
+                                });
                             });
                         });
-                    });
-                    ui.add_space(theme.spacing.sm);
-                }
+                        ui.add_space(theme.spacing.sm);
+                    }
 
-                ui.add_space(ui.active_theme().spacing.xxl);
+                    ui.add_space(ui.active_theme().spacing.xxl);
+                }
 
                 // DATA MODIFICATION
                 self.draw_section_header(ui, "DATA MODIFICATION", theme);
@@ -795,32 +824,14 @@ impl SettingsDialog {
             "Instant orders placement",
             text,
         );
-        let sounds = &self.execution_sounds;
-        let play = trading.play_execution_sound;
-        trading_option(
+        sound_controls(
             ui,
-            0.0,
-            &mut trading.play_execution_sound,
             "Play sound for executions",
-            text,
-            |ui| {
-                if let Some(first) = sounds.first() {
-                    let sound = &mut trading.execution_sound;
-                    let selected = if sound.is_empty() { first } else { &*sound }.clone();
-                    ui.add_enabled_ui(play, |ui| {
-                        styled_dropdown(ui, "execution_sound", 140.0, text, &selected, |ui| {
-                            for name in sounds {
-                                if ui
-                                    .selectable_label(selected == *name, l10n::text(ui.ctx(), name))
-                                    .clicked()
-                                {
-                                    sound.clone_from(name);
-                                }
-                            }
-                        });
-                    });
-                }
-            },
+            &mut trading.play_execution_sound,
+            &mut trading.execution_sound,
+            &mut trading.execution_sound_volume,
+            &self.execution_sounds,
+            &mut self.sound_preview,
         );
         ui.horizontal(|ui| {
             ui.set_min_height(42.0);
@@ -902,6 +913,16 @@ impl SettingsDialog {
             ui.add_space(0.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "ALERT SETTINGS", theme);
+                let alerts = &mut self.settings.alerts;
+                sound_controls(
+                    ui,
+                    "Play sound for alerts",
+                    &mut alerts.play_sound,
+                    &mut alerts.sound,
+                    &mut alerts.sound_volume,
+                    &self.execution_sounds,
+                    &mut self.sound_preview,
+                );
 
                 self.draw_setting_row_with_controls(ui, "Color", theme, |ui, dialog| {
                     if let Some(color) =
@@ -938,13 +959,6 @@ impl SettingsDialog {
                 ui.add_space(ui.active_theme().spacing.xxl);
                 self.draw_section_header(ui, "NOTIFICATIONS", theme);
 
-                self.draw_setting_row_with_controls(ui, "Sound volume", theme, |ui, dialog| {
-                    ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
-                    ui.add(
-                        egui::Slider::new(&mut dialog.settings.alerts.sound_volume, 0..=100)
-                            .suffix("%"),
-                    );
-                });
                 self.draw_setting_row_with_controls(ui, "Lifetime", theme, |ui, dialog| {
                     ui.add(
                         egui::DragValue::new(&mut dialog.settings.alerts.notification_seconds)
@@ -1040,6 +1054,37 @@ impl SettingsDialog {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+fn sound_controls(
+    ui: &mut Ui,
+    label: &str,
+    enabled: &mut bool,
+    sound: &mut String,
+    volume: &mut f32,
+    sounds: &[String],
+    preview: &mut Option<(String, f32)>,
+) {
+    styled_checkbox(ui, enabled, label, ui.active_theme().ui.text);
+    let Some(first) = sounds.first() else { return };
+    if sound.is_empty() {
+        sound.clone_from(first);
+    }
+    ui.add_enabled_ui(*enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.combo_select(label, sound, sounds.iter().cloned(), Clone::clone);
+            ui.add(egui::Slider::new(volume, 0.0..=1.0).text(l10n::text(ui.ctx(), "Volume")));
+        });
+        if ui.button(l10n::text(ui.ctx(), "Test sound")).clicked() {
+            *preview = Some((sound.clone(), *volume));
+        }
+        if cfg!(target_arch = "wasm32") {
+            ui.label(l10n::text(
+                ui.ctx(),
+                "Click Test sound to enable browser audio.",
+            ));
+        }
+    });
+}
 
 fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, line: &mut bool) {
     let mut mode = (*label, *line);

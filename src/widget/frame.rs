@@ -2938,15 +2938,16 @@ impl Chart {
                 .and_then(|instrument| instrument.unit.as_deref())
                 .filter(|_| self.config.show_unit);
 
-            let currency_width = painter
-                .layout_no_wrap(
-                    currency.to_owned(),
-                    rendering::axes::axis_font(ui.ctx()),
-                    colors.text,
-                )
+            let header = match (currency.is_empty(), unit.filter(|unit| !unit.is_empty())) {
+                (false, Some(unit)) => format!("{currency} · {unit}"),
+                (true, Some(unit)) => unit.to_owned(),
+                _ => currency.to_owned(),
+            };
+            let header_width = painter
+                .layout_no_wrap(header, rendering::axes::axis_font(ui.ctx()), colors.text)
                 .size()
                 .x
-                + 26.0;
+                + if currency.is_empty() { 16.0 } else { 26.0 };
             let axis = Rect::from_min_max(
                 Pos2::new(
                     if self.config.show_right_axis {
@@ -2960,10 +2961,7 @@ impl Chart {
             );
             let (button, choice) =
                 renderers::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
-            self.measured_axis_width = self
-                .measured_axis_width
-                .max(currency_width)
-                .max(button.rect.width());
+            self.measured_axis_width = self.measured_axis_width.max(header_width);
             if choice.is_some() {
                 self.currency_choice = choice;
             }
@@ -5183,7 +5181,7 @@ mod tests {
             let plot = chart.last_rendered_price_rect;
             let nav = chart.navigation_rect(ui, plot).unwrap();
             let buttons =
-                chart.interact_navigation(ui, nav, plot, egui::Id::new("hidden_navigation"));
+                chart.interact_navigation(ui, nav, plot, egui::Id::unique("hidden_navigation"));
             assert!(
                 buttons[5..]
                     .iter()

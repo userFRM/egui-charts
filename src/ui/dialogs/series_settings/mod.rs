@@ -14,3 +14,4 @@ pub use actions::SeriesSettingsAction;
 pub use config::SeriesSettingsConfig;
 pub use dialog::SeriesSettingsDialog;
 pub use tabs::SeriesSettingsTab;
+pub(crate) use tabs::SymbolTab;

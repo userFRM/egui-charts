@@ -896,6 +896,9 @@ dependencies = [
  "getrandom 0.2.17",
  "image",
  "log",
+ "maudio",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1757,6 +1760,24 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "maudio"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a8c12c69ee8b6c42705ca1ae980bbb9b0b30f278224d68849c4219a8d1430ad"
+dependencies = [
+ "maudio-sys",
+]
+
+[[package]]
+name = "maudio-sys"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b407c39b290e82b248dd0c9662b5fb4b4b8dbf231025d864a3ca15b7cc3afe0c"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "memchr"
@@ -3093,10 +3114,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

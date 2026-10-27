@@ -395,10 +395,17 @@ impl DemoApp {
                 self.ensure_chart_slots(mode);
             }
             LayoutAction::CreateNew => self.new_layout(None),
-            LayoutAction::SaveAs(name) => match self.capture_layout() {
-                Ok(layout) => {
+            LayoutAction::SaveAs(name) => match self
+                .capture_layout()
+                .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
+            {
+                Ok((layout, comparisons)) => {
                     self.new_layout(Some(name));
                     let name = self.layout_tabs[self.layout_tab].name.clone();
+                    if let Err(error) = self.storage.save_comparisons(&name, &comparisons) {
+                        self.toasts.error(error);
+                        return;
+                    }
                     self.restore_layout(name, layout);
                     self.save_layout();
                 }
@@ -415,9 +422,10 @@ impl DemoApp {
             LayoutAction::Rename(_, new) => {
                 if !new.trim().is_empty() && !self.layout_tabs.iter().any(|t| t.name == new) {
                     match self.capture_layout() {
-                        Ok(layout) => {
-                            self.top_toolbar.layout_menu.rename(&new, &layout);
-                        }
+                        Ok(layout) => match self.save_comparisons(&new) {
+                            Ok(()) => self.top_toolbar.layout_menu.rename(&new, &layout),
+                            Err(error) => self.toasts.error(error),
+                        },
                         Err(error) => self.toasts.error(error),
                     }
                 }
@@ -465,11 +473,33 @@ impl DemoApp {
         Ok(SavedLayout { mode, charts })
     }
 
+    fn capture_comparisons(&self) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
+        let active = super::comparison::capture(&self.chart, &self.comparisons)?;
+        let mut slots = self
+            .extra_charts
+            .iter()
+            .map(|slot| super::comparison::capture(&slot.chart, &slot.comparisons))
+            .collect::<Result<Vec<_>, _>>()?;
+        slots.insert(self.layout_slot, active);
+        if self.layout.mode != ChartLayoutMode::Tabs {
+            slots.truncate(self.layout.mode.chart_count());
+        }
+        Ok(slots)
+    }
+
+    fn save_comparisons(&self, name: &str) -> Result<(), String> {
+        self.storage
+            .save_comparisons(name, &self.capture_comparisons()?)
+    }
+
     /// Saves the open layout under its tab's name.
     fn save_layout(&mut self) {
         let name = self.layout_tabs[self.layout_tab].name.clone();
         match self.capture_layout() {
-            Ok(layout) => self.top_toolbar.layout_menu.save(&name, &layout),
+            Ok(layout) => match self.save_comparisons(&name) {
+                Ok(()) => self.top_toolbar.layout_menu.save(&name, &layout),
+                Err(error) => self.toasts.error(error),
+            },
             Err(error) => self.toasts.error(error),
         }
     }
@@ -490,6 +520,25 @@ impl DemoApp {
                 .error("Could not open layout: invalid chart count");
             return;
         }
+        let mut comparisons = match self.storage.comparisons(&name) {
+            Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
+            Ok(saved) if saved.len() == layout.charts.len() => saved,
+            Ok(_) => {
+                self.toasts
+                    .error("Could not open comparisons: invalid chart count");
+                return;
+            }
+            Err(error) => {
+                self.toasts.error(error);
+                return;
+            }
+        };
+        for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
+            if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
+                self.toasts.error(error);
+                return;
+            }
+        }
         for snapshot in &layout.charts {
             let mut check = Chart::new(egui_charts::model::BarData::new());
             if let Err(error) = check.restore(snapshot) {
@@ -506,6 +555,14 @@ impl DemoApp {
         while self.extra_charts.len() + 1 < layout.charts.len() {
             let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons);
             self.extra_charts.push(copy);
+        }
+        for (_, id, _) in self.comparisons.drain(..) {
+            self.chart.remove_series(id);
+        }
+        for target in &mut self.extra_charts {
+            for (_, id, _) in target.comparisons.drain(..) {
+                target.chart.remove_series(id);
+            }
         }
         for (slot, snapshot) in layout.charts.iter().enumerate() {
             if slot == self.layout_slot {
@@ -528,9 +585,35 @@ impl DemoApp {
                 _ => {}
             }
         }
+        for (slot, saved) in comparisons.drain(..).enumerate() {
+            if slot == self.layout_slot {
+                super::comparison::restore(&mut self.chart, &mut self.comparisons, saved);
+            } else {
+                let index = if slot < self.layout_slot {
+                    slot
+                } else {
+                    slot - 1
+                };
+                let target = &mut self.extra_charts[index];
+                target.live.set_symbol(target.chart.symbol());
+                target.chart.set_data(
+                    SeriesId::MAIN,
+                    target.live.snapshot(
+                        target.chart.timeframe().unwrap_or(Timeframe::Min1),
+                        target.chart.bar_clock(),
+                        target.chart.extended_hours(),
+                    ),
+                );
+                super::comparison::restore(&mut target.chart, &mut target.comparisons, saved);
+            }
+        }
         self.refresh_active_chart();
-        self.settings_state =
-            egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart);
+        self.settings_state = egui_charts::widget::settings::ChartSettingsState {
+            alerts: self.settings_state.alerts.clone(),
+            trading: self.trading.display.clone(),
+            adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
+            ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
+        };
     }
 
     /// The settings the demo keeps between sessions.

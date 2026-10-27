@@ -6,6 +6,10 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
+#[path = "alert_monitor.rs"]
+mod alert_monitor;
+#[path = "audio.rs"]
+mod audio;
 #[path = "commands.rs"]
 mod commands;
 #[path = "interval.rs"]
@@ -49,8 +53,7 @@ use egui_charts::ui::context_menu::{
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    KeyboardShortcutsDialog, SeriesContextMenuAction, SeriesSettingsAction, SeriesSettingsDialog,
-    StudyContextMenuAction,
+    KeyboardShortcutsDialog, SeriesContextMenuAction, StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse};
@@ -109,7 +112,7 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
 const MAIN_SERIES_ID: usize = usize::MAX;
-/// The sounds the settings offer for fills; the demo shows the chosen one as a notification.
+/// Local tones offered by the settings dialog.
 const DEMO_SOUNDS: [&str; 3] = ["Chime", "Bell", "Beep"];
 const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
@@ -319,7 +322,6 @@ pub struct DemoApp {
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     alert_dialog: AlertDialog,
-    series_settings: SeriesSettingsDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
     interval_entry: Option<String>,
@@ -343,6 +345,11 @@ pub struct DemoApp {
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
+    audio: audio::AudioPlayer,
+    alert_monitors: std::collections::HashMap<
+        (egui_charts::model::AlertId, String),
+        alert_monitor::AlertMonitor,
+    >,
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
@@ -427,7 +434,6 @@ impl DemoApp {
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
         options.time_scale.bar_spacing = 6.1;
-        options.crosshair.style = egui_charts::config::CrosshairStyle::Arrow;
         options.tooltip.on_long_press = true;
         options.tooltip.show_time = false;
         options.tooltip.font_size = 14.0;
@@ -550,7 +556,6 @@ impl DemoApp {
                 commands::quick_search_commands(),
             ),
             alert_dialog: AlertDialog::new(),
-            series_settings: SeriesSettingsDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             interval_entry: None,
@@ -567,6 +572,8 @@ impl DemoApp {
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
+            audio: Default::default(),
+            alert_monitors: Default::default(),
             trading: Default::default(),
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
@@ -698,6 +705,12 @@ impl DemoApp {
         app
     }
 
+    fn play_sound(&mut self, ctx: &egui::Context, name: &str, volume: f32, activate: bool) {
+        if let Err(error) = self.audio.play(name, volume, activate, ctx) {
+            self.toasts.error(error);
+        }
+    }
+
     /// Surface a short-lived, honest status message in the UI.
     fn notify(&mut self, msg: impl Into<String>) {
         let msg = msg.into();
@@ -736,6 +749,10 @@ impl DemoApp {
         self.copied_drawing = None;
         self.state.timeframe = tf;
         self.chart.set_timeframe(tf);
+        if matches!(tf, Timeframe::Range(_)) {
+            self.state.chart_type = ChartType::Range;
+            self.chart.set_chart_type(ChartType::Range);
+        }
         self.regenerate_bars();
         self.timeframe_toolbar.state.timeframe = tf;
         self.refresh_interval_control();
@@ -785,15 +802,20 @@ impl DemoApp {
     /// The sizes of the price-based charts are in price units: take them from the bars on show.
     fn size_price_based_charts(&mut self) {
         let chart = &mut self.chart;
+        let mut params = chart.chart_type_params().clone();
         let size = RenkoConfig::from_atr(chart.bars(SeriesId::MAIN), 14, 0.5).brick_size;
         if size > 0.0 && size.is_finite() {
-            let mut params = chart.chart_type_params().clone();
             params.renko_brick_size = size;
             params.kagi_reversal = size;
             params.range_size = size;
             params.pnf_box_size = size;
-            chart.set_chart_type_params(params);
         }
+        if let Timeframe::Range(ticks) = self.state.timeframe {
+            let tick_size = self.live.instrument().tick_size.unwrap_or(0.01);
+            params.range_size = ticks.get() as f64 * tick_size;
+            params.range_size_method = egui_charts::model::BoxSizeMethod::Fixed;
+        }
+        chart.set_chart_type_params(params);
     }
 
     fn apply_session(&mut self) {
@@ -869,6 +891,12 @@ impl DemoApp {
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
+        self.alert_dialog.watchlists = self
+            .watchlist
+            .lists()
+            .iter()
+            .map(|list| (list.name.clone(), list.name.clone()))
+            .collect();
         self.alert_dialog.open(self.state.symbol.clone(), price);
     }
 
@@ -890,11 +918,6 @@ impl DemoApp {
         self.settings_state.adjust_for_dividends =
             self.timeframe_toolbar.state.adjust_for_dividends;
         self.settings_dialog.open(self.settings_state.clone());
-    }
-
-    fn open_series_settings_dialog(&mut self) {
-        self.series_settings
-            .open(SeriesId::MAIN, self.chart.series_settings());
     }
 
     fn open_drawing_props_for(&mut self, drawing_id: usize) {
@@ -953,6 +976,9 @@ impl DemoApp {
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => self.apply_chart_settings(*state),
+            SettingsAction::PreviewSound { name, volume } => {
+                self.play_sound(ctx, &name, volume, true)
+            }
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -974,16 +1000,6 @@ impl DemoApp {
         match self.alert_dialog.show(ctx) {
             AlertDialogAction::Create(alert) => self.alerts.save(*alert),
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
-            _ => {}
-        }
-
-        // Series settings.
-        match self.series_settings.show(ctx) {
-            SeriesSettingsAction::Apply(_id, settings) => {
-                self.chart
-                    .user_action(|chart| chart.apply_series_settings(&settings));
-            }
-            SeriesSettingsAction::None | SeriesSettingsAction::Cancel => {}
             _ => {}
         }
 
@@ -1028,7 +1044,6 @@ impl DemoApp {
         self.trading.display = state.trading.clone();
         self.alerts
             .set_notification_seconds(state.alerts.notification_seconds as f32);
-        self.alerts.set_sound_volume(state.alerts.sound_volume);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
         if news_changed {
@@ -1174,19 +1189,13 @@ impl eframe::App for DemoApp {
 
         // Fulfil requests from the previous frame, before a dialog can submit another.
         self.handle_screenshot(&ctx);
-        let logged = self.alerts.log().len();
         self.alerts.poll(&ctx, &mut self.toasts);
-        if let Some(volume) = self.alerts.take_trigger_sound() {
-            self.notify(format!("Alert sound: {volume}%"));
-        }
-        // shortcut: a log already holding its 10,000 triggers forwards no new ones; count the
-        // triggers in the alert service if a session can reach that.
-        let new = self.alerts.log().len().saturating_sub(logged);
-        for trigger in self.alerts.log().iter().rev().take(new).rev() {
-            self.notification_host.notify(
-                format!("Alert triggered: {}", trigger.symbol),
-                Some(&trigger.symbol),
-            );
+        self.monitor_alerts(&ctx);
+        self.alerts.poll(&ctx, &mut self.toasts);
+        let triggers = self.alert_host.take_triggers();
+        for symbol in &triggers {
+            self.notification_host
+                .notify(format!("Alert triggered: {symbol}"), Some(symbol));
         }
         self.symbol_details.poll(&ctx);
         self.highlights.poll(&ctx);
@@ -1201,16 +1210,20 @@ impl eframe::App for DemoApp {
             self.notifications.unread() as u32,
         );
         self.trading.poll(&ctx, &mut self.toasts);
-        // The demo has no audio: the sound chosen for fills shows as a notification.
         if let Some(sound) = self.trading.take_execution_sound() {
-            self.notify(format!(
-                "Sound: {}",
-                if sound.is_empty() {
-                    DEMO_SOUNDS[0]
-                } else {
-                    &sound
-                }
-            ));
+            self.play_sound(
+                &ctx,
+                &sound,
+                self.trading.display.execution_sound_volume,
+                false,
+            );
+        }
+        if !triggers.is_empty() && self.settings_state.alerts.play_sound {
+            let name = self.settings_state.alerts.sound.clone();
+            self.play_sound(&ctx, &name, self.settings_state.alerts.sound_volume, false);
+        }
+        if let Some(error) = self.audio.take_error() {
+            self.toasts.error(error);
         }
         self.poll_storage(&ctx);
         // The watchlist opens beside the chart by default, but a compact window starts with the
@@ -2065,7 +2078,7 @@ impl DemoApp {
             }
             ObjectTreeAction::OpenProperties(id) | ObjectTreeAction::OpenIndicatorSettings(id) => {
                 if id == MAIN_SERIES_ID {
-                    self.open_series_settings_dialog();
+                    self.open_chart_settings_dialog();
                 } else if let Some(study) = indicator_from_tree_id(id) {
                     self.open_indicator_settings(study);
                 } else {
@@ -2078,8 +2091,7 @@ impl DemoApp {
 
     /// Publishes the quotes the watchlist subscribed to through the demo's quote service, and
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
-    /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows
-    /// as a notification.
+    /// and sales the executions of the live feed and reports matching filters as notifications.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
         // demo must be able to go idle instead of repainting for a market that stands still.
@@ -2483,29 +2495,58 @@ impl DemoApp {
                     self.chart.show_footprint(ui, flow, &config);
                     if let Some(ranges) = &self.profile_ranges {
                         let profiles = egui_charts::studies::trade_profiles(flow, ranges);
-                        egui_charts::chart::overlays::render_trade_profiles(ui.painter(), &self.chart.get_chart_mapping(), self.chart.bars(SeriesId::MAIN), &profiles, flow.price_step(), &config);
+                        egui_charts::chart::overlays::render_trade_profiles(
+                            ui.painter(),
+                            &self.chart.get_chart_mapping(),
+                            self.chart.bars(SeriesId::MAIN),
+                            &profiles,
+                            flow.price_step(),
+                            &config,
+                        );
                     }
                     if self.chart.chart_type().is_time_independent() {
-                        ui.painter().text(self.chart.get_rendered_price_rect().center(), egui::Align2::CENTER_CENTER,
-                            "Footprint requires a time-based chart", egui::FontId::proportional(14.0), self.theme.ui.text);
+                        ui.painter().text(
+                            self.chart.get_rendered_price_rect().center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Footprint requires a time-based chart",
+                            egui::FontId::proportional(14.0),
+                            self.theme.ui.text,
+                        );
                     }
                 } else {
-                    let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+                    let mut charts: Vec<_> =
+                        self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
                     charts.insert(self.layout_slot, &mut self.chart);
                     self.layout.show(ui, &mut charts);
                 }
                 self.highlight_strategy_trade(ui);
-                if self.replay.is_none() { self.alert_host.evaluate(&self.chart, chrono::Utc::now()); }
                 let mapping = self.chart.get_chart_mapping();
                 if self.settings_state.alerts.show_alerts {
-                    let decimals = self.chart.instrument().and_then(egui_charts::scales::instrument_price_precision).map(usize::from).unwrap_or(2);
-                    let currency = self.chart.instrument().and_then(|i| i.currency.as_deref()).unwrap_or("");
+                    let decimals = self
+                        .chart
+                        .instrument()
+                        .and_then(egui_charts::scales::instrument_price_precision)
+                        .map(usize::from)
+                        .unwrap_or(2);
+                    let currency = self
+                        .chart
+                        .instrument()
+                        .and_then(|i| i.currency.as_deref())
+                        .unwrap_or("");
                     if let Some(alert) = egui_charts::chart::render_alert_levels(
-                        ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
-                        self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        ui,
+                        &mapping,
+                        self.alerts
+                            .alerts()
+                            .iter()
+                            .filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
+                        self.settings_state.alerts.alert_color,
+                        self.settings_state.alerts.show_alert_labels,
                         self.settings_state.alerts.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),
-                    ) { self.alerts.save(alert); }
+                    ) {
+                        self.alerts.save(alert);
+                    }
                 }
                 if !self.keyboard_dialog_open() {
                     self.handle_keyboard(ui.ctx());
@@ -2514,13 +2555,17 @@ impl DemoApp {
                     self.open_indicator_settings(id);
                 }
                 if self.chart.take_scale_settings_request() {
-                    self.open_series_settings_dialog();
-                    self.series_settings.active_tab = egui_charts::ui::dialogs::series_settings::SeriesSettingsTab::ScalesAndLines;
+                    self.open_chart_settings_dialog();
                 }
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self.chart.bars(SeriesId::MAIN).iter().rfind(|bar| !bar.is_whitespace()) {
+                if let Some(bar) = self
+                    .chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .rfind(|bar| !bar.is_whitespace())
+                {
                     self.paper.set_price(self.chart.symbol(), bar.close);
                     if self.replay.is_some() {
                         // Replay has no historical spread; its close prices both broker and ticket.
@@ -2534,13 +2579,21 @@ impl DemoApp {
                     if !self.trading.is_connected() {
                         self.broker_picker.open();
                     } else if side == egui_charts::widget::QuoteSide::Ticket {
-                        self.trading.open_ticket(egui_charts::model::OrderRequest::new(
-                            self.chart.symbol(), egui_charts::model::OrderSide::Buy,
-                            self.trading.quantity, egui_charts::model::OrderType::Market));
+                        self.trading
+                            .open_ticket(egui_charts::model::OrderRequest::new(
+                                self.chart.symbol(),
+                                egui_charts::model::OrderSide::Buy,
+                                self.trading.quantity,
+                                egui_charts::model::OrderType::Market,
+                            ));
                     } else {
                         let side = match side {
-                            egui_charts::widget::QuoteSide::Buy => egui_charts::model::OrderSide::Buy,
-                            egui_charts::widget::QuoteSide::Sell => egui_charts::model::OrderSide::Sell,
+                            egui_charts::widget::QuoteSide::Buy => {
+                                egui_charts::model::OrderSide::Buy
+                            }
+                            egui_charts::widget::QuoteSide::Sell => {
+                                egui_charts::model::OrderSide::Sell
+                            }
                             egui_charts::widget::QuoteSide::Ticket => unreachable!(),
                         };
                         self.trading.trade(self.chart.symbol().to_owned(), side);
@@ -2562,6 +2615,7 @@ impl DemoApp {
 
     fn drain_chart_events(&mut self, ctx: &egui::Context) {
         let mut replay_click = None;
+        let mut open_settings = false;
         for event in self.chart.drain_events() {
             match event {
                 egui_charts::widget::ChartEvent::CrosshairMoved(pointer) => {
@@ -2578,6 +2632,16 @@ impl DemoApp {
                     }
                     self.last_chart_click = Some(position);
                 }
+                egui_charts::widget::ChartEvent::DoubleClick { position }
+                    if matches!(
+                        position.target,
+                        Some(egui_charts::widget::PointerTarget::Element(
+                            egui_charts::widget::ChartElementId::Series(SeriesId::MAIN)
+                        ))
+                    ) =>
+                {
+                    open_settings = true;
+                }
                 egui_charts::widget::ChartEvent::SymbolChanged(_)
                 | egui_charts::widget::ChartEvent::TimeframeChanged(_) => {
                     self.last_chart_click = None;
@@ -2588,6 +2652,9 @@ impl DemoApp {
         }
         if let Some(time) = replay_click {
             self.handle_replay_bar_click(ctx, time);
+        }
+        if open_settings && !self.replay_selecting {
+            self.open_chart_settings_dialog();
         }
     }
 
@@ -2640,6 +2707,18 @@ impl DemoApp {
                     context.price,
                     context.target
                 ));
+            }
+            ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)) => {
+                use egui_charts::scales::PriceFormatter;
+                let decimals = self
+                    .chart
+                    .instrument()
+                    .and_then(egui_charts::scales::instrument_price_precision)
+                    .unwrap_or(2);
+                ctx.copy_text(
+                    egui_charts::scales::DefaultPriceFormatter::with_precision(decimals as usize)
+                        .format(price),
+                );
             }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
@@ -2695,15 +2774,12 @@ impl DemoApp {
             ContextMenuAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            ContextMenuAction::OpenSeriesSettings => self.open_series_settings_dialog(),
+            ContextMenuAction::OpenSeriesSettings => self.open_chart_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::ExportCsv => self.export_csv(None),
-            ContextMenuAction::CopyPrice(price) => {
-                log::info!("[demo] copy price {price}");
-            }
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
@@ -2711,7 +2787,7 @@ impl DemoApp {
 
     fn handle_series_context(&mut self, action: SeriesContextMenuAction) {
         match action {
-            SeriesContextMenuAction::OpenSettings => self.open_series_settings_dialog(),
+            SeriesContextMenuAction::OpenSettings => self.open_chart_settings_dialog(),
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
@@ -2811,7 +2887,6 @@ impl DemoApp {
             || self.drawing_props.is_open
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
-            || self.series_settings.is_open
             || self.study_templates.is_open
             || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
@@ -4314,17 +4389,90 @@ mod tests {
                 .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         });
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
+        app.handle_comparison(CompareAction::AddSymbol("AAPL".into()));
+        app.add_series_pane();
+        let rsi = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::RSI::new(14)));
+        let pane = app.chart.series_pane(rsi).unwrap();
+        app.chart.move_pane(pane, 0);
+        let id = app.comparisons[0].1;
+        let mut options = app
+            .chart
+            .series()
+            .find(|(key, _)| *key == id)
+            .unwrap()
+            .1
+            .clone();
+        options.width = 4.0;
+        options.color = egui::Color32::YELLOW;
+        options.scale = egui_charts::model::SeriesScale::Separate(7);
+        app.chart.set_series_options(id, options);
+        app.chart.set_series_visible(id, false);
+        app.chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(100.0, 200.0);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        for _ in 0..3 {
+            ctx.run_ui(Default::default(), |ui| {
+                app.chart.show(ui);
+                for extra in &mut app.extra_charts {
+                    extra.chart.show(ui);
+                }
+            })
+            .drop_without_applying_deltas();
+        }
+        app.chart
+            .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         assert!(!app.export_dialog.is_open());
         app.poll_storage(&ctx);
         assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
         assert_eq!(app.layout_tabs.len(), 1);
+        // Opening a layout keeps the host's alert preferences and applied toast lifetime.
+        let mut settings = app.settings_state.clone();
+        settings.alerts.notification_seconds = 12;
+        settings.alerts.show_active_only = false;
+        settings.alerts.sound_volume = 0.35;
+        app.apply_chart_settings(settings.clone());
         // Opening the current layout again returns to it as saved.
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
         app.poll_storage(&ctx);
+        assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
             assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert_eq!(app.comparisons.len(), 2);
+            assert_eq!(
+                app.chart.chart_options().crosshair.style,
+                egui_charts::config::CrosshairStyle::Dot
+            );
+            assert_eq!(app.extra_charts.len(), 1);
+            assert_eq!(app.extra_charts[0].comparisons.len(), 2);
+            for (_, id, _) in &app.extra_charts[0].comparisons {
+                assert!(!app.extra_charts[0].chart.bars(*id).is_empty());
+            }
+            let id = app
+                .comparisons
+                .iter()
+                .find(|(symbol, _, _)| symbol == "AAPL")
+                .unwrap()
+                .1;
+            let options = app.chart.series().find(|(key, _)| *key == id).unwrap().1;
+            assert_eq!(options.width, 4.0);
+            assert_eq!(options.color, egui::Color32::YELLOW);
+            assert_eq!(options.scale, egui_charts::model::SeriesScale::Separate(7));
+            assert!(!app.chart.is_series_visible(id));
+            assert_eq!(app.chart.series_price_scale(id).unwrap().range().min, 100.0);
+            assert_eq!(app.chart.series_price_scale(id).unwrap().range().max, 200.0);
+            let pane = app.chart.series_pane(app.comparisons[1].1).unwrap();
+            assert_ne!(pane, egui_charts::widget::PaneId::MAIN);
+            assert_eq!(app.chart.panes()[1], pane);
+            assert_eq!(app.chart.pane_stretch_factor(pane), Some(1.5));
+            for (_, id, _) in &app.comparisons {
+                assert!(!app.chart.bars(*id).is_empty());
+            }
             assert!(app.chart.indicators().any(|(_, study)| {
                 study.inputs().first().map(|input| &input.value)
                     == Some(&egui_charts::studies::InputValue::Length(7))
@@ -4337,6 +4485,12 @@ mod tests {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut app = DemoApp::new(&cc);
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_layout_action(LayoutAction::Rename("Unnamed".into(), "Renamed".into()));
+        app.poll_storage(&ctx);
+        saved(&app);
+        app.handle_layout_action(LayoutAction::SaveAs("Copy".into()));
         app.poll_storage(&ctx);
         saved(&app);
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
@@ -4813,6 +4967,15 @@ mod tests {
             })
             .drop_without_applying_deltas();
         };
+        assert_eq!(
+            app.chart.chart_options().crosshair.style,
+            CrosshairStyle::Full
+        );
+        frame(&mut app);
+        assert_eq!(
+            app.drawing_toolbar.state.current_cursor_type,
+            CursorType::Cross
+        );
         for (style, cursor, magnet) in [
             (CrosshairStyle::Full, CursorType::Cross, MagnetType::Weak),
             (CrosshairStyle::Dot, CursorType::Dot, MagnetType::Strong),
@@ -6039,6 +6202,22 @@ mod tests {
                 );
             }
         }
+        for interval in ["10r", "25r"] {
+            let timeframe = interval.parse().unwrap();
+            app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(timeframe));
+            assert_eq!(app.chart.chart_type(), ChartType::Range);
+            assert_eq!(app.state.chart_type, ChartType::Range);
+            assert_eq!(app.chart.timeframe(), Some(timeframe));
+            let ticks = if interval == "10r" { 10.0 } else { 25.0 };
+            assert!((app.chart.chart_type_params().range_size - ticks * tick_size).abs() < 1e-10);
+            app.chart.set_data(SeriesId::MAIN, Vec::new());
+            let mut params = app.chart.chart_type_params().clone();
+            params.range_size = 1.0;
+            app.chart.set_chart_type_params(params);
+            app.size_price_based_charts();
+            assert!((app.chart.chart_type_params().range_size - ticks * tick_size).abs() < 1e-10);
+        }
+        app.switch_timeframe(Timeframe::Min1);
         let minute = app.chart.bars(SeriesId::MAIN).last().unwrap().clone();
         app.handle_top_toolbar(&ctx, TopToolbarAction::IntervalSelected(Timeframe::Sec1));
         for _ in 0..3 {
@@ -6159,6 +6338,261 @@ mod tests {
                 *delay <= Duration::from_secs(1),
                 "frame {index} asked for {delay:?}, more than the countdown's second"
             );
+        }
+    }
+
+    #[test]
+    fn copy_price_uses_the_selected_instruments_precision() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        for (symbol, price, expected) in [
+            ("AAPL", 123.45678, "123.46"),
+            ("AAPL", -0.001, "0.00"),
+            ("EURUSD", 1.12345678, "1.1235"),
+        ] {
+            app.switch_symbol(symbol);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                app.handle_context_action(
+                    ui.ctx(),
+                    ChartContextAction::Chart(ContextMenuAction::CopyPrice(price)),
+                );
+            });
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            assert!(
+                commands.iter().any(|command| matches!(command,
+                egui::OutputCommand::CopyText(text) if text == expected)),
+                "{symbol}: {commands:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_entry_points_open_the_same_chart_dialog() {
+        for entry in ["top", "axis", "double-click", "series"] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.chart.set_feed_paused(true);
+            let frame = |app: &mut DemoApp, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show_chart(ui, app.theme.chart.bg),
+                )
+                .drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            match entry {
+                "top" => app.handle_top_toolbar(&ctx, TopToolbarAction::OpenSettings),
+                "series" => app.handle_series_context(SeriesContextMenuAction::OpenSettings),
+                _ => {
+                    let map = app.chart.get_chart_mapping();
+                    let index = app.chart.state().shown().len() - 5;
+                    let pos = if entry == "axis" {
+                        egui::pos2(
+                            map.rect.right() + app.chart.config().right_axis_width / 2.0,
+                            map.rect.bottom() + 14.0,
+                        )
+                    } else {
+                        egui::pos2(
+                            map.idx_to_x(index),
+                            map.price_to_y(app.chart.state().shown()[index].close),
+                        )
+                    };
+                    frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+                    for _ in 0..if entry == "axis" { 1 } else { 2 } {
+                        for pressed in [true, false] {
+                            frame(
+                                &mut app,
+                                vec![egui::Event::PointerButton {
+                                    pos,
+                                    pressed,
+                                    button: egui::PointerButton::Primary,
+                                    modifiers: Default::default(),
+                                }],
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(
+                app.settings_dialog.is_open,
+                "{entry} must open chart settings"
+            );
+            assert_eq!(
+                app.settings_dialog.settings(),
+                &ChartSettingsState::from_chart(&app.chart)
+            );
+        }
+    }
+
+    #[test]
+    fn live_alerts_survive_symbol_changes_replay_and_watchlist_membership() {
+        use eframe::App;
+        for watchlist in [false, true] {
+            for replay in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                app.live.set_paused(true);
+                app.switch_symbol("AAPL");
+                app.switch_timeframe(Timeframe::Hour1);
+                let mut list = Watchlist::new("Test list");
+                list.add_symbol("AAPL");
+                list.add_symbol("BTCUSD");
+                app.watchlist = WatchlistPanel::new(vec![list]);
+                let mut alert = Alert::new("AAPL", AlertCondition::Above(0.0));
+                if watchlist {
+                    alert.watchlist = Some("Test list".into());
+                    if !replay {
+                        alert.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
+                    }
+                }
+                app.alerts.save(alert);
+                app.alerts.poll(&ctx, &mut app.toasts);
+                app.switch_symbol("EURUSD");
+                if replay {
+                    app.start_replay();
+                }
+                for _ in 0..4 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                let mut symbols: Vec<_> = app
+                    .alerts
+                    .log()
+                    .iter()
+                    .map(|trigger| trigger.symbol.as_str())
+                    .collect();
+                symbols.sort_unstable();
+                assert_eq!(
+                    symbols,
+                    if watchlist {
+                        vec!["AAPL", "BTCUSD"]
+                    } else {
+                        vec!["AAPL"]
+                    },
+                    "watchlist={watchlist}, replay={replay}"
+                );
+                app.switch_timeframe(Timeframe::Min1);
+                app.watchlist.add_symbol("MSFT");
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                if watchlist && !replay {
+                    let feed = LiveFeed::new("MSFT", app.live.now());
+                    let bars = feed.snapshot(
+                        Timeframe::Hour1,
+                        egui_charts::model::BarClock::new(Timeframe::Hour1),
+                        false,
+                    );
+                    let trigger = app
+                        .alerts
+                        .log()
+                        .iter()
+                        .find(|trigger| trigger.symbol == "MSFT")
+                        .unwrap();
+                    assert_eq!(
+                        trigger.price,
+                        Some(bars[bars.len() - 2].close),
+                        "new watchlist members keep the alert's original interval"
+                    );
+                }
+
+                app.switch_timeframe(Timeframe::Hour1);
+                // A removed parent must not resolve to a copied study with the same numeric id.
+                let parent = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                let child = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                app.chart
+                    .set_indicator_source(
+                        child,
+                        egui_charts::studies::StudySource::Study {
+                            id: parent.0,
+                            plot: 0,
+                        },
+                    )
+                    .unwrap();
+                app.chart.remove_series(parent);
+                let mut missing = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
+                missing.source = egui_charts::model::AlertSource::Study {
+                    id: child.0.to_string(),
+                    output: 0,
+                };
+                app.alerts.save(missing);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                app.switch_timeframe(Timeframe::Min1);
+                let replacement = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                let mut edited = app.alerts.alerts().last().unwrap().clone();
+                edited.source = egui_charts::model::AlertSource::Study {
+                    id: replacement.0.to_string(),
+                    output: 0,
+                };
+                app.alerts.save(edited);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    app.alerts.log().len(),
+                    if watchlist { 4 } else { 2 },
+                    "an edited alert must use its newly selected study"
+                );
+                let bars = LiveFeed::new("EURUSD", app.live.now()).snapshot(
+                    Timeframe::Hour1,
+                    egui_charts::model::BarClock::new(Timeframe::Hour1),
+                    false,
+                );
+                assert_eq!(
+                    app.alerts.log().back().unwrap().price,
+                    Some(bars[bars.len() - 2].close),
+                    "editing a source must retain the alert's original interval"
+                );
+                app.watchlist = WatchlistPanel::new(vec![Watchlist::new("Empty")]);
+                let mut expired = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                expired.watchlist = Some("Empty".into());
+                expired.expires = Some(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
+                app.alerts.save(expired);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    app.alerts.alerts().last().unwrap().status,
+                    egui_charts::model::AlertStatus::Expired,
+                    "expiry must not depend on a subscribed watchlist member"
+                );
+            }
         }
     }
 }

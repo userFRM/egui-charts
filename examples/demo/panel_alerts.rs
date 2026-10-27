@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use egui_charts::data::Reply;
-use egui_charts::model::{Alert, AlertId};
+use egui_charts::model::{Alert, AlertId, AlertStatus};
 use egui_charts::services::{AlertEvent, Alerts, Events};
 
 /// Session-only storage used by the demo alerts panel.
@@ -15,7 +15,8 @@ struct State {
     alerts: Vec<Alert>,
     events: Option<Events<AlertEvent>>,
     next_id: u64,
-    evaluation: std::collections::HashMap<AlertId, Evaluation>,
+    triggers: std::collections::VecDeque<String>,
+    evaluation: std::collections::HashMap<(AlertId, String), Evaluation>,
     documents: std::collections::HashMap<(egui_charts::services::StoreKind, String), String>,
 }
 
@@ -29,13 +30,27 @@ impl Alerts for DemoAlerts {
     }
 
     fn save(&self, mut alert: Alert, reply: Reply<()>) {
+        if !alert.is_valid() {
+            reply.send(Err(egui_charts::data::FeedError::Other(
+                "Invalid alert conditions".into(),
+            )));
+            return;
+        }
+        if alert.watchlist.is_none()
+            && !crate::sampledata::DemoSymbol::catalog()
+                .iter()
+                .any(|symbol| symbol.symbol == alert.symbol)
+        {
+            reply.send(Err(egui_charts::data::FeedError::NotSupported));
+            return;
+        }
         let mut state = self.0.lock().unwrap();
         if alert.id.is_none() {
             state.next_id += 1;
             alert.id = Some(AlertId(state.next_id.to_string()));
         }
         if let Some(id) = &alert.id {
-            state.evaluation.remove(id);
+            state.evaluation.retain(|(key, _), _| key != id);
         }
         state.alerts.retain(|a| a.id != alert.id);
         state.alerts.push(alert.clone());
@@ -47,7 +62,7 @@ impl Alerts for DemoAlerts {
 
     fn remove(&self, id: AlertId, reply: Reply<()>) {
         let mut state = self.0.lock().unwrap();
-        state.evaluation.remove(&id);
+        state.evaluation.retain(|(key, _), _| *key != id);
         state.alerts.retain(|a| a.id.as_ref() != Some(&id));
         if let Some(events) = &state.events {
             events.push(AlertEvent::Remove(id));
@@ -109,33 +124,61 @@ struct Evaluation {
     sample: Option<(chrono::DateTime<chrono::Utc>, u64, u64)>,
     previous: Vec<(Option<f64>, Option<f64>)>,
     triggered_bar: Option<chrono::DateTime<chrono::Utc>>,
+    once: bool,
 }
 
 impl DemoAlerts {
-    /// The example host evaluates only its displayed synthetic series, once per changed sample.
-    /// A deployed host supplies its own durable evaluator and feeds, including watchlist members.
-    pub fn evaluate(&self, chart: &egui_charts::Chart, now: chrono::DateTime<chrono::Utc>) {
-        use egui_charts::model::{AlertFrequency, AlertStatus};
+    /// Expiry does not depend on an available symbol or a nonempty watchlist.
+    pub fn expire(&self, now: chrono::DateTime<chrono::Utc>) {
+        let mut state = self.0.lock().unwrap();
+        let State { alerts, events, .. } = &mut *state;
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active && alert.expires.is_some_and(|expiry| expiry <= now)
+        }) {
+            alert.status = AlertStatus::Expired;
+            if let Some(events) = events {
+                events.push(AlertEvent::Upsert(alert.clone()));
+            }
+        }
+    }
+
+    /// Local delivery consumes occurrences directly, independently of the panel's bounded log.
+    pub fn take_triggers(&self) -> Vec<String> {
+        self.0.lock().unwrap().triggers.drain(..).collect()
+    }
+
+    /// Evaluates one live source, keeping occurrence state independently for each subject symbol.
+    pub fn evaluate(
+        &self,
+        chart: &egui_charts::Chart,
+        now: chrono::DateTime<chrono::Utc>,
+        only: Option<&AlertId>,
+        watchlists: &[egui_charts::ui::widget_bar::Watchlist],
+        studies: &std::collections::HashMap<String, egui_charts::widget::SeriesId>,
+    ) {
+        use egui_charts::model::AlertFrequency;
+        self.expire(now);
         let mut state = self.0.lock().unwrap();
         let State {
             alerts,
             evaluation,
             events,
+            triggers,
             ..
         } = &mut *state;
         let bars = chart.bars(egui_charts::chart::series::SeriesId::MAIN);
-        for alert in alerts
-            .iter_mut()
-            .filter(|a| a.status == AlertStatus::Active)
-        {
-            if alert.expires.is_some_and(|expiry| expiry <= now) {
-                alert.status = AlertStatus::Expired;
-                if let Some(events) = events {
-                    events.push(AlertEvent::Upsert(alert.clone()));
-                }
-                continue;
-            }
-            if alert.symbol != chart.symbol() || alert.watchlist.is_some() || !alert.is_valid() {
+        for alert in alerts.iter_mut().filter(|a| {
+            a.status == AlertStatus::Active && only.is_none_or(|id| a.id.as_ref() == Some(id))
+        }) {
+            let matches = alert.watchlist.as_ref().map_or_else(
+                || alert.symbol == chart.symbol(),
+                |name| {
+                    watchlists.iter().any(|list| {
+                        list.name == *name && list.symbols().any(|symbol| symbol == chart.symbol())
+                    })
+                },
+            );
+            if !matches || !alert.is_valid() {
                 continue;
             }
             let Some(id) = &alert.id else { continue };
@@ -144,7 +187,12 @@ impl DemoAlerts {
                 continue;
             };
             let bar = &bars[index];
-            let run = evaluation.entry(id.clone()).or_default();
+            let run = evaluation
+                .entry((id.clone(), chart.symbol().to_owned()))
+                .or_default();
+            if run.once {
+                continue;
+            }
             let sample = (bar.time, bar.close.to_bits(), bar.volume.to_bits());
             if closed && run.sample.is_some_and(|s| s.0 == bar.time) {
                 continue;
@@ -158,10 +206,10 @@ impl DemoAlerts {
             let mut satisfied = true;
             let mut inputs = Vec::new();
             for (rule_index, (source, condition)) in rules.enumerate() {
-                let current = source_value(chart, source, index);
+                let current = source_value(chart, studies, source, index);
                 let other = match condition {
                     egui_charts::model::AlertCondition::Compare { other, .. } => {
-                        source_value(chart, other, index)
+                        source_value(chart, studies, other, index)
                     }
                     _ => None,
                 };
@@ -169,11 +217,11 @@ impl DemoAlerts {
                     (
                         index
                             .checked_sub(1)
-                            .and_then(|i| source_value(chart, source, i)),
+                            .and_then(|i| source_value(chart, studies, source, i)),
                         match condition {
                             egui_charts::model::AlertCondition::Compare { other, .. } => index
                                 .checked_sub(1)
-                                .and_then(|i| source_value(chart, other, i)),
+                                .and_then(|i| source_value(chart, studies, other, i)),
                             _ => None,
                         },
                     )
@@ -188,7 +236,7 @@ impl DemoAlerts {
                         |lookback| {
                             index
                                 .checked_sub(lookback as usize)
-                                .and_then(|i| source_value(chart, source, i))
+                                .and_then(|i| source_value(chart, studies, source, i))
                         },
                         &bars[..=index],
                     )
@@ -209,14 +257,22 @@ impl DemoAlerts {
             run.previous = inputs;
             run.sample = Some(sample);
             if fire {
+                triggers.push_back(chart.symbol().to_owned());
+                if triggers.len() > 10_000 {
+                    triggers.pop_front();
+                }
                 run.triggered_bar = Some(bar.time);
                 if alert.frequency == AlertFrequency::Once {
-                    alert.status = AlertStatus::Triggered;
+                    run.once = true;
+                    if alert.watchlist.is_none() {
+                        alert.status = AlertStatus::Triggered;
+                    }
                 }
                 if let Some(events) = events {
                     events.push(AlertEvent::Upsert(alert.clone()));
-                    events.push(AlertEvent::Triggered {
+                    events.push(AlertEvent::TriggeredForSymbol {
                         id: id.clone(),
+                        symbol: chart.symbol().to_owned(),
                         time: now,
                         price: Some(bar.close),
                     });
@@ -228,6 +284,7 @@ impl DemoAlerts {
 
 fn source_value(
     chart: &egui_charts::Chart,
+    studies: &std::collections::HashMap<String, egui_charts::widget::SeriesId>,
     source: &egui_charts::model::AlertSource,
     index: usize,
 ) -> Option<f64> {
@@ -238,7 +295,13 @@ fn source_value(
         AlertSource::Volume => bars.get(index)?.volume,
         AlertSource::Study { id, output } => chart
             .indicators()
-            .find(|(key, _)| key.0.to_string() == *id)?
+            .find(|(key, _)| {
+                if studies.is_empty() {
+                    key.0.to_string() == *id
+                } else {
+                    studies.get(id) == Some(key)
+                }
+            })?
             .1
             .plot_value(*output, index)?,
         AlertSource::Drawing(id) => {
@@ -497,26 +560,26 @@ mod tests {
         let mut alert = Alert::new(chart.symbol(), C::Crossing(100.0));
         panel.save(alert.clone());
         panel.poll(&ctx, &mut toasts);
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.alerts()[0].status, AlertStatus::Triggered);
         assert_eq!(panel.log().len(), 1);
         assert_eq!(toasts.len(), 1);
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 1);
         alert.expires = Some(now - TimeDelta::seconds(1));
         panel.save(alert);
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.alerts()[1].status, AlertStatus::Expired);
         let mut alert = Alert::new(chart.symbol(), C::Above(100.0));
         alert.frequency = AlertFrequency::OncePerBar;
         panel.save(alert);
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 2);
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 2);
         chart.set_data(
@@ -533,7 +596,7 @@ mod tests {
                 ),
             ],
         );
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 3);
         assert_eq!(panel.alerts()[2].status, AlertStatus::Active);
@@ -557,7 +620,7 @@ mod tests {
                     ),
                 ],
             );
-            host.evaluate(&chart, now);
+            host.evaluate(&chart, now, None, &[], &Default::default());
             panel.poll(&ctx, &mut toasts);
             assert_eq!(panel.log().len(), expected, "crossing at {price}");
         }
@@ -575,12 +638,25 @@ mod tests {
                 comparison: AlertComparison::Crossing,
             },
         ));
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 6);
         chart.drawings_mut().drawings[0].chart_points[0].price = 90.0;
-        host.evaluate(&chart, now);
+        host.evaluate(&chart, now, None, &[], &Default::default());
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 7);
+        let saved = host.0.lock().unwrap().alerts.len();
+        for alert in [
+            Alert::new("UNKNOWN", C::Above(0.0)),
+            Alert::new("SAMPLE", C::Above(f64::NAN)),
+        ] {
+            panel.save(alert);
+            panel.poll(&ctx, &mut toasts);
+            assert_eq!(
+                host.0.lock().unwrap().alerts.len(),
+                saved,
+                "unavailable or invalid sources must not be stored"
+            );
+        }
     }
 }

@@ -363,6 +363,8 @@ pub struct TradingSettings {
     /// The name of the sound the host plays for fills, one of the
     /// `SettingsDialog::execution_sounds` with the `ui` feature; empty for the host's first.
     pub execution_sound: String,
+    /// Local execution sound gain, from zero (muted) to one.
+    pub execution_sound_volume: f32,
     /// Which trading events raise a notification.
     pub notifications: TradingNotifications,
     /// Draw the open positions.
@@ -392,6 +394,7 @@ impl Default for TradingSettings {
             bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),
+            execution_sound_volume: 1.0,
             notifications: TradingNotifications::All,
             show_positions: true,
             position_pnl: true,
@@ -436,6 +439,12 @@ impl TradingNotifications {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AlertsSettings {
+    /// Ask the host to play a local sound when an alert fires.
+    pub play_sound: bool,
+    /// Host sound name; empty selects its first available sound.
+    pub sound: String,
+    /// Local alert sound gain, from zero (muted) to one.
+    pub sound_volume: f32,
     /// Whether to show alerts.
     pub show_alerts: bool,
     /// Whether to show alert labels.
@@ -444,8 +453,6 @@ pub struct AlertsSettings {
     pub alert_color: Color32,
     /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
     pub show_active_only: bool,
-    /// Alert sound volume in percent; zero is mute. The host plays requested sounds.
-    pub sound_volume: u8,
     /// Seconds an alert notification stays on screen.
     pub notification_seconds: u32,
 }
@@ -453,11 +460,13 @@ pub struct AlertsSettings {
 impl Default for AlertsSettings {
     fn default() -> Self {
         Self {
+            play_sound: false,
+            sound: String::new(),
+            sound_volume: 1.0,
             show_alerts: true,
             show_alert_labels: true,
             alert_color: crate::studies::palette::ORANGE, // Orange
             show_active_only: true,
-            sound_volume: 100,
             notification_seconds: 5,
         }
     }
@@ -467,6 +476,15 @@ impl Default for AlertsSettings {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
     // Symbol tab
+    /// Active representation used to select the Symbol controls. Applying settings keeps the chart type.
+    #[serde(default)]
+    pub chart_type: crate::model::ChartType,
+    /// Styles and construction inputs; absent in settings saved before these controls existed.
+    #[serde(default)]
+    pub chart_type_params: Option<crate::model::ChartTypeParams>,
+    /// Source for line and area representations; absent in older saved settings.
+    #[serde(default)]
+    pub price_source: Option<crate::model::PriceSource>,
     /// Candle body, border and wick colors.
     pub candle_colors: CandleColorConfig,
     /// Price display precision.
@@ -525,6 +543,9 @@ impl Default for ChartSettingsState {
         let grid_lines = GridLinesSettings::default();
 
         Self {
+            chart_type: crate::model::ChartType::default(),
+            chart_type_params: None,
+            price_source: None,
             candle_colors: CandleColorConfig::default(),
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
