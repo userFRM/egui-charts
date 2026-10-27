@@ -180,7 +180,7 @@ impl DemoApp {
         }
     }
 
-    pub(super) fn activate_chart_slot(&mut self, slot: usize) {
+    pub(crate) fn activate_chart_slot(&mut self, slot: usize) {
         if slot == self.layout_slot {
             return;
         }

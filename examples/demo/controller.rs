@@ -302,7 +302,7 @@ impl ChartAppState for DemoAppState {
 /// The full demo application.
 pub struct DemoApp {
     pub chart: Chart,
-    layout: ChartLayout,
+    pub(crate) layout: ChartLayout,
     layout_slot: usize,
     extra_charts: Vec<DemoChart>,
     layout_tabs: Vec<LayoutTab>,
@@ -324,7 +324,7 @@ pub struct DemoApp {
     theme_choice: Option<bool>,
 
     // Persistent toolbars.
-    top_toolbar: TopToolbar,
+    pub(crate) top_toolbar: TopToolbar,
     drawing_toolbar: DrawingToolbar,
     timeframe_toolbar: TimeframeToolbar,
     widget_bar: WidgetBar,
@@ -380,7 +380,7 @@ pub struct DemoApp {
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
-    trading: egui_charts::ui::trading::Trading,
+    pub(crate) trading: egui_charts::ui::trading::Trading,
     paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
@@ -1881,7 +1881,7 @@ impl DemoApp {
             });
     }
 
-    fn toggle_panel(&mut self, icon: RightBarIcon) {
+    pub(crate) fn toggle_panel(&mut self, icon: RightBarIcon) {
         if icon == RightBarIcon::Help {
             self.keyboard_shortcuts.toggle();
         }
@@ -2281,17 +2281,20 @@ impl DemoApp {
         }
     }
 
+    /// Connects the paper account and opens its panel, as its tile in the broker picker does.
+    pub(crate) fn connect_paper(&mut self) {
+        self.trading.set_service(self.paper.clone());
+        self.trading.account_panel.broker = "Paper Trading".to_owned();
+        self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
+        self.account_panel = AccountPanelSize::Normal;
+    }
+
     /// The account panel of the connected broker, under the chart and its interval bar.
     fn show_account_panel(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         use egui_charts::ui::trading::{AccountPanelAction, BrokerPickerAction, BrokerTile};
 
         match self.broker_picker.show(ui.ctx()) {
-            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => {
-                self.trading.set_service(self.paper.clone());
-                self.trading.account_panel.broker = "Paper Trading".to_owned();
-                self.trading.account_panel.accounts = vec!["Paper 1".to_owned()];
-                self.account_panel = AccountPanelSize::Normal;
-            }
+            Some(BrokerPickerAction::Connect(id)) if id == BrokerTile::PAPER => self.connect_paper(),
             Some(BrokerPickerAction::Connect(_)) => {
                 self.notify("Example brokers have no account behind them in this demo");
             }

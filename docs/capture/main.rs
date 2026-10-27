@@ -3,10 +3,10 @@
 //! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
 //!
 //! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
-//! Output: `<scene>-<theme>@2x.png` for the dark and light themes. Each capture sets its theme on the app and with
-//! `Chart::set_theme` before the first step. `docs/images` holds the chart scenes as written. `hero-<theme>.png`
-//! and `themes-<theme>.png` are the `hero` and `themes` window captures placed in a frame after capture, without
-//! changing a pixel inside the windows.
+//! Output: `<scene>-<theme>.png` for the dark and light themes, from a 1440x900 window at one pixel per point.
+//! Each capture sets its theme on the app and with `Chart::set_theme` before the first step. `docs/images` holds
+//! them converted unchanged to lossless WebP: `for f in <out-dir>/*.png; do cwebp -quiet -lossless -z 9 "$f" -o
+//! docs/images/$(basename "${f%.png}").webp; done`.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "the capture tool uses part of the demo")]
@@ -24,8 +24,12 @@ use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
 use egui_charts::model::{Bar, ChartType as ModelChartType, Timeframe};
 use egui_charts::studies::{self, Indicator};
 use egui_charts::theme::Theme;
+use egui_charts::model::{OrderRequest, OrderSide, OrderType};
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
+use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+use egui_charts::ui::widget_bar::RightBarIcon;
+use egui_charts::widget::{ChartLayoutMode, SeriesId};
 use egui_kittest::Harness;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use std::path::Path;
@@ -33,7 +37,7 @@ use std::path::Path;
 /// The demo catalog's neutral instrument, so no real ticker is shown with synthetic prices.
 const SAMPLE: &str = "SAMPLE";
 /// Images above this size are reported, since each one is downloaded with the README.
-const MAX_BYTES: u64 = 1_000_000;
+const MAX_BYTES: u64 = 400_000;
 
 enum Step {
     /// Switch symbol, as picking one in symbol search does.
@@ -48,6 +52,24 @@ enum Step {
     Study(fn() -> Box<dyn Indicator>),
     /// Add drawings placed from the bars on the chart.
     Drawings(fn(&[Bar]) -> Vec<Drawing>),
+    /// Pick an arrangement in the layout menu.
+    Grid(ChartLayoutMode),
+    /// Make the chart in this slot of the layout the active one, as clicking it does.
+    Slot(usize),
+    /// Open or close a side panel from the right-hand bar.
+    Panel(RightBarIcon),
+    /// Show the liquidity heatmap and volume bubbles, as the toolbar toggle does.
+    Heatmap,
+    /// Start replay this many bars before the last one, as picking that bar does.
+    Replay(usize),
+    /// Connect the paper account in the broker picker.
+    Paper,
+    /// Stop the charts of a layout following each other's time range.
+    UnsyncTime,
+    /// Zoom the active chart to this many bars, ending at the latest.
+    Visible(usize),
+    /// Open the order ticket for a limit order this far below the last close, in percent.
+    Ticket(f64),
 }
 
 enum Crop {
@@ -58,7 +80,6 @@ enum Crop {
 
 struct Scene {
     name: &'static str,
-    size: Vec2,
     crop: Crop,
     steps: Vec<Step>,
     /// Pointer position as a fraction of the chart area, which shows the crosshair there.
@@ -69,26 +90,25 @@ fn study<T: Indicator + Default + 'static>() -> Box<dyn Indicator> {
     Box::new(T::default())
 }
 
-/// Logical window sizes: a full-width README image, and one of a pair shown side by side.
-const WIDE: Vec2 = vec2(1100.0, 700.0);
-const HALF: Vec2 = vec2(900.0, 560.0);
+/// Logical window size of every capture, written at one pixel per point.
+const SIZE: Vec2 = vec2(1440.0, 900.0);
 
 fn scenes() -> Vec<Scene> {
     use Step::*;
-    let scene = |name, size, crop, steps| Scene {
+    let scene = |name, crop, steps| Scene {
         name,
-        size,
         crop,
         steps,
         pointer: None,
     };
-    let chart_type = |name, style| {
-        scene(
-            name,
-            HALF,
-            Crop::Chart,
-            vec![Symbol(SAMPLE), ClearStudies, ChartType(style)],
-        )
+    // One chart per slot of a four-chart grid, each with its own style.
+    let grid = |styles: [ModelChartType; 4], interval| {
+        let mut steps = vec![Symbol(SAMPLE), Interval(interval), ClearStudies, Grid(ChartLayoutMode::Four)];
+        for (slot, style) in styles.into_iter().enumerate() {
+            steps.extend([Slot(slot), ChartType(style)]);
+        }
+        steps.push(Slot(0));
+        steps
     };
     let picks = [
         study::<studies::IchimokuCloud>,
@@ -98,62 +118,110 @@ fn scenes() -> Vec<Scene> {
     vec![
         Scene {
             name: "hero",
-            size: vec2(1440.0, 900.0),
             crop: Crop::Window,
-            steps: vec![Symbol(SAMPLE), Drawings(retracement)],
+            steps: vec![Symbol(SAMPLE), Interval(Timeframe::Min5), Drawings(retracement)],
             pointer: Some(vec2(0.62, 0.3)),
         },
-        chart_type("type-heikin-ashi", ModelChartType::Heikin),
-        chart_type("type-baseline", ModelChartType::Baseline),
-        chart_type("type-kagi", ModelChartType::Kagi),
-        chart_type("type-point-and-figure", ModelChartType::PointAndFigure),
+        scene(
+            "chart-types",
+            Crop::Chart,
+            grid(
+                [
+                    ModelChartType::Heikin,
+                    ModelChartType::Renko,
+                    ModelChartType::Kagi,
+                    ModelChartType::PointAndFigure,
+                ],
+                Timeframe::Hour1,
+            ),
+        ),
         scene(
             "studies",
-            WIDE,
             Crop::Chart,
-            [Symbol(SAMPLE), ClearStudies]
+            [Symbol(SAMPLE), Interval(Timeframe::Min5), ClearStudies]
                 .into_iter()
                 .chain(picks.map(Study))
                 .collect(),
         ),
         scene(
             "drawings",
-            WIDE,
             Crop::Window,
-            vec![Symbol(SAMPLE), ClearStudies, Drawings(analysis)],
+            vec![
+                Symbol(SAMPLE), Interval(Timeframe::Min5),
+                ClearStudies,
+                Drawings(analysis),
+                Panel(RightBarIcon::ObjectTree),
+            ],
+        ),
+        scene(
+            "order-flow",
+            Crop::Chart,
+            vec![
+                Symbol(SAMPLE),
+                Interval(Timeframe::Min5),
+                ClearStudies,
+                Grid(ChartLayoutMode::TwoHorizontal),
+                UnsyncTime,
+                Slot(0),
+                ChartType(ModelChartType::VolumeFootprint),
+                Interval(Timeframe::Min1),
+                Visible(14),
+                Slot(1),
+                Interval(Timeframe::Min1),
+                Visible(70),
+                Heatmap,
+                Slot(0),
+            ],
+        ),
+        scene(
+            "profiles",
+            Crop::Chart,
+            vec![
+                Symbol(SAMPLE),
+                Interval(Timeframe::Min30),
+                ClearStudies,
+                Grid(ChartLayoutMode::TwoHorizontal),
+                UnsyncTime,
+                Slot(0),
+                ChartType(ModelChartType::TimePriceOpportunity),
+                Slot(1),
+                ChartType(ModelChartType::SessionVolumeProfile),
+                Slot(0),
+            ],
+        ),
+        scene(
+            "trading",
+            Crop::Window,
+            vec![Symbol(SAMPLE), Interval(Timeframe::Min5), ClearStudies, Paper, Ticket(0.5)],
+        ),
+        scene(
+            "layouts",
+            Crop::Window,
+            vec![
+                Symbol(SAMPLE), Interval(Timeframe::Min5),
+                ClearStudies,
+                Study(study::<studies::RSI>),
+                Grid(ChartLayoutMode::Three),
+                Slot(1),
+                Interval(Timeframe::Min15),
+                Slot(2),
+                ChartType(ModelChartType::Line),
+                Slot(0),
+            ],
+        ),
+        scene(
+            "replay",
+            Crop::Window,
+            vec![Symbol(SAMPLE), Interval(Timeframe::Min5), ClearStudies, Replay(120)],
         ),
         scene(
             "themes",
-            WIDE,
             Crop::Window,
             vec![
-                Symbol(SAMPLE),
+                Symbol(SAMPLE), Interval(Timeframe::Min5),
                 ClearStudies,
                 Study(study::<studies::SuperTrend>),
                 Study(study::<studies::RSI>),
-            ],
-        ),
-        scene(
-            "tpo",
-            HALF,
-            Crop::Chart,
-            vec![
-                Symbol(SAMPLE),
-                Interval(Timeframe::Min30),
-                ClearStudies,
-                ChartType(ModelChartType::TimePriceOpportunity),
-            ],
-        ),
-        scene(
-            "volume-profile",
-            HALF,
-            Crop::Chart,
-            vec![
-                Symbol(SAMPLE),
-                Interval(Timeframe::Min30),
-                ClearStudies,
-                Study(study::<studies::CVD>),
-                Drawings(profile),
             ],
         ),
     ]
@@ -230,17 +298,6 @@ fn analysis(bars: &[Bar]) -> Vec<Drawing> {
     out
 }
 
-/// A fixed-range volume profile over the last session on screen.
-fn profile(bars: &[Bar]) -> Vec<Drawing> {
-    let n = bars.len();
-    let (low, _) = extremes(bars, n.saturating_sub(48), n);
-    vec![drawing(
-        DrawingToolType::FixedRangeVolumeProfile,
-        BLUE,
-        &[(n.saturating_sub(48), low.1), (n - 1, low.1)],
-    )]
-}
-
 // ---------------------------------------------------------------- capture
 
 fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
@@ -258,6 +315,26 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
                 .into_iter()
                 .for_each(|d| dm.add_synced_drawing(d));
         }
+        Step::Grid(mode) => app.handle_top_toolbar(ctx, TopToolbarAction::Layout(LayoutAction::SelectGrid(*mode))),
+        Step::Slot(slot) => app.activate_chart_slot(*slot),
+        Step::Panel(icon) => app.toggle_panel(*icon),
+        Step::Heatmap => {
+            app.chart.set_liquidity_heatmap(true);
+            app.chart.set_volume_bubbles(Some(Default::default()));
+        }
+        Step::Replay(back) => {
+            let n = app.chart.bars(SeriesId::MAIN).len();
+            app.start_replay_at(n.saturating_sub(*back + 1));
+        }
+        Step::UnsyncTime => app.layout.sync.sync_time_axis = false,
+        Step::Visible(count) => app.chart.set_visible_bars(*count),
+        Step::Paper => app.connect_paper(),
+        Step::Ticket(below) => {
+            let close = app.chart.bars(SeriesId::MAIN).last().map_or(0.0, |b| b.close);
+            let price = (close * (1.0 - below / 100.0) * 100.0).round() / 100.0;
+            let request = OrderRequest::new(SAMPLE, OrderSide::Buy, 10.0, OrderType::Limit(price));
+            app.trading.open_ticket(request);
+        }
     }
 }
 
@@ -270,7 +347,7 @@ fn chart_rect(ctx: &Context) -> Rect {
             .outer_rect
     };
     let mut r = ctx.content_rect();
-    r.min.y = panel("symbol_header").max.y.max(panel("toolbar").max.y);
+    r.min.y = panel("toolbar").max.y;
     r.min.x = panel("drawing_toolbar").max.x;
     r.max.x = panel("widget_bar").min.x;
     r.max.y = panel("bottom").min.y;
@@ -279,7 +356,7 @@ fn chart_rect(ctx: &Context) -> Rect {
 
 fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     let mut h = Harness::builder()
-        .with_size(scene.size)
+        .with_size(SIZE)
         .with_pixels_per_point(scale)
         // The chart draws its own crosshair; kittest would paint a pointer arrow over it.
         .with_render_cursor(false)
@@ -295,10 +372,15 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     let app = h.state_mut();
     app.theme = if light { Theme::light() } else { Theme::dark() };
     app.chart.set_theme(&ctx, &app.theme);
+    // The watchlist, open at start, lists real tickers beside synthetic prices.
+    app.toggle_panel(RightBarIcon::Watchlist);
+    // The demo's call to action belongs to the host application, not to the library.
+    app.top_toolbar.call_to_action = None;
     for step in &scene.steps {
         apply(app, &ctx, step);
     }
-    h.run_steps(3);
+    // Enough frames for the paper broker's replies and the replay window to arrive.
+    h.run_steps(10);
     let area = chart_rect(&ctx);
     if let Some(f) = scene.pointer {
         h.hover_at(area.min + area.size() * f);
@@ -314,7 +396,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         img = image::imageops::crop_imm(&img, x, y, width, height).to_image();
     }
     let theme = if light { "light" } else { "dark" };
-    let path = out.join(format!("{}-{theme}@{scale}x.png", scene.name));
+    let path = out.join(format!("{}-{theme}.png", scene.name));
     let file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
     img.write_with_encoder(PngEncoder::new_with_quality(
         file,
@@ -342,7 +424,7 @@ fn main() {
     std::fs::create_dir_all(out).unwrap();
     for scene in scenes().iter().filter(|s| s.name.contains(filter)) {
         for light in [false, true] {
-            shoot(scene, light, 2.0, out);
+            shoot(scene, light, 1.0, out);
         }
         eprintln!("captured {}", scene.name);
     }
