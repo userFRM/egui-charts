@@ -196,7 +196,6 @@ pub fn apply_to_egui(ctx: &egui::Context, theme: &Theme) {
     context::set_active_theme(ctx, theme.clone());
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,7 +308,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn bundled_font_keeps_prices_tabular() {
