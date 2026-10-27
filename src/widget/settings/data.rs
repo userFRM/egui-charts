@@ -302,6 +302,8 @@ pub struct TradingSettings {
     /// The name of the sound the host plays for fills, one of the
     /// `SettingsDialog::execution_sounds` with the `ui` feature; empty for the host's first.
     pub execution_sound: String,
+    /// Local execution sound gain, from zero (muted) to one.
+    pub execution_sound_volume: f32,
     /// Which trading events raise a notification.
     pub notifications: TradingNotifications,
     /// Draw the open positions.
@@ -331,6 +333,7 @@ impl Default for TradingSettings {
             bid_ask_labels: true,
             play_execution_sound: false,
             execution_sound: String::new(),
+            execution_sound_volume: 1.0,
             notifications: TradingNotifications::All,
             show_positions: true,
             position_pnl: true,
@@ -373,7 +376,14 @@ impl TradingNotifications {
 
 /// Alerts tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AlertsSettings {
+    /// Ask the host to play a local sound when an alert fires.
+    pub play_sound: bool,
+    /// Host sound name; empty selects its first available sound.
+    pub sound: String,
+    /// Local alert sound gain, from zero (muted) to one.
+    pub sound_volume: f32,
     /// Whether to show alerts.
     pub show_alerts: bool,
     /// Whether to show alert labels.
@@ -385,6 +395,9 @@ pub struct AlertsSettings {
 impl Default for AlertsSettings {
     fn default() -> Self {
         Self {
+            play_sound: false,
+            sound: String::new(),
+            sound_volume: 1.0,
             show_alerts: true,
             show_alert_labels: true,
             alert_color: crate::studies::palette::ORANGE, // Orange

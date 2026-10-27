@@ -170,6 +170,14 @@ impl ChartSettingsState {
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err("Crosshair width must be above zero");
         }
+        for volume in [
+            self.trading.execution_sound_volume,
+            self.alerts.sound_volume,
+        ] {
+            if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+                return Err("Sound volume must be between zero and one");
+            }
+        }
         if let Some(params) = &self.chart_type_params
             && let Some(error) = params.invalid(self.chart_type)
         {

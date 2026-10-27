@@ -8,6 +8,8 @@
 
 #[path = "alert_monitor.rs"]
 mod alert_monitor;
+#[path = "audio.rs"]
+mod audio;
 #[path = "commands.rs"]
 mod commands;
 #[path = "interval.rs"]
@@ -110,7 +112,7 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
 /// `usize` id space cleanly distinguishes indicators from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
 const MAIN_SERIES_ID: usize = usize::MAX;
-/// The sounds the settings offer for fills; the demo shows the chosen one as a notification.
+/// Local tones offered by the settings dialog.
 const DEMO_SOUNDS: [&str; 3] = ["Chime", "Bell", "Beep"];
 const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 
@@ -342,6 +344,7 @@ pub struct DemoApp {
     // Host-owned session-only alerts, shown through the library service connection.
     alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
+    audio: audio::AudioPlayer,
     alert_monitors: std::collections::HashMap<
         (egui_charts::model::AlertId, String),
         alert_monitor::AlertMonitor,
@@ -567,6 +570,7 @@ impl DemoApp {
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: Arc::default(),
+            audio: Default::default(),
             alert_monitors: Default::default(),
             trading: Default::default(),
             paper: Arc::new(
@@ -697,6 +701,12 @@ impl DemoApp {
             app.apply_user_settings(&cc.egui_ctx, settings);
         }
         app
+    }
+
+    fn play_sound(&mut self, ctx: &egui::Context, name: &str, volume: f32, activate: bool) {
+        if let Err(error) = self.audio.play(name, volume, activate, ctx) {
+            self.toasts.error(error);
+        }
     }
 
     /// Surface a short-lived, honest status message in the UI.
@@ -962,6 +972,9 @@ impl DemoApp {
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => self.apply_chart_settings(*state),
+            SettingsAction::PreviewSound { name, volume } => {
+                self.play_sound(ctx, &name, volume, true)
+            }
             SettingsAction::Cancel => {}
             _ => {}
         }
@@ -1181,16 +1194,20 @@ impl eframe::App for DemoApp {
             self.notifications.unread() as u32,
         );
         self.trading.poll(&ctx, &mut self.toasts);
-        // The demo has no audio: the sound chosen for fills shows as a notification.
         if let Some(sound) = self.trading.take_execution_sound() {
-            self.notify(format!(
-                "Sound: {}",
-                if sound.is_empty() {
-                    DEMO_SOUNDS[0]
-                } else {
-                    &sound
-                }
-            ));
+            self.play_sound(
+                &ctx,
+                &sound,
+                self.trading.display.execution_sound_volume,
+                false,
+            );
+        }
+        if !triggers.is_empty() && self.settings_state.alerts.play_sound {
+            let name = self.settings_state.alerts.sound.clone();
+            self.play_sound(&ctx, &name, self.settings_state.alerts.sound_volume, false);
+        }
+        if let Some(error) = self.audio.take_error() {
+            self.toasts.error(error);
         }
         self.poll_storage(&ctx);
         // The watchlist opens beside the chart by default, but a compact window starts with the
@@ -2054,8 +2071,7 @@ impl DemoApp {
 
     /// Publishes the quotes the watchlist subscribed to through the demo's quote service, and
     /// passes the chart symbol's quote on to the details panel and the order ticket. Feeds time
-    /// and sales the executions of the live feed. The demo has no audio: a filter's sound shows
-    /// as a notification.
+    /// and sales the executions of the live feed and reports matching filters as notifications.
     fn feed_market_panels(&mut self, ctx: &egui::Context) {
         // The simulation clock rather than the wall clock, which the pause freezes: a paused
         // demo must be able to go idle instead of repainting for a market that stands still.

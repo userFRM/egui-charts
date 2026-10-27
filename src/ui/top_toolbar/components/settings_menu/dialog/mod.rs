@@ -51,11 +51,12 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Controls the host hid.
     hidden: HashSet<Control>,
-    /// The sounds the host can play for fills, by name, offered on the Trading tab. The host
+    /// The local sounds the host can play, by name, offered on the Trading and Alerts tabs. The host
     /// plays the chosen one; see
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
     /// Without any, the tab offers no choice.
     pub execution_sounds: Vec<String>,
+    sound_preview: Option<(String, f32)>,
 }
 
 #[derive(Clone, Default)]
@@ -141,6 +142,7 @@ impl SettingsDialog {
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             execution_sounds: Vec::new(),
+            sound_preview: None,
         }
     }
 
@@ -158,6 +160,7 @@ impl SettingsDialog {
         self.is_open = true;
         self.template_menu_open = false;
         self.save_name = None;
+        self.sound_preview = None;
         self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
@@ -279,6 +282,9 @@ impl SettingsDialog {
             }
         }
 
+        if let Some((name, volume)) = self.sound_preview.take() {
+            return SettingsAction::PreviewSound { name, volume };
+        }
         action
     }
 
@@ -663,6 +669,59 @@ impl SettingsDialog {
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    #[test]
+    fn enabled_sound_controls_offer_a_preview_without_applying_settings() {
+        let ctx = Context::default();
+        let mut settings = ChartSettingsState::default();
+        settings.trading.play_execution_sound = true;
+        let mut dialog = SettingsDialog::new();
+        dialog.execution_sounds = vec!["Chime".into(), "Bell".into()];
+        dialog.open(settings);
+        dialog.active_tab = SettingsTab::Trading;
+        let mut preview = None;
+        let mut action = SettingsAction::None;
+        for step in 0..5 {
+            let events = match (step, preview) {
+                (3, Some(pos)) | (4, Some(pos)) => vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed: step == 3,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+                _ => vec![],
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = dialog.show(ui.ctx(), &Theme::light()),
+            );
+            preview = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Test sound" => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            if step >= 2 {
+                assert!(
+                    preview.is_some(),
+                    "an enabled sound needs a local preview control"
+                );
+            }
+        }
+        assert!(!matches!(
+            action,
+            SettingsAction::None | SettingsAction::Apply(_) | SettingsAction::Cancel
+        ));
+        assert!(dialog.is_open);
+    }
 
     #[test]
     fn symbol_controls_follow_the_chart_type_and_retain_its_parameters() {
