@@ -28,6 +28,7 @@ impl MagnetButton {
         ui: &mut Ui,
         magnet_on: bool,
         magnet_type: MagnetType,
+        snap_to_indicators: bool,
     ) -> Option<DrawingToolbarAction> {
         let is_current = |kind| magnet_on && magnet_type == kind;
         SubmenuBuilder::new(ui)
@@ -53,6 +54,16 @@ impl MagnetButton {
             })
             .icon(&icons::CHART_BARS)
             .checked(is_current(MagnetType::OHLC))
+            .add_text_item_with_action(
+                "Snap to indicators",
+                "Include visible study values",
+                move || {
+                    Some(DrawingToolbarAction::SetSnapToIndicators(
+                        !snap_to_indicators,
+                    ))
+                },
+            )
+            .checked(snap_to_indicators)
             .show()
     }
 }

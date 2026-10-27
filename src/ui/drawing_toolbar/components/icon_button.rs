@@ -11,7 +11,7 @@ use egui::{
     WidgetInfo,
 };
 
-use super::svg_helpers::render_svg_at_rect_themed;
+use super::svg_helpers::{rail_icon_color, rail_icon_size, render_svg_at_rect_themed};
 use crate::tokens::DESIGN_TOKENS;
 
 /// Single icon button with theme-aware rendering.
@@ -161,7 +161,7 @@ pub fn draw_icon_button_padded(
 /// - Outer rect: 52×38px
 /// - Inner hover rect: 8.5px horizontal margin, 1.5px vertical margin
 /// - Inner rounding: the theme's medium radius
-/// - Icon: 24×24 centered in outer rect
+/// - Icon: optically sized and centered in outer rect
 ///
 /// A selected tool has a neutral fill; a latched utility uses contrasting ink and fill.
 /// The tooltip opens to the right of the bar, so it never covers the next button.
@@ -231,7 +231,7 @@ fn draw_rail_button(
                 Color32::WHITE
             }
         } else {
-            theme.ui.text
+            rail_icon_color(ui)
         };
         let bg = match (is_selected, response.hovered()) {
             (true, _) => Some(selected_fill),
@@ -258,13 +258,13 @@ fn draw_rail_button(
         }
 
         // Icon centered in OUTER rect
-        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(tokens.icon_size));
+        let icon_rect = Rect::from_center_size(rect.center(), rail_icon_size(icon));
         let icon_color = if !ui.is_enabled() {
             theme.ui.text_disabled
         } else if is_selected {
             selected_ink
         } else {
-            theme.ui.text
+            rail_icon_color(ui)
         };
         icon.as_image_tinted(icon_rect.size(), icon_color)
             .paint_at(ui, icon_rect);
