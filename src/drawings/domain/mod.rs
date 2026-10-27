@@ -14,7 +14,7 @@ mod template;
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use coordinates::ChartPoint;
 pub use drawing::Drawing;
-pub use gann::GannConfig;
+pub use gann::{GannConfig, GannFanDirection};
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
     PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,

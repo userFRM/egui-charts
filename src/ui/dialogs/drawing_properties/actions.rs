@@ -232,6 +232,14 @@ impl DrawingProps {
             }) {
                 return Err("Gann divisions must be between 0 and 1");
             }
+            if settings.gann.as_ref().is_some_and(|c| {
+                c.fan_ratios
+                    .iter()
+                    .chain(&c.arc_ratios)
+                    .any(|v| !v.is_finite() || *v <= 0.0)
+            }) {
+                return Err("Gann fan and arc ratios must be positive and finite");
+            }
             if !settings.position_sizing.is_valid() {
                 return Err(
                     "Position economics must be positive and finite; quantity step cannot be negative",

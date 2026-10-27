@@ -209,6 +209,20 @@ impl StoredDrawing {
                     .flat_map(|c| c.time_levels.iter().copied())
                     .collect(),
             ),
+            (
+                "gann.fan_ratios",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.fan_ratios.iter().copied())
+                    .collect(),
+            ),
+            (
+                "gann.arc_ratios",
+                d.gann
+                    .iter()
+                    .flat_map(|c| c.arc_ratios.iter().copied())
+                    .collect(),
+            ),
         ] {
             if let Some(i) = values.iter().position(|v| !v.is_finite()) {
                 let suffix = if name.ends_with(".levels") {
@@ -869,6 +883,12 @@ mod tests {
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![0.25, 0.75],
                 time_levels: vec![0.5],
+                show_grid: false,
+                show_fan: false,
+                fan_ratios: vec![0.5, 2.0],
+                fan_direction: crate::drawings::GannFanDirection::Reverse,
+                show_arcs: false,
+                arc_ratios: vec![0.75],
             });
             let mut fork = crate::drawings::PitchforkConfig::default();
             fork.levels[0].line_style = LineStyle::Dotted;

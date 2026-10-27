@@ -1,8 +1,8 @@
 //! Inputs that correspond to the selected tool's saved drawing configuration.
 
 use crate::drawings::{
-    Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel, GannConfig, PitchforkConfig,
-    PitchforkLevel, PositionSize, RegressionTrendConfig,
+    Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel, GannConfig,
+    GannFanDirection, PitchforkConfig, PitchforkLevel, PositionSize, RegressionTrendConfig,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -55,14 +55,63 @@ impl InputsTab {
                         GannConfig {
                             price_levels: vec![0.0, 0.25, 0.5, 0.75, 1.0],
                             time_levels: vec![0.0, 0.25, 0.5, 0.75, 1.0],
+                            ..GannConfig::default()
                         }
                     } else {
                         GannConfig::default()
                     }
                 });
                 let original = config.clone();
-                fractions(ui, "Price divisions", &mut config.price_levels);
-                fractions(ui, "Time divisions", &mut config.time_levels);
+                let square = drawing.tool_type == Tool::GannSquare;
+                if square {
+                    ui.checkbox(&mut config.show_grid, l10n::text(ui.ctx(), "Show grid"));
+                }
+                if !square || config.show_grid {
+                    fractions(
+                        ui,
+                        "Price divisions",
+                        &mut config.price_levels,
+                        0.0..=1.0,
+                        0.5,
+                    );
+                    fractions(
+                        ui,
+                        "Time divisions",
+                        &mut config.time_levels,
+                        0.0..=1.0,
+                        0.5,
+                    );
+                }
+                if square {
+                    ui.checkbox(&mut config.show_fan, l10n::text(ui.ctx(), "Show fan"));
+                    if config.show_fan {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "gann_fan_direction",
+                            &mut config.fan_direction,
+                            [
+                                GannFanDirection::Forward,
+                                GannFanDirection::Reverse,
+                                GannFanDirection::Both,
+                            ],
+                            |v| {
+                                l10n::text(
+                                    &ctx,
+                                    match v {
+                                        GannFanDirection::Forward => "Forward",
+                                        GannFanDirection::Reverse => "Reverse",
+                                        GannFanDirection::Both => "Both",
+                                    },
+                                )
+                            },
+                        );
+                        fractions(ui, "Fan ratios", &mut config.fan_ratios, 0.01..=100.0, 1.0);
+                    }
+                    ui.checkbox(&mut config.show_arcs, l10n::text(ui.ctx(), "Show arcs"));
+                    if config.show_arcs {
+                        fractions(ui, "Arc ratios", &mut config.arc_ratios, 0.01..=1.41, 0.5);
+                    }
+                }
                 if config != original {
                     drawing.gann = Some(config);
                 }
@@ -456,7 +505,13 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     }
 }
 
-fn fractions(ui: &mut Ui, title: &str, levels: &mut Vec<f32>) {
+fn fractions(
+    ui: &mut Ui,
+    title: &str,
+    levels: &mut Vec<f32>,
+    range: std::ops::RangeInclusive<f32>,
+    new: f32,
+) {
     ui.strong(l10n::text(ui.ctx(), title));
     let mut remove = None;
     let columns = ((ui.available_width() / 96.0) as usize).clamp(1, 3);
@@ -464,15 +519,20 @@ fn fractions(ui: &mut Ui, title: &str, levels: &mut Vec<f32>) {
         .num_columns(columns * 2)
         .show(ui, |ui| {
             for (i, value) in levels.iter_mut().enumerate() {
-                ui.add(egui::DragValue::new(value).range(0.0..=1.0).speed(0.001))
-                    .accessible_name(l10n::format_text(
-                        ui.ctx(),
-                        "{title} {index}",
-                        &[
-                            ("title", l10n::text(ui.ctx(), title)),
-                            ("index", (i + 1).to_string()),
-                        ],
-                    ));
+                let speed = (range.end() - range.start()) / 1000.0;
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(range.clone())
+                        .speed(speed),
+                )
+                .accessible_name(l10n::format_text(
+                    ui.ctx(),
+                    "{title} {index}",
+                    &[
+                        ("title", l10n::text(ui.ctx(), title)),
+                        ("index", (i + 1).to_string()),
+                    ],
+                ));
                 if Button::icon(&crate::icons::icons::TRASH)
                     .ghost()
                     .tooltip("Remove division")
@@ -494,7 +554,7 @@ fn fractions(ui: &mut Ui, title: &str, levels: &mut Vec<f32>) {
         .show(ui)
         .clicked()
     {
-        levels.push(0.5);
+        levels.push(new);
     }
     ui.space_sm();
 }

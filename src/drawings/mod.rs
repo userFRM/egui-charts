@@ -36,8 +36,8 @@ mod validation;
 // Re-export domain types at module root for convenience
 pub use domain::{
     ArrowStyle, ChartPoint, Drawing, DrawingInteractionMode, DrawingOptions, DrawingTemplate,
-    DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, HandlePos,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing,
+    DrawingToolType, FibonacciConfig, FibonacciLevel, FontWeight, GannConfig, GannFanDirection,
+    HandlePos, ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing,
     RegressionTrendConfig, TimeframeVisibility,
 };
 
