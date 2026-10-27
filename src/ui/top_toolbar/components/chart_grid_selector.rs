@@ -64,11 +64,9 @@ impl ChartGridSelector {
         egui::ScrollArea::vertical()
             .max_height(max_height)
             .show(ui, |ui| {
-                // Rows as tall as the diagrams centre the counts beside them.
                 egui::Grid::new("chart_layout_presets")
                     .num_columns(2)
                     .min_col_width(0.0)
-                    .min_row_height(ButtonSize::MD.pixels())
                     .show(ui, |ui| {
                         for count in 1..=16 {
                             ui.label(
@@ -76,7 +74,9 @@ impl ChartGridSelector {
                                     .size(theme.text.small)
                                     .color(theme.ui.text_secondary),
                             );
-                            ui.horizontal(|ui| {
+                            let row = egui::vec2(0.0, ButtonSize::MD.pixels());
+                            let row_layout = egui::Layout::left_to_right(egui::Align::Center);
+                            ui.allocate_ui_with_layout(row, row_layout, |ui| {
                                 for &layout in ChartLayoutMode::all()
                                     .iter()
                                     .filter(|layout| layout.chart_count() == count)
