@@ -411,7 +411,7 @@ impl IndicatorDialog {
             || self
                 .indicators
                 .iter()
-                .any(|ind| Self::destination(ind).0 == category)
+                .any(|ind| Self::destination(ind).0 == category && self.accepts_source(ind))
     }
 
     /// The built-in pages that have studies, above the built-in results. A search covers
@@ -421,9 +421,10 @@ impl IndicatorDialog {
             .iter()
             .copied()
             .filter(|tab| {
-                self.indicators
-                    .iter()
-                    .any(|ind| Self::destination(ind) == (IndicatorCategory::BuiltIns, *tab))
+                self.indicators.iter().any(|ind| {
+                    Self::destination(ind) == (IndicatorCategory::BuiltIns, *tab)
+                        && self.accepts_source(ind)
+                })
             })
             .collect();
         if !tabs.contains(&self.active_tab) {
@@ -438,15 +439,18 @@ impl IndicatorDialog {
         }
     }
 
+    fn accepts_source(&self, ind: &IndicatorInfo) -> bool {
+        self.source.is_none()
+            || self
+                .factory
+                .create(&ind.id)
+                .is_some_and(|study| study.source().is_some())
+    }
+
     /// Whether `ind` belongs to the active category, and page for the built-ins, and matches
     /// the search.
     fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
-        if self.source.is_some()
-            && self
-                .factory
-                .create(&ind.id)
-                .is_none_or(|study| study.source().is_none())
-        {
+        if !self.accepts_source(ind) {
             return false;
         }
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
@@ -1056,21 +1060,43 @@ mod tests {
             (IndicatorFactory::PERSONAL, MyScripts, Indicators),
             (IndicatorFactory::COMMUNITY, Community, Indicators),
         ] {
-            let mut factory = IndicatorFactory::new();
-            for name in factory.list() {
-                factory.unregister(&name);
+            for source in [
+                None,
+                Some(StudySource::Price(crate::model::PriceSource::Open)),
+            ] {
+                let mut factory = IndicatorFactory::new();
+                for name in factory.list() {
+                    factory.unregister(&name);
+                }
+                factory.register_in(category, "Host study", || Box::new(ATR::new(14)));
+                let mut dialog = IndicatorDialog::new().with_factory(factory);
+                assert!(dialog.open_for_chart(&crate::widget::ChartBuilder::new().build(), source));
+                ctx.run_ui(Default::default(), |ui| {
+                    dialog.draw_content(ui, &dialog.config.clone(), &Theme::dark());
+                })
+                .drop_without_applying_deltas();
+                let compatible = source.is_none();
+                assert_eq!(
+                    dialog.sel_category,
+                    if compatible { selected } else { Favorites },
+                    "{category} / {source:?}"
+                );
+                assert_eq!(
+                    dialog.active_tab,
+                    if compatible { tab } else { Indicators },
+                    "{category} / {source:?}"
+                );
+                assert_eq!(
+                    dialog.offers(BuiltIns),
+                    compatible && selected == BuiltIns,
+                    "{category} / {source:?}"
+                );
+                assert_eq!(
+                    dialog.matches(&ctx, &dialog.indicators[0]),
+                    compatible,
+                    "{category} / {source:?}"
+                );
             }
-            factory.register_in(category, "Host study", || Box::new(SMA::new(42)));
-            let mut dialog = IndicatorDialog::new().with_factory(factory);
-            dialog.open();
-            ctx.run_ui(Default::default(), |ui| {
-                dialog.draw_content(ui, &dialog.config.clone(), &Theme::dark());
-            })
-            .drop_without_applying_deltas();
-            assert_eq!(dialog.sel_category, selected, "{category}");
-            assert_eq!(dialog.active_tab, tab, "{category}");
-            assert_eq!(dialog.offers(BuiltIns), selected == BuiltIns, "{category}");
-            assert!(dialog.matches(&ctx, &dialog.indicators[0]), "{category}");
         }
 
         // A study the host registers, under a new name or a built-in's, is added through the
