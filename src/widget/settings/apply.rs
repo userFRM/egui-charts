@@ -7,6 +7,7 @@ use super::{
 use crate::{
     Chart,
     config::{BackgroundStyle, NavigationButtons},
+    model::CandlesStyle,
     scales::{PriceScaleMode, TimezoneMode},
 };
 use egui::Color32;
@@ -33,10 +34,16 @@ impl ChartSettingsState {
         settings.candle_colors.wick_down = config
             .bearish_wick_color
             .unwrap_or(settings.candle_colors.border_down);
+        let candles = &chart.chart_type_params().styles.candles;
+        settings.candle_colors.show_body = candles.body_visible;
+        settings.candle_colors.show_border = config.candle_border_width > 0.0;
+        settings.candle_colors.show_wick = candles.wick_visible;
+        settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
         settings.chart_basic_styles.background_color = config.background_color;
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color =
             config.vertical_grid_color.unwrap_or(config.grid_color);
+        settings.status_line.show_logo = config.show_legend_badge;
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
@@ -47,6 +54,10 @@ impl ChartSettingsState {
         settings.status_line.show_indicator_titles = config.show_indicator_labels;
         settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
         settings.status_line.show_indicator_values = config.show_indicator_last_val;
+        settings.status_line.show_last_day_change = config.show_last_day_change;
+        settings.status_line.show_indicator_background = config.show_indicator_backdrop;
+        settings.status_line.indicator_background_opacity =
+            (config.indicator_backdrop_opacity.clamp(0.0, 1.0) * 100.0).round() as u8;
         settings.scales_and_lines.price_scale_left =
             !config.show_right_axis && config.show_left_axis;
         settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
@@ -205,6 +216,12 @@ impl ChartSettingsState {
         config.bearish_border_color = Some(self.candle_colors.border_down);
         config.bullish_wick_color = Some(self.candle_colors.wick_up);
         config.bearish_wick_color = Some(self.candle_colors.wick_down);
+        // Borders keep a width the host chose and take a hairline when switched on.
+        if !self.candle_colors.show_border {
+            config.candle_border_width = 0.0;
+        } else if config.candle_border_width <= 0.0 {
+            config.candle_border_width = 1.0;
+        }
 
         if self.chart_basic_styles.background_color != Color32::PLACEHOLDER {
             config.background_color = self.chart_basic_styles.background_color;
@@ -227,6 +244,11 @@ impl ChartSettingsState {
             ButtonVisibility::Hidden => NavigationButtons::Never,
         };
         config.show_ohlc_info = self.status_line.show_ohlc;
+        config.show_legend_badge = self.status_line.show_logo;
+        config.show_last_day_change = self.status_line.show_last_day_change;
+        config.show_indicator_backdrop = self.status_line.show_indicator_background;
+        config.indicator_backdrop_opacity =
+            f32::from(self.status_line.indicator_background_opacity.min(100)) / 100.0;
         config.show_symbol_labels = self.status_line.show_symbol;
         config.title_as_description = self.status_line.title_as_description;
         config.show_quote_boxes = self.status_line.show_quote_boxes;
@@ -316,6 +338,17 @@ impl ChartSettingsState {
                     .and_then(crate::scales::instrument_price_precision)
             });
         chart.state.price_scale_mut().set_price_precision(precision);
+        let candles = CandlesStyle {
+            body_visible: self.candle_colors.show_body,
+            wick_visible: self.candle_colors.show_wick,
+            color_by_previous_close: self.candle_colors.color_by_previous_close,
+        };
+        // Other chart type parameters re-resolve their box sizes when set, so only a change is set.
+        if chart.chart_type_params().styles.candles != candles {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.candles = candles;
+            chart.set_chart_type_params(params);
+        }
         Ok(())
     }
 }

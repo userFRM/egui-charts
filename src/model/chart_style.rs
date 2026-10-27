@@ -137,7 +137,31 @@ impl Default for BarsStyle {
     }
 }
 
-/// Styles of the bars, line, step, marker, area and baseline chart types.
+/// The Candles chart's bodies, wicks and colouring. Borders are drawn while the chart's candle
+/// border width is above zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CandlesStyle {
+    /// Fill each candle's body between its open and close.
+    pub body_visible: bool,
+    /// Draw each candle's wick from its high to its low.
+    pub wick_visible: bool,
+    /// Colour each candle by its close against the previous close instead of its open: rising
+    /// when the close is at or above the last close before it.
+    pub color_by_previous_close: bool,
+}
+
+impl Default for CandlesStyle {
+    fn default() -> Self {
+        Self {
+            body_visible: true,
+            wick_visible: true,
+            color_by_previous_close: false,
+        }
+    }
+}
+
+/// Styles of the candles, bars, line, step, marker, area and baseline chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -154,6 +178,8 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
+    /// Candles chart.
+    pub candles: CandlesStyle,
     /// Bars chart.
     pub bars: BarsStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
@@ -173,6 +199,7 @@ impl Default for ChartTypeStyles {
             marker_radius: 3.0,
             area: AreaStyle::default(),
             baseline: BaselineStyle::default(),
+            candles: CandlesStyle::default(),
             bars: BarsStyle::default(),
             crosshair_marker_radius: 0.0,
             last_price_animation: LastPriceAnimation::Disabled,

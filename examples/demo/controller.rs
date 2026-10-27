@@ -885,6 +885,7 @@ impl DemoApp {
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
         self.settings_state.trading = trading;
+        self.settings_state.adjust_for_dividends = self.timeframe_toolbar.state.adjust_for_dividends;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1022,6 +1023,11 @@ impl DemoApp {
         self.trading.display = state.trading.clone();
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
+        if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
+            self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+            self.stop_replay();
+            self.apply_session();
+        }
     }
 
     fn remove_all_indicators(&mut self) {

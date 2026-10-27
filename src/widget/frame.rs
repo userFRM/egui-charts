@@ -1956,21 +1956,29 @@ impl Chart {
                 }),
         );
 
+        // The previous session's close and the last close, for the previous close line and the
+        // legend's day change.
+        let session_closes = (self.config.show_symbol_prev_close
+            || self.config.show_prev_close_line
+            || self.config.show_last_day_change)
+            .then(|| {
+                let bars = &self.state.data().bars;
+                let last = crate::model::last_with_value(bars)?;
+                let index = bars
+                    .partition_point(|bar| {
+                        exchange_session.trading_date(bar.time)
+                            < exchange_session.trading_date(last.time)
+                    })
+                    .checked_sub(1)?;
+                crate::model::last_with_value(&bars[..=index])
+                    .map(|previous| (previous.close, last.close))
+            })
+            .flatten();
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
-            && let Some(last) = crate::model::last_with_value(&self.state.data().bars)
-            && let Some(index) = self
-                .state
-                .data()
-                .bars
-                .partition_point(|bar| {
-                    exchange_session.trading_date(bar.time)
-                        < exchange_session.trading_date(last.time)
-                })
-                .checked_sub(1)
-            && let Some(previous) = crate::model::last_with_value(&self.state.data().bars[..=index])
+            && let Some((previous_close, _)) = session_closes
         {
-            let line = PriceLine::new(previous.close, ui.active_theme().ui.text_secondary)
+            let line = PriceLine::new(previous_close, ui.active_theme().ui.text_secondary)
                 .with_style(crate::model::LineStyle::Dotted)
                 .with_axis_label(self.config.show_symbol_prev_close)
                 .with_width(if self.config.show_prev_close_line {
@@ -1989,7 +1997,7 @@ impl Chart {
             );
             if self.config.show_symbol_prev_close {
                 pending_values.push((
-                    previous.close,
+                    previous_close,
                     rendering::axes::axis_label_colors(&line),
                     false,
                 ));
@@ -2511,7 +2519,10 @@ impl Chart {
                     .collect();
                 legend.formatters = self.value_formatters();
                 legend.instrument = self.instrument();
-                legend.badge = self.legend_badge.clone();
+                legend.badge = self
+                    .legend_badge
+                    .clone()
+                    .filter(|_| self.config.show_legend_badge);
                 legend.statuses = &statuses;
                 legend.quote = self
                     .quote
@@ -2527,6 +2538,12 @@ impl Chart {
                 legend.show_indicator_titles = self.config.show_indicator_labels;
                 legend.show_indicator_inputs = self.config.show_indicator_inputs;
                 legend.show_indicator_values = self.config.show_indicator_last_val;
+                legend.day_change =
+                    session_closes.filter(|_| values && self.config.show_last_day_change);
+                legend.study_backdrop = self
+                    .config
+                    .show_indicator_backdrop
+                    .then_some(self.config.indicator_backdrop_opacity.clamp(0.0, 1.0));
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =

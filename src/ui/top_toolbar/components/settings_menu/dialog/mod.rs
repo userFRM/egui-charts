@@ -948,7 +948,7 @@ mod tests {
                             },
                         );
                         let heading = output.shapes.iter().find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.text() == "CANDLE COLORS" => {
+                            egui::Shape::Text(text) if text.galley.text() == "CANDLES" => {
                                 Some(text.galley.job.sections[0].format.font_id.size)
                             }
                             _ => None,

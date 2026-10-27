@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The Symbol settings tab switches candle bodies, borders and wicks on and off independently and can colour candles by the previous close. `ChartTypeStyles::candles` holds the body and wick visibility and the colouring as a `CandlesStyle`; borders follow `ChartConfig::candle_border_width` and are now drawn inside the body. Adjust data for dividends sets `ChartSettingsState::adjust_for_dividends`, which the host applies by reloading adjusted history, as the demo does. The Status line tab shows or hides the legend logo (`ChartConfig::show_legend_badge`) and the change of the last close from the previous session close (`show_last_day_change`), and sets the opacity of the backdrop behind study legend rows (`show_indicator_backdrop`, `indicator_backdrop_opacity`).
+
 - Alert expiry is entered in the alert dialog as a date (YYYY-MM-DD) and a 24-hour time in `AlertDialog::timezone`, which is UTC unless the host sets another zone, or turned off with No expiry; turning it back on proposes one month ahead. Malformed dates and times, local times skipped by a clock change and expiries that are not in the future are named beneath the form and block saving, and a repeated local time resolves to its first occurrence. The RFC 3339 text field is removed.
 
 - The demo quick search runs a sample backtest on completed synthetic bars, marks equity at their closes and opens the strategy report below the chart. Reports can be replaced or cleared; selecting a trade restores its symbol and interval, scrolls to its bars and highlights its span. Entry and exit markers share the signals service with the API samples, including in newly added chart slots. Trades CSV is saved or downloaded by the host. Strategy execution, market data and storage remain host-owned. ([#225](https://github.com/userFRM/egui-charts/issues/225))
@@ -869,6 +871,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `ChartTypeStyles`, `CandleColorConfig`, `StatusLineOptions` and `ChartSettingsState` have new public fields for candle part visibility, previous-close colouring, the legend logo, the last day change, the study backdrop and dividend adjustment. Struct literals add the fields or end with `..Default::default()`; saved settings without them take the defaults.
 
 - The chart settings dialog has a pictogram for each of its seven tabs in a 206 point sidebar of 40 point rows. The selected row takes the hover fill and a semibold label in the text colour, and the chart behind the dialog is no longer dimmed. Dialog titles are semibold at the `dialog_title` size, now 20 points instead of 18. `DialogFooter` buttons are 34 points tall with 14 point side padding, and the primary button is filled with the theme's text colour, so the confirming action has the strongest contrast in every theme.
 

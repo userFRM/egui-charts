@@ -274,6 +274,14 @@ pub struct ChartConfig {
     pub show_legend_volume: bool,
     /// Show host-supplied study inputs in the legend.
     pub show_indicator_inputs: bool,
+    /// Show the host's legend badge, such as the instrument logo, before the title.
+    pub show_legend_badge: bool,
+    /// Show the change of the last price from the previous session's close in the legend.
+    pub show_last_day_change: bool,
+    /// Draw a backdrop of the chart background behind the legend's study rows.
+    pub show_indicator_backdrop: bool,
+    /// Opacity of the study rows' backdrop, from 0 to 1.
+    pub indicator_backdrop_opacity: f32,
     /// Whether to show right price axis
     pub show_right_axis: bool,
     /// Whether to show left price axis
@@ -432,6 +440,10 @@ impl Default for ChartConfig {
             show_ohlc_change_percent: true,
             show_legend_volume: true,
             show_indicator_inputs: true,
+            show_legend_badge: true,
+            show_last_day_change: false,
+            show_indicator_backdrop: true,
+            indicator_backdrop_opacity: 1.0,
             show_right_axis: true,
             show_left_axis: false,
             right_axis_width: 70.0,

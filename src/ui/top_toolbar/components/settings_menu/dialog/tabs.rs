@@ -314,60 +314,32 @@ impl SettingsDialog {
                     "Analyst price targets",
                     theme.ui.text,
                 );
-                // CANDLE COLORS
-                self.draw_section_header(ui, "CANDLE COLORS", theme);
+                // CANDLES
+                self.draw_section_header(ui, "CANDLES", theme);
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.candle_colors.color_by_previous_close,
+                    "Color bars based on previous close",
+                    theme.ui.text,
+                );
+                for (label, part) in [
+                    ("Body", CandlePart::Body),
+                    ("Borders", CandlePart::Border),
+                    ("Wick", CandlePart::Wick),
+                ] {
+                    self.draw_candle_row(ui, label, part, theme);
+                }
 
-                self.draw_setting_row_with_controls(ui, "Body", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_up, "body_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.body_down, "body_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.body_down = color;
-                    }
-                });
+                ui.add_space(ui.active_theme().spacing.xxl);
 
-                self.draw_setting_row_with_controls(ui, "Border", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_up, "border_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.border_down, "border_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.border_down = color;
-                    }
-                });
-
-                self.draw_setting_row_with_controls(ui, "Wick", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_up, "wick_up")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_up = color;
-                    }
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.wick_down, "wick_down")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.candle_colors.wick_down = color;
-                    }
-                });
-
+                // DATA MODIFICATION
+                self.draw_section_header(ui, "DATA MODIFICATION", theme);
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.adjust_for_dividends,
+                    "Adjust data for dividends",
+                    theme.ui.text,
+                );
                 ui.add_space(ui.active_theme().spacing.xxl);
 
                 // PRECISION
@@ -425,6 +397,12 @@ impl SettingsDialog {
             ui.add_space(0.0);
             ui.vertical(|ui| {
                 self.draw_section_header(ui, "INSTRUMENT", theme);
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.status_line.show_logo,
+                    "Logo",
+                    theme.ui.text,
+                );
                 ui.horizontal(|ui| {
                     ui.spacing_mut().interact_size.y = 34.0;
                     ui.allocate_ui(egui::vec2(112.0, 42.0), |ui| {
@@ -485,6 +463,12 @@ impl SettingsDialog {
                 );
                 styled_checkbox(
                     ui,
+                    &mut self.settings.status_line.show_last_day_change,
+                    "Last day change values",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
                     &mut self.settings.status_line.show_quote_boxes,
                     "Buy/sell buttons",
                     theme.ui.text,
@@ -508,6 +492,20 @@ impl SettingsDialog {
                     &mut self.settings.status_line.show_indicator_values,
                     "Values",
                     theme.ui.text,
+                );
+                let status_line = &mut self.settings.status_line;
+                let shown = status_line.show_indicator_background;
+                let opacity = &mut status_line.indicator_background_opacity;
+                trading_option(
+                    ui,
+                    0.0,
+                    &mut status_line.show_indicator_background,
+                    "Background",
+                    theme.ui.text,
+                    |ui| {
+                        ui.add_enabled(shown, egui::Slider::new(opacity, 0..=100).suffix("%"))
+                            .accessible_name(l10n::text(ui.ctx(), "Background opacity"));
+                    },
                 );
             });
         });
@@ -782,16 +780,9 @@ impl SettingsDialog {
         ui.add_space(ui.active_theme().spacing.sm);
     }
 
-    pub(super) fn draw_setting_row_with_controls<F>(
-        &mut self,
-        ui: &mut Ui,
-        label: &str,
-        theme: &Theme,
-        add_content: F,
-    ) where
-        F: FnOnce(&mut Ui, &mut SettingsDialog),
-    {
-        let label_width = [
+    /// The width of the label column, which every tab shares: the longest label's width.
+    fn label_width(ui: &Ui, theme: &Theme) -> f32 {
+        [
             "Panel layout",
             "Background",
             "Grid lines",
@@ -804,9 +795,6 @@ impl SettingsDialog {
             "Right margin (bars)",
             "Visibility",
             "Timezone",
-            "Body",
-            "Border",
-            "Wick",
         ]
         .iter()
         .map(|label| {
@@ -819,7 +807,19 @@ impl SettingsDialog {
                 .size()
                 .x
         })
-        .fold(0.0_f32, f32::max);
+        .fold(0.0_f32, f32::max)
+    }
+
+    pub(super) fn draw_setting_row_with_controls<F>(
+        &mut self,
+        ui: &mut Ui,
+        label: &str,
+        theme: &Theme,
+        add_content: F,
+    ) where
+        F: FnOnce(&mut Ui, &mut SettingsDialog),
+    {
+        let label_width = Self::label_width(ui, theme);
         ui.horizontal(|ui| {
             // All tabs share the longest label's width.
             let label = ui.allocate_ui_with_layout(
@@ -847,6 +847,76 @@ impl SettingsDialog {
             });
         });
         ui.add_space(ui.active_theme().spacing.sm);
+    }
+}
+
+/// A part of the candles on the Symbol tab.
+#[derive(Clone, Copy)]
+enum CandlePart {
+    Body,
+    Border,
+    Wick,
+}
+
+/// Height of a candle part row, which with the spacing below it gives a 50 point pitch.
+const CANDLE_ROW_HEIGHT: f32 = 38.0;
+
+impl SettingsDialog {
+    /// A Symbol tab row for one candle part: its visibility checkbox in the label column, then
+    /// its rising and falling colours, which are disabled while the part is hidden.
+    fn draw_candle_row(&mut self, ui: &mut Ui, label: &str, part: CandlePart, theme: &Theme) {
+        let label_width = Self::label_width(ui, theme);
+        let colors = &mut self.settings.candle_colors;
+        let pickers = &mut self.color_picker_states;
+        let (shown, [up, down], [up_picker, down_picker], [up_id, down_id]) = match part {
+            CandlePart::Body => (
+                &mut colors.show_body,
+                [&mut colors.body_up, &mut colors.body_down],
+                [&mut pickers.body_up, &mut pickers.body_down],
+                ["body_up", "body_down"],
+            ),
+            CandlePart::Border => (
+                &mut colors.show_border,
+                [&mut colors.border_up, &mut colors.border_down],
+                [&mut pickers.border_up, &mut pickers.border_down],
+                ["border_up", "border_down"],
+            ),
+            CandlePart::Wick => (
+                &mut colors.show_wick,
+                [&mut colors.wick_up, &mut colors.wick_down],
+                [&mut pickers.wick_up, &mut pickers.wick_down],
+                ["wick_up", "wick_down"],
+            ),
+        };
+        ui.horizontal(|ui| {
+            let checkbox = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(label_width, CANDLE_ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(label_width);
+                        ui.checkbox(
+                            shown,
+                            RichText::new(l10n::text(ui.ctx(), label))
+                                .size(theme.text.title)
+                                .color(theme.ui.text),
+                        )
+                    },
+                )
+                .inner;
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().interact_size.y = 32.0;
+            ui.add_enabled_ui(*shown, |ui| {
+                ui.label_inputs_by(checkbox.id, |ui| {
+                    for (color, picker, id) in [(up, up_picker, up_id), (down, down_picker, down_id)] {
+                        if let Some(picked) = ColorPicker::new(picker, id).show(ui).inner {
+                            *color = picked;
+                        }
+                    }
+                });
+            });
+        });
+        ui.add_space(theme.spacing.sm);
     }
 }
 
