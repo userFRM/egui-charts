@@ -134,7 +134,7 @@ impl DrawingToolType {
                 Self::Signpost,
                 Self::FlagNote,
             ],
-            "content" => Vec::new(),
+            "content" => vec![Self::Image, Self::Tweet, Self::Idea],
             "icons" => vec![Self::FontIcon, Self::Sticker],
             _ => vec![Self::TrendLine],
         }

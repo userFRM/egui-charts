@@ -300,17 +300,6 @@ mod tests {
                 crate::ui::drawing_toolbar::data::get_category_sections(category),
                 crate::drawings::categories::get_category_sections(category),
             );
-            for (_, tools) in crate::drawings::categories::get_category_sections(category) {
-                for tool in tools {
-                    assert!(
-                        !matches!(
-                            tool,
-                            DrawingToolType::Image | DrawingToolType::Tweet | DrawingToolType::Idea
-                        ),
-                        "unfinished {tool:?} in {category}"
-                    );
-                }
-            }
         }
     }
 }

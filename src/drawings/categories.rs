@@ -211,22 +211,32 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                 ],
             ),
         ],
-        "Text/Annotations" => vec![(
-            "TEXT & NOTES",
-            vec![
-                DrawingToolType::TextLabel,
-                DrawingToolType::AnchoredText,
-                DrawingToolType::Note,
-                DrawingToolType::PriceNote,
-                DrawingToolType::AnchoredNote,
-                DrawingToolType::Table,
-                DrawingToolType::Callout,
-                DrawingToolType::Comment,
-                DrawingToolType::PriceLabel,
-                DrawingToolType::Signpost,
-                DrawingToolType::FlagNote,
-            ],
-        )],
+        "Text/Annotations" => vec![
+            (
+                "TEXT & NOTES",
+                vec![
+                    DrawingToolType::TextLabel,
+                    DrawingToolType::AnchoredText,
+                    DrawingToolType::Note,
+                    DrawingToolType::PriceNote,
+                    DrawingToolType::AnchoredNote,
+                    DrawingToolType::Table,
+                    DrawingToolType::Callout,
+                    DrawingToolType::Comment,
+                    DrawingToolType::PriceLabel,
+                    DrawingToolType::Signpost,
+                    DrawingToolType::FlagNote,
+                ],
+            ),
+            (
+                "CONTENT",
+                vec![
+                    DrawingToolType::Image,
+                    DrawingToolType::Tweet,
+                    DrawingToolType::Idea,
+                ],
+            ),
+        ],
         "Icons/Emojis" => vec![(
             "ICONS",
             vec![DrawingToolType::FontIcon, DrawingToolType::Sticker],

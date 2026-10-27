@@ -26,6 +26,9 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
             | DrawingToolType::PriceLabel
             | DrawingToolType::PriceNote
             | DrawingToolType::Table
+            | DrawingToolType::Image
+            | DrawingToolType::Tweet
+            | DrawingToolType::Idea
     ) {
         return;
     }
@@ -75,6 +78,12 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let request_focus = std::mem::take(&mut editor.focus);
     let font_size = drawing.font_size;
     let table = drawing.tool_type == DrawingToolType::Table;
+    let hint = match drawing.tool_type {
+        DrawingToolType::Image => "Image address, such as file:///home/me/chart.png",
+        DrawingToolType::Tweet => "Author on the first line, then the post",
+        DrawingToolType::Idea => "Title on the first line, then the idea",
+        _ => "",
+    };
     let mut outside = false;
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -108,6 +117,7 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                             ui.add(
                                 egui::TextEdit::multiline(&mut editor.draft)
                                     .id(field_id)
+                                    .hint_text(l10n::text(ui.ctx(), hint))
                                     .font(egui::FontId::proportional(font_size))
                                     .desired_width((width - 16.0).max(1.0))
                                     .desired_rows(3),

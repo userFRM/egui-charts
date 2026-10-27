@@ -455,9 +455,9 @@ impl Drawing {
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),
             DrawingToolType::Signpost => self.render_signpost(painter, rect),
-            DrawingToolType::Image => self.render_image_placeholder(painter),
-            DrawingToolType::Tweet => self.render_tweet_placeholder(painter),
-            DrawingToolType::Idea => self.render_idea_placeholder(painter),
+            DrawingToolType::Image => self.render_image(painter),
+            DrawingToolType::Tweet => self.render_post(painter),
+            DrawingToolType::Idea => self.render_idea(painter),
             DrawingToolType::FontIcon | DrawingToolType::Sticker => self.render_font_icon(painter),
 
             // Cursor tools (4 - not rendered as drawings)

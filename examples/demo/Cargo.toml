@@ -15,10 +15,11 @@ egui-charts = { path = "../..", features = ["ui"] }
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 # The emoji fonts draw the icons the drawing bar's Icons/Emojis menu places.
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
-egui_extras = { version = "0.37.0", features = ["svg"] }
+# The image and file loaders show the pictures that image drawings point to.
+egui_extras = { version = "0.37.0", features = ["svg", "image", "file"] }
 chrono = "0.4.43"
 log = "0.4.29"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Native gets the windowing backends and the system clipboard.
 # WASM uses the canvas backend and browser downloads.
