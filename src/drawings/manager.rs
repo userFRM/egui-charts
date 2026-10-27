@@ -39,10 +39,6 @@ pub enum DrawingSyncAction {
     /// A batch of drawings should be restored from backend storage. The manager never
     /// queues it.
     RestoreDrawings(Vec<crate::drawings::persistence::StoredDrawing>),
-    /// The queue overflowed or notifications were re-enabled. Replace the host's complete
-    /// stored drawing set with the manager's current saveable drawings, removing absent records.
-    /// Further notifications coalesce into this signal until the host drains it.
-    ResyncRequired,
 }
 
 /// Snapshot of drawing-related state from the central application state.
@@ -303,8 +299,7 @@ pub struct DrawingManager {
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
-    /// [`DrawingSyncAction`]. At most [`Self::SYNC_QUEUE_LIMIT`] actions are queued; overflow
-    /// replaces them with [`DrawingSyncAction::ResyncRequired`] until drained.
+    /// [`DrawingSyncAction`].
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
@@ -317,24 +312,16 @@ impl Default for DrawingManager {
 }
 
 impl DrawingManager {
-    /// Maximum queued drawing notifications before a full replacement is required.
-    pub const SYNC_QUEUE_LIMIT: usize = 1024;
-
     /// Enables or disables per-drawing storage notifications. Disabling clears pending actions.
     /// Automatic chart storage disables them; enable them again to also consume notifications.
-    /// Enabling requests a full replacement so changes made while disabled are included.
+    /// Changes made while disabled are not reported.
     pub fn set_sync_enabled(&mut self, enabled: bool) {
-        if self.sync_enabled == enabled {
-            return;
-        }
         self.sync_enabled = enabled;
-        let mut sync = self
-            .pending_sync
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        sync.clear();
-        if enabled {
-            sync.push(DrawingSyncAction::ResyncRequired);
+        if !enabled {
+            self.pending_sync
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
         }
     }
 
@@ -1845,18 +1832,12 @@ impl DrawingManager {
     }
 }
 
-/// Coalesces notifications without losing deletes, and makes overflow explicit.
+/// Coalesces repeated saves and updates of a drawing without reordering them across its delete.
 fn queue_sync(
     sync: &mut Vec<DrawingSyncAction>,
     action: DrawingSyncAction,
     stored_id: Option<&str>,
 ) {
-    if sync
-        .iter()
-        .any(|pending| matches!(pending, DrawingSyncAction::ResyncRequired))
-    {
-        return;
-    }
     if let DrawingSyncAction::SaveDrawing(id) | DrawingSyncAction::UpdateDrawing(id) = &action {
         for pending in sync.iter_mut().rev() {
             match pending {
@@ -1873,12 +1854,7 @@ fn queue_sync(
             }
         }
     }
-    if sync.len() >= DrawingManager::SYNC_QUEUE_LIMIT {
-        sync.clear();
-        sync.push(DrawingSyncAction::ResyncRequired);
-    } else {
-        sync.push(action);
-    }
+    sync.push(action);
 }
 
 /// The id a drawing is stored under.
@@ -1892,33 +1868,6 @@ fn sync_id(drawing: &Drawing) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sync_queue_overflow_requests_a_full_replacement_until_drained() {
-        let mut manager = DrawingManager::new();
-        for id in 0..=DrawingManager::SYNC_QUEUE_LIMIT {
-            manager.queue(DrawingSyncAction::Delete(id.to_string()));
-        }
-        assert!(matches!(
-            manager.pending_sync.lock().unwrap().as_slice(),
-            [DrawingSyncAction::ResyncRequired]
-        ));
-        manager.queue(DrawingSyncAction::Delete("later".into()));
-        assert_eq!(manager.pending_sync.lock().unwrap().len(), 1);
-        manager.pending_sync.lock().unwrap().clear();
-        manager.queue(DrawingSyncAction::Delete("next".into()));
-        assert!(
-            matches!(manager.pending_sync.lock().unwrap().as_slice(), [DrawingSyncAction::Delete(id)] if id == "next")
-        );
-        manager.set_sync_enabled(false);
-        manager.queue(DrawingSyncAction::Delete("disabled".into()));
-        assert!(manager.pending_sync.lock().unwrap().is_empty());
-        manager.set_sync_enabled(true);
-        assert!(matches!(
-            manager.pending_sync.lock().unwrap().as_slice(),
-            [DrawingSyncAction::ResyncRequired]
-        ));
-    }
 
     /// Text extents, position zones, Fibonacci rings and repeating cycle lines are
     /// selectable away from every anchor, using their actual paint geometry.
@@ -2435,7 +2384,6 @@ mod tests {
                     DrawingSyncAction::UpdateDrawing(id) => format!("Update({id})"),
                     DrawingSyncAction::Delete(id) => format!("Delete({id})"),
                     DrawingSyncAction::RestoreDrawings(_) => "Restore".into(),
-                    DrawingSyncAction::ResyncRequired => "Resync".into(),
                 })
                 .collect();
             assert_eq!(queued, expected);

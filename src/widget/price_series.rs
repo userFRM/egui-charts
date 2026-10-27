@@ -752,7 +752,8 @@ impl Chart {
             };
             if !study.is_visible()
                 || self.in_pane(id)
-                || (key == self.main_series_scale && !autoscale)
+                || (key == self.main_series_scale
+                    && (!autoscale || self.config.scale_price_chart_only))
             {
                 continue;
             }
@@ -1358,6 +1359,11 @@ impl Chart {
         rect: Rect,
         colors: &StyleColors,
     ) -> f32 {
+        let study_axis = crate::config::PriceAxisOptions {
+            show_study_values: self.config.show_indicator_last_val
+                && self.config.price_axis.show_study_values,
+            ..self.config.price_axis
+        };
         let mut measured = 0.0_f32;
         for (key, axis) in self.secondary_axes(widget, rect) {
             let position = if key == SeriesScale::Right {
@@ -1392,7 +1398,7 @@ impl Chart {
                         &assigned,
                         &coords,
                         axis,
-                        self.config.show_indicator_last_val,
+                        &study_axis,
                         self.percentage_formatter.as_deref(),
                     ));
                 }
@@ -1420,9 +1426,10 @@ impl Chart {
                     ),
                     colors,
                     &tags,
+                    self.config.price_axis.allow_label_overlap,
                 ));
             }
-            if self.config.show_indicator_last_val {
+            if study_axis.show_study_values {
                 for study in &assigned {
                     let mapping = study
                         .scale_mapping()
@@ -1436,6 +1443,7 @@ impl Chart {
                         axis.right(),
                         &mut tags,
                         None,
+                        &study_axis,
                     );
                 }
             }
@@ -2193,6 +2201,17 @@ mod tests {
         let drawn = bodies(&painted);
         assert_eq!(drawn.len(), 3);
         assert!(drawn.iter().all(|body| main.contains_rect(*body)));
+        for show_study_values in [false, true] {
+            chart.config.price_axis.show_study_values = show_study_values;
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.1, vec![]);
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.pos.x < chart.last_rendered_price_rect.right()
+                        && text.galley.text().contains("label 220.00")
+                )),
+                "study axis settings must preserve comparison legend values"
+            );
+        }
     }
 
     /// Bars can be popped from, and looked up in, any bar series; live changes are reported

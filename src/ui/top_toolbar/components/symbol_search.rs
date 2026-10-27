@@ -36,7 +36,7 @@
 //! // The symbols your data source offers
 //! let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 //! match compare.show(ctx, &symbols) {
-//!     CompareAction::AddSymbol(sym) => println!("Add: {}", sym),
+//!     CompareAction::AddSymbol(sym, placement) => println!("Add: {sym} ({placement:?})"),
 //!     CompareAction::RemoveSymbol(sym) => println!("Remove: {}", sym),
 //!     _ => {}
 //! }
@@ -48,7 +48,7 @@ mod service;
 
 use crate::icons::icons;
 use crate::model::{Instrument, SymbolType};
-use crate::services::{Storage, SymbolSearch};
+use crate::services::{Storage, SymbolExpression, SymbolSearch};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
@@ -170,8 +170,21 @@ pub struct SymbolSearchDialog {
     filtered_symbols: Vec<Instrument>,
     category: Category,
     recent_symbols: Vec<String>,
+    sources: Vec<String>,
+    expanded: Vec<String>,
+    /// Why the query's expression is not listed: still being checked, or invalid.
+    expression_status: Option<(String, bool)>,
     config: SymbolSearchConfig,
     search: Search,
+}
+
+/// A listed result: its index in the results and, for the first instrument of a root, how many
+/// others share that root.
+#[derive(Clone, Copy)]
+struct Row {
+    index: usize,
+    members: usize,
+    nested: bool,
 }
 
 impl Default for SymbolSearchDialog {
@@ -191,6 +204,9 @@ impl SymbolSearchDialog {
             filtered_symbols: Vec::new(),
             category: Category(None),
             recent_symbols: Vec::new(),
+            sources: Vec::new(),
+            expanded: Vec::new(),
+            expression_status: None,
             config: SymbolSearchConfig::default(),
             search: Search::default(),
         }
@@ -225,9 +241,16 @@ impl SymbolSearchDialog {
         self.search.recents.set_storage(storage);
     }
 
-    /// Restricts service results to an exchange, or removes that filter.
+    /// Restricts results to an exchange, or removes that filter, as the source menu does.
     pub fn set_exchange_filter(&mut self, exchange: Option<String>) {
         self.search.exchange = exchange;
+    }
+
+    /// Offers these exchanges in the source menu, whose choice reaches the service as
+    /// [`SymbolQuery::exchange`](crate::services::SymbolQuery::exchange). Without a service the
+    /// menu offers the exchanges of the supplied symbols.
+    pub fn set_sources(&mut self, sources: Vec<String>) {
+        self.sources = sources;
     }
 
     /// Records an instrument opened outside this dialog in the recent list.
@@ -249,6 +272,7 @@ impl SymbolSearchDialog {
         self.search_query.clear();
         self.sel_idx = 0;
         self.category = Category(None);
+        self.expanded.clear();
         self.filtered_symbols.clear();
         self.search.reset();
     }
@@ -328,21 +352,23 @@ impl SymbolSearchDialog {
             )
         });
         let keyboard_move = up || down;
-        if !self.filtered_symbols.is_empty() {
+        let mut rows = self.rows();
+        self.sel_idx = self.sel_idx.min(rows.len().saturating_sub(1));
+        if !rows.is_empty() {
             if down {
-                self.sel_idx = (self.sel_idx + 1) % self.filtered_symbols.len();
+                self.sel_idx = (self.sel_idx + 1) % rows.len();
             }
             if up {
-                self.sel_idx =
-                    (self.sel_idx + self.filtered_symbols.len() - 1) % self.filtered_symbols.len();
+                self.sel_idx = (self.sel_idx + rows.len() - 1) % rows.len();
             }
         }
 
         let mut open = true;
         Modal::new("symbol_search", "")
             .width(840.0)
-            .height(480.0)
-            .top(ctx.content_rect().top() + ctx.content_rect().height() / 3.0 - 240.0)
+            .height(680.0)
+            .rounding(SEARCH_RADIUS)
+            .backdrop(search_backdrop(ctx))
             .show(ctx, &mut open, |ui| {
                 let translated_label = l10n::text(ui.ctx(), "Search symbols");
                 ui.response().widget_info(|| {
@@ -424,20 +450,53 @@ impl SymbolSearchDialog {
                 if !categories.contains(&self.category) {
                     self.category = Category(None);
                 }
-                egui::ScrollArea::horizontal()
-                    .id_salt("symbol_categories")
-                    .show(ui, |ui| {
-                        if TabBar::new(&categories, &mut self.category)
-                            .pills()
-                            .show(ui)
-                        {
-                            self.sel_idx = 0;
-                            self.refresh_results(ctx, all_symbols);
+                if TabBar::new(&categories, &mut self.category)
+                    .pills()
+                    .show(ui)
+                {
+                    self.sel_idx = 0;
+                    self.refresh_results(ctx, all_symbols);
+                }
+                let mut sources = self.sources.clone();
+                if !self.search.connected() {
+                    for exchange in all_symbols.iter().filter_map(|s| s.exchange.as_ref()) {
+                        if !sources.contains(exchange) {
+                            sources.push(exchange.clone());
                         }
-                    });
+                    }
+                }
+                if !sources.is_empty() {
+                    let all = l10n::text(ui.ctx(), "All sources");
+                    let before = self.search.exchange.clone();
+                    egui::ComboBox::from_id_salt("symbol_sources")
+                        .selected_text(self.search.exchange.as_deref().unwrap_or(&all))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.search.exchange, None, all.as_str());
+                            for source in sources {
+                                let label = source.clone();
+                                ui.selectable_value(&mut self.search.exchange, Some(source), label);
+                            }
+                        })
+                        .response
+                        .accessible_name(l10n::text(ui.ctx(), "Source"));
+                    if self.search.exchange != before {
+                        self.sel_idx = 0;
+                        self.refresh_results(ctx, all_symbols);
+                    }
+                    ui.add_space(4.0);
+                }
+                rows = self.rows();
                 ui.add_space(4.0);
 
                 self.search.status(ui);
+                if let Some((status, error)) = &self.expression_status {
+                    let status = l10n::text(ui.ctx(), status);
+                    if *error {
+                        ui.colored_label(ui.visuals().error_fg_color, status);
+                    } else {
+                        ui.weak(status);
+                    }
+                }
                 if self.search_query.is_empty()
                     && self.category.0.is_none()
                     && self.search.exchange.is_none()
@@ -477,11 +536,17 @@ impl SymbolSearchDialog {
                                 ui.label(l10n::text(ui.ctx(), "No symbols found"));
                             }
                         } else {
-                            for (idx, symbol) in self.filtered_symbols.iter().enumerate() {
+                            let mut toggled = None;
+                            for (idx, row) in rows.iter().enumerate() {
                                 let is_sel = idx == self.sel_idx;
-                                let response = self.render_symbol_item(ui, symbol, is_sel);
-                                next_page |= idx + 1 == self.filtered_symbols.len()
-                                    && ui.is_rect_visible(response.rect);
+                                let symbol = &self.filtered_symbols[row.index];
+                                let (response, toggle) =
+                                    self.render_symbol_item(ui, symbol, is_sel, *row);
+                                next_page |=
+                                    idx + 1 == rows.len() && ui.is_rect_visible(response.rect);
+                                if toggle {
+                                    toggled = symbol.root.clone();
+                                }
 
                                 if response.clicked() {
                                     sel_symbol = Some(symbol.clone());
@@ -496,6 +561,13 @@ impl SymbolSearchDialog {
                                     && ui.input(|input| input.pointer.delta() != Vec2::ZERO)
                                 {
                                     self.sel_idx = idx;
+                                }
+                            }
+                            if let Some(root) = toggled {
+                                if let Some(at) = self.expanded.iter().position(|r| *r == root) {
+                                    self.expanded.remove(at);
+                                } else {
+                                    self.expanded.push(root);
                                 }
                             }
                         }
@@ -528,9 +600,9 @@ impl SymbolSearchDialog {
                 ui.input(|i| {
                     if search_focused
                         && i.key_pressed(egui::Key::Enter)
-                        && !self.filtered_symbols.is_empty()
+                        && let Some(row) = rows.get(self.sel_idx)
                     {
-                        sel_symbol = Some(self.filtered_symbols[self.sel_idx].clone());
+                        sel_symbol = Some(self.filtered_symbols[row.index].clone());
                         should_close = true;
                     }
                 });
@@ -568,6 +640,41 @@ impl SymbolSearchDialog {
         } else {
             self.update_filtered_symbols(all_symbols);
         }
+        self.list_expression(ctx, all_symbols);
+    }
+
+    /// Lists first the spread the query spells, such as `AAPL-MSFT`, once its symbols are found
+    /// in the catalog, or says why it cannot be charted.
+    fn list_expression(&mut self, ctx: &Context, all_symbols: &[Instrument]) {
+        self.expression_status = None;
+        let text = self.search_query.trim();
+        if self.config.max_results == 0
+            || self.search_query.chars().count() < self.config.min_search_len
+            || !text.contains(['+', '-', '*', '/', '(', ')'])
+            || !matches!(self.category.0, None | Some(SymbolType::Spread))
+            || self
+                .filtered_symbols
+                .iter()
+                .any(|symbol| symbol.symbol.eq_ignore_ascii_case(text))
+        {
+            return;
+        }
+        let expression = match SymbolExpression::parse(text) {
+            Ok(expression) if !expression.is_spread() => return,
+            Ok(expression) => self.search.resolve(ctx, text, expression, all_symbols),
+            Err(error) => Some(Err(error.to_string())),
+        };
+        match expression {
+            Some(Ok(expression)) => {
+                self.filtered_symbols.insert(
+                    0,
+                    Instrument::new(expression.to_string()).with_symbol_type(SymbolType::Spread),
+                );
+                self.filtered_symbols.truncate(self.config.max_results);
+            }
+            Some(Err(error)) => self.expression_status = Some((error, true)),
+            None => self.expression_status = Some(("Checking symbols…".into(), false)),
+        }
     }
 
     fn update_filtered_symbols(&mut self, all_symbols: &[Instrument]) {
@@ -582,6 +689,7 @@ impl SymbolSearchDialog {
             .iter()
             .filter(|symbol| {
                 (self.category.0.is_none() || symbol.symbol_type == self.category.0)
+                    && (self.search.exchange.is_none() || symbol.exchange == self.search.exchange)
                     && (symbol.symbol.to_lowercase().contains(&query_lower)
                         || symbol
                             .description
@@ -610,7 +718,54 @@ impl SymbolSearchDialog {
             .min(self.filtered_symbols.len().saturating_sub(1));
     }
 
-    fn render_symbol_item(&self, ui: &mut Ui, symbol: &Instrument, is_sel: bool) -> Response {
+    /// The listed results: each instrument without a root, the first of each root, and the other
+    /// instruments of an expanded root right after their first.
+    fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let symbols = &self.filtered_symbols;
+        for (index, symbol) in symbols.iter().enumerate() {
+            let Some(root) = &symbol.root else {
+                rows.push(Row {
+                    index,
+                    members: 0,
+                    nested: false,
+                });
+                continue;
+            };
+            if symbols[..index]
+                .iter()
+                .any(|s| s.root.as_ref() == Some(root))
+            {
+                continue;
+            }
+            let members: Vec<_> = (index + 1..symbols.len())
+                .filter(|&i| symbols[i].root.as_ref() == Some(root))
+                .collect();
+            rows.push(Row {
+                index,
+                members: members.len(),
+                nested: false,
+            });
+            if self.expanded.contains(root) {
+                rows.extend(members.into_iter().map(|index| Row {
+                    index,
+                    members: 0,
+                    nested: true,
+                }));
+            }
+        }
+        rows
+    }
+
+    /// Paints one result row. Also returns whether its member count, shown on the first
+    /// instrument of a root, was clicked to show or hide the others.
+    fn render_symbol_item(
+        &self,
+        ui: &mut Ui,
+        symbol: &Instrument,
+        is_sel: bool,
+        row: Row,
+    ) -> (Response, bool) {
         let theme = ui.active_theme();
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
@@ -627,7 +782,21 @@ impl SymbolSearchDialog {
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
         }
-        let right = rect.right() - 8.0;
+        let mut right = rect.right() - 8.0;
+        // The exchange mark column exists once any row has one, so the other columns line up.
+        if self.config.show_exchange
+            && self
+                .filtered_symbols
+                .iter()
+                .any(|symbol| symbol.exchange_logo.is_some())
+        {
+            let mark = egui::Rect::from_min_max(
+                Pos2::new(right - 20.0, rect.center().y - 10.0),
+                Pos2::new(right, rect.center().y + 10.0),
+            );
+            paint_image(ui, symbol.exchange_logo.as_deref(), mark);
+            right = mark.left() - 12.0;
+        }
         let kind = symbol
             .symbol_type
             .map(|kind| kind.to_string())
@@ -690,8 +859,60 @@ impl SymbolSearchDialog {
                 theme.ui.text_secondary,
             );
         }
-        let left = rect.left() + 8.0;
-        let width = (exchange_right - exchange_width - 16.0 - left).max(0.0);
+        let indent = if row.nested { 24.0 } else { 0.0 };
+        let mark = egui::Rect::from_center_size(
+            Pos2::new(rect.left() + 20.0 + indent, rect.center().y),
+            Vec2::splat(24.0),
+        );
+        paint_symbol_mark(ui, symbol, mark);
+        let left = mark.right() + 12.0;
+        let mut text_right = exchange_right - exchange_width - 16.0;
+        let mut toggled = false;
+        if row.members > 0 {
+            let expanded = symbol
+                .root
+                .as_ref()
+                .is_some_and(|root| self.expanded.contains(root));
+            let galley = ui.painter().layout_no_wrap(
+                format!("+{}", row.members),
+                egui::FontId::proportional(11.0),
+                theme.ui.text,
+            );
+            let pill = egui::Rect::from_min_max(
+                Pos2::new(text_right - galley.size().x - 16.0, rect.center().y - 10.0),
+                Pos2::new(text_right, rect.center().y + 10.0),
+            );
+            text_right = pill.left() - 8.0;
+            let toggle = ui.interact(pill, response.id.with("members"), Sense::click());
+            let label = l10n::format_text(
+                ui.ctx(),
+                "{0} more instruments of {1}",
+                &[
+                    ("0", row.members.to_string()),
+                    ("1", symbol.root.clone().unwrap_or_default()),
+                ],
+            );
+            toggle.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, true, expanded, &label)
+            });
+            let fill = if toggle.hovered() || expanded {
+                theme.ui.btn_bg_hover
+            } else {
+                theme.ui.panel_bg
+            };
+            ui.painter().rect(
+                pill,
+                pill.height() / 2.0,
+                fill,
+                ui.visuals().widgets.inactive.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+            crate::styles::focus::draw_focus_ring(ui, &toggle, pill.height() / 2.0);
+            ui.painter()
+                .galley(pill.center() - galley.size() / 2.0, galley, theme.ui.text);
+            toggled = toggle.clicked();
+        }
+        let width = (text_right - left).max(0.0);
         let name = egui::WidgetText::from(
             RichText::new(&symbol.symbol)
                 .size(13.0)
@@ -730,8 +951,71 @@ impl SymbolSearchDialog {
             );
         }
 
-        response
+        (response, toggled)
     }
+}
+
+/// Corner radius of the symbol search and comparison dialogs.
+const SEARCH_RADIUS: f32 = 20.0;
+
+/// The backdrop of the search dialogs: a faint veil, #F1F1F1 over white, on light themes, and the
+/// theme's modal overlay on dark ones.
+fn search_backdrop(ctx: &Context) -> Color32 {
+    let theme = ctx.active_theme();
+    if theme.dark {
+        theme.ui.modal_overlay
+    } else {
+        Color32::from_black_alpha(14)
+    }
+}
+
+/// Paints the image at `uri` into `rect` as a circle. Returns `false`, painting nothing, without
+/// a URI or while the image is loading or unreadable.
+fn paint_image(ui: &Ui, uri: Option<&str>, rect: egui::Rect) -> bool {
+    let Some(uri) = uri else {
+        return false;
+    };
+    let pixels = (rect.size() * ui.ctx().pixels_per_point()).round();
+    let size = egui::SizeHint::Size {
+        width: pixels.x as u32,
+        height: pixels.y as u32,
+        maintain_aspect_ratio: true,
+    };
+    match ui
+        .ctx()
+        .try_load_texture(uri, egui::TextureOptions::LINEAR, size)
+    {
+        Ok(egui::load::TexturePoll::Ready { texture }) => {
+            egui::Image::from_texture(texture)
+                .corner_radius(rect.width() / 2.0)
+                .paint_at(ui, rect);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Paints the instrument's logo in `rect`, or its initial in a neutral circle without one.
+fn paint_symbol_mark(ui: &Ui, symbol: &Instrument, rect: egui::Rect) {
+    if paint_image(ui, symbol.logo.as_deref(), rect) {
+        return;
+    }
+    let theme = ui.active_theme();
+    ui.painter()
+        .circle_filled(rect.center(), rect.width() / 2.0, theme.ui.btn_bg_hover);
+    let initial: String = symbol
+        .symbol
+        .chars()
+        .take(1)
+        .flat_map(char::to_uppercase)
+        .collect();
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initial,
+        egui::FontId::proportional(rect.height() * 0.5),
+        theme.ui.text_secondary,
+    );
 }
 
 // =============================================================================
@@ -823,14 +1107,42 @@ impl CompareSymbolsConfig {
     }
 }
 
+/// Where a symbol added from the compare dialog goes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ComparePlacement {
+    /// On the main price scale, which then shows every series as a percentage change.
+    #[default]
+    SamePercentScale,
+    /// On a price scale of its own, beside the main one.
+    NewPriceScale,
+    /// In a pane of its own.
+    NewPane,
+}
+
+impl ComparePlacement {
+    /// Every placement, in the order the dialog offers them.
+    const ALL: [Self; 3] = [Self::SamePercentScale, Self::NewPriceScale, Self::NewPane];
+
+    /// The label of the placement's button.
+    fn label(self) -> &'static str {
+        match self {
+            Self::SamePercentScale => "Same % scale",
+            Self::NewPriceScale => "New price scale",
+            Self::NewPane => "New pane",
+        }
+    }
+}
+
 /// Action from compare symbols dialog
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum CompareAction {
     /// No action
     None,
-    /// Add symbol to comparison
-    AddSymbol(String),
+    /// Add the symbol to the comparison, placed as the user chose. A click on the row itself
+    /// chooses [`ComparePlacement::SamePercentScale`].
+    AddSymbol(String, ComparePlacement),
     /// Remove symbol from comparison
     RemoveSymbol(String),
     /// Toggle symbol visibility
@@ -859,8 +1171,8 @@ pub enum CompareAction {
 ///
 /// let symbols = vec![Instrument::new("ETHUSDT").with_description("Ethereum / Tether")];
 /// match compare.show(ctx, &symbols) {
-///     CompareAction::AddSymbol(sym) => {
-///         // Add symbol to chart overlay
+///     CompareAction::AddSymbol(sym, placement) => {
+///         // Add the symbol to the chart where `placement` says
 ///     }
 ///     CompareAction::RemoveSymbol(sym) => {
 ///         // Remove symbol from chart
@@ -905,6 +1217,12 @@ impl CompareSymbolsDialog {
         self.search.set_service(service);
     }
 
+    /// Lists the instruments symbol search recently opened, from the same host storage, while
+    /// the query is empty.
+    pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
+        self.search.recents.set_storage(storage);
+    }
+
     /// Create with custom configuration
     pub fn with_config(mut self, config: CompareSymbolsConfig) -> Self {
         self.config = config;
@@ -916,6 +1234,8 @@ impl CompareSymbolsDialog {
         self.is_open = true;
         self.search_query.clear();
         self.search.reset();
+        // Symbol search writes the recent list through its own store.
+        self.search.recents.reload();
     }
 
     /// Close the dialog
@@ -938,6 +1258,8 @@ impl CompareSymbolsDialog {
             .width(config.width)
             .height(config.height)
             .fill(config.bg_color)
+            .rounding(SEARCH_RADIUS)
+            .backdrop(search_backdrop(ctx))
             .show(ctx, &mut is_open, |ui| {
                 let translated_label = l10n::text(ui.ctx(), "Compare symbols");
                 ui.response().widget_info(|| {
@@ -1029,8 +1351,13 @@ impl CompareSymbolsDialog {
         }
 
         self.search.query(ui.ctx(), &self.search_query, None, 20);
-        let found = self.search.results();
-        let symbols = if self.search.connected() {
+        let recent = self.search_query.is_empty() && self.search.has_recents();
+        let found = if recent {
+            self.search.recent_results()
+        } else {
+            self.search.results()
+        };
+        let symbols = if self.search.connected() || recent {
             found.as_slice()
         } else {
             symbols
@@ -1038,7 +1365,8 @@ impl CompareSymbolsDialog {
         self.search.status(ui);
         let mut next_page = false;
         // Suggestions
-        ui.label(RichText::new(l10n::text(ui.ctx(), "Symbols")).color(config.muted_color));
+        let heading = if recent { "Recent symbols" } else { "Symbols" };
+        ui.label(RichText::new(l10n::text(ui.ctx(), heading)).color(config.muted_color));
         ui.space_lg();
 
         if symbols.is_empty() {
@@ -1049,6 +1377,7 @@ impl CompareSymbolsDialog {
             .id_salt("comparison_suggestions")
             .max_height(ui.available_height())
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let query = self.search_query.to_lowercase();
                 for symbol in symbols.iter().filter(|symbol| {
                     self.search.connected()
@@ -1082,6 +1411,7 @@ impl CompareSymbolsDialog {
         symbol: &Instrument,
         config: &CompareSymbolsConfig,
     ) -> Option<CompareAction> {
+        let theme = ui.active_theme();
         let is_compared = self
             .compared_symbols
             .iter()
@@ -1098,51 +1428,200 @@ impl CompareSymbolsDialog {
         });
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_selected(is_compared));
-        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.md);
+        crate::styles::focus::draw_focus_ring(ui, &response, theme.radius.md);
 
-        // Background on hover
-        if response.hovered() && !is_compared {
+        // The placement buttons follow the pointer or the keyboard focus into the row.
+        let placement_ids = ComparePlacement::ALL.map(|placement| response.id.with(placement));
+        let menu_id = response.id.with("placements");
+        let engaged = response.contains_pointer()
+            || response.has_focus()
+            || egui::Popup::is_id_open(ui.ctx(), menu_id.with("popup"))
+            || ui.memory(|m| m.has_focus(menu_id))
+            || ui.memory(|m| placement_ids.iter().any(|id| m.has_focus(*id)));
+        if engaged && !is_compared {
             ui.painter()
-                .rect_filled(rect, ui.active_theme().radius.md, config.hover_color);
+                .rect_filled(rect, theme.radius.md, config.hover_color);
         }
 
-        // Checkmark if compared
-        let indicator_pos = Pos2::new(rect.min.x + 12.0, rect.center().y);
+        // Every row reserves the mark, so text lines up whatever the host supplies.
+        let mark = egui::Rect::from_center_size(
+            Pos2::new(rect.min.x + 4.0 + 18.0, rect.center().y),
+            Vec2::splat(36.0),
+        );
+        paint_symbol_mark(ui, symbol, mark);
+        let left = mark.right() + 8.0;
+
+        // Right-hand column, from the edge: country, then the comparison check.
+        let mut right = rect.max.x - 12.0;
+        if let Some(country) = &symbol.country {
+            let galley = ui.painter().layout_no_wrap(
+                country.to_uppercase(),
+                egui::FontId::proportional(theme.text.small),
+                config.muted_color,
+            );
+            let pos = Pos2::new(
+                right - galley.size().x,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            right = pos.x - 12.0;
+            ui.painter().galley(pos, galley, config.muted_color);
+        }
         if is_compared {
-            ui.painter()
-                .circle_filled(indicator_pos, 5.0, ui.active_theme().ui.success);
+            let center = Pos2::new(right - 8.0, rect.center().y);
+            ui.painter().circle_filled(center, 8.0, theme.ui.success);
             ui.painter().text(
-                indicator_pos,
+                center,
                 egui::Align2::CENTER_CENTER,
                 l10n::text(ui.ctx(), "v"),
-                egui::FontId::proportional(ui.active_theme().text.micro),
-                ui.active_theme().ui.panel_bg,
+                egui::FontId::proportional(theme.text.micro),
+                theme.ui.panel_bg,
             );
+            right = center.x - 20.0;
         }
 
-        // Instrument
-        ui.painter().text(
-            Pos2::new(rect.min.x + 40.0, rect.center().y - 10.0),
-            egui::Align2::LEFT_CENTER,
-            &symbol.symbol,
-            egui::FontId::proportional(16.0),
+        let mut action = None;
+        if engaged && !is_compared {
+            let placements = ComparePlacement::ALL.map(|placement| {
+                let label = ui.painter().layout_no_wrap(
+                    l10n::text(ui.ctx(), placement.label()),
+                    egui::FontId::proportional(theme.text.small),
+                    config.text_color,
+                );
+                (placement, label)
+            });
+            let buttons_width: f32 = placements
+                .iter()
+                .map(|(_, label)| label.size().x + 20.0)
+                .sum();
+            if right - left < buttons_width + 80.0 {
+                let button = egui::Rect::from_center_size(
+                    Pos2::new(right - 20.0, rect.center().y),
+                    Vec2::new(40.0, 24.0),
+                );
+                right = button.left() - 4.0;
+                let menu = ui.interact(button, menu_id, Sense::click());
+                let label = l10n::text(ui.ctx(), "Add");
+                menu.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                let visuals = ui.style().interact(&menu);
+                ui.painter().rect(
+                    button,
+                    12.0,
+                    visuals.weak_bg_fill,
+                    visuals.bg_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter().text(
+                    button.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(theme.text.small),
+                    config.text_color,
+                );
+                crate::styles::focus::draw_focus_ring(ui, &menu, 12.0);
+                egui::Popup::menu(&menu).show(|ui| {
+                    for placement in ComparePlacement::ALL {
+                        if ui.button(l10n::text(ui.ctx(), placement.label())).clicked() {
+                            action =
+                                Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                            ui.close();
+                        }
+                    }
+                });
+            } else {
+                for ((placement, galley), id) in placements.into_iter().zip(placement_ids).rev() {
+                    let button = egui::Rect::from_min_max(
+                        Pos2::new(right - galley.size().x - 16.0, rect.center().y - 12.0),
+                        Pos2::new(right, rect.center().y + 12.0),
+                    );
+                    right = button.left() - 4.0;
+                    let clicked = ui.interact(button, id, Sense::click());
+                    clicked.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, galley.text())
+                    });
+                    let fill = if clicked.hovered() {
+                        theme.ui.btn_bg_hover
+                    } else {
+                        config.bg_color
+                    };
+                    ui.painter().rect(
+                        button,
+                        button.height() / 2.0,
+                        fill,
+                        ui.visuals().widgets.inactive.bg_stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                    crate::styles::focus::draw_focus_ring(ui, &clicked, button.height() / 2.0);
+                    ui.painter().galley(
+                        button.center() - galley.size() / 2.0,
+                        galley,
+                        config.text_color,
+                    );
+                    if clicked.clicked() {
+                        action = Some(CompareAction::AddSymbol(symbol.symbol.clone(), placement));
+                    }
+                }
+            }
+        }
+
+        // Instrument, then its description and type badge
+        let width = (right - 12.0 - left).max(0.0);
+        let line = |text: &str, size: f32, color: Color32, width: f32| {
+            egui::WidgetText::from(RichText::new(text).size(size).color(color)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                width,
+                egui::TextStyle::Body,
+            )
+        };
+        let name = line(&symbol.symbol, 16.0, config.text_color, width);
+        ui.painter().galley(
+            Pos2::new(left, rect.center().y - 1.0 - name.size().y),
+            name,
             config.text_color,
         );
-
-        // Description
-        ui.painter().text(
-            Pos2::new(rect.min.x + 40.0, rect.center().y + 10.0),
-            egui::Align2::LEFT_CENTER,
+        let kind = symbol
+            .symbol_type
+            .map(|kind| l10n::text(ui.ctx(), kind.to_string()).to_uppercase());
+        let badge = kind.map(|kind| {
+            ui.painter().layout_no_wrap(
+                kind,
+                egui::FontId::proportional(theme.text.micro),
+                config.muted_color,
+            )
+        });
+        let badge_width = badge.as_ref().map_or(0.0, |badge| badge.size().x + 14.0);
+        let description = line(
             symbol.description.as_deref().unwrap_or(&symbol.symbol),
-            egui::FontId::proportional(12.0),
+            12.0,
             config.muted_color,
+            (width - badge_width).max(0.0),
         );
-
-        if response.clicked() && !is_compared {
-            return Some(CompareAction::AddSymbol(symbol.symbol.clone()));
+        let top = rect.center().y + 3.0;
+        let badge_left = left + description.size().x + 6.0;
+        let description_height = description.size().y;
+        ui.painter()
+            .galley(Pos2::new(left, top), description, config.muted_color);
+        if let Some(badge) = badge {
+            let frame = egui::Rect::from_min_size(
+                Pos2::new(
+                    badge_left,
+                    top + (description_height - badge.size().y - 4.0) / 2.0,
+                ),
+                badge.size() + Vec2::new(8.0, 4.0),
+            );
+            ui.painter()
+                .rect_filled(frame, theme.radius.xs, theme.ui.btn_bg_hover);
+            ui.painter()
+                .galley(frame.min + Vec2::new(4.0, 2.0), badge, config.muted_color);
         }
 
-        None
+        if action.is_none() && response.clicked() && !is_compared {
+            action = Some(CompareAction::AddSymbol(
+                symbol.symbol.clone(),
+                ComparePlacement::SamePercentScale,
+            ));
+        }
+        action
     }
 }
 
@@ -1193,6 +1672,46 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn compare_recents_do_not_require_a_search_service() {
+        let symbols = create_test_symbols();
+        for connected in [false, true] {
+            let ctx = Context::default();
+            let mut dialog = CompareSymbolsDialog::new();
+            if connected {
+                dialog.set_search_service(Some(Arc::new(symbols.clone())));
+            }
+            dialog.search.record(&symbols[0]);
+            dialog.search.poll(&ctx);
+            let config = dialog.config.resolved(&ctx.global_style().visuals);
+            for (query, heading, listed, absent) in [
+                ("", "Recent symbols", "BTCUSDT", "TSLA"),
+                ("tsla", "Symbols", "TSLA", "BTCUSDT"),
+            ] {
+                dialog.search_query = query.into();
+                for frame in 0..2 {
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        dialog.draw_content(ui, &symbols, &config);
+                    });
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    if frame > 0 {
+                        assert!(texts.contains(&heading), "connected {connected}: {texts:?}");
+                        assert!(texts.contains(&listed));
+                        assert!(!texts.contains(&absent));
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_symbol_search_creation() {
         let dialog = SymbolSearchDialog::new();
@@ -1277,7 +1796,12 @@ mod tests {
                 .collect();
             let mut dialog = SymbolSearchDialog::new();
             ctx.run_ui(Default::default(), |ui| {
-                let response = dialog.render_symbol_item(ui, &symbols[0], false);
+                let row = Row {
+                    index: 0,
+                    members: 0,
+                    nested: false,
+                };
+                let (response, _) = dialog.render_symbol_item(ui, &symbols[0], false, row);
                 assert_eq!(response.rect.height(), 32.0);
             })
             .drop_without_applying_deltas();
@@ -1354,18 +1878,19 @@ mod tests {
         let symbols: Vec<_> = create_test_symbols()
             .into_iter()
             .map(|symbol| {
-                let kind = if symbol.symbol.ends_with("USDT") {
-                    SymbolType::Crypto
+                let (kind, exchange) = if symbol.symbol.ends_with("USDT") {
+                    (SymbolType::Crypto, "Binance")
                 } else {
-                    SymbolType::Stock
+                    (SymbolType::Stock, "NASDAQ")
                 };
-                symbol.with_exchange("Test").with_symbol_type(kind)
+                symbol.with_exchange(exchange).with_symbol_type(kind)
             })
             .collect();
-        for (query, category, recents, limit, expected) in [
-            ("BTC", None, vec![], 20, vec!["BTCUSDT"]),
+        for (query, category, exchange, recents, limit, expected) in [
+            ("BTC", None, None, vec![], 20, vec!["BTCUSDT"]),
             (
                 "",
+                None,
                 None,
                 vec![],
                 20,
@@ -1374,6 +1899,7 @@ mod tests {
             (
                 "",
                 None,
+                None,
                 vec!["TSLA", "missing", "ETHUSDT"],
                 2,
                 vec!["TSLA", "ETHUSDT"],
@@ -1381,17 +1907,21 @@ mod tests {
             (
                 "",
                 Some(SymbolType::Stock),
+                None,
                 vec!["ETHUSDT", "TSLA"],
                 20,
                 vec!["TSLA", "AAPL"],
             ),
-            ("bitcoin", Some(SymbolType::Stock), vec![], 20, vec![]),
-            ("a", None, vec![], 20, vec![]),
+            ("bitcoin", Some(SymbolType::Stock), None, vec![], 20, vec![]),
+            ("a", None, None, vec![], 20, vec![]),
+            ("", None, Some("NASDAQ"), vec![], 20, vec!["AAPL", "TSLA"]),
+            ("btc", None, Some("NASDAQ"), vec![], 20, vec![]),
         ] {
             let mut dialog = SymbolSearchDialog::new();
             dialog.config.min_search_len = 2;
             dialog.config.max_results = limit;
             dialog.category = Category(category);
+            dialog.set_exchange_filter(exchange.map(str::to_owned));
             dialog.set_recent_symbols(recents.into_iter().map(str::to_owned).collect());
             dialog.search_query = query.to_owned();
             dialog.update_filtered_symbols(&symbols);
@@ -1402,9 +1932,124 @@ mod tests {
                     .map(|s| s.symbol.as_str())
                     .collect::<Vec<_>>(),
                 expected,
-                "{query:?} / {category:?}"
+                "{query:?} / {category:?} / {exchange:?}"
             );
         }
+    }
+
+    /// An expression over listed symbols comes first, spelled as the catalog spells them;
+    /// unknown symbols and malformed text are reported instead.
+    #[test]
+    fn spread_queries_list_the_expression_or_report_why_not() {
+        let symbols = create_test_symbols();
+        for (query, min_length, limit, expected, status) in [
+            ("aapl - tsla", 1, 20, Some("AAPL-TSLA"), None),
+            (
+                "(btcusdt+ethusdt)/2",
+                1,
+                20,
+                Some("(BTCUSDT+ETHUSDT)/2"),
+                None,
+            ),
+            ("aapl-xyz", 1, 20, None, Some("Unknown symbol xyz")),
+            ("aapl-", 1, 20, None, Some("A symbol or number is missing")),
+            ("aapl-tsla", 20, 20, None, None),
+            ("aapl-tsla", 1, 0, None, None),
+        ] {
+            let ctx = Context::default();
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.config.min_search_len = min_length;
+            dialog.config.max_results = limit;
+            dialog.search_query = query.into();
+            dialog.refresh_results(&ctx, &symbols);
+            let spread = dialog
+                .filtered_symbols
+                .first()
+                .filter(|symbol| symbol.symbol_type == Some(SymbolType::Spread));
+            assert_eq!(spread.map(|s| s.symbol.as_str()), expected, "{query}");
+            let shown = dialog.expression_status.as_ref();
+            assert_eq!(shown.map(|(text, _)| text.as_str()), status, "{query}");
+        }
+    }
+
+    /// A root lists its first instrument with the count of the others; a click on the count lists
+    /// them under it, and a chosen contract comes back exactly, exchange included.
+    #[test]
+    fn roots_expand_to_their_instruments_and_pick_the_exact_one() {
+        let contract = |symbol: &str| {
+            Instrument::new(symbol)
+                .with_root("ES")
+                .with_exchange("CME")
+                .with_symbol_type(SymbolType::Futures)
+        };
+        let symbols = vec![
+            contract("ES1!"),
+            Instrument::new("AAPL"),
+            contract("ESZ2026"),
+            contract("ESH2027"),
+        ];
+        let ctx = Context::default();
+        let mut dialog = SymbolSearchDialog::new();
+        dialog.open();
+        let mut frame = |events| {
+            let mut picked = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| picked = dialog.show(ui.ctx(), &symbols),
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            (picked, texts)
+        };
+        // Each row also shows its symbol as the description it lacks.
+        let listed = |texts: &[(String, Pos2)]| {
+            let mut names: Vec<_> = texts
+                .iter()
+                .map(|(text, _)| text.clone())
+                .filter(|text| symbols.iter().any(|symbol| symbol.symbol == *text))
+                .collect();
+            names.dedup();
+            names
+        };
+        let button = |pos, pressed| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]
+        };
+        frame(vec![]);
+        let (_, texts) = frame(vec![]);
+        assert_eq!(listed(&texts), ["ES1!", "AAPL"]);
+        let count = texts.iter().find(|(text, _)| text == "+2").unwrap().1;
+        frame(vec![egui::Event::PointerMoved(count)]);
+        frame(button(count, true));
+        frame(button(count, false));
+        let (_, texts) = frame(vec![]);
+        assert_eq!(listed(&texts), ["ES1!", "ESZ2026", "ESH2027", "AAPL"]);
+        let row = texts.iter().find(|(text, _)| text == "ESZ2026").unwrap().1;
+        frame(vec![egui::Event::PointerMoved(row)]);
+        frame(button(row, true));
+        let (picked, _) = frame(button(row, false));
+        assert_eq!(picked.as_ref(), Some(&symbols[2]));
     }
 
     #[test]
@@ -1488,63 +2133,122 @@ mod tests {
         dialog.close();
         assert!(!dialog.is_open);
         let symbols = create_test_symbols();
-        for (label, expected, populated) in [
-            ("AAPL", CompareAction::AddSymbol("AAPL".into()), false),
-            ("X", CompareAction::RemoveSymbol("AAPL".into()), true),
-            ("Hide", CompareAction::ToggleVisibility("AAPL".into()), true),
-        ] {
-            let ctx = Context::default();
-            let mut dialog = CompareSymbolsDialog::new();
-            if populated {
-                dialog.compared_symbols.push(CompareSymbol::new(
-                    "AAPL",
-                    "Apple",
-                    "Test",
-                    Color32::GOLD,
-                ));
-            }
-            let config = dialog.config.resolved(&ctx.global_style().visuals);
-            let mut frame = |events| {
-                let mut action = CompareAction::None;
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        action = dialog.draw_content(ui, &symbols, &config);
-                    },
-                );
-                let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == label => {
-                        Some(text.pos + text.galley.size() / 2.0)
+        let add = |placement| CompareAction::AddSymbol("AAPL".into(), placement);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for width in [1440.0, 360.0] {
+                for (hover, label, expected, populated) in [
+                    (None, "AAPL", add(ComparePlacement::SamePercentScale), false),
+                    (
+                        Some("AAPL"),
+                        "Same % scale",
+                        add(ComparePlacement::SamePercentScale),
+                        false,
+                    ),
+                    (
+                        Some("AAPL"),
+                        "New price scale",
+                        add(ComparePlacement::NewPriceScale),
+                        false,
+                    ),
+                    (
+                        Some("AAPL"),
+                        "New pane",
+                        add(ComparePlacement::NewPane),
+                        false,
+                    ),
+                    (None, "X", CompareAction::RemoveSymbol("AAPL".into()), true),
+                    (
+                        None,
+                        "Hide",
+                        CompareAction::ToggleVisibility("AAPL".into()),
+                        true,
+                    ),
+                ] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut dialog = CompareSymbolsDialog::new();
+                    if populated {
+                        dialog.compared_symbols.push(CompareSymbol::new(
+                            "AAPL",
+                            "Apple",
+                            "Test",
+                            Color32::GOLD,
+                        ));
                     }
-                    _ => None,
-                });
-                output.drop_without_applying_deltas();
-                (action, pos)
-            };
-            frame(vec![]);
-            let pos = frame(vec![]).1.unwrap();
-            frame(vec![egui::Event::PointerMoved(pos)]);
-            let button = |pressed| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            frame(vec![button(true)]);
-            assert_eq!(frame(vec![button(false)]).0, expected);
-            assert_eq!(
-                dialog.compared_symbols.len(),
-                usize::from(populated),
-                "only the host updates chart membership"
-            );
-            if populated {
-                assert!(
-                    dialog.compared_symbols[0].visible,
-                    "only the host updates chart visibility"
-                );
+                    let config = dialog.config.resolved(&ctx.global_style().visuals);
+                    let mut frame = |events, label| {
+                        let mut action = CompareAction::None;
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(width, 640.0),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                action = dialog.draw_content(ui, &symbols, &config);
+                            },
+                        );
+                        let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                                assert!(!text.galley.elided, "{label} is unreadable at {width}");
+                                assert!(
+                                    shape.clip_rect.contains_rect(rect),
+                                    "{label} is clipped at {width}"
+                                );
+                                Some(rect.center())
+                            }
+                            _ => None,
+                        });
+                        output.drop_without_applying_deltas();
+                        (action, pos)
+                    };
+                    frame(vec![], label);
+                    if let Some(row) = hover {
+                        let pos = frame(vec![], row).1.unwrap();
+                        frame(vec![egui::Event::PointerMoved(pos)], row);
+                    }
+                    if hover.is_some()
+                        && let Some(pos) = frame(vec![], "Add").1
+                    {
+                        frame(vec![egui::Event::PointerMoved(pos)], "Add");
+                        for pressed in [true, false] {
+                            frame(
+                                vec![egui::Event::PointerButton {
+                                    pos,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                }],
+                                "Add",
+                            );
+                        }
+                    }
+                    let pos = frame(vec![], label).1.unwrap();
+                    frame(vec![egui::Event::PointerMoved(pos)], label);
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    frame(vec![button(true)], label);
+                    assert_eq!(frame(vec![button(false)], label).0, expected);
+                    assert_eq!(
+                        dialog.compared_symbols.len(),
+                        usize::from(populated),
+                        "only the host updates chart membership"
+                    );
+                    if populated {
+                        assert!(
+                            dialog.compared_symbols[0].visible,
+                            "only the host updates chart visibility"
+                        );
+                    }
+                }
             }
         }
     }

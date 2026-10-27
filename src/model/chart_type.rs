@@ -18,7 +18,7 @@
 //! - Area-based: Area, HLC Area, Baseline, Columns
 //! - Japanese: Renko, Kagi, Line Break, Heikin-Ashi, Point & Figure
 //! - Range-based: High-Low, Range Bars
-//! - Advanced: TPO (Market Profile)
+//! - Advanced: TPO (Market Profile), Volume Footprint, Session Volume Profile
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -81,6 +81,14 @@ pub enum ChartType {
     // === Advanced/Professional Types ===
     /// Time Price Opportunity (Market Profile)
     TimePriceOpportunity,
+    /// Bid and ask volume at each price of every bar, summed from the trades the feed sends on
+    /// the instrument's tick size. Requires a time-based interval and an instrument tick size;
+    /// otherwise draws candles, as do bars before the first held trade.
+    VolumeFootprint,
+    /// Volume at each price of every session of the visible bars, with its point of control and
+    /// value area, summed like [`VolumeFootprint`](Self::VolumeFootprint). Draws candles without
+    /// the `studies` feature.
+    SessionVolumeProfile,
 }
 
 /// Categories for grouping chart types in the UI
@@ -97,7 +105,7 @@ pub enum ChartTypeCategory {
     Japanese,
     /// Range/price-based charts
     RangeBased,
-    /// Market Profile charts.
+    /// Market Profile and execution-based charts.
     Advanced,
 }
 
@@ -143,13 +151,15 @@ impl ChartType {
             ChartType::Baseline,
             ChartType::Columns,
             ChartType::HighLow,
+            ChartType::VolumeFootprint,
             ChartType::TimePriceOpportunity,
+            ChartType::SessionVolumeProfile,
+            ChartType::Heikin,
+            ChartType::Renko,
             ChartType::LineBreak,
             ChartType::Kagi,
-            ChartType::Range,
             ChartType::PointAndFigure,
-            ChartType::Renko,
-            ChartType::Heikin,
+            ChartType::Range,
         ]
     }
 
@@ -175,6 +185,8 @@ impl ChartType {
             ChartType::PointAndFigure => "Point & Figure",
             ChartType::Renko => "Renko",
             ChartType::Heikin => "Heikin Ashi",
+            ChartType::VolumeFootprint => "Volume footprint",
+            ChartType::SessionVolumeProfile => "Session volume profile",
         }
     }
 
@@ -205,6 +217,8 @@ impl ChartType {
             ChartType::PointAndFigure => "X and O chart",
             ChartType::Renko => "Renko bricks",
             ChartType::Heikin => "Heikin-Ashi candles",
+            ChartType::VolumeFootprint => "Executed volume per price in each bar",
+            ChartType::SessionVolumeProfile => "Executed volume per price in each session",
         }
     }
 
@@ -237,7 +251,9 @@ impl ChartType {
 
             ChartType::HighLow | ChartType::Range => ChartTypeCategory::RangeBased,
 
-            ChartType::TimePriceOpportunity => ChartTypeCategory::Advanced,
+            ChartType::TimePriceOpportunity
+            | ChartType::VolumeFootprint
+            | ChartType::SessionVolumeProfile => ChartTypeCategory::Advanced,
         }
     }
 
@@ -265,7 +281,9 @@ impl ChartType {
             | ChartType::Heikin
             | ChartType::Range
             | ChartType::PointAndFigure
-            | ChartType::TimePriceOpportunity => true,
+            | ChartType::TimePriceOpportunity
+            | ChartType::VolumeFootprint
+            | ChartType::SessionVolumeProfile => true,
 
             ChartType::Line
             | ChartType::LineWithMarkers

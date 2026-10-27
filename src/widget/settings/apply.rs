@@ -7,6 +7,7 @@ use super::{
 use crate::{
     Chart,
     config::{BackgroundStyle, NavigationButtons},
+    model::CandlesStyle,
     scales::{PriceScaleMode, TimezoneMode},
 };
 use egui::Color32;
@@ -36,10 +37,16 @@ impl ChartSettingsState {
         settings.candle_colors.wick_down = config
             .bearish_wick_color
             .unwrap_or(settings.candle_colors.border_down);
+        let candles = &chart.chart_type_params().styles.candles;
+        settings.candle_colors.show_body = candles.body_visible;
+        settings.candle_colors.show_border = config.candle_border_width > 0.0;
+        settings.candle_colors.show_wick = candles.wick_visible;
+        settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
         settings.chart_basic_styles.background_color = config.background_color;
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color =
             config.vertical_grid_color.unwrap_or(config.grid_color);
+        settings.status_line.show_logo = config.show_legend_badge;
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
@@ -50,8 +57,28 @@ impl ChartSettingsState {
         settings.status_line.show_indicator_titles = config.show_indicator_labels;
         settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
         settings.status_line.show_indicator_values = config.show_indicator_last_val;
+        settings.status_line.show_last_day_change = config.show_last_day_change;
+        settings.status_line.indicator_background_opacity =
+            (config.indicator_backdrop_opacity.clamp(0.0, 1.0) * 100.0).round() as u8;
         settings.scales_and_lines.price_scale_left =
             !config.show_right_axis && config.show_left_axis;
+        settings.scales_and_lines.show_currency = config.show_currency;
+        settings.scales_and_lines.show_unit = config.show_unit;
+        settings.scales_and_lines.show_scale_mode_buttons = config.show_scale_mode_buttons;
+        settings.scales_and_lines.show_plus_button = config.show_plus_button;
+        settings.scales_and_lines.allow_label_overlap = config.price_axis.allow_label_overlap;
+        settings.scales_and_lines.show_study_values = config.price_axis.show_study_values;
+        settings.scales_and_lines.study_value_color = config.price_axis.study_value_color;
+        settings.scales_and_lines.show_extended_session_price = config.show_extended_session_price;
+        settings.scales_and_lines.extended_session_price_color =
+            config.extended_session_price_color;
+        settings.scales_and_lines.symbol_price_color = chart
+            .series_style(crate::widget::SeriesId::MAIN)
+            .and_then(|style| style.price_line_color);
+        settings.scales_and_lines.lock_price_to_bar_ratio =
+            chart.state().price_scale().bar_ratio_locked();
+        settings.scales_and_lines.price_to_bar_ratio =
+            chart.state().price_scale().bar_ratio().unwrap_or(1.0);
         settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
         settings.scales_and_lines.show_price_line = config.show_price_line;
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
@@ -170,6 +197,12 @@ impl ChartSettingsState {
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
             return Err("Crosshair width must be above zero");
         }
+        if self.scales_and_lines.lock_price_to_bar_ratio
+            && (!self.scales_and_lines.price_to_bar_ratio.is_finite()
+                || self.scales_and_lines.price_to_bar_ratio <= 0.0)
+        {
+            return Err("Price-to-bar ratio must be positive and finite");
+        }
         for volume in [
             self.trading.execution_sound_volume,
             self.alerts.sound_volume,
@@ -230,6 +263,12 @@ impl ChartSettingsState {
         config.bearish_border_color = Some(self.candle_colors.border_down);
         config.bullish_wick_color = Some(self.candle_colors.wick_up);
         config.bearish_wick_color = Some(self.candle_colors.wick_down);
+        // Borders keep a width the host chose and take a hairline when switched on.
+        if !self.candle_colors.show_border {
+            config.candle_border_width = 0.0;
+        } else if config.candle_border_width <= 0.0 {
+            config.candle_border_width = 1.0;
+        }
 
         if self.chart_basic_styles.background_color != Color32::PLACEHOLDER {
             config.background_color = self.chart_basic_styles.background_color;
@@ -252,6 +291,10 @@ impl ChartSettingsState {
             ButtonVisibility::Hidden => NavigationButtons::Never,
         };
         config.show_ohlc_info = self.status_line.show_ohlc;
+        config.show_legend_badge = self.status_line.show_logo;
+        config.show_last_day_change = self.status_line.show_last_day_change;
+        config.indicator_backdrop_opacity =
+            f32::from(self.status_line.indicator_background_opacity.min(100)) / 100.0;
         config.show_symbol_labels = self.status_line.show_symbol;
         config.title_as_description = self.status_line.title_as_description;
         config.show_quote_boxes = self.status_line.show_quote_boxes;
@@ -263,6 +306,16 @@ impl ChartSettingsState {
         config.show_indicator_last_val = self.status_line.show_indicator_values;
         config.show_right_axis = !self.scales_and_lines.price_scale_left;
         config.show_left_axis = self.scales_and_lines.price_scale_left;
+        config.show_currency = self.scales_and_lines.show_currency;
+        config.show_unit = self.scales_and_lines.show_unit;
+        config.show_scale_mode_buttons = self.scales_and_lines.show_scale_mode_buttons;
+        config.show_plus_button = self.scales_and_lines.show_plus_button;
+        config.price_axis.allow_label_overlap = self.scales_and_lines.allow_label_overlap;
+        config.price_axis.show_study_values = self.scales_and_lines.show_study_values;
+        config.price_axis.study_value_color = self.scales_and_lines.study_value_color;
+        config.show_extended_session_price = self.scales_and_lines.show_extended_session_price;
+        config.extended_session_price_color = self.scales_and_lines.extended_session_price_color;
+        config.lock_price_to_bar_ratio = self.scales_and_lines.lock_price_to_bar_ratio;
         config.show_symbol_last_val = self.scales_and_lines.show_last_price_label;
         config.show_price_line = self.scales_and_lines.show_price_line;
         config.show_symbol_prev_close = self.scales_and_lines.show_prev_close_label;
@@ -341,6 +394,191 @@ impl ChartSettingsState {
                     .and_then(crate::scales::instrument_price_precision)
             });
         chart.state.price_scale_mut().set_price_precision(precision);
+        if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
+            style.price_line_color = self.scales_and_lines.symbol_price_color;
+        }
+        chart.price_scale_mut().set_bar_ratio(
+            self.scales_and_lines
+                .lock_price_to_bar_ratio
+                .then_some(self.scales_and_lines.price_to_bar_ratio),
+        );
+        chart.last_ratio_lock = self.scales_and_lines.lock_price_to_bar_ratio;
+        let candles = CandlesStyle {
+            body_visible: self.candle_colors.show_body,
+            wick_visible: self.candle_colors.show_wick,
+            color_by_previous_close: self.candle_colors.color_by_previous_close,
+        };
+        // Other chart type parameters re-resolve their box sizes when set, so only a change is set.
+        if chart.chart_type_params().styles.candles != candles {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.candles = candles;
+            chart.set_chart_type_params(params);
+        }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "studies"))]
+mod tests {
+    use super::*;
+    use crate::model::{Bar, BarData, Instrument, quote::SessionQuote};
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use crate::theme::Theme;
+    use egui::{Context, Shape, Vec2};
+
+    #[test]
+    fn scale_settings_render_values_and_preserve_the_entered_ratio() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for (left, mode) in [
+                (false, PriceScaleMode::Normal),
+                (true, PriceScaleMode::Normal),
+                (false, PriceScaleMode::Logarithmic),
+                (true, PriceScaleMode::Logarithmic),
+                (false, PriceScaleMode::Percentage),
+                (true, PriceScaleMode::Percentage),
+            ] {
+                for width in [320.0, 800.0] {
+                    let locked_ratio = if mode == PriceScaleMode::Logarithmic {
+                        0.005
+                    } else {
+                        0.5
+                    };
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let bars = (0..10)
+                        .map(|i| {
+                            Bar::new(
+                                chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i),
+                                100.0,
+                                120.0,
+                                90.0,
+                                112.0,
+                                0.0,
+                            )
+                        })
+                        .collect();
+                    let mut chart = Chart::new(BarData::from_bars(bars));
+                    chart.set_size(Some(Vec2::new(width, 600.0)));
+                    chart.set_instrument(Some(
+                        Instrument::new("SAMPLE")
+                            .with_currency("USD")
+                            .with_unit("contracts per barrel"),
+                    ));
+                    chart.set_session_quote(Some(SessionQuote::new(115.0, "EXT")));
+                    chart.add_indicator(Box::new(CustomIndicator::new("Constant", |bars| {
+                        vec![IndicatorValue::Single(110.0); bars.len()]
+                    })));
+                    for _ in 0..2 {
+                        ctx.run_ui(Default::default(), |ui| {
+                            chart.show(ui);
+                        })
+                        .drop_without_applying_deltas();
+                    }
+                    let mut settings = ChartSettingsState::from_chart(&chart);
+                    let scales = &mut settings.scales_and_lines;
+                    scales.price_scale_left = left;
+                    scales.log_scale = mode == PriceScaleMode::Logarithmic;
+                    scales.percentage_scale = mode == PriceScaleMode::Percentage;
+                    scales.show_scale_mode_buttons = false;
+                    scales.show_plus_button = false;
+                    scales.allow_label_overlap = true;
+                    scales.auto_scale = false;
+                    scales.lock_price_to_bar_ratio = true;
+                    scales.price_to_bar_ratio = locked_ratio;
+                    scales.symbol_price_color = Some(Color32::GOLD);
+                    scales.study_value_color = Some(Color32::PURPLE);
+                    scales.extended_session_price_color = Color32::LIGHT_RED;
+                    settings.apply_to_chart(&mut chart).unwrap();
+                    assert_eq!(
+                        ChartSettingsState::from_chart(&chart).scales_and_lines,
+                        settings.scales_and_lines
+                    );
+                    for (currency, unit, shown) in [
+                        (true, true, true),
+                        (true, false, true),
+                        (false, true, true),
+                        (false, false, false),
+                    ] {
+                        settings.scales_and_lines.show_currency = currency;
+                        settings.scales_and_lines.show_unit = unit;
+                        settings.scales_and_lines.show_study_values = shown;
+                        settings.scales_and_lines.show_last_price_label = shown;
+                        settings.scales_and_lines.show_extended_session_price = shown;
+                        settings.apply_to_chart(&mut chart).unwrap();
+                        for frame in 0..3 {
+                            let mut output = ctx.run_ui(Default::default(), |ui| {
+                                chart.show(ui);
+                            });
+                            let shapes = std::mem::take(&mut output.shapes);
+                            output.drop_without_applying_deltas();
+                            if frame == 2 {
+                                let plot = chart.last_rendered_price_rect;
+                                let expected = match (currency, unit) {
+                                    (true, true) => Some("USD · contracts per barrel"),
+                                    (true, false) => Some("USD"),
+                                    (false, true) => Some("contracts per barrel"),
+                                    _ => None,
+                                };
+                                let header = shapes.iter().find_map(|s| match &s.shape {
+                                    Shape::Text(t)
+                                        if [
+                                            "USD · contracts per barrel",
+                                            "USD",
+                                            "contracts per barrel",
+                                        ]
+                                        .contains(&t.galley.text()) =>
+                                    {
+                                        Some(t.galley.text())
+                                    }
+                                    _ => None,
+                                });
+                                assert_eq!(header, expected);
+                                if let Some(expected) = expected {
+                                    let header_fits = shapes.iter().any(|s| match &s.shape {
+                                        Shape::Text(t) if t.galley.text() == expected => {
+                                            s.clip_rect.contains_rect(egui::Rect::from_min_size(
+                                                t.pos,
+                                                t.galley.size(),
+                                            ))
+                                        }
+                                        _ => false,
+                                    });
+                                    assert!(header_fits, "unit header must fit its axis column");
+                                }
+                                for color in [Color32::GOLD, Color32::PURPLE, Color32::LIGHT_RED] {
+                                    let tag = shapes.iter().any(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == color && (r.rect.right() <= plot.left() || r.rect.left() >= plot.right())));
+                                    assert_eq!(tag, shown, "{color:?}, left={left}");
+                                }
+                                // A 0.5 unit/bar ratio and 6 point bars over 600 points imply
+                                // a 50 unit span. Use actual plot height and spacing after layout.
+                                let scale = chart.state().price_scale();
+                                let span = scale.range().max - scale.range().min;
+                                let ratio = span
+                                    * f64::from(
+                                        chart.state().time_scale().bar_spacing() / plot.height(),
+                                    );
+                                assert!((ratio - locked_ratio).abs() < 1e-6, "{ratio}");
+                                if mode == PriceScaleMode::Logarithmic {
+                                    assert!(
+                                        (chart
+                                            .last_price_map
+                                            .transform()
+                                            .to_scale(std::f64::consts::E)
+                                            - 1.0)
+                                            .abs()
+                                            < 1e-12
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+                        settings.scales_and_lines.price_to_bar_ratio = invalid;
+                        assert!(settings.apply_to_chart(&mut chart).is_err());
+                        assert_eq!(chart.state().price_scale().bar_ratio(), Some(locked_ratio));
+                    }
+                }
+            }
+        }
     }
 }

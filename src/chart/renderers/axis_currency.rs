@@ -7,19 +7,26 @@ use egui::{Align2, Pos2, Rect, Response, Sense, Stroke, Ui};
 /// Paints a currency button at the top of an axis column and returns its response and
 /// the host currency choice, if any. The host supplies available conversions and replaces
 /// the prices and instrument metadata after a choice; the renderer never converts prices.
-/// Pass the returned response rectangle to price tick occlusion.
+/// `unit` appends the host's price unit without converting prices. An empty currency shows only
+/// the unit and offers no conversion menu. Pass the response rectangle to price tick occlusion.
 pub fn render_axis_currency(
     ui: &mut Ui,
     axis: Rect,
     currency: &str,
+    unit: Option<&str>,
     choices: &[String],
 ) -> (Response, Option<String>) {
     let theme = ui.active_theme();
+    let header = match (currency.is_empty(), unit.filter(|unit| !unit.is_empty())) {
+        (false, Some(unit)) => format!("{currency} · {unit}"),
+        (true, Some(unit)) => unit.to_owned(),
+        _ => currency.to_owned(),
+    };
     let font = axis_font(ui.ctx());
     let galley = ui
         .painter()
-        .layout_no_wrap(currency.into(), font.clone(), theme.chart.axis_text);
-    let width = galley.size().x + 8.0 + 4.0 + 6.0 + 8.0;
+        .layout_no_wrap(header.clone(), font.clone(), theme.chart.axis_text);
+    let width = galley.size().x + 16.0 + if currency.is_empty() { 0.0 } else { 10.0 };
     let rect = Rect::from_min_max(
         Pos2::new((axis.right() - width).max(axis.left()), axis.top()),
         Pos2::new(axis.right(), (axis.top() + 24.0).min(axis.bottom())),
@@ -29,7 +36,7 @@ pub fn render_axis_currency(
         ui.scope_id().with(("axis_currency", axis.top().to_bits())),
         Sense::click(),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, currency));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &header));
     let painter = ui.painter().with_clip_rect(axis.intersect(ui.clip_rect()));
     for offset in 0..18 {
         let y = rect.bottom() + offset as f32;
@@ -43,28 +50,32 @@ pub fn render_axis_currency(
     painter.text(
         Pos2::new(rect.left() + 8.0, rect.center().y),
         Align2::LEFT_CENTER,
-        currency,
+        header,
         font,
         theme.chart.axis_text,
     );
-    let x = rect.left() + 8.0 + galley.size().x + 4.0;
-    painter.add(egui::Shape::line(
-        vec![
-            Pos2::new(x, rect.center().y - 1.5),
-            Pos2::new(x + 3.0, rect.center().y + 1.5),
-            Pos2::new(x + 6.0, rect.center().y - 1.5),
-        ],
-        Stroke::new(1.0, theme.chart.axis_text),
-    ));
+    if !currency.is_empty() {
+        let x = rect.left() + 8.0 + galley.size().x + 4.0;
+        painter.add(egui::Shape::line(
+            vec![
+                Pos2::new(x, rect.center().y - 1.5),
+                Pos2::new(x + 3.0, rect.center().y + 1.5),
+                Pos2::new(x + 6.0, rect.center().y - 1.5),
+            ],
+            Stroke::new(1.0, theme.chart.axis_text),
+        ));
+    }
     let mut chosen = None;
-    egui::Popup::menu(&response).show(|ui| {
-        let _ = ui.selectable_label(true, currency);
-        for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
-            if ui.selectable_label(false, choice).clicked() {
-                chosen = Some(choice.clone());
-                ui.close();
+    if !currency.is_empty() {
+        egui::Popup::menu(&response).show(|ui| {
+            let _ = ui.selectable_label(true, currency);
+            for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
+                if ui.selectable_label(false, choice).clicked() {
+                    chosen = Some(choice.clone());
+                    ui.close();
+                }
             }
-        }
-    });
+        });
+    }
     (response, chosen)
 }

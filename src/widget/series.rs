@@ -636,9 +636,15 @@ impl Chart {
             self.prune_series_scales();
             return true;
         }
-        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+        let Some(indicator) = self.take_study(id) else {
             return false;
         };
+        self.retain_removed_study(id, indicator);
+        true
+    }
+
+    pub(super) fn take_study(&mut self, id: SeriesId) -> Option<Box<dyn Indicator>> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
         #[cfg(feature = "studies")]
         if self.volume_study == Some(id) {
@@ -646,7 +652,7 @@ impl Chart {
             self.config.show_volume = false;
             self.volume_setting = false;
         }
-        self.studies.remove_indicator(at);
+        let indicator = self.studies.remove_indicator(at);
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
@@ -655,7 +661,7 @@ impl Chart {
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
             self.selection.deselect();
         }
-        true
+        indicator
     }
 
     /// Shows or hides the study `id`; a hidden study keeps its values. Returns `false` for an id
@@ -980,10 +986,15 @@ mod tests {
                 "no_scale",
                 "displaced_future",
                 "main_hidden",
+                "price_only",
+                "price_only_shared",
+                "price_only_shared_other",
+                "price_only_restored",
+                "price_only_excluded",
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
-                chart.price_scale_mut().options_mut().mode = mode;
+                chart.config_mut().right_axis_scale_mode = mode;
                 frame(&ctx, &mut chart, 0.0, Vec::new());
                 chart.set_visible_bars(20);
                 chart.set_start_idx(40);
@@ -1039,6 +1050,12 @@ mod tests {
                     "independent" => crate::studies::StudyScale::Independent,
                     "no_scale" => crate::studies::StudyScale::None,
                     "pane" => crate::studies::StudyScale::Independent,
+                    "price_only_shared" => {
+                        crate::studies::StudyScale::Shared(crate::model::SeriesScale::Right)
+                    }
+                    "price_only_shared_other" => {
+                        crate::studies::StudyScale::Shared(crate::model::SeriesScale::Left)
+                    }
                     _ => crate::studies::StudyScale::Main,
                 });
                 let study: Box<dyn Indicator> = if case == "profile" {
@@ -1063,13 +1080,54 @@ mod tests {
                     study.apply_settings(&[], settings).unwrap();
                 }
                 chart.set_indicator_visible(id, case != "hidden");
-                assert!(chart.set_indicator_autoscale(id, case != "excluded"));
+                assert!(chart.set_indicator_autoscale(
+                    id,
+                    !matches!(case, "excluded" | "price_only_excluded")
+                ));
                 chart.set_main_series_visible(case != "main_hidden");
+                if case.starts_with("price_only") {
+                    #[cfg(feature = "ui")]
+                    {
+                        let mut menu = crate::ui::top_toolbar::SettingsMenu::new();
+                        menu.settings.scale_price_chart_only = true;
+                        chart.update_config(menu.apply_to_config(chart.config().clone()));
+                    }
+                    #[cfg(not(feature = "ui"))]
+                    {
+                        chart.config_mut().scale_price_chart_only = true;
+                    }
+                    if matches!(case, "price_only_restored" | "price_only_excluded") {
+                        frame(&ctx, &mut chart, 0.03, Vec::new());
+                        chart.config_mut().scale_price_chart_only = false;
+                    }
+                    assert!(
+                        chart
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .unwrap()
+                            .1
+                            .is_visible()
+                    );
+                }
                 frame(&ctx, &mut chart, 0.04, Vec::new());
+                if case == "price_only_shared_other" {
+                    let study = chart
+                        .indicators()
+                        .find(|(study, _)| *study == id)
+                        .unwrap()
+                        .1;
+                    let map =
+                        crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping())
+                            .price;
+                    assert!(map.range().contains(map.transform().to_scale(120.0)));
+                }
                 let expected = if case == "main_hidden" {
                     let value = crate::scales::PriceTransform { mode, base: 110.0 }.to_scale(120.0);
                     (value - value.abs() * 0.00125, value + value.abs() * 0.00125)
-                } else if matches!(case, "single" | "multiple" | "displaced_future") {
+                } else if matches!(
+                    case,
+                    "single" | "multiple" | "displaced_future" | "price_only_restored"
+                ) {
                     fitted
                 } else {
                     bars_only

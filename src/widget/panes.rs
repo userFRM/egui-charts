@@ -184,12 +184,22 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
+        let maximized_plot = maximized.filter(|id| *id != PaneId::MAIN).map(|id| {
+            ui.interact(
+                Rect::from_min_max(
+                    Pos2::new(plot.left(), available.top()),
+                    Pos2::new(plot.right(), time_axis.top()),
+                ),
+                ui.scope_id().with((id, "plot")),
+                Sense::click_and_drag(),
+            )
+        });
         let response = ui
             .scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(main_rect)
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                |ui| self.show_internal(ui, Some(time_axis), footprint),
+                |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
             )
             .inner;
 
@@ -555,6 +565,12 @@ impl Chart {
                 config.height = height;
                 config.show_grid &= paint_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
+                panel.legend_backdrop = self.config.indicator_backdrop_opacity;
+                panel.axis_options = crate::config::PriceAxisOptions {
+                    show_study_values: self.config.show_indicator_last_val
+                        && self.config.price_axis.show_study_values,
+                    ..self.config.price_axis
+                };
                 panel.price_map = Some(
                     if matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)) {
                         crate::chart::renderers::study_mapping(indicator, &pane_mapping).price
@@ -722,7 +738,10 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = pane_response.interact(Sense::click_and_drag());
+                    let pane_response = match &maximized_plot {
+                        Some(plot) => pane_response.union(plot.clone()),
+                        None => pane_response.interact(Sense::click_and_drag()),
+                    };
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
@@ -1005,6 +1024,7 @@ impl Chart {
                             ),
                             colors,
                             &axis_tags,
+                            self.config.price_axis.allow_label_overlap,
                         );
                         axis_tags.push(tag);
                     }
@@ -1215,6 +1235,126 @@ mod tests {
         pointer(ctx, chart, to, None);
     }
 
+    /// Maximized panes retain shared navigation and leave the hidden price range alone.
+    #[test]
+    fn maximized_panes_keep_pointer_navigation() {
+        use crate::widget::test_frames::{frame, shapes};
+        for (theme, width, left, above) in [
+            (crate::theme::Theme::light(), 760.0, false, false),
+            (crate::theme::Theme::dark(), 760.0, true, true),
+            (crate::theme::Theme::light(), 320.0, true, false),
+            (crate::theme::Theme::dark(), 320.0, false, true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(Vec2::new(width, 580.0)));
+            chart.config.show_right_axis = !left;
+            chart.config.show_left_axis = left;
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            chart.chart_options.crosshair.horz_line_style = crate::model::LineStyle::Solid;
+            chart.chart_options.crosshair.horz_line_color = egui::Color32::BLUE;
+            let study = chart.add_indicator(Box::new(RSI::new(14)));
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            if above {
+                chart.move_pane(chart.series_pane(study).unwrap(), 0);
+            }
+            chart.pane_layout.maximized = chart.series_pane(study);
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            frame(&ctx, &mut chart, 0.2, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            let pos = pane.chart_rect.center();
+            let before = chart.state.time_scale().right_offset_precise();
+            assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
+            chart.state.price_scale_mut().set_range(90.0, 120.0);
+            drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 20.0));
+            // Forty pixels at six pixels per bar move history by 6 2/3 bars.
+            assert!(
+                (chart.state.time_scale().right_offset_precise() - (before - 20.0 / 3.0)).abs()
+                    < 1e-5
+            );
+            assert_eq!(chart.state.price_scale().range().min, 90.0);
+            assert_eq!(chart.state.price_scale().range().max, 120.0);
+
+            for event in [
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -20.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::Zoom(1.1),
+            ] {
+                let before = chart.state.time_scale().bar_spacing();
+                let time = ctx.input(|input| input.time) + 1.0;
+                frame(
+                    &ctx,
+                    &mut chart,
+                    time,
+                    vec![Event::PointerMoved(pos), event],
+                );
+                assert!(chart.state.time_scale().bar_spacing() > before);
+            }
+            let price_axis = Pos2::new(
+                if left {
+                    pane.panel_rect.left() + 5.0
+                } else {
+                    pane.panel_rect.right() - 5.0
+                },
+                pos.y,
+            );
+            let time_axis = chart.time_axis_rect.center();
+            let before = chart.state.time_scale().bar_spacing();
+            drag(
+                &ctx,
+                &mut chart,
+                time_axis,
+                time_axis + egui::vec2(30.0, 0.0),
+            );
+            assert!(chart.state.time_scale().bar_spacing() > before);
+            let at = chart
+                .pane_layout
+                .panes
+                .iter()
+                .position(|pane| Some(pane.id) == chart.series_pane(study))
+                .unwrap();
+            drag(
+                &ctx,
+                &mut chart,
+                price_axis,
+                price_axis + egui::vec2(0.0, 30.0),
+            );
+            assert!(chart.pane_layout.panes[at].scale.is_manual());
+            for axis in [price_axis, time_axis] {
+                let time = ctx.input(|input| input.time) + 1.0;
+                frame(&ctx, &mut chart, time, Vec::new());
+                for pressed in [None, Some(true), Some(false), Some(true), Some(false)] {
+                    pointer(&ctx, &mut chart, axis, pressed);
+                }
+            }
+            assert!(!chart.pane_layout.panes[at].scale.is_manual());
+            assert_eq!(
+                chart.state.time_scale().bar_spacing(),
+                chart.chart_options.time_scale.bar_spacing
+            );
+
+            let time = ctx.input(|input| input.time) + 1.0;
+            let painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+            assert!(chart.get_hover_bar_idx().is_some());
+            assert!(painted.iter().any(|shape| matches!(shape, egui::Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::BLUE && points.iter().all(|p| (p.y - pos.y).abs() < 0.1))));
+            frame(&ctx, &mut chart, time + 0.1, vec![Event::Zoom(1.1)]);
+            drag(&ctx, &mut chart, pos, pos + egui::vec2(40.0, 0.0));
+            let offset = chart.state.time_scale().right_offset_precise();
+            let spacing = chart.state.time_scale().bar_spacing();
+            chart.pane_layout.maximized = None;
+            pointer(&ctx, &mut chart, Pos2::ZERO, None);
+            assert_eq!(chart.state.time_scale().right_offset_precise(), offset);
+            assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+        }
+    }
+
     /// Pane drawings retain study units through editing, layout changes and storage.
     #[test]
     #[cfg(feature = "drawings")]
@@ -1222,16 +1362,27 @@ mod tests {
         use crate::drawings::DrawingToolType;
         use crate::scales::PriceScaleMode;
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for (mode, inverted, low, high, middle) in [
-                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0),
-                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0),
-                (PriceScaleMode::Logarithmic, false, 10.0, 1000.0, 100.0),
+            for (mode, inverted, low, high, middle, maximized) in [
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0, false),
+                (PriceScaleMode::Normal, true, 0.0, 100.0, 50.0, false),
+                (
+                    PriceScaleMode::Logarithmic,
+                    false,
+                    10.0,
+                    1000.0,
+                    100.0,
+                    false,
+                ),
+                (PriceScaleMode::Normal, false, 0.0, 100.0, 50.0, true),
             ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[1000.0], &[1100.0]);
                 chart.set_theme(&ctx, &theme);
                 let study = chart.add_indicator(Box::new(RSI::new(14)));
                 chart.sync_panes();
+                if maximized {
+                    chart.pane_layout.maximized = chart.series_pane(study);
+                }
                 let scale = &mut chart.pane_layout.panes[1].scale;
                 scale.options_mut().mode = mode;
                 scale.options_mut().invert_scale = inverted;
@@ -1243,6 +1394,7 @@ mod tests {
                 // Halfway between 0 and 100 is 50; halfway between ln(10) and ln(1000) is ln(100).
                 let first = Pos2::new(pane.mapping.idx_to_x(30), pane.chart_rect.center().y);
                 let second = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+                let viewport = chart.get_time_scale_state();
                 chart
                     .drawings_mut()
                     .set_active_tool(Some(DrawingToolType::TrendLine));
@@ -1269,6 +1421,7 @@ mod tests {
                 drag(&ctx, &mut chart, first, to);
                 let moved = chart.drawings().drawings[0].chart_points[0].price;
                 assert!((moved - pane.mapping.y_to_price(to.y)).abs() < 1e-3);
+                assert_eq!(chart.get_time_scale_state(), viewport);
                 assert!(chart.undo());
                 assert!((chart.drawings().drawings[0].chart_points[0].price - middle).abs() < 1e-3);
                 assert!(chart.redo());

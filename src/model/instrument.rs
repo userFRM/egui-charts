@@ -77,6 +77,18 @@ pub struct Instrument {
     pub description: Option<String>,
     /// Exchange or venue, such as "NASDAQ".
     pub exchange: Option<String>,
+    /// URI of the symbol's mark, such as a company logo, for egui's installed image loaders.
+    /// Symbol choosers show the symbol's initial while it is unknown, loading or unreadable.
+    pub logo: Option<String>,
+    /// URI of the exchange's mark, for egui's installed image loaders. Symbol search shows the
+    /// exchange name alone while it is unknown, loading or unreadable.
+    pub exchange_logo: Option<String>,
+    /// Country of the listing, as an ISO 3166-1 alpha-2 code such as "US".
+    pub country: Option<String>,
+    /// Root shared by related instruments, such as "ES" for the contracts of a futures root or
+    /// one security listed on several exchanges. Symbol search lists the first instrument of a
+    /// root and offers the others under it.
+    pub root: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -89,6 +101,8 @@ pub struct Instrument {
     pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD".
     pub currency: Option<String>,
+    /// Host-supplied price unit, such as "USD/barrel"; no conversion is performed.
+    pub unit: Option<String>,
     /// Exchange time zone.
     pub time_zone: Option<TimezoneId>,
     /// Regular trading hours, in exchange time.
@@ -112,12 +126,17 @@ impl Instrument {
             symbol: symbol.into(),
             description: None,
             exchange: None,
+            logo: None,
+            exchange_logo: None,
+            country: None,
+            root: None,
             symbol_type: None,
             tick_size: None,
             pip_size: None,
             price_decimals: None,
             volume_decimals: None,
             currency: None,
+            unit: None,
             time_zone: None,
             session: None,
             native_timeframes: None,
@@ -132,9 +151,39 @@ impl Instrument {
         self
     }
 
+    /// Sets the price [`unit`](Self::unit).
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
+    }
+
     /// Sets [`exchange`](Self::exchange).
     pub fn with_exchange(mut self, exchange: impl Into<String>) -> Self {
         self.exchange = Some(exchange.into());
+        self
+    }
+
+    /// Sets [`logo`](Self::logo).
+    pub fn with_logo(mut self, uri: impl Into<String>) -> Self {
+        self.logo = Some(uri.into());
+        self
+    }
+
+    /// Sets [`exchange_logo`](Self::exchange_logo).
+    pub fn with_exchange_logo(mut self, uri: impl Into<String>) -> Self {
+        self.exchange_logo = Some(uri.into());
+        self
+    }
+
+    /// Sets [`country`](Self::country).
+    pub fn with_country(mut self, country: impl Into<String>) -> Self {
+        self.country = Some(country.into());
+        self
+    }
+
+    /// Sets [`root`](Self::root).
+    pub fn with_root(mut self, root: impl Into<String>) -> Self {
+        self.root = Some(root.into());
         self
     }
 

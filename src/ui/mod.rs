@@ -35,6 +35,7 @@ mod axis_context_menu;
 pub mod connection_status;
 pub mod context_menu;
 pub mod export;
+pub mod financials;
 pub mod floating_replay_control;
 pub mod multi_chart;
 pub mod replay_status;

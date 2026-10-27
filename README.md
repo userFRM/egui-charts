@@ -128,7 +128,7 @@ The [demo](examples/demo) connects the top, drawing and timeframe toolbars, the 
 | Area | Area, HLC Area, Baseline, Columns |
 | Japanese | Heikin Ashi, Renko, Kagi, Line Break, Point and Figure |
 | Range | High-Low, Range Bars |
-| Advanced | Market Profile (TPO) |
+| Advanced | Market Profile (TPO), Volume Footprint, Session Volume Profile |
 
 ## Studies
 
@@ -167,6 +167,8 @@ Magnet mode snaps drawing anchors to nearby OHLC prices, visible study values an
 ## Order flow
 
 The library renders Market Profile (TPO), volume profiles, footprints, volume bubbles and liquidity heatmaps. `Datafeed` accepts host-supplied executions and depth updates; `Footprint` aggregates executed volume at price and `DepthHistory` retains the book over time. Execution-based studies require trade data from the host. Bar-based volume estimates do not recover the actual aggressor side of trades.
+
+`ChartType::VolumeFootprint` and `ChartType::SessionVolumeProfile` use retained and incoming feed executions on time-based intervals, with the instrument's tick size. They draw candles on trade-based intervals or without a tick size, and for bars before the first retained execution. Session profiles also require `studies`.
 
 ## Themes
 

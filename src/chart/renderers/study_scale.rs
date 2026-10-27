@@ -84,7 +84,7 @@ pub(crate) fn render_study_axis(
     studies: &[&dyn Indicator],
     coords: &ChartMapping,
     axis: Rect,
-    show_values: bool,
+    axis_options: &crate::config::PriceAxisOptions,
     relative_formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
     let Some(&study) = studies.first() else {
@@ -97,7 +97,7 @@ pub(crate) fn render_study_axis(
     let mut width = 0.0_f32;
     let mut labels = Vec::new();
     for &member in studies {
-        if !show_values {
+        if !axis_options.show_study_values {
             continue;
         }
         let Some(bar) = member.values().len().checked_sub(1) else {
@@ -125,7 +125,11 @@ pub(crate) fn render_study_axis(
                 };
                 labels.push((
                     coords.price_to_y(value),
-                    Some(member.plot_style(line).color),
+                    Some(
+                        axis_options
+                            .study_value_color
+                            .unwrap_or(member.plot_style(line).color),
+                    ),
                     label,
                 ));
             }
@@ -159,7 +163,10 @@ pub(crate) fn render_study_axis(
             .anchor_size(Pos2::new(x, y), galley.size())
             .expand(2.0);
         width = width.max(rect.width() + 8.0);
-        if !axis.contains_rect(rect) || occupied.iter().any(|other: &Rect| other.intersects(rect)) {
+        if !axis.contains_rect(rect)
+            || (!axis_options.allow_label_overlap
+                && occupied.iter().any(|other: &Rect| other.intersects(rect)))
+        {
             continue;
         }
         painter.rect_filled(rect, 0.0, color.unwrap_or(theme.chart.bg));
@@ -226,7 +233,7 @@ mod tests {
                         &[indicators[0].as_ref()],
                         &mapping,
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(80.0, 120.0)),
-                        true,
+                        &Default::default(),
                         None,
                     );
                 }

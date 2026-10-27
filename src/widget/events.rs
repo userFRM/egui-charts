@@ -386,7 +386,7 @@ impl Chart {
         }
         let position = ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
             ui.rect_contains_pointer(egui::Rect::from_min_max(
-                self.last_rendered_price_rect.min,
+                egui::pos2(self.last_rendered_price_rect.left(), ui.max_rect().top()),
                 egui::pos2(
                     self.last_rendered_price_rect.right(),
                     ui.max_rect().bottom(),
@@ -600,46 +600,58 @@ mod tests {
         #[cfg(feature = "studies")]
         {
             let id = chart.add_indicator(Box::new(crate::studies::RSI::default()));
-            frame(&ctx, &mut chart, 1.5, vec![]);
-            chart.drain_events().for_each(drop);
-            let pane = &chart.last_rendered_indicator_panes[0];
-            let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
-            frame(&ctx, &mut chart, 1.6, vec![Event::PointerMoved(pos)]);
-            let events = chart.drain_events().collect::<Vec<_>>();
-            let Some(ChartEvent::CrosshairMoved(Some(pointer))) = events.last() else {
-                panic!("{events:?}")
-            };
-            assert_eq!(pointer.series, id);
-            assert_eq!(pointer.time, bars[70].time);
-            assert!((pointer.price - 50.0).abs() < 0.001);
-            assert_eq!(pointer.pane, 1);
-            assert_eq!(
-                pointer.studies,
-                chart
-                    .study_values_at(70)
-                    .into_iter()
-                    .map(|row| (id, row))
-                    .collect::<Vec<_>>()
-            );
-            let expected = pointer.clone();
-            for pressed in [true, false] {
-                frame(
-                    &ctx,
-                    &mut chart,
-                    1.7,
-                    vec![Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    }],
+            chart.sync_panes();
+            let pane_id = chart.series_pane(id).unwrap();
+            for (above, maximized) in [(false, false), (false, true), (true, true), (true, false)] {
+                chart.move_pane(pane_id, if above { 0 } else { 1 });
+                chart.pane_layout.maximized = maximized.then_some(pane_id);
+                frame(&ctx, &mut chart, 1.5, vec![]);
+                chart.drain_events().for_each(drop);
+                let pane = &chart.last_rendered_indicator_panes[0];
+                let pos = Pos2::new(pane.mapping.idx_to_x(70), pane.chart_rect.center().y);
+                frame(&ctx, &mut chart, 1.6, vec![Event::PointerMoved(pos)]);
+                let events = chart.drain_events().collect::<Vec<_>>();
+                let Some(ChartEvent::CrosshairMoved(Some(pointer))) = events.last() else {
+                    panic!("above={above}, maximized={maximized}: {events:?}")
+                };
+                assert_eq!(pointer.series, id);
+                assert_eq!(pointer.time, bars[70].time);
+                assert!((pointer.price - 50.0).abs() < 0.001);
+                assert_eq!(pointer.pane, usize::from(!above));
+                assert_eq!(
+                    pointer.studies,
+                    chart
+                        .study_values_at(70)
+                        .into_iter()
+                        .map(|row| (id, row))
+                        .collect::<Vec<_>>()
                 );
+                let expected = pointer.clone();
+                for pressed in [true, false] {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        1.7,
+                        vec![Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+                let events = chart.drain_events().collect::<Vec<_>>();
+                assert!(
+                    events.iter().any(|event| *event
+                        == ChartEvent::Click {
+                            position: expected.clone(),
+                            button: PointerButton::Primary
+                        }),
+                    "above={above}, maximized={maximized}: {events:?}, expected {expected:?}"
+                );
+                frame(&ctx, &mut chart, 1.75, vec![Event::PointerGone]);
             }
-            assert!(chart.drain_events().any(|event| event
-                == ChartEvent::Click {
-                    position: expected.clone(),
-                    button: PointerButton::Primary
-                }));
+            chart.move_pane(pane_id, 1);
             let other = chart.add_indicator(Box::new(
                 crate::studies::CustomIndicator::new("Other", |bars| {
                     bars.iter()
