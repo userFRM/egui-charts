@@ -378,7 +378,8 @@ impl Drawing {
 
     /// The alert source of level `level` of [`Self::alert_levels`]: the drawing's stored id, or
     /// its id when it was never stored, followed by `#` and the level for levels after the
-    /// first. It names the same level after the drawing is saved and restored.
+    /// first. `%` and `#` in the id are escaped as `%25` and `%23` so distinct drawings cannot
+    /// share a source. It names the same level after the drawing is saved and restored.
     pub fn alert_source(&self, level: usize) -> AlertSource {
         let id = self.stable_id();
         AlertSource::Drawing(if level == 0 {
@@ -406,9 +407,15 @@ impl Drawing {
     }
 
     fn stable_id(&self) -> std::borrow::Cow<'_, str> {
-        self.stored_id
+        let id: std::borrow::Cow<'_, str> = self
+            .stored_id
             .as_deref()
-            .map_or_else(|| self.id.to_string().into(), Into::into)
+            .map_or_else(|| self.id.to_string().into(), Into::into);
+        if id.contains('%') || id.contains('#') {
+            id.replace('%', "%25").replace('#', "%23").into()
+        } else {
+            id
+        }
     }
 
     /// Add a point with both screen and chart coordinates
@@ -669,8 +676,12 @@ mod tests {
         }
 
         let mut line = drawing(T::TrendLine, &[(10.0, 100.0), (20.0, 120.0)]);
-        for (stored, level, source) in [(None, 0, "7"), (None, 2, "7#2"), (Some("a#1"), 3, "a#1#3")]
-        {
+        for (stored, level, source) in [
+            (None, 0, "7"),
+            (None, 2, "7#2"),
+            (Some("a%231"), 0, "a%25231"),
+            (Some("a#1"), 3, "a%231#3"),
+        ] {
             line.stored_id = stored.map(Into::into);
             assert_eq!(
                 line.alert_source(level),
@@ -682,6 +693,11 @@ mod tests {
             assert_eq!(line.alert_level(&AlertSource::Drawing(other.into())), None);
         }
         assert_eq!(line.alert_level(&AlertSource::Price), None);
+
+        // A stored id containing the level separator must not alias another drawing's level.
+        let mut other = line.clone();
+        other.stored_id = Some("a".into());
+        assert_ne!(line.alert_source(0), other.alert_source(1));
     }
 
     #[test]
