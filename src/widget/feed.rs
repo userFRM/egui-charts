@@ -1695,10 +1695,10 @@ mod tests {
             events.push(button(start - egui::vec2(400.0, 0.0), false));
             play(chart, frames, events);
         };
-        let home_key = |chart: &mut Chart, frames: &mut Frames| {
+        let end_key = |chart: &mut Chart, frames: &mut Frames| {
             let centre = chart.last_rendered_price_rect.center();
-            let home = egui::Event::Key {
-                key: egui::Key::Home,
+            let end = egui::Event::Key {
+                key: egui::Key::End,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
@@ -1708,7 +1708,7 @@ mod tests {
             play(
                 chart,
                 frames,
-                [&click[..], &[button(centre, false), home]].concat(),
+                [&click[..], &[button(centre, false), end]].concat(),
             );
         };
         let box_zoom = |chart: &mut Chart, _: &mut Frames| {
@@ -1720,7 +1720,7 @@ mod tests {
         let moves: [fn(&mut Chart, &mut Frames); 4] = [
             |chart, _| chart.set_start_idx(600),
             drag,
-            home_key,
+            end_key,
             box_zoom,
         ];
         for (row, user_move) in moves.into_iter().enumerate() {
