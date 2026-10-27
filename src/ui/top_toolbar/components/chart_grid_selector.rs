@@ -4,7 +4,7 @@ use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
 use crate::ui::model::ChartLayoutMode;
-use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::widget::ChartSyncOptions;
 use egui::{RichText, Ui};
 
@@ -64,8 +64,11 @@ impl ChartGridSelector {
         egui::ScrollArea::vertical()
             .max_height(max_height)
             .show(ui, |ui| {
+                // Rows as tall as the diagrams centre the counts beside them.
                 egui::Grid::new("chart_layout_presets")
                     .num_columns(2)
+                    .min_col_width(0.0)
+                    .min_row_height(ButtonSize::MD.pixels())
                     .show(ui, |ui| {
                         for count in 1..=16 {
                             ui.label(
