@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use egui_charts::data::Reply;
-use egui_charts::model::{Alert, AlertId};
+use egui_charts::model::{Alert, AlertId, AlertStatus};
 use egui_charts::services::{AlertEvent, Alerts, Events};
 
 /// Session-only storage used by the demo alerts panel.
@@ -128,6 +128,20 @@ struct Evaluation {
 }
 
 impl DemoAlerts {
+    /// Expiry does not depend on an available symbol or a nonempty watchlist.
+    pub fn expire(&self, now: chrono::DateTime<chrono::Utc>) {
+        let mut state = self.0.lock().unwrap();
+        let State { alerts, events, .. } = &mut *state;
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active && alert.expires.is_some_and(|expiry| expiry <= now)
+        }) {
+            alert.status = AlertStatus::Expired;
+            if let Some(events) = events {
+                events.push(AlertEvent::Upsert(alert.clone()));
+            }
+        }
+    }
+
     /// Local delivery consumes occurrences directly, independently of the panel's bounded log.
     pub fn take_triggers(&self) -> Vec<(AlertId, String)> {
         self.0.lock().unwrap().triggers.drain(..).collect()
@@ -142,7 +156,8 @@ impl DemoAlerts {
         watchlists: &[egui_charts::ui::widget_bar::Watchlist],
         studies: &std::collections::HashMap<String, egui_charts::widget::SeriesId>,
     ) {
-        use egui_charts::model::{AlertFrequency, AlertStatus};
+        use egui_charts::model::AlertFrequency;
+        self.expire(now);
         let mut state = self.0.lock().unwrap();
         let State {
             alerts,
@@ -155,13 +170,6 @@ impl DemoAlerts {
         for alert in alerts.iter_mut().filter(|a| {
             a.status == AlertStatus::Active && only.is_none_or(|id| a.id.as_ref() == Some(id))
         }) {
-            if alert.expires.is_some_and(|expiry| expiry <= now) {
-                alert.status = AlertStatus::Expired;
-                if let Some(events) = events {
-                    events.push(AlertEvent::Upsert(alert.clone()));
-                }
-                continue;
-            }
             let matches = alert.watchlist.as_ref().map_or_else(
                 || alert.symbol == chart.symbol(),
                 |name| {

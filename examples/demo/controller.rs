@@ -6453,6 +6453,22 @@ mod tests {
                     if watchlist { 4 } else { 2 },
                     "an edited alert must use its newly selected study"
                 );
+                app.watchlist = WatchlistPanel::new(vec![Watchlist::new("Empty")]);
+                let mut expired = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                expired.watchlist = Some("Empty".into());
+                expired.expires = Some(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
+                app.alerts.save(expired);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    app.alerts.alerts().last().unwrap().status,
+                    egui_charts::model::AlertStatus::Expired,
+                    "expiry must not depend on a subscribed watchlist member"
+                );
             }
         }
     }

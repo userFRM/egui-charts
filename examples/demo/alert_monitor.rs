@@ -250,6 +250,7 @@ fn alert_sources(alert: &Alert) -> impl Iterator<Item = &AlertSource> {
 impl DemoApp {
     pub(super) fn monitor_alerts(&mut self, ctx: &egui::Context) {
         let now = chrono::Utc::now();
+        self.alert_host.expire(now);
         let alerts = self.alerts.alerts();
         self.alert_monitors
             .retain(|(id, _), _| alerts.iter().any(|alert| alert.id.as_ref() == Some(id)));
