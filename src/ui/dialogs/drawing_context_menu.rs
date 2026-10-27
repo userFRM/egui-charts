@@ -33,7 +33,7 @@ pub(crate) fn move_targets(chart: &Chart, drawing_id: usize) -> Vec<(PaneId, Str
 pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
-    /// Open the alert dialog on this alert, the price crossing the drawing's first level, for
+    /// Open the alert dialog on this alert, the price crossing the drawing's first visible level, for
     /// example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels`](crate::drawings::Drawing::alert_levels)
     /// as its sources.
@@ -129,15 +129,16 @@ impl DrawingContextMenu {
             self.set_context(drawing.tool_type.as_str(), drawing.locked, drawing.visible);
         }
         self.alert = drawing
-            .filter(|drawing| !chart.symbol.is_empty() && !drawing.alert_levels(0.0).is_empty())
-            .map(|drawing| {
-                Alert::new(
+            .filter(|_| !chart.symbol.is_empty())
+            .and_then(|drawing| {
+                let (level, _, _) = drawing.alert_levels(0.0).into_iter().next()?;
+                Some(Alert::new(
                     chart.symbol.clone(),
                     AlertCondition::Compare {
-                        other: drawing.alert_source(0),
+                        other: drawing.alert_source(level),
                         comparison: AlertComparison::Crossing,
                     },
-                )
+                ))
             });
         self.panes = move_targets(chart, drawing_id);
         self.open(pos, drawing_id);
@@ -277,6 +278,47 @@ impl DrawingContextMenu {
         ) {
             self.last_action = action.unwrap_or(DrawingContextMenuAction::None);
             self.close();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig};
+    use crate::model::{AlertSource, BarData};
+
+    /// The initial alert follows the first visible level, including when level zero is hidden.
+    #[test]
+    fn alerts_start_on_a_visible_drawing_level() {
+        let mut chart = Chart::new(BarData::default());
+        chart.symbol = "SAMPLE".into();
+        let mut drawing = Drawing::new(7, DrawingToolType::FibonacciRetracement);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 200.0)];
+        drawing.stored_id = Some("fib".into());
+        chart.drawings_mut().drawings.push(drawing);
+        let mut menu = DrawingContextMenu::new();
+        for visible in [vec![0, 1], vec![1], vec![]] {
+            let mut config = FibonacciConfig::default();
+            for (index, level) in config.levels.iter_mut().enumerate() {
+                level.visible = visible.contains(&index);
+            }
+            chart.drawings_mut().drawings[0].fib_config = Some(config);
+            menu.open_on(&chart, Pos2::ZERO, 7);
+            assert_eq!(
+                menu.alert.as_ref().map(|alert| &alert.condition),
+                visible
+                    .first()
+                    .map(|level| AlertCondition::Compare {
+                        other: AlertSource::Drawing(if *level == 0 {
+                            "fib".into()
+                        } else {
+                            "fib#1".into()
+                        }),
+                        comparison: AlertComparison::Crossing,
+                    })
+                    .as_ref()
+            );
         }
     }
 }
