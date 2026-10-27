@@ -1177,7 +1177,7 @@ impl eframe::App for DemoApp {
         self.monitor_alerts(&ctx);
         self.alerts.poll(&ctx, &mut self.toasts);
         let triggers = self.alert_host.take_triggers();
-        for (_, symbol) in &triggers {
+        for symbol in &triggers {
             self.notification_host
                 .notify(format!("Alert triggered: {symbol}"), Some(symbol));
         }
@@ -6403,6 +6403,7 @@ mod tests {
                     );
                 }
 
+                app.switch_timeframe(Timeframe::Hour1);
                 // A removed parent must not resolve to a copied study with the same numeric id.
                 let parent = app
                     .chart
@@ -6421,6 +6422,7 @@ mod tests {
                     .unwrap();
                 app.chart.remove_series(parent);
                 let mut missing = Alert::new("EURUSD", AlertCondition::Above(0.0));
+                missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                 missing.source = egui_charts::model::AlertSource::Study {
                     id: child.0.to_string(),
                     output: 0,
@@ -6433,6 +6435,7 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                app.switch_timeframe(Timeframe::Min1);
                 let replacement = app
                     .chart
                     .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
@@ -6452,6 +6455,16 @@ mod tests {
                     app.alerts.log().len(),
                     if watchlist { 4 } else { 2 },
                     "an edited alert must use its newly selected study"
+                );
+                let bars = LiveFeed::new("EURUSD", app.live.now()).snapshot(
+                    Timeframe::Hour1,
+                    egui_charts::model::BarClock::new(Timeframe::Hour1),
+                    false,
+                );
+                assert_eq!(
+                    app.alerts.log().back().unwrap().price,
+                    Some(bars[bars.len() - 2].close),
+                    "editing a source must retain the alert's original interval"
                 );
                 app.watchlist = WatchlistPanel::new(vec![Watchlist::new("Empty")]);
                 let mut expired = Alert::new("EURUSD", AlertCondition::Above(0.0));

@@ -15,7 +15,7 @@ struct State {
     alerts: Vec<Alert>,
     events: Option<Events<AlertEvent>>,
     next_id: u64,
-    triggers: std::collections::VecDeque<(AlertId, String)>,
+    triggers: std::collections::VecDeque<String>,
     evaluation: std::collections::HashMap<(AlertId, String), Evaluation>,
     documents: std::collections::HashMap<(egui_charts::services::StoreKind, String), String>,
 }
@@ -143,7 +143,7 @@ impl DemoAlerts {
     }
 
     /// Local delivery consumes occurrences directly, independently of the panel's bounded log.
-    pub fn take_triggers(&self) -> Vec<(AlertId, String)> {
+    pub fn take_triggers(&self) -> Vec<String> {
         self.0.lock().unwrap().triggers.drain(..).collect()
     }
 
@@ -257,7 +257,7 @@ impl DemoAlerts {
             run.previous = inputs;
             run.sample = Some(sample);
             if fire {
-                triggers.push_back((id.clone(), chart.symbol().to_owned()));
+                triggers.push_back(chart.symbol().to_owned());
                 if triggers.len() > 10_000 {
                     triggers.pop_front();
                 }

@@ -259,10 +259,21 @@ impl DemoApp {
             .filter(|alert| alert.status == AlertStatus::Active)
         {
             let Some(id) = &alert.id else { continue };
-            if self.alert_monitors.iter().any(|((current, _), monitor)| {
-                current == id && monitor.alert_sources.iter().ne(alert_sources(alert))
-            }) {
-                self.alert_monitors.retain(|(current, _), _| current != id);
+            for ((current, symbol), monitor) in &mut self.alert_monitors {
+                if current == id && monitor.alert_sources.iter().ne(alert_sources(alert)) {
+                    let mut next = AlertMonitor::new(&self.chart, &monitor.live, symbol, alert);
+                    next.chart
+                        .set_timeframe(monitor.chart.timeframe().unwrap_or(Timeframe::Min1));
+                    next.chart
+                        .set_chart_options(monitor.chart.chart_options().clone());
+                    next.chart
+                        .set_extended_hours(monitor.chart.extended_hours());
+                    if self.chart.symbol() != symbol {
+                        next.chart.drawings_mut().drawings =
+                            monitor.chart.drawings().drawings.clone();
+                    }
+                    *monitor = next;
+                }
             }
             let symbols: Vec<_> = alert.watchlist.as_ref().map_or_else(
                 || vec![alert.symbol.clone()],
