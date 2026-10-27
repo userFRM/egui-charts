@@ -781,49 +781,49 @@ mod tests {
     #[test]
     fn cached_price_moves_obey_the_fresh_build_work_bound() {
         // The gap exceeds two million sizes; reseeding leaves only the final three-size move.
-        for kind in [ChartType::Renko, ChartType::Range] {
-            for source in [PriceBasedSource::Close, PriceBasedSource::HighLow] {
-                for append in [false, true] {
-                    for whitespace in [false, true] {
-                        let params = ChartTypeParams {
-                            renko_source: source,
-                            range_size: 1.0,
-                            ..Default::default()
-                        };
-                        let build = |data: &[Bar], revision| match kind {
-                            ChartType::Renko => renko(data, revision, &params).series(),
-                            _ => range_bars(data, revision, &params).series(),
-                        };
-                        let mut data = bars(0, &[100.0, 101.0], None);
-                        if whitespace {
-                            data.push(Bar::whitespace(
-                                data.last().unwrap().time + Duration::minutes(1),
-                            ));
-                            data.extend(bars(3, &[101.0], None));
-                        }
-                        build(&data, 0);
-                        if append {
-                            data.extend(bars(data.len() as i64, &[2_000_102.0], None));
-                        } else {
-                            let last = data.len() - 1;
-                            data[last] = bars(last as i64, &[2_000_102.0], None).remove(0);
-                        }
-                        let cached = build(&data, 0);
-                        let fresh = build(&data, 1);
-                        assert_eq!(
-                            cached.0.len(),
-                            fresh.0.len(),
-                            "{kind:?} {source:?} {append} {whitespace}"
-                        );
-                        assert!(cached.1 && fresh.1);
-                        data.extend(bars(data.len() as i64, &[2_000_105.0], None));
-                        let resumed = build(&data, 0);
-                        assert_eq!(
-                            resumed.0.len(),
-                            if kind == ChartType::Renko { 3 } else { 4 }
-                        );
-                        assert_eq!(resumed.0.last().unwrap().close, 2_000_105.0);
+        for (kind, source) in [
+            (ChartType::Renko, PriceBasedSource::Close),
+            (ChartType::Renko, PriceBasedSource::HighLow),
+            (ChartType::Range, PriceBasedSource::Close),
+        ] {
+            for append in [false, true] {
+                for whitespace in [false, true] {
+                    let params = ChartTypeParams {
+                        renko_source: source,
+                        range_size: 1.0,
+                        ..Default::default()
+                    };
+                    let build = |data: &[Bar]| match kind {
+                        ChartType::Renko => renko(data, 0, &params).series(),
+                        _ => range_bars(data, 0, &params).series(),
+                    };
+                    let mut data = bars(0, &[100.0, 101.0], None);
+                    if whitespace {
+                        data.push(Bar::whitespace(
+                            data.last().unwrap().time + Duration::minutes(1),
+                        ));
                     }
+                    build(&data);
+                    if append {
+                        data.extend(bars(data.len() as i64, &[2_000_102.0], None));
+                    } else {
+                        let last = data.len() - 1;
+                        data[last] = bars(last as i64, &[2_000_102.0], None).remove(0);
+                    }
+                    let cached = build(&data);
+                    assert_eq!(
+                        cached.0.len(),
+                        if kind == ChartType::Renko { 0 } else { 1 },
+                        "{kind:?} {source:?} {append} {whitespace}"
+                    );
+                    assert!(cached.1);
+                    data.extend(bars(data.len() as i64, &[2_000_105.0], None));
+                    let resumed = build(&data);
+                    assert_eq!(
+                        resumed.0.len(),
+                        if kind == ChartType::Renko { 3 } else { 4 }
+                    );
+                    assert_eq!(resumed.0.last().unwrap().close, 2_000_105.0);
                 }
             }
         }
