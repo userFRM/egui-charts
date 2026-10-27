@@ -60,7 +60,8 @@ pub trait SessionProvider: Send + Sync {
         to: &DateTime<Utc>,
     ) -> Option<SessionBreak>;
 
-    /// Get all session breaks within a time range
+    /// Get all session breaks within a time range, checking at most one minute at a time.
+    /// The final check stops at `end`; an empty or reversed range has no breaks.
     fn session_breaks_in_range(
         &self,
         start: &DateTime<Utc>,
@@ -70,7 +71,10 @@ pub trait SessionProvider: Send + Sync {
         let mut current = *start;
 
         while current < *end {
-            let next = current + Duration::minutes(1);
+            let next = current
+                .checked_add_signed(Duration::minutes(1))
+                .unwrap_or(*end)
+                .min(*end);
             if let Some(session_break) = self.session_break_between(&current, &next) {
                 breaks.push(session_break);
             }
@@ -815,6 +819,36 @@ mod tests {
             find_session_breaks(&create_test_bars(), &DailySessionProvider::default()).len(),
             2
         );
+    }
+
+    #[test]
+    fn session_range_stays_within_its_end_at_timestamp_limits() {
+        let midnight = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let max = DateTime::<Utc>::MAX_UTC;
+        let min = DateTime::<Utc>::MIN_UTC;
+        for (start, end, expected) in [
+            (max - Duration::seconds(1), max, None),
+            (min, min + Duration::seconds(1), None),
+            (max, max, None),
+            (max, min, None),
+            (
+                midnight - Duration::seconds(30),
+                midnight - Duration::seconds(1),
+                None,
+            ),
+            (midnight - Duration::seconds(30), midnight, Some(midnight)),
+            (
+                midnight - Duration::seconds(30),
+                midnight + Duration::seconds(10),
+                Some(midnight + Duration::seconds(10)),
+            ),
+        ] {
+            let breaks = DailySessionProvider::continuous().session_breaks_in_range(&start, &end);
+            assert_eq!(
+                breaks.iter().map(|item| item.ts).collect::<Vec<_>>(),
+                expected.into_iter().collect::<Vec<_>>()
+            );
+        }
     }
 
     #[cfg(feature = "timezones")]

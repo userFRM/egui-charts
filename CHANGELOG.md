@@ -312,6 +312,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Selecting a report trade in the demo opens the full-day session when regular hours hide its entry after switching symbols, so the selected trade remains visible.
+
+- The registry documentation guards its built-in study example with the `studies` feature, so the documented headless configuration compiles every example. CI also runs doctests with no default features. ([#951](https://github.com/userFRM/egui-charts/issues/951))
+
+- Restoring a layout rejects main or pane scales requesting more than 1,000 tick marks before changing the chart. Direct tick generation caps the limit at 1,000, and built-in numeric formatters cap precision at 324 places even when fields are set directly, preventing overflow and formatting panics. Migration: lower saved `tick_marks.max_marks` values above 1,000 before restoring; formatter precisions above 324 now produce at most 324 decimal places. ([#947](https://github.com/userFRM/egui-charts/issues/947))
+
+- Bar CSV/JSON imports and exports and `Chart::export_csv` return errors with `Send + Sync` bounds, allowing results and original error values to cross worker-thread boundaries. Migration: update explicitly typed results, function pointers and error adapters from `Box<dyn std::error::Error>` to `Box<dyn std::error::Error + Send + Sync>`. ([#950](https://github.com/userFRM/egui-charts/issues/950))
+
+- Session range lookup clips its final one-minute check to the requested end and uses checked timestamp addition, so sub-minute ranges do not report a later break and ranges at the maximum UTC timestamp do not panic. Empty and reversed ranges remain empty. ([#953](https://github.com/userFRM/egui-charts/issues/953))
+
+- The example dependency locks replace yanked `clipboard-win` 5.4.1 with 5.4.3. CI checks advisories as well as licences and duplicate versions, rejecting yanked packages. Three unmaintained standalone D-Bus packages required by the egui 0.37 accessibility backend have explicit maintenance exceptions pending its migration to zbus 6; these are development/example dependencies and have no patched standalone releases. ([#952](https://github.com/userFRM/egui-charts/issues/952))
+
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
 
 - `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
