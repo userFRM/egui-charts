@@ -518,23 +518,28 @@ mod tests {
             });
             h.run();
             assert_eq!(h.state().0.state().selection_count(), 2);
-            h.query_all_by_label("Toggle folder")
-                .next()
-                .unwrap()
-                .click();
-            h.run();
-            assert!(h.query_by_label("Support").is_none());
-            h.state_mut().0.state_mut().filter_text = "Support".into();
-            h.run();
-            h.get_by_label("Support");
-            assert!(h.query_by_label("Outside").is_none());
-            h.state_mut().0.state_mut().filter_text.clear();
-            h.run();
-            h.query_all_by_label("Toggle folder")
-                .next()
-                .unwrap()
-                .click();
-            h.run();
+            for filter_type in [None, Some(SourceType::Drawing)] {
+                h.state_mut().0.state_mut().filter_type = filter_type;
+                h.run();
+                h.query_all_by_label("Toggle folder")
+                    .next()
+                    .unwrap()
+                    .click();
+                h.run();
+                assert!(h.query_by_label("Support").is_none());
+                h.state_mut().0.state_mut().filter_text = "Support".into();
+                h.run();
+                h.get_by_label("Support");
+                assert!(h.query_by_label("Outside").is_none());
+                h.state_mut().0.state_mut().filter_text.clear();
+                h.run();
+                h.query_all_by_label("Toggle folder")
+                    .next()
+                    .unwrap()
+                    .click();
+                h.run();
+            }
+            h.state_mut().0.state_mut().filter_type = None;
             let nested = saved(&h);
             for (index, name) in ["Support", "Resistance", "Outside"].iter().enumerate() {
                 assert_eq!(nested[index]["label"], *name);

@@ -49,14 +49,14 @@ pub(super) fn render_folders(
         .collect();
     for path in paths {
         if (1..path.len()).any(|depth| state.collapsed_folders.contains(&path[..depth]))
-            && !state.has_filter()
+            && filter.is_empty()
         {
             continue;
         }
         if !matches_folder_filter(&path, sources, state, filter) {
             continue;
         }
-        let collapsed = state.collapsed_folders.contains(&path) && !state.has_filter();
+        let collapsed = state.collapsed_folders.contains(&path) && filter.is_empty();
         let members: Vec<_> = sources
             .iter()
             .filter(|s| s.is_drawing() && s.folder.starts_with(&path))
