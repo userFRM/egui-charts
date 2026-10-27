@@ -25,6 +25,72 @@ impl ObjectTreePanel {
             .collect();
         match action {
             ObjectTreeAction::None => {}
+            ObjectTreeAction::CreateFolder(parent, name) => {
+                let name = name.trim();
+                if name.is_empty() || (!parent.is_empty() && !self.state().folders.contains(parent))
+                {
+                    return false;
+                }
+                let mut path = parent.clone();
+                path.push(name.to_owned());
+                if !self.state_mut().folders.insert(path.clone()) {
+                    return false;
+                }
+                self.state_mut().expanded_groups.insert("Drawings".into());
+                for depth in 1..=path.len() {
+                    self.state_mut().collapsed_folders.remove(&path[..depth]);
+                }
+                let ids: Vec<_> = selected
+                    .iter()
+                    .filter(|s| s.is_drawing())
+                    .map(|s| s.id)
+                    .collect();
+                chart
+                    .drawings_mut()
+                    .edit_drawings(&ids, |d| d.folder = path.clone());
+            }
+            ObjectTreeAction::MoveToFolder(ids, path) => {
+                if !path.is_empty() && !self.state().folders.contains(path) {
+                    return false;
+                }
+                let ids: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| {
+                        ids.contains(&d.id)
+                            && d.folder != *path
+                            && sources.iter().any(|s| s.id == d.id && s.is_drawing())
+                    })
+                    .map(|d| d.id)
+                    .collect();
+                chart
+                    .drawings_mut()
+                    .edit_drawings(&ids, |d| d.folder = path.clone());
+            }
+            ObjectTreeAction::SetFolderVisible(path, value)
+            | ObjectTreeAction::SetFolderLocked(path, value) => {
+                if path.is_empty() || !self.state().folders.contains(path) {
+                    return false;
+                }
+                let ids: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .filter(|d| {
+                        d.folder.starts_with(path)
+                            && match action {
+                                ObjectTreeAction::SetFolderVisible(_, _) => d.visible != *value,
+                                _ => d.locked != *value,
+                            }
+                    })
+                    .map(|d| d.id)
+                    .collect();
+                chart.drawings_mut().edit_drawings(&ids, |d| match action {
+                    ObjectTreeAction::SetFolderVisible(_, _) => d.visible = *value,
+                    _ => d.locked = *value,
+                });
+            }
             ObjectTreeAction::Rename(id, name) => {
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing()) {
                     return false;

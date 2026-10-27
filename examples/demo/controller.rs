@@ -2015,6 +2015,7 @@ impl DemoApp {
             item.locked = d.locked;
             item.z_index = d.z_order;
             item.label = d.label.clone();
+            item.folder = d.folder.clone();
             items.push(item);
         }
         items

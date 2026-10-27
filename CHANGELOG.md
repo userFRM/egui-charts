@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The object tree creates named folders from selected drawings, nests folders and moves selected drawings between folders or back to the root. Folder visibility and locking apply to all descendants as one undoable edit. Drawing folder paths persist with drawing identities, independently of host groups; hosts retain empty folders through `ObjectTreeState::folders`. Migration: `Drawing` and `SourceItem` literals add `folder: Vec::new()`; `ObjectTreeState` literals use `..Default::default()` for its folder and rendered-order state; copy `Drawing::folder` into live drawing rows. Older saved drawings start at the root. ([#978](https://github.com/userFRM/egui-charts/issues/978))
+
 - Scales and lines settings expose currency and unit headers, scale-mode and price-action visibility, a numeric price-to-bar ratio lock, label overlap policy, and symbol, study and extended-session value colours and visibility. Units come from host metadata without converting data. ([#993](https://github.com/userFRM/egui-charts/issues/993))
 
 - Alert settings filter active levels and set trigger notification lifetime. Inactive levels can be shown dimmed; the existing local sound controls apply the selected volume. ([#995](https://github.com/userFRM/egui-charts/issues/995))

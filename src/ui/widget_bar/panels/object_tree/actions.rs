@@ -70,6 +70,16 @@ pub enum ObjectTreeAction {
     /// Move a drawing to a pane
     MoveToPane(usize, crate::widget::PaneId),
 
+    // === Folders ===
+    /// Create a named folder under a parent path and move selected drawings into it.
+    CreateFolder(Vec<String>, String),
+    /// Move drawing ids into an existing folder, or an empty path for the root.
+    MoveToFolder(Vec<usize>, Vec<String>),
+    /// Set visibility of every drawing in a folder and its descendants.
+    SetFolderVisible(Vec<String>, bool),
+    /// Set locking of every drawing in a folder and its descendants.
+    SetFolderLocked(Vec<String>, bool),
+
     // === Navigation ===
     /// Zoom to object on chart (focus view)
     ZoomTo(usize),
@@ -120,6 +130,10 @@ impl ObjectTreeAction {
                 | Self::MoveUp(_)
                 | Self::MoveDown(_)
                 | Self::MoveToPane(_, _)
+                | Self::CreateFolder(_, _)
+                | Self::MoveToFolder(_, _)
+                | Self::SetFolderVisible(_, _)
+                | Self::SetFolderLocked(_, _)
                 | Self::RemoveIndicator(_)
                 | Self::RemoveAllDrawings
                 | Self::RemoveAllIndicators
