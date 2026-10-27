@@ -149,9 +149,33 @@ fn example_brokers() -> Vec<egui_charts::ui::trading::BrokerTile> {
         tile.rating = Some(rating);
         tile.featured = featured;
         tile.description = format!("{name} is an example tile: a host lists its brokers here.");
+        tile.facts = broker_facts(id);
         tile
     })
     .collect()
+}
+
+/// The comparison rows of a broker in the picker: the demo paper account's terms, and made-up
+/// ones for the example tiles, one of which gives no leverage.
+fn broker_facts(id: &str) -> Vec<(String, egui_charts::ui::trading::BrokerFact)> {
+    use egui_charts::ui::trading::BrokerFact::{Supported, Value};
+    let (commission, leverage, stocks, futures, crypto) = match id {
+        egui_charts::ui::trading::BrokerTile::PAPER => ("None", Some("10:1"), true, true, true),
+        "example-stocks" => ("0.005 USD per share", Some("4:1"), true, false, false),
+        "example-futures" => ("1.25 USD per contract", Some("20:1"), false, true, false),
+        _ => ("0.10% per trade", None, false, false, true),
+    };
+    let mut facts = vec![("Commission".to_owned(), Value(commission.to_owned()))];
+    facts.extend(leverage.map(|leverage| ("Leverage".to_owned(), Value(leverage.to_owned()))));
+    for (label, supported) in [
+        ("Stocks", stocks),
+        ("Futures", futures),
+        ("Crypto", crypto),
+        ("Bracket orders", id != "example-crypto"),
+    ] {
+        facts.push((label.to_owned(), Supported(supported)));
+    }
+    facts
 }
 
 /// Which right-hand side panel is open, if any.
@@ -563,7 +587,11 @@ impl DemoApp {
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
             ),
-            broker_picker: egui_charts::ui::trading::BrokerPicker::new(example_brokers()),
+            broker_picker: {
+                let mut picker = egui_charts::ui::trading::BrokerPicker::new(example_brokers());
+                picker.tiles[0].facts = broker_facts(egui_charts::ui::trading::BrokerTile::PAPER);
+                picker
+            },
             account_panel: AccountPanelSize::Normal,
             paper_reset: false,
             watchlist: WatchlistPanel::new(

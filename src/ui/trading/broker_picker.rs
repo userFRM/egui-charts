@@ -13,6 +13,20 @@ use crate::ui_kit::modal::Modal;
 
 const TILE: egui::Vec2 = vec2(164.0, 152.0);
 const GAP: f32 = 8.0;
+/// Width of a column of the comparison view.
+const COLUMN: f32 = 200.0;
+/// Brokers compared at once.
+const MAX_COMPARED: usize = 3;
+
+/// One row of a broker in the picker's comparison view.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum BrokerFact {
+    /// A value, such as a price or the leverage, formatted by the host.
+    Value(String),
+    /// Whether the broker supports a feature.
+    Supported(bool),
+}
 
 /// One broker of the [`BrokerPicker`], as the host offers it.
 #[derive(Clone, Debug)]
@@ -35,6 +49,9 @@ pub struct BrokerTile {
     pub favorite: bool,
     /// What the connect card says about the broker.
     pub description: String,
+    /// The rows of the comparison view by label, such as pricing, leverage and features. A
+    /// label that another compared broker has and this one lacks shows as not available.
+    pub facts: Vec<(String, BrokerFact)>,
 }
 
 impl BrokerTile {
@@ -52,6 +69,7 @@ impl BrokerTile {
             featured: false,
             favorite: false,
             description: String::new(),
+            facts: Vec::new(),
         }
     }
 
@@ -79,7 +97,9 @@ pub enum BrokerPickerAction {
 }
 
 /// The dialog in which the user picks a broker: a grid of the host's [`BrokerTile`]s, the
-/// paper account first, with a search and a footer link. Picking a tile shows its connect card,
+/// paper account first, with a search and a footer link. Its compare button shows the
+/// [`facts`](BrokerTile::facts) of two brokers side by side in aligned rows, with a control to
+/// add another and one to connect each. Picking a tile shows its connect card,
 /// whose Connect button returns [`BrokerPickerAction::Connect`] and closes the picker; the host
 /// then connects [`Trading`](super::Trading) to that broker. Open it with
 /// [`open`](Self::open), such as from the toolbar's Trade button while no broker is connected.
@@ -91,6 +111,8 @@ pub struct BrokerPicker {
     query: String,
     /// The tile whose connect card is open.
     selected: Option<usize>,
+    /// The ids of the compared brokers, while the comparison view is shown.
+    compared: Option<Vec<String>>,
 }
 
 impl Default for BrokerPicker {
@@ -108,6 +130,7 @@ impl BrokerPicker {
             searching: false,
             query: String::new(),
             selected: None,
+            compared: None,
         }
     }
 
@@ -117,6 +140,7 @@ impl BrokerPicker {
         self.searching = false;
         self.query.clear();
         self.selected = None;
+        self.compared = None;
     }
 
     /// Whether the picker is open.
@@ -154,7 +178,13 @@ impl BrokerPicker {
                 ui.add_space(32.0);
                 ui.horizontal(|ui| {
                     ui.add_space(inset);
-                    if self.searching {
+                    if self.compared.is_some() {
+                        ui.label(semibold(
+                            &l10n::text(ui.ctx(), "Compare brokers"),
+                            20.0,
+                            theme.ui.text,
+                        ));
+                    } else if self.searching {
                         let search = ui.add(
                             egui::TextEdit::singleline(&mut self.query)
                                 .hint_text(l10n::text(ui.ctx(), "Search"))
@@ -174,11 +204,25 @@ impl BrokerPicker {
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(inset);
-                        if IconButton::new(&icons::QUICK_SEARCH)
-                            .tooltip("Search brokers")
-                            .selected(self.searching)
+                        if IconButton::new(&icons::COMPARE_ADD)
+                            .tooltip("Compare brokers")
+                            .selected(self.compared.is_some())
                             .show(ui)
                             .clicked()
+                        {
+                            self.compared = match self.compared {
+                                Some(_) => None,
+                                None => {
+                                    Some(self.tiles.iter().take(2).map(|t| t.id.clone()).collect())
+                                }
+                            };
+                        }
+                        if self.compared.is_none()
+                            && IconButton::new(&icons::QUICK_SEARCH)
+                                .tooltip("Search brokers")
+                                .selected(self.searching)
+                                .show(ui)
+                                .clicked()
                         {
                             self.searching = !self.searching;
                             self.query.clear();
@@ -192,6 +236,15 @@ impl BrokerPicker {
                     .max_height((ui.available_height() - footer).max(0.0))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if let Some(compared) = &mut self.compared {
+                            egui::ScrollArea::horizontal().show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(inset);
+                                    chosen = comparison(ui, &self.tiles, compared);
+                                });
+                            });
+                            return;
+                        }
                         let width = ui.available_width() - inset * 2.0;
                         let columns = ((width + GAP) / (TILE.x + GAP)).floor().max(1.0) as usize;
                         let indent = inset;
@@ -424,6 +477,165 @@ fn tile(ui: &mut Ui, tile: &mut BrokerTile) -> bool {
     response.clicked() && !star_response.clicked()
 }
 
+/// Draws the compared brokers in columns beside the labels of their facts, with a column to add
+/// another broker; returns the broker whose Connect button the user pressed.
+fn comparison(ui: &mut Ui, tiles: &[BrokerTile], compared: &mut Vec<String>) -> Option<usize> {
+    let theme = ui.active_theme();
+    compared.retain(|id| tiles.iter().any(|tile| tile.id == *id));
+    let columns: Vec<_> = compared
+        .iter()
+        .filter_map(|id| tiles.iter().position(|tile| tile.id == *id))
+        .collect();
+    let mut labels: Vec<&str> = Vec::new();
+    for (label, _) in columns.iter().flat_map(|&i| &tiles[i].facts) {
+        if !labels.contains(&label.as_str()) {
+            labels.push(label);
+        }
+    }
+    let mut chosen = None;
+    let mut removed = None;
+    let mut added = None;
+    egui::Grid::new("broker_comparison")
+        .min_col_width(COLUMN)
+        .min_row_height(40.0)
+        .spacing(vec2(GAP, 4.0))
+        .show(ui, |ui| {
+            ui.label("");
+            for &index in &columns {
+                let tile = &tiles[index];
+                ui.vertical_centered(|ui| {
+                    ui.set_width(COLUMN);
+                    let (rect, _) = ui.allocate_exact_size(vec2(COLUMN, 48.0), Sense::hover());
+                    paint_icon(
+                        ui,
+                        tile,
+                        Rect::from_center_size(rect.center(), vec2(48.0, 48.0)),
+                    );
+                    let remove =
+                        Rect::from_min_size(rect.right_top() - vec2(24.0, 0.0), vec2(24.0, 24.0));
+                    if ui
+                        .place(remove, |ui: &mut Ui| {
+                            IconButton::new(&icons::CLOSE)
+                                .tooltip("Remove from comparison")
+                                .show(ui)
+                        })
+                        .clicked()
+                    {
+                        removed = Some(tile.id.clone());
+                    }
+                    ui.add_space(4.0);
+                    ui.label(semibold(
+                        &l10n::text(ui.ctx(), &tile.name),
+                        theme.text.body + 2.0,
+                        theme.ui.text,
+                    ));
+                    if let Some(rating) = tile.rating {
+                        ui.label(
+                            RichText::new(format!("{rating:.1} / 5"))
+                                .color(theme.ui.text_secondary),
+                        );
+                    }
+                    ui.add_space(4.0);
+                    if ui.button(l10n::text(ui.ctx(), "Connect")).clicked() {
+                        chosen = Some(index);
+                    }
+                });
+            }
+            let others: Vec<_> = tiles
+                .iter()
+                .filter(|tile| !compared.contains(&tile.id))
+                .collect();
+            if compared.len() < MAX_COMPARED && !others.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.set_width(COLUMN);
+                    ui.add_space(12.0);
+                    let add = ui.add(
+                        egui::Button::new((
+                            icons::PLUS.as_image_square(20.0),
+                            RichText::new(l10n::text(ui.ctx(), "Add broker"))
+                                .size(theme.text.body + 2.0)
+                                .color(theme.ui.text),
+                        ))
+                        .frame(false)
+                        .image_tint_follows_text_color(true),
+                    );
+                    egui::Popup::menu(&add).show(|ui| {
+                        for tile in others {
+                            if ui.button(l10n::text(ui.ctx(), &tile.name)).clicked() {
+                                added = Some(tile.id.clone());
+                            }
+                        }
+                    });
+                });
+            }
+            ui.end_row();
+            for label in &labels {
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), *label)).color(theme.ui.text_secondary),
+                );
+                for &index in &columns {
+                    let fact = tiles[index]
+                        .facts
+                        .iter()
+                        .find(|(l, _)| l == label)
+                        .map(|(_, fact)| fact);
+                    fact_ui(ui, fact);
+                }
+                ui.end_row();
+            }
+        });
+    if let Some(id) = removed {
+        compared.retain(|other| *other != id);
+    }
+    compared.extend(added);
+    chosen
+}
+
+/// One cell of the comparison view: the value, a check for a supported feature, a cross for an
+/// unsupported one, and a dash for a fact the host did not give.
+fn fact_ui(ui: &mut Ui, fact: Option<&BrokerFact>) {
+    let theme = ui.active_theme();
+    let (rect, response) = ui.allocate_exact_size(vec2(COLUMN, 40.0), Sense::hover());
+    let (name, mark) = match fact {
+        Some(BrokerFact::Value(value)) => (l10n::text(ui.ctx(), value), None),
+        Some(BrokerFact::Supported(true)) => (
+            l10n::text(ui.ctx(), "Supported"),
+            Some((&icons::CHECK, theme.ui.success)),
+        ),
+        Some(BrokerFact::Supported(false)) => (
+            l10n::text(ui.ctx(), "Not supported"),
+            Some((&icons::CLOSE, theme.ui.error)),
+        ),
+        None => (l10n::text(ui.ctx(), "Not available"), None),
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &name));
+    let font = FontId::proportional(theme.text.body + 2.0);
+    match (fact, mark) {
+        (_, Some((icon, color))) => icon
+            .as_image_tinted(vec2(20.0, 20.0), color)
+            .paint_at(ui, Rect::from_center_size(rect.center(), vec2(20.0, 20.0))),
+        (Some(_), None) => {
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                &name,
+                font,
+                theme.ui.text,
+            );
+        }
+        (None, None) => {
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "-",
+                font,
+                theme.ui.text_muted,
+            );
+            response.on_hover_text(name);
+        }
+    }
+}
+
 /// Draws the tile's logo in `rect`: the host's image, a candlestick mark for the paper account,
 /// or the name's first letter.
 fn paint_icon(ui: &Ui, tile: &BrokerTile, rect: Rect) {
@@ -455,5 +667,37 @@ fn paint_icon(ui: &Ui, tile: &BrokerTile, rect: Rect) {
             FontId::proportional(rect.height() * 0.5),
             theme.ui.panel_bg_floating,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The compared brokers share one row per fact, in the order the brokers give them, and a
+    /// broker without a fact shows it as not available, unlike a feature it does not support.
+    #[test]
+    fn comparison_aligns_facts_and_tells_unavailable_from_unsupported() {
+        let mut a = BrokerTile::new("a", "A");
+        a.facts = vec![
+            ("Leverage".to_owned(), BrokerFact::Value("30:1".to_owned())),
+            ("Crypto".to_owned(), BrokerFact::Supported(false)),
+        ];
+        let mut b = BrokerTile::new("b", "B");
+        b.facts = vec![("Crypto".to_owned(), BrokerFact::Supported(true))];
+        let tiles = [a, b];
+        let mut compared = vec!["a".to_owned(), "b".to_owned()];
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(vec2(1000.0, 600.0))
+            .build_ui(|ui| {
+                comparison(ui, &tiles, &mut compared);
+            });
+        harness.run();
+        let y = |label: &str| harness.get_by_label(label).rect().center().y;
+        assert_eq!(y("30:1"), y("Not available"), "leverage row");
+        assert_eq!(y("Not supported"), y("Supported"), "crypto row");
+        assert!(y("Leverage") < y("Crypto"));
     }
 }
