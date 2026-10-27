@@ -873,8 +873,7 @@ fn paint_quotes(
         layout.colors.text,
     );
     let gap = (spread_galley.size().x + 12.0).max(36.0);
-    let quote = |side: QuoteSide, price: f64| {
-        let color = Color32::WHITE;
+    let quote = |side: QuoteSide, price: f64, color: Color32| {
         let price = layout
             .painter
             .layout_job(egui::text::LayoutJob::single_section(
@@ -893,9 +892,9 @@ fn paint_quotes(
         );
         (price, label)
     };
-    let sell = quote(QuoteSide::Sell, bid);
-    let buy = quote(QuoteSide::Buy, ask);
-    let width = 66.0_f32
+    let sell = quote(QuoteSide::Sell, bid, theme.chart.candle_down);
+    let buy = quote(QuoteSide::Buy, ask, theme.ui.accent);
+    let width = 59.0_f32
         .max(sell.0.size().x + 12.0)
         .max(buy.0.size().x + 12.0);
     let size = Vec2::new(width, 34.0);
@@ -1022,14 +1021,14 @@ fn quote_box(
     painter.rect(
         rect,
         5.0,
-        color,
+        ui.active_theme().chart.bg,
         Stroke::new(1.0, color),
         egui::StrokeKind::Inside,
     );
     painter.galley(
         Pos2::new(rect.center().x - price.size().x / 2.0, rect.top() + 2.0),
         price,
-        Color32::WHITE,
+        color,
     );
     painter.galley(
         Pos2::new(
@@ -1037,7 +1036,7 @@ fn quote_box(
             rect.bottom() - label.size().y - 2.0,
         ),
         label,
-        Color32::WHITE,
+        color,
     );
     if response.has_focus() {
         painter.rect_stroke(

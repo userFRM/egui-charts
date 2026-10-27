@@ -906,6 +906,20 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Symbol details inset the title and price by 10 points inside the host panel and enlarge the main price to 26 points. The supplied `SymbolDetails::category` appears below the name, key statistics sit on a tinted card, and prices use the watchlist's thousands grouping. ([#990](https://github.com/userFRM/egui-charts/issues/990))
+
+- Watchlist rows are 30 points high with an 18 point symbol mark and aligned names. `WatchlistPanel::set_mark` supplies a mark; rows without one show an initial on a neutral disc. Prices and changes use thousands grouping, so 43237.45 reads 43,237.45, and changes omit the sign when they round to zero. ([#989](https://github.com/userFRM/egui-charts/issues/989))
+
+- Chart layout uses the shared dark toolbar tooltip with consistent padding and no shortcut chip when no shortcut is bound. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
+
+- Sell and Buy quote buttons use outlines and matching text on the chart background, with a minimum width of 59 points. Bid and Ask axis tags default to hidden while saved choices remain intact; volume shows a compact last-value tag when study values are enabled. ([#988](https://github.com/userFRM/egui-charts/issues/988))
+
+- The demo allocates 25% of the price pane to overlay volume, keeping the columns on the plot bottom and the height configurable through `ChartConfig::volume_height_fraction`. ([#987](https://github.com/userFRM/egui-charts/issues/987))
+
+- Light crosshair tags use black fills and white text, with dashed crosshair ink at approximately #9C9C9C on the white plot. ([#1007](https://github.com/userFRM/egui-charts/issues/1007))
+
+- The light preset draws grid lines in #D1D1D1 instead of #DCDCDC, so the dotted grid stays visible on the white plot. Horizontal and vertical grid lines keep their separate visibility settings. ([#1010](https://github.com/userFRM/egui-charts/issues/1010))
+
 - Crate and public API documentation now describe host-supplied history and streaming data, current feature boundaries and a populated quick start. Stale capability claims, counts and implementation inventories are removed, and the README and package description use the same scope. ([#933](https://github.com/userFRM/egui-charts/issues/933))
 
 - Charts follow active theme changes for inherited background, grid, text, candle, border and wick colours, retaining host edits and per-chart overrides. Chart titles, OHLC and pane legends, secondary series, trading labels and chart controls read the active text, spacing and radius scales. Clearing an override rejoins the current context palette. Migration: a default `ChartBuilder` now follows the active theme; call `with_theme(Theme::dark())` to retain a fixed dark chart beside a differently themed UI. Settings dialogs read `Theme` directly; UI chrome, shared buttons, forms, lists and dialog padding use the applied text, spacing and radius scales. Applying a theme also updates egui's built-in text sizes while retaining font families. Study defaults now use `studies::palette`, preserving their existing colours independently of UI status colours; unused study and extended colour tokens have been removed. Migration: replace the removed `theme::components::{DialogStyle, SettingsDialogStyle, ContextMenuStyle}` and their theme re-exports with `Theme` fields or egui visuals; replace `DESIGN_TOKENS.typography` and `TypographyTokens` with `theme.text`; pass `&Ui` instead of `&Visuals` to `StyledPanelFrame` constructors so separate frames also read the applied scales. Remove `SemanticTokens::{buttons, alert, modal, command_palette}` and their corresponding `ButtonSemanticTokens`, `AlertSemanticTokens`, `ModalSemanticTokens` and `CommandPaletteSemanticTokens` literals; `UiSemanticTokens` retains only the engine fallbacks `text_muted_dark` and `border_dark`. `TextSizes` literals add `micro`, `marker` and `dialog_title` or use `..Default::default()`; saved themes default missing roles. See [theme integration](docs/theme.md). ([#356](https://github.com/userFRM/egui-charts/issues/356))
