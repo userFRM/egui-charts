@@ -196,6 +196,7 @@ impl Chart {
                 self.drawings.end_drag_handle();
                 self.drawings.deselect();
                 let mut next = self.symbol_drawings.remove(&symbol).unwrap_or_default();
+                next.0.set_sync_enabled(self.drawings.sync_enabled);
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
