@@ -63,19 +63,8 @@ impl CommandPalette {
     fn update_filter(&mut self) {
         self.filtered.clear();
 
-        if self.search_query.is_empty() {
-            // Show all commands when query is empty
-            for (idx, _) in self.commands.iter().enumerate() {
-                self.filtered.push((
-                    idx,
-                    FuzzyMatch {
-                        score: 0,
-                        matched_indices: Vec::new(),
-                    },
-                ));
-            }
-        } else {
-            // Fuzzy match against all commands
+        // An empty query lists nothing, so no command is highlighted before the user types.
+        if !self.search_query.is_empty() {
             for (idx, cmd) in self.commands.iter().enumerate() {
                 let mut searchable = cmd.searchable_text();
                 if let Some(ctx) = &self.context {
@@ -122,7 +111,8 @@ impl CommandPalette {
 
     /// Show the command palette modal
     ///
-    /// Returns the ID of the executed command if any. Keyboard activation consumes its key so
+    /// The list stays empty, under an instruction to type, until the query matches commands; the
+    /// best match is then highlighted. Returns the ID of the executed command if any. Keyboard activation consumes its key so
     /// the host can open another dialog in the same frame.
     pub fn show(&mut self, ctx: &Context, open: &mut bool) -> Option<String> {
         if !*open {
@@ -188,6 +178,8 @@ impl CommandPalette {
                             TextEdit::singleline(&mut self.search_query)
                                 .id(search_id)
                                 .hint_text(l10n::text(ui.ctx(), "Search actions"))
+                                // Enter runs a match; without one the query stays focused.
+                                .return_key(None)
                                 .frame(egui::Frame::NONE)
                                 .desired_width(ui.available_width())
                                 .font(egui::FontId::proportional(14.0)),
@@ -204,10 +196,13 @@ impl CommandPalette {
                 ui.separator();
                 ui.add_space(12.0);
                 if self.filtered.is_empty() {
+                    let message = if self.search_query.is_empty() {
+                        "Type to search for actions"
+                    } else {
+                        "No matching actions"
+                    };
                     ui.centered_and_justified(|ui| {
-                        ui.label(
-                            RichText::new(l10n::text(ui.ctx(), "No matching actions")).size(14.0),
-                        );
+                        ui.label(RichText::new(l10n::text(ui.ctx(), message)).size(14.0));
                     });
                 } else {
                     ScrollArea::vertical()
@@ -454,9 +449,16 @@ mod tests {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut palette = CommandPalette::new(vec![
-                    Command::new("a", "First"),
-                    Command::new("b", "Second"),
+                    Command::new("a", "Action one"),
+                    Command::new("b", "Action two"),
                 ]);
+                frame(&ctx, &mut palette, None);
+                assert_eq!(
+                    frame(&ctx, &mut palette, Some(key)),
+                    None,
+                    "nothing is listed or run before a query"
+                );
+                palette.search_query = "action".into();
                 frame(&ctx, &mut palette, None);
                 frame(&ctx, &mut palette, None);
                 if focus_row {
@@ -544,19 +546,21 @@ mod tests {
             CommandPalette::new(
                 ["a", "b", "c"]
                     .into_iter()
-                    .map(|id| Command::new(id, id))
+                    .map(|id| Command::new(id, id).category("Tools"))
                     .collect(),
             )
         };
 
         // A removal leaves no row past the end of the list.
         let (ctx, mut p) = (Context::default(), palette());
+        p.search_query = "tools".into();
         frame(&ctx, &mut p, None);
         p.remove_command("b");
         assert_eq!(frame(&ctx, &mut p, None), None);
 
         // A removal above the highlighted command keeps the highlight on it.
         let (ctx, mut p) = (Context::default(), palette());
+        p.search_query = "tools".into();
         frame(&ctx, &mut p, None);
         frame(&ctx, &mut p, Some(Key::ArrowDown));
         p.remove_command("a");

@@ -308,6 +308,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Quick search opens with an empty, focused query and an instruction to type. Commands are listed, and the best match highlighted, only once the query matches them; Enter still runs the highlighted match. ([#1000](https://github.com/userFRM/egui-charts/issues/1000))
+
 - Numeric formatters omit the minus sign for negative zero and values that round to zero at their displayed precision. Currency amounts such as -0.001 dollars read `$0.00`; price, volume and study labels follow the same rule, while percentage changes retain their positive-zero convention. ([#938](https://github.com/userFRM/egui-charts/issues/938))
 
 - `CurrencyFormatter` puts the minus sign of a negative amount before a leading currency symbol and no longer groups it: -123.45 in dollars reads `-$123.45` and -123456 reads `-$123,456.00`, where they read `$-,123.45` and `$-,123,456.00`. ([#607](https://github.com/userFRM/egui-charts/issues/607))
