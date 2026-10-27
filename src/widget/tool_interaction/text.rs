@@ -104,17 +104,12 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                 if request_focus {
                     ui.memory_mut(|memory| memory.request_focus(field_id));
                 }
-                let field = if table {
-                    crate::drawings::Drawing::edit_table(
-                        ui,
-                        &mut editor.draft,
-                        field_id,
-                        (height - 80.0).max(1.0),
-                    )
-                } else {
-                    egui::ScrollArea::vertical()
-                        .max_height((height - 48.0).max(1.0))
-                        .show(ui, |ui| {
+                let field = egui::ScrollArea::vertical()
+                    .max_height((height - 48.0).max(1.0))
+                    .show(ui, |ui| {
+                        if table {
+                            crate::drawings::Drawing::edit_table(ui, &mut editor.draft, field_id)
+                        } else {
                             ui.add(
                                 egui::TextEdit::multiline(&mut editor.draft)
                                     .id(field_id)
@@ -123,9 +118,9 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                                     .desired_width((width - 16.0).max(1.0))
                                     .desired_rows(3),
                             )
-                        })
-                        .inner
-                };
+                        }
+                    })
+                    .inner;
                 if request_focus {
                     field.request_focus();
                 }
@@ -158,7 +153,16 @@ mod tests {
         use crate::drawings::{Drawing, DrawingManager};
         use egui::{Id, RawInput, Rect, vec2};
         for dark in [false, true] {
-            for width in [120.0, 320.0] {
+            for (tool, width) in [
+                DrawingToolType::TextLabel,
+                DrawingToolType::Table,
+                DrawingToolType::Image,
+                DrawingToolType::Tweet,
+                DrawingToolType::Idea,
+            ]
+            .into_iter()
+            .flat_map(|tool| [120.0, 320.0].map(|width| (tool, width)))
+            {
                 let ctx = Context::default();
                 ctx.set_visuals(if dark {
                     egui::Visuals::dark()
@@ -167,7 +171,7 @@ mod tests {
                 });
                 let pane = Rect::from_min_size(pos2(20.0, 20.0), vec2(width, 180.0));
                 let mut manager = DrawingManager::new();
-                let mut drawing = Drawing::new(7, DrawingToolType::TextLabel);
+                let mut drawing = Drawing::new(7, tool);
                 drawing.points.push(pane.right_bottom() - vec2(10.0, 10.0));
                 drawing.text = Some("Long draft\n".repeat(30));
                 manager.drawings.push(drawing);
@@ -198,7 +202,7 @@ mod tests {
                 let rect = Rect::from_min_size(area.left_top_pos(), area.size.unwrap());
                 assert!(
                     pane.expand(1.0).contains_rect(rect),
-                    "{width}, dark {dark}: {rect:?}"
+                    "{tool:?}, {width}, dark {dark}: {rect:?}"
                 );
                 let pos = rect.center_bottom() - vec2(0.0, 8.0);
                 for pressed in [true, false] {

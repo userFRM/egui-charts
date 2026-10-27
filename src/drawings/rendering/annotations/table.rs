@@ -42,43 +42,35 @@ impl Drawing {
     }
 
     /// Edits table text as a grid of single-line cells, with buttons that add and remove rows
-    /// and columns while keeping at least one of each, the cells scrolling beyond `max_height`.
+    /// and columns while keeping at least one of each. Wide grids scroll horizontally.
     /// Returns the first cell's response.
-    pub(crate) fn edit_table(
-        ui: &mut egui::Ui,
-        text: &mut String,
-        id: egui::Id,
-        max_height: f32,
-    ) -> egui::Response {
+    pub(crate) fn edit_table(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
         let mut grid = cells(text);
         let mut first = None;
-        egui::ScrollArea::both()
-            .max_height(max_height)
-            .show(ui, |ui| {
-                // Without a minimum, the first frame's narrow columns would stay narrow.
-                egui::Grid::new(id.with("cells"))
-                    .min_col_width(DESIGN_TOKENS.sizing.annotation.table_cell_width)
-                    .show(ui, |ui| {
-                        for (r, row) in grid.iter_mut().enumerate() {
-                            for (c, cell) in row.iter_mut().enumerate() {
-                                let field = if r == 0 && c == 0 {
-                                    id
-                                } else {
-                                    id.with((r, c))
-                                };
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(cell).id(field).desired_width(
-                                        DESIGN_TOKENS.sizing.annotation.table_cell_width,
-                                    ),
-                                );
-                                // Tabs and line breaks separate the cells in the saved text.
-                                cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
-                                first.get_or_insert(response);
-                            }
-                            ui.end_row();
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            // Without a minimum, the first frame's narrow columns would stay narrow.
+            egui::Grid::new(id.with("cells"))
+                .min_col_width(DESIGN_TOKENS.sizing.annotation.table_cell_width)
+                .show(ui, |ui| {
+                    for (r, row) in grid.iter_mut().enumerate() {
+                        for (c, cell) in row.iter_mut().enumerate() {
+                            let field = if r == 0 && c == 0 {
+                                id
+                            } else {
+                                id.with((r, c))
+                            };
+                            let response =
+                                ui.add(egui::TextEdit::singleline(cell).id(field).desired_width(
+                                    DESIGN_TOKENS.sizing.annotation.table_cell_width,
+                                ));
+                            // Tabs and line breaks separate the cells in the saved text.
+                            cell.retain(|ch| !matches!(ch, '\t' | '\n' | '\r'));
+                            first.get_or_insert(response);
                         }
-                    });
-            });
+                        ui.end_row();
+                    }
+                });
+        });
         let (rows, cols) = (grid.len(), grid[0].len());
         ui.horizontal_wrapped(|ui| {
             if ui.button(l10n::text(ui.ctx(), "Add row")).clicked() {

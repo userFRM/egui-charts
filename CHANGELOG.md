@@ -318,6 +318,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Table editors keep their cells and wrapping row and column controls within narrow panes by scrolling them together. ([#984](https://github.com/userFRM/egui-charts/issues/984))
 - Drawing alert sources escape `%` and `#` in stored drawing identities, keeping a drawing such as `a#1` distinct from level 1 of drawing `a`. Migration: regenerate saved alert sources containing those identity characters with `Drawing::alert_source`; numeric identities are unchanged. ([#980](https://github.com/userFRM/egui-charts/issues/980))
 - The demo loads image drawing addresses over HTTP and HTTPS as well as native files, so image input works in browser builds. The host still supplies image storage and access. ([#985](https://github.com/userFRM/egui-charts/issues/985))
 - Drawing-menu alerts start on the first visible Fibonacci level even when level zero is hidden; drawings with no visible levels offer no alert. ([#980](https://github.com/userFRM/egui-charts/issues/980))
