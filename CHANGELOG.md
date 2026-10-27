@@ -321,6 +321,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))
+
 - The price axis menu offers Scale price chart only, and the quick setting applies `ChartConfig::scale_price_chart_only`. It excludes overlay studies and their primitives from the main price range without hiding them; turning it off restores their individual autoscale participation. Other scales keep their own ranges. Saved configurations without the option default to including studies. ([#964](https://github.com/userFRM/egui-charts/issues/964))
 
 - Changing symbols returns the main price scale to autoscaling, clears its price-to-bar ratio lock and discards the previous symbol's zoom history, so prices outside a manually fixed range remain visible. Repeating the symbol or replacing or reloading its data keeps manual scaling. Initial ratio-lock settings are preserved. ([#955](https://github.com/userFRM/egui-charts/issues/955))
