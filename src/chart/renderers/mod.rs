@@ -48,7 +48,8 @@ pub use session_breaks::{
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use tooltip::{StudyValue, ValueFormatters, render_tooltip_with_options};
 pub use trading_lines::{
-    PnlUnit, TradingLineAction, TradingLineOptions, TradingLines, render_trading_lines,
+    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
+    render_trading_lines,
 };
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{decimals, to_step};

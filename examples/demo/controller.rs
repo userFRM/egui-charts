@@ -3057,8 +3057,8 @@ impl DemoApp {
             return;
         };
         let result = self
-            .chart
-            .export_png(ctx, &options)
+            .trading
+            .export_png(&self.chart, ctx, &options)
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
                 ScreenshotTarget::NewTab => open_image(ctx, &png),

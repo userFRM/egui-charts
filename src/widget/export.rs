@@ -168,6 +168,15 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<ChartImage, String> {
+        self.export_image_with(ctx, options, |_, _| {})
+    }
+
+    pub(crate) fn export_image_with(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<ChartImage, String> {
         let size = options.size;
         if size.iter().any(|&side| !(100..=7680).contains(&side))
             || u64::from(size[0]) * u64::from(size[1]) > 33_177_600
@@ -241,6 +250,7 @@ impl Chart {
                         });
                     }
                     chart.show(ui);
+                    overlay(ui, &mut chart);
                 },
             );
             textures_delta.append(output.textures_delta);
@@ -261,7 +271,16 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
     ) -> Result<Vec<u8>, String> {
-        let mut image = self.export_image(ctx, options)?;
+        self.export_png_with(ctx, options, |_, _| {})
+    }
+
+    pub(crate) fn export_png_with(
+        &self,
+        ctx: &egui::Context,
+        options: &ImageExportOptions,
+        overlay: impl Fn(&mut egui::Ui, &mut Chart),
+    ) -> Result<Vec<u8>, String> {
+        let mut image = self.export_image_with(ctx, options, overlay)?;
         let [width, height] = image.size;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();

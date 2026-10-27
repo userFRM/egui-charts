@@ -56,6 +56,30 @@ impl PnlUnit {
     }
 }
 
+/// Horizontal placement of trading line labels inside the price pane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TradingLabelAlignment {
+    /// Place labels beside the left edge.
+    Left,
+    /// Centre labels in the pane.
+    Center,
+    /// Place labels near the right edge.
+    #[default]
+    Right,
+}
+
+impl TradingLabelAlignment {
+    fn left(self, rect: Rect, width: f32, inset: f32) -> f32 {
+        let left = rect.left() + 8.0;
+        let right = (rect.right() - inset - width).max(left);
+        match self {
+            Self::Left => left,
+            Self::Center => (rect.center().x - width / 2.0).clamp(left, right),
+            Self::Right => rect.right() - inset - width,
+        }
+    }
+}
+
 /// What [`render_trading_lines`] drew, and what the user asked for.
 pub struct TradingLines {
     /// What the user asked for on a line in this frame.
@@ -77,6 +101,10 @@ pub struct TradingLineOptions<'a> {
     pub show_orders: bool,
     /// Draw positions. Hidden positions still supply their brackets' entry price.
     pub show_positions: bool,
+    /// Extend lines to the left edge instead of starting at their labels.
+    pub extend_lines: bool,
+    /// Horizontal placement of order and position labels.
+    pub label_alignment: TradingLabelAlignment,
     /// Offer a Buy or Sell submit button beside projected orders.
     pub submit: bool,
     /// Order and bracket lines can be dragged, and brackets removed.
@@ -390,15 +418,6 @@ fn show_position(
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
     let line = PriceLine::new(entry, color).with_style(LineStyle::Dotted);
-    render_price_line(
-        &painter,
-        mapping.rect,
-        &mapping.price,
-        &line,
-        mapping.rect.left(),
-        false,
-        f32::INFINITY,
-    );
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
@@ -463,11 +482,27 @@ fn show_position(
         } else {
             0.0
         };
-    let right = mapping.rect.right()
-        - LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
     let reverse = options.close && options.reverse;
-    let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
+    let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
+    let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
+    let left = options
+        .label_alignment
+        .left(mapping.rect, label_width, inset);
+    let right = left + label_width;
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
+    render_price_line(
+        &painter,
+        mapping.rect,
+        &mapping.price,
+        &line,
+        if options.extend_lines {
+            mapping.rect.left()
+        } else {
+            label.left()
+        },
+        false,
+        f32::INFINITY,
+    );
     let cell = |x: f32, w: f32| Rect::from_min_size(pos2(x, label.top()), vec2(w, HEIGHT));
     let reverse_rect = if left < mapping.rect.left() {
         let top = if label.bottom() + 4.0 + HEIGHT <= mapping.rect.bottom() {
@@ -605,7 +640,11 @@ fn show_position(
             mapping.rect,
             &mapping.price,
             &line,
-            mapping.rect.left(),
+            if options.extend_lines {
+                mapping.rect.left()
+            } else {
+                label.left()
+            },
             false,
             f32::INFINITY,
         );
@@ -766,14 +805,21 @@ impl Label<'_> {
             + width(&quantity)
             + HEIGHT * self.buttons.len() as f32;
         let inset = LABEL_INSET.min((mapping.rect.width() - total - 8.0).max(8.0));
-        let mut x = mapping.rect.right() - inset - total;
+        let mut x = options.label_alignment.left(mapping.rect, total, inset);
         let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
 
         let mut dragged = None;
         let mut value = staged.unwrap_or(line.price);
         let grab = ui.interact(
             Rect::from_min_max(
-                pos2(mapping.rect.left(), rect.top()),
+                pos2(
+                    if options.extend_lines {
+                        mapping.rect.left()
+                    } else {
+                        rect.left()
+                    },
+                    rect.top(),
+                ),
                 pos2(rect.max.x - HEIGHT * self.buttons.len() as f32, rect.max.y),
             )
             .intersect(mapping.rect),
@@ -826,7 +872,11 @@ impl Label<'_> {
             mapping.rect,
             &mapping.price,
             &line,
-            mapping.rect.left(),
+            if options.extend_lines {
+                mapping.rect.left()
+            } else {
+                rect.left()
+            },
             false,
             f32::INFINITY,
         );

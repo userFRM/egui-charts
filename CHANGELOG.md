@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Trading settings persist left, centre or right label placement, line extension to the left edge, and image-export visibility. `Trading::export_image` and `export_png` include visible orders, positions and executions when `include_in_image` is enabled; the demo uses that path. Existing settings retain extended lines, right-aligned labels and images without trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. Sound volume and error-only notifications already use the existing controls and host playback. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 
 - The snapshot menu offers Download image, Copy image and Open in new tab through typed host intents. Hosts with image publishing enable `TopToolbarState::can_publish_image` to offer Publish, Copy link and Post image, then deliver their service's result. The demo copies PNG images and opens them in a browser tab or native viewer; publishing remains host-owned. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
 

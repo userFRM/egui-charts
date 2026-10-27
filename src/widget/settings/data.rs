@@ -1,7 +1,7 @@
 //! Data structures for settings state - Canvas style
 
 use super::types::{BackgroundType, ButtonVisibility, GridLinesMode, PrecisionMode, WatermarkMode};
-use crate::chart::PnlUnit;
+use crate::chart::{PnlUnit, TradingLabelAlignment};
 use crate::model::LineStyle;
 use egui::Color32;
 
@@ -314,6 +314,12 @@ pub struct TradingSettings {
     pub position_pnl_unit: PnlUnit,
     /// Show a position's reverse button while its label is hovered.
     pub reverse_button: bool,
+    /// Extend trading lines to the left edge of the pane instead of starting at their labels.
+    pub extend_lines: bool,
+    /// Horizontal placement of order and position labels.
+    pub label_alignment: TradingLabelAlignment,
+    /// Include the visible trading overlays in images exported through `ui::trading::Trading`.
+    pub include_in_image: bool,
     /// Draw the working orders and their brackets.
     pub show_orders: bool,
     /// Give on each take profit and stop loss the profit or loss of reaching it.
@@ -339,6 +345,9 @@ impl Default for TradingSettings {
             position_pnl: true,
             position_pnl_unit: PnlUnit::Money,
             reverse_button: true,
+            extend_lines: true,
+            label_alignment: TradingLabelAlignment::Right,
+            include_in_image: false,
             show_orders: true,
             bracket_pnl: true,
             bracket_pnl_unit: PnlUnit::Money,
