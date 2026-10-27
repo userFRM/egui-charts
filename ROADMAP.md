@@ -43,12 +43,12 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Locale-aware date names and configurable date patterns.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales.
+- [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
 - [ ] Use configured scale precision for added-series value tags when no formatter is supplied.
 - [ ] Draw independent symbol-name and study-name tags on the price scale.
 - [ ] Apply scale font-size, scale-line colour and pane-button visibility settings.
-- [ ] Expose currency/unit labels, scale-button visibility, editable price-to-bar ratio, label overlap policy, scale add buttons and per-series label colours.
 
 ## Drawing Tools
 
@@ -198,11 +198,11 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and multiple conditions.
 - [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; presets use storage.
-- [x] Toolbar, context-menu and keyboard entry points, plus draggable chart alert levels.
+- [x] Toolbar, context-menu, price-scale and keyboard entry points, plus draggable chart alert levels.
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
 - [ ] Add user-controlled sorting and cloning to the alerts panel.
 - [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
-- [ ] Add price-scale alert creation and channel-drawing alert geometry.
+- [ ] Add channel-drawing alert geometry.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
 
@@ -214,7 +214,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; comparisons use shared percentage scales, separate scales or panes.
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
-- [x] Chart settings apply backgrounds, grids, candle colours, crosshair styling, session shading and watermarks.
+- [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
+- [x] Status settings control supplied logos, last day change and study backdrops; Symbol settings request dividend-adjusted history from the host.
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
@@ -227,8 +228,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
 - [ ] Handle the series context menu's Copy price action.
 - [ ] Complete default interval-entry, rectangle-tool and selected-chart-maximise shortcut routing.
-- [ ] Add main-symbol legend controls and independent logo/day-change/study-background settings.
-- [ ] Expose candle body/border/wick visibility, previous-close colouring and adjustment controls in Symbol settings.
+- [ ] Add main-symbol legend controls for visibility, settings and removal.
 - [ ] Add watchlist duplication, flag-filtered lists, chart-menu insertion and a working advanced watchlist view.
 
 ### Replay

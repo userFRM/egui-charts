@@ -23,6 +23,11 @@ impl DemoApp {
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {
             bars: self.bars.clone(),
             samples,
+            notifications: self
+                .chart
+                .event_visibility()
+                .show_news_notifications
+                .then(|| self.notification_host.clone()),
         })));
         self.chart
             .set_change_markers(SeriesId::MAIN, samples.then(ChangeMarkers::default));
@@ -107,6 +112,7 @@ impl DemoApp {
 pub(super) struct DemoMarks {
     pub bars: Vec<Bar>,
     pub samples: bool,
+    pub notifications: Option<Arc<super::feeds::DemoNotifications>>,
 }
 
 impl Marks for DemoMarks {
@@ -117,12 +123,13 @@ impl Marks for DemoMarks {
                 i % 40 == 0 && bar.time >= request.from && bar.time <= request.to
             })
         {
-            let kind = match (index / 40) % 5 {
+            let kind = match (index / 40) % 6 {
                 0 => EventKind::Dividend,
                 1 => EventKind::Split,
                 2 => EventKind::Earnings,
                 3 => EventKind::Economic,
-                _ => EventKind::News,
+                4 => EventKind::News,
+                _ => EventKind::Idea,
             };
             page.events.push(TimeScaleEvent {
                 id: format!("demo-event-{index}"),
@@ -131,6 +138,11 @@ impl Marks for DemoMarks {
                 title: format!("Synthetic {} event", kind.label()),
                 details: "Demonstration data supplied by the host.".into(),
             });
+            if kind == EventKind::News
+                && let Some(notifications) = &self.notifications
+            {
+                notifications.notify_event(&request.symbol, page.events.last().unwrap());
+            }
             if self.samples {
                 page.bar_marks.push(
                     Marker::buy_signal(bar.time)

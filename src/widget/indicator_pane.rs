@@ -296,11 +296,17 @@ pub struct IndicatorPane {
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
+    pub(super) axis_options: crate::config::PriceAxisOptions,
+    pub(super) legend_backdrop: f32,
 }
 
 impl IndicatorPane {
     /// Create a new indicator panel with custom configuration
     pub fn with_config(config: IndicatorPaneConfig) -> Self {
+        let axis_options = crate::config::PriceAxisOptions {
+            show_study_values: config.show_values,
+            ..Default::default()
+        };
         Self {
             config,
             bar_index: None,
@@ -312,6 +318,8 @@ impl IndicatorPane {
             pane_controls: false,
             axis_rect: None,
             axis_tags: Vec::new(),
+            axis_options,
+            legend_backdrop: 1.0,
         }
     }
 
@@ -745,6 +753,7 @@ impl IndicatorPane {
                                     label.color,
                                 ),
                                 &self.axis_tags,
+                                self.axis_options.allow_label_overlap,
                             );
                             self.axis_tags.push(tag);
                         }
@@ -1312,14 +1321,29 @@ impl IndicatorPane {
             .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
-        if self.config.show_values {
+        if self.axis_options.show_study_values {
             if indicator.is_volume()
                 && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
             {
-                super::volume::tags(painter, chart_rect, &map, indicator, axis_edge, &mut tags);
+                super::volume::tags(
+                    painter,
+                    chart_rect,
+                    &map,
+                    indicator,
+                    axis_edge,
+                    &mut tags,
+                    &self.axis_options,
+                );
             } else {
                 crate::chart::rendering::axes::render_study_tags(
-                    painter, chart_rect, &map, indicator, axis_edge, &mut tags, None,
+                    painter,
+                    chart_rect,
+                    &map,
+                    indicator,
+                    axis_edge,
+                    &mut tags,
+                    None,
+                    &self.axis_options,
                 );
             }
         }
@@ -1488,6 +1512,16 @@ impl IndicatorPane {
         let pos = Pos2::new(
             rect.left() + theme.spacing.sm,
             rect.top() + self.legend_offset + theme.spacing.sm.min(rect.height() / 2.0),
+        );
+        painter.rect_filled(
+            Rect::from_min_size(pos, galley.size())
+                .expand(2.0)
+                .intersect(rect),
+            0.0,
+            theme
+                .chart
+                .bg
+                .gamma_multiply(self.legend_backdrop.clamp(0.0, 1.0)),
         );
         painter.galley(pos, galley, text_color);
     }
@@ -1716,36 +1750,52 @@ mod tests {
             .with_colors(colors.clone())
             .with_line_count(3);
             study.calculate(&[]);
-            let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                pane.draw_legend(ui.painter(), ui.max_rect(), &study, theme.ui.text);
-            });
-            let shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
-            let text = shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Text(t) => Some(t),
-                    _ => None,
-                })
-                .unwrap();
-            let sections = &text.galley.job.sections;
-            for (i, color) in colors.iter().enumerate() {
-                let value = format!("{:.2}", (i + 1) as f64);
-                let section = sections
+            let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+            for opacity in [0.0, 0.35, 1.0] {
+                pane.legend_backdrop = opacity;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    pane.draw_legend(ui.painter(), ui.max_rect(), &study, theme.ui.text);
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let text = shapes
                     .iter()
-                    .find(|s| {
-                        text.galley.job.text[s.byte_range.start.0..s.byte_range.end.0]
-                            .contains(&value)
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some(t),
+                        _ => None,
                     })
                     .unwrap();
-                assert!(crate::theme::contrast(section.format.color, theme.chart.bg) >= 4.5);
+                let sections = &text.galley.job.sections;
+                let backdrop = shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) => Some(rect),
+                        _ => None,
+                    })
+                    .expect("pane legend backdrop");
+                assert_eq!(backdrop.fill, theme.chart.bg.gamma_multiply(opacity));
                 assert!(
-                    sections.iter().any(|s| s.format.color == *color),
-                    "missing plot colour {color:?}"
+                    backdrop
+                        .rect
+                        .contains_rect(Rect::from_min_size(text.pos, text.galley.size()))
                 );
+                for (i, color) in colors.iter().enumerate() {
+                    let value = format!("{:.2}", (i + 1) as f64);
+                    let section = sections
+                        .iter()
+                        .find(|s| {
+                            text.galley.job.text[s.byte_range.start.0..s.byte_range.end.0]
+                                .contains(&value)
+                        })
+                        .unwrap();
+                    assert!(crate::theme::contrast(section.format.color, theme.chart.bg) >= 4.5);
+                    assert!(
+                        sections.iter().any(|s| s.format.color == *color),
+                        "missing plot colour {color:?}"
+                    );
+                }
+                assert_eq!(sections[0].format.color, theme.ui.text);
             }
-            assert_eq!(sections[0].format.color, theme.ui.text);
         }
     }
 }

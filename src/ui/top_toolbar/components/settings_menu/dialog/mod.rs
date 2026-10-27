@@ -26,6 +26,9 @@ use std::collections::HashSet;
 // Settings Dialog (Modal)
 // ============================================================================
 
+/// Width of the tab sidebar, before it yields to narrow windows.
+const SIDEBAR_WIDTH: f32 = 206.0;
+
 /// Modal settings dialog with tabbed interface.
 ///
 /// Edits chart display settings, event category visibility and the host trading and
@@ -76,6 +79,9 @@ struct ColorPickerStates {
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
     alert: ColorPickerState,
+    symbol_value: ColorPickerState,
+    study_value: ColorPickerState,
+    extended_value: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -129,6 +135,21 @@ impl SettingsDialog {
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
+                symbol_value: ColorPickerState::new(
+                    settings
+                        .scales_and_lines
+                        .symbol_price_color
+                        .unwrap_or(settings.candle_colors.body_up),
+                ),
+                study_value: ColorPickerState::new(
+                    settings
+                        .scales_and_lines
+                        .study_value_color
+                        .unwrap_or(settings.scales_appearance.text_color),
+                ),
+                extended_value: ColorPickerState::new(
+                    settings.scales_and_lines.extended_session_price_color,
+                ),
             },
             margin_top_str: format!("{}", settings.margins.top_percent),
             margin_bottom_str: format!("{}", settings.margins.bottom_percent),
@@ -188,6 +209,18 @@ impl SettingsDialog {
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
 
         self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
+        self.color_picker_states.symbol_value.sel_color = self
+            .settings
+            .scales_and_lines
+            .symbol_price_color
+            .unwrap_or(self.settings.candle_colors.body_up);
+        self.color_picker_states.study_value.sel_color = self
+            .settings
+            .scales_and_lines
+            .study_value_color
+            .unwrap_or(self.settings.scales_appearance.text_color);
+        self.color_picker_states.extended_value.sel_color =
+            self.settings.scales_and_lines.extended_session_price_color;
 
         self.margin_top_str = format!("{}", self.settings.margins.top_percent);
         self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);
@@ -256,6 +289,7 @@ impl SettingsDialog {
         Modal::new("chart_settings", "Chart settings")
             .width(width)
             .height(height)
+            .dim_background(false)
             .show(ctx, &mut is_open, |ui| {
                 ui.add_space(theme.spacing.xxl);
                 action = self.draw_content(ui, theme);
@@ -294,19 +328,21 @@ impl SettingsDialog {
         let content_height = (ui.available_height() - 68.0).max(0.0);
 
         let seam_top = ui.cursor().top();
-        let seam_x = ui.cursor().left()
-            + 184.0_f32.min(ui.available_width() * 0.4)
-            + ui.spacing().item_spacing.x;
+        let sidebar_width = SIDEBAR_WIDTH.min(ui.available_width() * 0.4);
+        let seam_x = ui.cursor().left() + sidebar_width + ui.spacing().item_spacing.x;
         let mut active = self.active_tab;
         ui.allocate_ui(Vec2::new(ui.available_width(), content_height), |ui| {
-            SidebarLayout::new(184.0_f32.min(ui.available_width() * 0.4)).show(
+            SidebarLayout::new(sidebar_width).show(
                 ui,
                 |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("settings_tabs")
                         .show(ui, |ui| {
                             for tab in SettingsTab::all() {
-                                if SidebarTab::new(tab.name(), active == *tab).show(ui) {
+                                if SidebarTab::new(tab.name(), active == *tab)
+                                    .icon(tab.icon())
+                                    .show(ui)
+                                {
                                     active = *tab;
                                 }
                             }
@@ -733,6 +769,8 @@ mod tests {
             model::{BarData, ChartType, PriceSource},
         };
         for (kind, label) in [
+            (ChartType::Heikin, "Body"),
+            (ChartType::Bars, "Body"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
             (ChartType::Renko, "Size method"),
@@ -758,7 +796,7 @@ mod tests {
             });
             let candle_colors = output.shapes.iter().any(|shape| {
                 matches!(&shape.shape,
-                egui::Shape::Text(text) if text.galley.text() == "CANDLE COLORS")
+                egui::Shape::Text(text) if text.galley.text() == "CANDLES")
             });
             output.drop_without_applying_deltas();
             assert!(has_label, "{kind:?} must offer {label}");
@@ -984,38 +1022,45 @@ mod tests {
         }
     }
     #[test]
-    fn choosing_a_scale_mode_clears_the_other_mode() {
+    fn scale_controls_show_small_ratios_and_keep_modes_exclusive() {
         let ctx = Context::default();
         let mut dialog = SettingsDialog::new();
         let theme = Theme::light();
-        for (label, expected) in [
-            ("Log scale", (true, false)),
-            ("Percentage scale", (false, true)),
-            ("Log scale", (true, false)),
+        for (label, expected, ratio) in [
+            ("Log scale", (true, false), 0.005),
+            ("Percentage scale", (false, true), 0.00000001),
+            ("Log scale", (true, false), 1.0),
         ] {
-            let mut frame = |events| {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_scales_and_lines_tab(ui, &theme);
-                    },
-                );
-                let pos = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                output.drop_without_applying_deltas();
-                pos
-            };
+            dialog.settings.scales_and_lines.price_to_bar_ratio = ratio;
+            dialog.settings.scales_and_lines.lock_price_to_bar_ratio = true;
+            let mut frame =
+                |events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            dialog.draw_scales_and_lines_tab(ui, &theme);
+                        },
+                    );
+                    let ratio_shown = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().parse::<f64>() == Ok(ratio)
+                    ));
+                    let pos = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos + text.galley.size() / 2.0)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    output.drop_without_applying_deltas();
+                    assert!(ratio_shown, "entered ratio {ratio} must remain legible");
+                    pos
+                };
             let pos = frame(vec![]);
             frame(vec![egui::Event::PointerMoved(pos)]);
             for pressed in [true, false] {
@@ -1043,7 +1088,11 @@ mod tests {
         scaled.spacing.lg = 12.0;
         scaled.spacing.xxxl = 32.0;
         for theme in [Theme::light(), Theme::dark(), scaled] {
-            for size in [Vec2::new(1440.0, 900.0), Vec2::new(600.0, 400.0)] {
+            for size in [
+                Vec2::new(1440.0, 900.0),
+                Vec2::new(600.0, 400.0),
+                Vec2::new(320.0, 450.0),
+            ] {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut dialog = SettingsDialog::new();
@@ -1062,13 +1111,40 @@ mod tests {
                                 dialog.show(ui.ctx(), &theme);
                             },
                         );
+                        let sidebar = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(row)
+                                if row.rect.height() == 40.0
+                                    && row.rect.width() <= SIDEBAR_WIDTH =>
+                            {
+                                Some(row.rect)
+                            }
+                            _ => None,
+                        });
+                        let labels_fit = sidebar.is_none_or(|row| {
+                            output.shapes.iter().all(|shape| match &shape.shape {
+                                egui::Shape::Text(text)
+                                    if SettingsTab::all()
+                                        .iter()
+                                        .any(|tab| tab.name() == text.galley.text()) =>
+                                {
+                                    text.pos.x + text.galley.size().x <= row.right() + 0.5
+                                }
+                                _ => true,
+                            })
+                        });
                         let heading = output.shapes.iter().find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.text() == "CANDLE COLORS" => {
+                            egui::Shape::Text(text) if text.galley.text() == "CANDLES" => {
                                 Some(text.galley.job.sections[0].format.font_id.size)
                             }
                             _ => None,
                         });
                         output.drop_without_applying_deltas();
+                        if pass == 2 {
+                            assert!(
+                                labels_fit,
+                                "tab labels must stay in the sidebar at {size:?}"
+                            );
+                        }
                         if *tab == SettingsTab::Symbol && pass == 2 {
                             assert_eq!(heading, Some(theme.text.small));
                         }

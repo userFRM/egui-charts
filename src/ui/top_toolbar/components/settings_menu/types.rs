@@ -1,5 +1,7 @@
 //! Tabs of the chart settings dialog.
 
+use crate::icons::{Icon, icons};
+
 /// Settings dialog tabs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -32,6 +34,19 @@ impl SettingsTab {
             SettingsTab::Alerts,
             SettingsTab::Events,
         ]
+    }
+
+    /// The tab's pictogram in the dialog's sidebar.
+    pub fn icon(&self) -> &'static Icon {
+        match self {
+            SettingsTab::Symbol => &icons::SETTINGS_SYMBOL,
+            SettingsTab::StatusLine => &icons::SETTINGS_STATUS_LINE,
+            SettingsTab::ScalesAndLines => &icons::SETTINGS_SCALES_LINES,
+            SettingsTab::Canvas => &icons::SETTINGS_CANVAS,
+            SettingsTab::Trading => &icons::SETTINGS_TRADING,
+            SettingsTab::Alerts => &icons::ALERTS,
+            SettingsTab::Events => &icons::SETTINGS_EVENTS,
+        }
     }
 
     /// Display name for this value.

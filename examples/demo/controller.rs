@@ -960,6 +960,8 @@ impl DemoApp {
         self.settings_state = ChartSettingsState::from_chart(&self.chart);
         self.settings_state.alerts = alerts;
         self.settings_state.trading = trading;
+        self.settings_state.adjust_for_dividends =
+            self.timeframe_toolbar.state.adjust_for_dividends;
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1083,11 +1085,23 @@ impl DemoApp {
     }
 
     fn apply_chart_settings(&mut self, state: ChartSettingsState) {
+        let news_changed = state.events.show_news_notifications
+            != self.chart.event_visibility().show_news_notifications;
         self.chart.begin_user_action();
         self.settings_state = state.clone();
         self.trading.display = state.trading.clone();
+        self.alerts
+            .set_notification_seconds(state.alerts.notification_seconds as f32);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
+        if news_changed {
+            self.annotate();
+        }
+        if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
+            self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+            self.stop_replay();
+            self.apply_session();
+        }
     }
 
     fn remove_all_indicators(&mut self) {
@@ -2470,6 +2484,7 @@ impl DemoApp {
                             .filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
                         self.settings_state.alerts.alert_color,
                         self.settings_state.alerts.show_alert_labels,
+                        self.settings_state.alerts.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),
                     ) {
                         self.alerts.save(alert);
@@ -4382,10 +4397,17 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
         assert_eq!(app.layout_tabs.len(), 1);
+        // Opening a layout keeps the host's alert preferences and applied toast lifetime.
+        let mut settings = app.settings_state.clone();
+        settings.alerts.notification_seconds = 12;
+        settings.alerts.show_active_only = false;
+        settings.alerts.sound_volume = 0.35;
+        app.apply_chart_settings(settings.clone());
         // Opening the current layout again returns to it as saved.
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
         app.handle_layout_action(LayoutAction::Open("Unnamed".into()));
         app.poll_storage(&ctx);
+        assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.comparisons.len(), 2);
@@ -4689,8 +4711,12 @@ mod tests {
         use egui_charts::config::BackgroundStyle;
         use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        app.chart.set_size(Some(egui::vec2(800.0, 600.0)));
         let mut state = app.settings_state.clone();
+        state.candle_colors = serde_json::from_str("{}").unwrap();
         state.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
         state.chart_basic_styles.background_gradient_top = egui::Color32::RED;
         state.chart_basic_styles.background_gradient_bottom = egui::Color32::BLUE;
@@ -4710,6 +4736,11 @@ mod tests {
         state.trading.show_execution_labels = true;
         app.apply_chart_settings(state.clone());
         assert_eq!(app.trading.display, state.trading);
+        assert_eq!(
+            app.chart.config().candle_border_width,
+            0.0,
+            "older settings retain borderless candles"
+        );
         assert_eq!(
             app.chart.config().background_style,
             BackgroundStyle::VerticalGradient {
@@ -4777,6 +4808,34 @@ mod tests {
             apply_settings_state(&invalid, &mut app.chart, &mut app.timeframe_toolbar);
             app.open_chart_settings_dialog();
             assert_eq!(app.settings_state, before);
+        }
+        app.notifications.poll(&ctx);
+        let initial = app.notifications.unread();
+        let mut received = initial;
+        for enabled in [false, true, true, false] {
+            let mut state = app.settings_state.clone();
+            state.events.show_news = false;
+            state.events.show_news_notifications = enabled;
+            app.apply_chart_settings(state);
+            app.chart.reload_marks();
+            for _ in 0..4 {
+                app.chart.fit_content();
+                ctx.run_ui(Default::default(), |ui| {
+                    app.chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+                app.notifications.poll(&ctx);
+            }
+            let unread = app.notifications.unread();
+            if enabled && received == initial {
+                assert!(
+                    unread > initial,
+                    "hidden news markers still allow notifications"
+                );
+            } else {
+                assert_eq!(unread, received, "quiet or repeated news must not notify");
+            }
+            received = unread;
         }
     }
 
