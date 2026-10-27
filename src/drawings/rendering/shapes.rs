@@ -294,8 +294,8 @@ mod tests {
             sector.points = points;
             assert!(sector.outline(rect).is_none());
         }
+        #[cfg(feature = "ui")]
         for category in crate::drawings::categories::CATEGORY_ORDER {
-            #[cfg(feature = "ui")]
             assert_eq!(
                 crate::ui::drawing_toolbar::data::get_category_sections(category),
                 crate::drawings::categories::get_category_sections(category),

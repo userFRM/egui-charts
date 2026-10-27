@@ -209,6 +209,7 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
+    use crate::studies::{CustomIndicator, IndicatorValue};
 
     /// Guards #977: a drawing moves between the price pane and a study pane as one undoable
     /// edit with its anchors and style, and joins the pane the chart draws it in.
@@ -221,8 +222,13 @@ mod tests {
             })
             .collect();
         let mut chart = Chart::new(BarData::from_bars(bars));
-        let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(3)));
-        let pane = chart.series_pane(rsi).unwrap();
+        let study = chart.add_indicator(Box::new(
+            CustomIndicator::new("Pane", |bars| {
+                vec![IndicatorValue::Single(50.0); bars.len()]
+            })
+            .with_overlay(false),
+        ));
+        let pane = chart.series_pane(study).unwrap();
         let mut line = Drawing::new(0, DrawingToolType::TrendLine);
         line.color = [1, 2, 3, 255];
         line.chart_points = vec![ChartPoint::new(2.0, 30.0), ChartPoint::new(9.0, 70.0)];
@@ -233,7 +239,7 @@ mod tests {
         assert!(chart.user_action(|chart| chart.move_drawing_to_pane(id, pane)));
         let moved = &chart.drawings().drawings[0];
         assert_eq!(chart.drawing_pane(id), Some(pane));
-        assert_eq!(moved.pane, Some(rsi.0));
+        assert_eq!(moved.pane, Some(study.0));
         assert_eq!(
             (&moved.chart_points, moved.color),
             (&before.chart_points, before.color)
