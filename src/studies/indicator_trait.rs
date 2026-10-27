@@ -209,6 +209,24 @@ pub trait Indicator: Send {
         }
     }
 
+    /// Capture editable inputs and presentation without copying calculated values.
+    /// The chart presentation wrapper also retains visibility before interval filtering.
+    /// Custom presentations can use [`super::StudySettingsSnapshot::capture`] with their
+    /// global visibility toggle to do the same.
+    fn snapshot_settings(&self) -> super::StudySettingsSnapshot {
+        super::StudySettingsSnapshot::capture(self, self.is_visible())
+    }
+
+    /// Restore a snapshot from this study. Recalculate against current data afterwards.
+    /// The default applies changed inputs and presentation through [`Self::apply_settings`].
+    /// Returns an error if the snapshot is no longer accepted.
+    fn restore_settings(
+        &mut self,
+        snapshot: &super::StudySettingsSnapshot,
+    ) -> Result<(), &'static str> {
+        snapshot.restore(self)
+    }
+
     /// Apply a complete edit atomically. Charts wrap studies in [`ConfiguredStudy`](super::ConfiguredStudy),
     /// which validates inputs on a clone before replacing the calculation and presentation.
     fn apply_settings(

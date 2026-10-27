@@ -636,9 +636,15 @@ impl Chart {
             self.prune_series_scales();
             return true;
         }
-        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+        let Some(indicator) = self.take_study(id) else {
             return false;
         };
+        self.retain_removed_study(id, indicator);
+        true
+    }
+
+    pub(super) fn take_study(&mut self, id: SeriesId) -> Option<Box<dyn Indicator>> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
         #[cfg(feature = "studies")]
         if self.volume_study == Some(id) {
@@ -646,7 +652,7 @@ impl Chart {
             self.config.show_volume = false;
             self.volume_setting = false;
         }
-        self.studies.remove_indicator(at);
+        let indicator = self.studies.remove_indicator(at);
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
@@ -655,7 +661,7 @@ impl Chart {
         if self.selection.selected_id() == Some(ChartElementId::Indicator(id)) {
             self.selection.deselect();
         }
-        true
+        indicator
     }
 
     /// Shows or hides the study `id`; a hidden study keeps its values. Returns `false` for an id

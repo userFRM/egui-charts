@@ -147,11 +147,15 @@ pub(super) fn tags(
     study: &dyn Indicator,
     edge: f32,
     occupied: &mut Vec<Option<Rect>>,
+    axis: &crate::config::PriceAxisOptions,
 ) {
     let Some(bar) = study.values().len().checked_sub(1) else {
         return;
     };
-    if !study.is_visible() || study.scale() == crate::studies::StudyScale::None {
+    if !axis.show_study_values
+        || !study.is_visible()
+        || study.scale() == crate::studies::StudyScale::None
+    {
         return;
     }
     // Keep tags opaque even when volume columns use transparency.
@@ -162,14 +166,22 @@ pub(super) fn tags(
             && map.range().contains(value)
         {
             let label = study.format_value(value);
+            let color = axis.study_value_color.unwrap_or(plot.color).to_opaque();
             occupied.push(crate::chart::rendering::axes::render_axis_value(
                 painter,
                 rect,
                 edge,
                 map.price_to_y(value),
                 label,
-                (egui::Color32::WHITE, plot.color.to_opaque()),
+                (
+                    axis.study_value_color.map_or(
+                        egui::Color32::WHITE,
+                        crate::chart::rendering::axes::tag_text_color,
+                    ),
+                    color,
+                ),
                 occupied,
+                axis.allow_label_overlap,
             ));
         }
     }

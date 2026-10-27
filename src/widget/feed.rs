@@ -11,10 +11,10 @@ use crate::data::inbox::{Answer, Inbox};
 use crate::data::merge::Origin;
 use crate::data::trades::Trades;
 use crate::data::{
-    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, HistoryPage,
+    Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, FeedState, Footprint, HistoryPage,
     HistoryRequest, Reply, Subscription, SubscriptionId, TradePage, TradeRequest,
 };
-use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
+use crate::model::{BarClock, ChartType, Instrument, OrderBook, Tick, Timeframe};
 use egui::ViewportId;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -50,6 +50,8 @@ pub(crate) struct FeedLink {
     trades: Trades,
     /// The held trades as volume bubbles, when the host turned them on.
     pub(super) bubbles: Option<VolumeBubbles>,
+    /// The trades as a footprint on the instrument's tick, while the chart type draws from them.
+    pub(super) footprint: Option<Footprint>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
     /// The order book over time, when the host turned it on.
@@ -90,6 +92,20 @@ impl FeedLink {
         if let Some(bubbles) = self.bubbles.take() {
             self.bubbles = Some(self.bubbles(bubbles.config));
         }
+        if self.footprint.is_some() {
+            self.footprint = self.footprint();
+        }
+    }
+
+    /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
+    /// older than the one before it is left out, as it is when it arrives live.
+    fn footprint(&self) -> Option<Footprint> {
+        let tick_size = self.instrument.as_ref()?.tick_size?;
+        let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
+        for trade in self.trades.iter() {
+            let _ = flow.push(trade);
+        }
+        Some(flow)
     }
 
     fn bubbles(&self, config: VolumeBubblesConfig) -> VolumeBubbles {
@@ -128,6 +144,7 @@ impl Chart {
             instrument: None,
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
+            footprint: None,
             order_book: None,
             order_queue: None,
             depth_history: None,
@@ -544,6 +561,19 @@ impl Chart {
     /// Issues what the feed must be asked and applies what it sent since the last call. Called
     /// first in [`show`](Self::show); does nothing without a feed.
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        // Session profiles are summed by the studies' code.
+        let executions = (self.chart_type == ChartType::VolumeFootprint
+            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies")))
+            && self
+                .timeframe
+                .is_none_or(|timeframe| !timeframe.is_trade_based());
+        if let Some(link) = self
+            .feed_link
+            .as_mut()
+            .filter(|link| executions != link.footprint.is_some())
+        {
+            link.footprint = if executions { link.footprint() } else { None };
+        }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
         }
@@ -670,6 +700,9 @@ impl Chart {
                             for (input, _) in &link.study_inputs {
                                 input.replace_trades(&link.clock, link.trades.iter());
                             }
+                            if link.footprint.is_some() {
+                                link.footprint = link.footprint();
+                            }
                         }
                     }
                     Err(error) => log::debug!("no trade history for {}: {error}", self.symbol),
@@ -719,11 +752,16 @@ impl Chart {
             feed.rejected_bars += updates.rejected;
             feed.rejected_depth += updates.rejected_depth;
             let bubbles = &mut link.bubbles;
+            let footprint = &mut link.footprint;
             let inputs = &link.study_inputs;
             let clock = &link.clock;
             let fold = &mut |trade: &Tick, added| {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                 if added {
+                    // An evicted trade stays in the footprint until the trades are summed again.
+                    if let Some(flow) = footprint {
+                        let _ = flow.push(trade);
+                    }
                     for (input, _) in inputs {
                         input.push_trade(clock, trade);
                     }
@@ -1379,13 +1417,15 @@ mod tests {
             let feed = Arc::new(Script::default());
             let mut chart = fed(&feed, Some("A"));
             chart.set_timeframe(timeframe);
+            chart.set_chart_type(ChartType::VolumeFootprint);
             if !limit_after_load {
                 chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(3));
             }
             let mut frames = Frames::new();
             frames.run(&mut chart);
             chart.drain_events().for_each(drop);
-            feed.resolve().send(Ok(Instrument::new("A")));
+            feed.resolve()
+                .send(Ok(Instrument::new("A").with_tick_size(1.0)));
             feed.page().send(page(bars(5), end));
             frames.run(&mut chart);
             if limit_after_load {
@@ -1459,6 +1499,11 @@ mod tests {
             }
             assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().close, 1100.0);
             assert_eq!(chart.trades(SeriesId::MAIN).count(), 100);
+            assert_eq!(
+                chart.feed_link.as_ref().unwrap().footprint.is_some(),
+                !timeframe.is_trade_based(),
+                "execution charts retain candles when the interval has no time slots"
+            );
         }
     }
 
@@ -2073,8 +2118,8 @@ mod tests {
 
     /// Guards the feed contract of the chart: nothing blocks or calls the feed outside `show`,
     /// each request is issued once, answers and pushes reach the bars, a push from another thread
-    /// wakes the UI once per burst, order flow is asked for and reaches the volume bubbles,
-    /// scroll-back ends on every end signal, a permanent error stops requests until the symbol
+    /// wakes the UI once per burst, order flow is asked for and reaches the volume bubbles and
+    /// the footprint chart type while it streams, scroll-back ends on every end signal, a permanent error stops requests until the symbol
     /// or timeframe changes, a change releases the old subscription and ignores whatever comes
     /// for it, and a dropped chart unsubscribes without waking itself.
     #[test]
@@ -2116,7 +2161,8 @@ mod tests {
         // c. The instrument subscribes and asks for trades once; a burst from another thread
         // wakes the root viewport once and reaches the forming bar; a lost book asks for one
         // snapshot.
-        feed.resolve().send(Ok(Instrument::new("A")));
+        let instrument = Instrument::new("A").with_tick_size(0.5);
+        feed.resolve().send(Ok(instrument.clone()));
         frames.run(&mut chart);
         let id = feed.sink().id;
         let trades = Call::Trades(TradeRequest {
@@ -2126,7 +2172,7 @@ mod tests {
         });
         let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
         assert_eq!(feed.calls(), [subscribe, trades], "c");
-        assert_eq!(chart.instrument(), Some(&Instrument::new("A")), "c");
+        assert_eq!(chart.instrument(), Some(&instrument), "c");
         feed.sink().symbols_changed();
         feed.sink().symbols_changed();
         frames.run(&mut chart);
@@ -2137,6 +2183,8 @@ mod tests {
             "c: catalog notification coalesces"
         );
         chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        frames.run(&mut chart);
         let woken = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&woken);
         frames
@@ -2165,6 +2213,17 @@ mod tests {
         let shown = bubbles.unwrap().between(forming.time, forming.time);
         let shown = Vec::from_iter(shown.map(|bubble| (bubble.price, bubble.volume)));
         assert_eq!(shown, [(7.0, 1000.0)], "c: the trades reach the bubbles");
+        let footprint = chart
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref());
+        let row = footprint.and_then(|flow| flow.bar_at(forming.time)?.levels.get(&14));
+        assert_eq!(
+            row.map(|row| row.volume()),
+            Some(1000.0),
+            "c: and the footprint"
+        );
+        chart.set_chart_type(ChartType::Candles);
         assert_eq!(chart.feed_state(main).unwrap().repeated_ticks, 1, "c");
         let empty = OrderBook {
             ts,

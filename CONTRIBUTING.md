@@ -188,7 +188,7 @@ And for the web demo:
 cd examples/demo && trunk build --release
 ```
 
-CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. It also checks the dependency tree and runs `cargo audit`.
+CI runs clippy with warnings denied. Its `stable` toolchain is current stable, which is newer than the 1.95 MSRV, so run clippy on current stable to catch the same lints CI will. It also checks the dependency tree and runs `cargo deny` for advisories, duplicate versions and licences.
 
 ## Code style
 

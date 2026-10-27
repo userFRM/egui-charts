@@ -50,12 +50,19 @@ pub enum NavigationButtons {
 }
 
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
-/// the main and series price axes; study panes draw their own axes.
+/// the main and series price axes; value tag settings also apply to study panes.
 ///
 /// Tick spacing is a property of each scale, set through
 /// [`PriceScaleOptions::tick_marks`](crate::scales::PriceScaleOptions::tick_marks).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct PriceAxisOptions {
+    /// Allow value tags to overlap instead of moving them to free vertical slots.
+    pub allow_label_overlap: bool,
+    /// Display study values on price axes when study values are enabled.
+    pub show_study_values: bool,
+    /// Study value tag colour; `None` follows each plot's colour.
+    pub study_value_color: Option<Color32>,
     /// Draw a line between the plot and the axis.
     /// Default: false
     pub border_visible: bool,
@@ -76,6 +83,9 @@ pub struct PriceAxisOptions {
 impl Default for PriceAxisOptions {
     fn default() -> Self {
         Self {
+            allow_label_overlap: false,
+            show_study_values: true,
+            study_value_color: None,
             border_visible: false,
             border_color: None,
             ticks_visible: false,
@@ -274,6 +284,24 @@ pub struct ChartConfig {
     pub show_legend_volume: bool,
     /// Show host-supplied study inputs in the legend.
     pub show_indicator_inputs: bool,
+    /// Show the host's legend badge, such as the instrument logo, before the title.
+    pub show_legend_badge: bool,
+    /// Show the change of the last price from the previous session's close in the legend.
+    pub show_last_day_change: bool,
+    /// Opacity of the study rows' backdrop, from 0 to 1.
+    pub indicator_backdrop_opacity: f32,
+    /// Show the host-supplied currency above the price ticks.
+    pub show_currency: bool,
+    /// Show the host-supplied price unit above the price ticks.
+    pub show_unit: bool,
+    /// Show Auto, Log and Percent buttons in chart navigation.
+    pub show_scale_mode_buttons: bool,
+    /// Enable the crosshair price tag action that opens the host's price menu.
+    pub show_plus_button: bool,
+    /// Show the host-supplied extended-session price tag independently of the last price.
+    pub show_extended_session_price: bool,
+    /// Colour of the extended-session price tag.
+    pub extended_session_price_color: Color32,
     /// Whether to show right price axis
     pub show_right_axis: bool,
     /// Whether to show left price axis
@@ -436,6 +464,15 @@ impl Default for ChartConfig {
             show_ohlc_change_percent: true,
             show_legend_volume: true,
             show_indicator_inputs: true,
+            show_legend_badge: true,
+            show_last_day_change: false,
+            indicator_backdrop_opacity: 1.0,
+            show_currency: true,
+            show_unit: true,
+            show_scale_mode_buttons: true,
+            show_plus_button: true,
+            show_extended_session_price: true,
+            extended_session_price_color: Color32::from_rgb(251, 142, 1),
             show_right_axis: true,
             show_left_axis: false,
             right_axis_width: 70.0,
