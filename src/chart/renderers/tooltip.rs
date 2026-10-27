@@ -649,50 +649,6 @@ mod tests {
     const HOVER: Pos2 = Pos2::new(400.0, 250.0);
 
     #[test]
-    fn held_values_show_time_ohlc_and_total_volume() {
-        for show_time in [false, true] {
-            let ctx = egui::Context::default();
-            let output = ctx.run_ui(Default::default(), |ui| {
-                render_floating_tooltip(
-                    ui.painter(),
-                    HOVER,
-                    Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0)),
-                    &Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 11.0, 9.0, 10.5, 100.0),
-                    None,
-                    &TooltipOptions {
-                        on_long_press: true,
-                        show_time,
-                        ..Default::default()
-                    },
-                    egui::Color32::GREEN,
-                    &crate::scales::TimeFormatterBuilder::new().build(),
-                    3600,
-                    &[],
-                    None,
-                    ValueFormatters::default(),
-                );
-            });
-            let shapes = output.shapes.clone();
-            output.drop_without_applying_deltas();
-            let text: Vec<_> = shapes
-                .iter()
-                .filter_map(|shape| {
-                    if let egui::Shape::Text(text) = &shape.shape {
-                        Some(text.galley.text())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            assert_eq!(text.len(), 12, "six label/value pairs: {text:?}");
-            assert_eq!(
-                text.iter().step_by(2).copied().collect::<Vec<_>>(),
-                ["Time", "Open", "High", "Low", "Close", "Vol"]
-            );
-        }
-    }
-
-    #[test]
     fn study_readouts_fit_narrow_plots() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for width in [160.0, 320.0, 800.0] {
@@ -743,6 +699,7 @@ mod tests {
                             None,
                             &TooltipOptions {
                                 on_long_press: held,
+                                show_time: !held,
                                 ..Default::default()
                             },
                             egui::Color32::GREEN,
@@ -755,6 +712,18 @@ mod tests {
                     });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
+                    if held {
+                        let labels: Vec<_> = shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text()),
+                                _ => None,
+                            })
+                            .step_by(2)
+                            .take(6)
+                            .collect();
+                        assert_eq!(labels, ["Time", "Open", "High", "Low", "Close", "Vol"]);
+                    }
                     let mut labels = 0;
                     for shape in shapes {
                         match shape.shape {

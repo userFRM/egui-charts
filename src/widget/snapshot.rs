@@ -442,6 +442,7 @@ mod tests {
         options.time_scale.min_bar_spacing = 0.1;
         options.time_scale.max_bar_spacing = 12.0;
         options.time_scale.right_offset = 7.0;
+        options.tooltip.show_volume_details = true;
         chart.set_chart_options(options);
         chart.apply_synced_time_scale(0.25, 4.0);
         let empty = chart.add_pane();
@@ -555,6 +556,13 @@ mod tests {
             assert_eq!(restored.config(), chart.config());
         }
         let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        legacy["charts"][0]["options"]["tooltip"]
+            .as_object_mut()
+            .unwrap()
+            .remove("show_volume_details");
+        let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
+        restored.restore(&migrated.charts[0]).unwrap();
+        assert!(!restored.chart_options().tooltip.show_volume_details);
         legacy["version"] = 1.into();
         for key in ["config", "options", "price_scale", "maximized"] {
             legacy["charts"][0].as_object_mut().unwrap().remove(key);

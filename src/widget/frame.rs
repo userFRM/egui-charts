@@ -3640,6 +3640,8 @@ mod tests {
             chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
             chart.chart_options.tooltip.on_long_press = true;
             chart.chart_options.tooltip.show_time = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
             frame(&ctx, &mut chart, 0.0, vec![]);
             let map = chart.get_chart_mapping();
             let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
@@ -3685,12 +3687,22 @@ mod tests {
                 if expected {
                     assert_eq!(
                         labels.iter().any(|label| label.starts_with("Volume:")),
-                        volume_details,
+                        volume_details && cfg!(feature = "studies"),
                         "volume study details are opt-in"
                     );
                     assert!(labels.contains(&"Time"));
                     assert!(!labels.contains(&"Change"));
                     assert!(labels.contains(&"Vol"));
+                    #[cfg(feature = "studies")]
+                    {
+                        assert!(labels.contains(&"SMA"), "other study values remain visible");
+                        assert!(
+                            chart
+                                .study_values_at(50)
+                                .iter()
+                                .any(|row| row.study == "Volume")
+                        );
+                    }
                     let legend = labels
                         .iter()
                         .position(|label| *label == "O 100.00")
