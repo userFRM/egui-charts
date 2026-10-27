@@ -85,6 +85,10 @@ pub struct Instrument {
     pub exchange_logo: Option<String>,
     /// Country of the listing, as an ISO 3166-1 alpha-2 code such as "US".
     pub country: Option<String>,
+    /// Root shared by related instruments, such as "ES" for the contracts of a futures root or
+    /// one security listed on several exchanges. Symbol search lists the first instrument of a
+    /// root and offers the others under it.
+    pub root: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
@@ -123,6 +127,7 @@ impl Instrument {
             logo: None,
             exchange_logo: None,
             country: None,
+            root: None,
             symbol_type: None,
             tick_size: None,
             pip_size: None,
@@ -164,6 +169,12 @@ impl Instrument {
     /// Sets [`country`](Self::country).
     pub fn with_country(mut self, country: impl Into<String>) -> Self {
         self.country = Some(country.into());
+        self
+    }
+
+    /// Sets [`root`](Self::root).
+    pub fn with_root(mut self, root: impl Into<String>) -> Self {
+        self.root = Some(root.into());
         self
     }
 

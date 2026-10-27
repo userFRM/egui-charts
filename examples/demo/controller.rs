@@ -657,6 +657,16 @@ impl DemoApp {
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
         app.compare_dialog.set_storage(app.storage.clone());
+        let mut sources = Vec::new();
+        for exchange in DemoSymbol::symbols()
+            .into_iter()
+            .filter_map(|row| row.exchange)
+        {
+            if !sources.contains(&exchange) {
+                sources.push(exchange);
+            }
+        }
+        app.symbol_search.set_sources(sources);
         if let Some(row) = DemoSymbol::symbols()
             .into_iter()
             .find(|row| row.symbol == symbol)
