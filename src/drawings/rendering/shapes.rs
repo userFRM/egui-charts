@@ -305,10 +305,7 @@ mod tests {
                     assert!(
                         !matches!(
                             tool,
-                            DrawingToolType::Table
-                                | DrawingToolType::Image
-                                | DrawingToolType::Tweet
-                                | DrawingToolType::Idea
+                            DrawingToolType::Image | DrawingToolType::Tweet | DrawingToolType::Idea
                         ),
                         "unfinished {tool:?} in {category}"
                     );

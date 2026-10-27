@@ -127,6 +127,7 @@ impl DrawingToolType {
                 Self::Note,
                 Self::PriceNote,
                 Self::AnchoredNote,
+                Self::Table,
                 Self::Callout,
                 Self::Comment,
                 Self::PriceLabel,

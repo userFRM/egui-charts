@@ -219,6 +219,7 @@ pub fn get_category_sections(category: &str) -> Vec<(&'static str, Vec<DrawingTo
                 DrawingToolType::Note,
                 DrawingToolType::PriceNote,
                 DrawingToolType::AnchoredNote,
+                DrawingToolType::Table,
                 DrawingToolType::Callout,
                 DrawingToolType::Comment,
                 DrawingToolType::PriceLabel,

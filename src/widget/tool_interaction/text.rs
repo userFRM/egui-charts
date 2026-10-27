@@ -25,12 +25,17 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize) {
             | DrawingToolType::Signpost
             | DrawingToolType::PriceLabel
             | DrawingToolType::PriceNote
+            | DrawingToolType::Table
     ) {
         return;
     }
     manager.text_editor = Some(TextEditState {
         id,
-        draft: drawing.text.clone().unwrap_or_default(),
+        draft: if drawing.tool_type == DrawingToolType::Table {
+            drawing.table_text()
+        } else {
+            drawing.text.clone().unwrap_or_default()
+        },
         focus: true,
         opened_frame: None,
     });
@@ -69,6 +74,7 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
     let opened_frame = *editor.opened_frame.get_or_insert(frame);
     let request_focus = std::mem::take(&mut editor.focus);
     let font_size = drawing.font_size;
+    let table = drawing.tool_type == DrawingToolType::Table;
     let mut outside = false;
     egui::Area::new(id)
         .order(egui::Order::Foreground)
@@ -88,18 +94,27 @@ pub(super) fn show_editor(ui: &mut Ui, manager: &mut DrawingManager, chart_id: I
                 if request_focus {
                     ui.memory_mut(|memory| memory.request_focus(field_id));
                 }
-                let field = egui::ScrollArea::vertical()
-                    .max_height((height - 48.0).max(1.0))
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut editor.draft)
-                                .id(field_id)
-                                .font(egui::FontId::proportional(font_size))
-                                .desired_width((width - 16.0).max(1.0))
-                                .desired_rows(3),
-                        )
-                    })
-                    .inner;
+                let field = if table {
+                    crate::drawings::Drawing::edit_table(
+                        ui,
+                        &mut editor.draft,
+                        field_id,
+                        (height - 80.0).max(1.0),
+                    )
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height((height - 48.0).max(1.0))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut editor.draft)
+                                    .id(field_id)
+                                    .font(egui::FontId::proportional(font_size))
+                                    .desired_width((width - 16.0).max(1.0))
+                                    .desired_rows(3),
+                            )
+                        })
+                        .inner
+                };
                 if request_focus {
                     field.request_focus();
                 }
