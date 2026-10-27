@@ -448,7 +448,7 @@ mod tests {
             panel.state_mut().select_all(&ids[..2]);
             let mut h = Harness::builder()
                 .allow_missing_glyphs()
-                .with_size(vec2(320.0, 600.0))
+                .with_size(vec2(220.0, 600.0))
                 .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
                 .build_ui_state(
                     |ui, (panel, chart): &mut (ObjectTreePanel, crate::Chart)| {
@@ -597,6 +597,23 @@ mod tests {
                 h.state().1.drawings().drawings[0].chart_points,
                 [ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)]
             );
+            let path = vec!["Analysis / one".into(), "Levels".into()];
+            let sources: Vec<_> = ids[..2]
+                .iter()
+                .map(|&id| SourceItem::drawing(id, DrawingToolType::TrendLine, egui::Color32::RED))
+                .collect();
+            let (panel, chart) = h.state_mut();
+            for action in [
+                ObjectTreeAction::MoveToFolder(ids[..2].to_vec(), path.clone()),
+                ObjectTreeAction::SetFolderVisible(path.clone(), false),
+                ObjectTreeAction::SetFolderLocked(path, true),
+            ] {
+                assert!(panel.apply_to_chart(chart, &action, &sources));
+                assert!(
+                    chart.drawings().can_redo(),
+                    "unchanged {action:?} cleared redo"
+                );
+            }
         }
     }
 

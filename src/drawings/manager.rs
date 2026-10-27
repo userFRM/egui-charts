@@ -1266,12 +1266,13 @@ impl DrawingManager {
     /// Edits live drawing ids as one undo step and queues their saved changes.
     /// Locked drawings accept visibility, name and folder changes, or an edit that unlocks them.
     pub fn edit_drawings(&mut self, ids: &[usize], mut edit: impl FnMut(&mut Drawing)) {
-        let before = self.drawings.clone();
-        if !before.iter().any(|d| ids.contains(&d.id)) {
+        if ids.is_empty() {
             return;
         }
-        for old in before.iter().filter(|d| ids.contains(&d.id)) {
-            let drawing = self.drawings.iter_mut().find(|d| d.id == old.id).unwrap();
+        let ids: HashSet<_> = ids.iter().copied().collect();
+        let mut before = Vec::new();
+        for drawing in self.drawings.iter_mut().filter(|d| ids.contains(&d.id)) {
+            let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
                 let (visible, label, folder) = (
@@ -1280,6 +1281,9 @@ impl DrawingManager {
                     drawing.folder.clone(),
                 );
                 *drawing = old.clone();
+                if visible == old.visible && label == old.label && folder == old.folder {
+                    continue;
+                }
                 drawing.visible = visible;
                 drawing.label = label;
                 drawing.folder = folder;
@@ -1287,6 +1291,9 @@ impl DrawingManager {
             if !drawing.selectable {
                 self.selection.deselect(old.id);
             }
+            before.push(old);
+        }
+        for old in &before {
             self.queue_edit(old);
         }
         self.history.push_snapshot(before);
@@ -2168,46 +2175,92 @@ mod tests {
     /// delete or style edit, until it is explicitly unlocked.
     #[test]
     fn a_locked_drawing_is_neither_moved_nor_deleted() {
-        let mut manager = DrawingManager::new();
-        let mut line = Drawing::new(3, DrawingToolType::TrendLine);
-        line.chart_points = vec![ChartPoint::new(10.0, 10.0), ChartPoint::new(20.0, 20.0)];
-        line.update_screen_coords(|bar| bar, |price| price as f32);
-        line.locked = true;
-        manager.drawings.push(line);
+        for bulk in [false, true] {
+            let edit = |manager: &mut DrawingManager, change: fn(&mut Drawing)| {
+                if bulk {
+                    manager.edit_drawings(&[3], change);
+                } else {
+                    manager.edit_drawing(3, change);
+                }
+            };
+            let mut manager = DrawingManager::new();
+            let mut line = Drawing::new(3, DrawingToolType::TrendLine);
+            line.chart_points = vec![ChartPoint::new(10.0, 10.0), ChartPoint::new(20.0, 20.0)];
+            line.update_screen_coords(|bar| bar, |price| price as f32);
+            line.locked = true;
+            manager.drawings.push(line);
 
-        manager.start_drag_handle(3, HandlePos::Start);
-        manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
-        manager.end_drag_handle();
-        manager.delete_drawing(3);
-        manager.edit_drawing(3, |d| d.font_size = 30.0);
-        manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
-        manager.end_drag_handle();
-        assert_eq!(manager.drawings[0].font_size, 12.0);
-        assert!(!manager.can_undo());
-        assert!(manager.pending_sync.lock().unwrap().is_empty());
-        // Tree metadata can change without unlocking geometry or style edits.
-        manager.edit_drawing(3, |d| {
-            d.visible = false;
-            d.label = Some("Support".into());
-            d.font_size = 30.0;
-        });
-        assert!(!manager.drawings[0].visible);
-        assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
-        assert_eq!(manager.drawings[0].font_size, 12.0);
-        assert!(manager.drawings[0].locked);
-        assert!(manager.undo());
-        assert!(manager.drawings[0].visible);
-        assert_eq!(manager.drawings[0].label, None);
-        assert!(manager.drawings[0].locked);
-        manager.edit_drawing(3, |d| d.locked = false);
-        manager.edit_drawing(3, |d| d.font_size = 30.0);
-        assert_eq!(manager.drawings[0].font_size, 30.0);
+            manager.start_drag_handle(3, HandlePos::Start);
+            manager.update_drag_handle(Pos2::new(50.0, 50.0), |x| x, f64::from);
+            manager.end_drag_handle();
+            manager.delete_drawing(3);
+            edit(&mut manager, |d| d.font_size = 30.0);
+            manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+            manager.end_drag_handle();
+            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert!(!manager.can_undo());
+            assert!(manager.pending_sync.lock().unwrap().is_empty());
+            // Tree metadata can change without unlocking geometry or style edits.
+            edit(&mut manager, |d| {
+                d.visible = false;
+                d.label = Some("Support".into());
+                d.folder = vec!["Analysis".into()];
+                d.font_size = 30.0;
+            });
+            assert!(!manager.drawings[0].visible);
+            assert_eq!(manager.drawings[0].label.as_deref(), Some("Support"));
+            assert_eq!(manager.drawings[0].folder, ["Analysis"]);
+            assert_eq!(manager.drawings[0].font_size, 12.0);
+            assert!(manager.drawings[0].locked);
+            assert!(manager.undo());
+            assert!(manager.drawings[0].visible);
+            assert_eq!(manager.drawings[0].label, None);
+            assert!(manager.drawings[0].folder.is_empty());
+            assert!(manager.drawings[0].locked);
+            edit(&mut manager, |d| d.locked = false);
+            edit(&mut manager, |d| d.font_size = 30.0);
+            assert_eq!(manager.drawings[0].font_size, 30.0);
 
-        assert_eq!(manager.drawings.len(), 1);
-        assert_eq!(
-            manager.drawings[0].chart_points[0],
-            ChartPoint::new(10.0, 10.0)
-        );
+            assert_eq!(manager.drawings.len(), 1);
+            assert_eq!(
+                manager.drawings[0].chart_points[0],
+                ChartPoint::new(10.0, 10.0)
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
+        for edit in [
+            (|d: &mut Drawing| d.folder = vec!["Analysis".into()]) as fn(&mut Drawing),
+            |d| d.visible = false,
+            |d| d.locked = true,
+        ] {
+            let mut manager = DrawingManager::new();
+            manager.drawings = (0..3)
+                .map(|id| Drawing::new(id, DrawingToolType::HorizontalLine))
+                .collect();
+            manager.edit_drawings(&[2], edit);
+            manager.pending_sync.lock().unwrap().clear();
+            // Host updates outside this edit must survive both history directions.
+            manager.drawings[0].label = Some("Host update".into());
+            manager.drawings.remove(1);
+            manager
+                .drawings
+                .push(Drawing::new(3, DrawingToolType::HorizontalLine));
+            for step in [DrawingManager::undo, DrawingManager::redo] {
+                assert!(step(&mut manager));
+                assert_eq!(
+                    manager.drawings.iter().map(|d| d.id).collect::<Vec<_>>(),
+                    [0, 2, 3]
+                );
+                assert_eq!(manager.drawings[0].label.as_deref(), Some("Host update"));
+                assert!(matches!(
+                    manager.pending_sync.lock().unwrap().as_slice(),
+                    [DrawingSyncAction::UpdateDrawing(2)]
+                ));
+            }
+        }
     }
 
     /// Of two overlapping drawings, the one with the higher `z_order` is hit, whichever was

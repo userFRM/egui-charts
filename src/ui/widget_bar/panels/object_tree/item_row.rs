@@ -33,10 +33,10 @@ pub fn render_item_row(
     } else {
         config.indent_width
     };
-    let indent = indent_level as f32 * indent_width;
-
     // Allocate row
     let available_width = ui.available_width();
+    // Leave room for the controls and name even in deeply nested folders.
+    let indent = (indent_level as f32 * indent_width).min((available_width - 180.0).max(0.0));
     let (rect, response) = ui.allocate_exact_size(
         vec2(available_width, config.row_height),
         Sense::click_and_drag(),
@@ -484,7 +484,7 @@ mod tests {
             .into_iter()
             .chain([("custom", custom)])
         {
-            for width in [220.0, 280.0] {
+            for (width, depth) in [(220.0, 0), (280.0, 0), (220.0, 2), (220.0, 20), (280.0, 20)] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let input = egui::RawInput {
@@ -500,7 +500,13 @@ mod tests {
                     let mut state = ObjectTreeState::new();
                     state.select(1);
                     row = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 24.0));
-                    render_item_row(ui, &mut item, &ObjectTreeConfig::default(), &mut state, 0);
+                    render_item_row(
+                        ui,
+                        &mut item,
+                        &ObjectTreeConfig::default(),
+                        &mut state,
+                        depth,
+                    );
                 });
                 output.textures_delta.clear();
                 let swatches: Vec<_> = output

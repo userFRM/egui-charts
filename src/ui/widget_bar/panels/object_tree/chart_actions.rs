@@ -53,10 +53,16 @@ impl ObjectTreePanel {
                 if !path.is_empty() && !self.state().folders.contains(path) {
                     return false;
                 }
-                let ids: Vec<_> = ids
+                let ids: Vec<_> = chart
+                    .drawings()
+                    .drawings
                     .iter()
-                    .copied()
-                    .filter(|id| sources.iter().any(|s| s.id == *id && s.is_drawing()))
+                    .filter(|d| {
+                        ids.contains(&d.id)
+                            && d.folder != *path
+                            && sources.iter().any(|s| s.id == d.id && s.is_drawing())
+                    })
+                    .map(|d| d.id)
                     .collect();
                 chart
                     .drawings_mut()
@@ -71,7 +77,13 @@ impl ObjectTreePanel {
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| d.folder.starts_with(path))
+                    .filter(|d| {
+                        d.folder.starts_with(path)
+                            && match action {
+                                ObjectTreeAction::SetFolderVisible(_, _) => d.visible != *value,
+                                _ => d.locked != *value,
+                            }
+                    })
                     .map(|d| d.id)
                     .collect();
                 chart.drawings_mut().edit_drawings(&ids, |d| match action {
