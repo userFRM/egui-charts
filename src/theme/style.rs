@@ -163,7 +163,7 @@ pub(crate) fn apply_to_style(style: &mut egui::Style, theme: &Theme) {
     style.spacing.interact_size.y = DESIGN_TOKENS.sizing.control_height;
 }
 
-/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`].
+/// Apply `theme` to egui's visuals and store it for [`ThemeExt::active_theme`](super::ThemeExt::active_theme).
 /// Also install Roboto ahead of the application's proportional fonts.
 ///
 /// Call it once at startup and again after the theme changes. Inside `eframe::App::ui` the root
