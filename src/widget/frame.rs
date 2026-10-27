@@ -2595,6 +2595,7 @@ impl Chart {
                     .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
             });
         let mut study_action = None;
+        let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
         {
             let visible_data = self.state.visible_data();
@@ -2634,7 +2635,8 @@ impl Chart {
                     .quote
                     .as_ref()
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
-                legend.show_title = self.main_series_visible && self.config.show_symbol_labels;
+                legend.show_title = self.main_series_present && self.config.show_symbol_labels;
+                legend.series_visible = self.main_series_visible;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
@@ -2660,7 +2662,7 @@ impl Chart {
                 {
                     legend.quantity = order_quantity;
                 }
-                let (quote_action, study_settings, bottom, quantity) = ui
+                let (quote_action, study_settings, bottom, quantity, main_action) = ui
                     .push_id(shown.id, |ui| {
                         legend.show_with_colors(
                             ui,
@@ -2685,6 +2687,7 @@ impl Chart {
                 #[cfg(not(feature = "ui"))]
                 let _ = quantity;
                 study_action = study_settings;
+                series_action = main_action;
                 legend_bottom = bottom;
             }
         }
@@ -2876,6 +2879,9 @@ impl Chart {
                             );
                         }
                     }
+                    // A symbol without metadata still heads the readout.
+                    let heading = (self.instrument().is_none() && !self.symbol.is_empty())
+                        .then(|| crate::model::Instrument::new(self.symbol.as_str()));
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
@@ -2905,7 +2911,7 @@ impl Chart {
                             })
                             .map(|(_, row)| row)
                             .collect::<Vec<_>>(),
-                        self.instrument(),
+                        self.instrument().or(heading.as_ref()),
                         self.value_formatters(),
                     );
                 }
@@ -3108,6 +3114,9 @@ impl Chart {
         self.show_signal_menu(ui, price_rect);
         if let Some(action) = study_action {
             self.apply_study_action(action);
+        }
+        if let Some(action) = series_action {
+            self.apply_main_series_action(action);
         }
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
@@ -3342,6 +3351,31 @@ mod tests {
         }
     }
 
+    /// The main series' legend actions hide it, request its settings and remove it through the
+    /// chart's typed operations, leaving the studies and other series in place.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn main_series_legend_actions_preserve_studies_and_comparisons() {
+        use crate::chart::renderers::SeriesAction;
+        use crate::widget::{SeriesId, SeriesOptions};
+        let mut chart = chart(&[100.0], &[110.0]);
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+        let other = chart.add_series(SeriesOptions::default());
+        chart.apply_main_series_action(SeriesAction::ToggleVisibility);
+        assert!(!chart.is_main_series_visible());
+        chart.apply_main_series_action(SeriesAction::ToggleVisibility);
+        assert!(chart.is_main_series_visible());
+        chart.apply_main_series_action(SeriesAction::Settings);
+        assert_eq!(
+            chart.take_indicator_settings_request(),
+            Some(SeriesId::MAIN)
+        );
+        chart.apply_main_series_action(SeriesAction::Remove);
+        assert!(!chart.main_series_present);
+        assert!(chart.indicators().any(|(id, _)| id == study));
+        assert!(chart.series_scale(other).is_some());
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn status_visibility_reaches_the_chart_legend() {
@@ -3452,7 +3486,7 @@ mod tests {
             };
             assert_eq!(
                 texts.iter().any(|text| text.starts_with(title)),
-                hidden != 1 && hidden != 11,
+                hidden != 1,
                 "{texts:?}"
             );
             assert_eq!(

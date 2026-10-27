@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Floating, held and tracking data readouts lead with the instrument's symbol, and follow a change of instrument. The main series' legend title row offers hide or show, settings and remove buttons that run the chart's typed operations on `SeriesId::MAIN`, leaving studies and other series in place; settings arrive through `Chart::take_indicator_settings_request` as `SeriesId::MAIN`. A hidden main series keeps its dimmed title and buttons so it can be shown again, and the buttons are reachable with Tab. ([#1063](https://github.com/userFRM/egui-charts/issues/1063))
+
 - `PriceAxisOptions::show_symbol_name` and `show_study_names`, and the Scales and lines settings checkboxes of the same names, write the symbol or study name before its last value tag on the price scale, so equal values of different series stay apart. They are off by default, independent of the legend titles and the value visibility flags, and persist with the settings. Added series write their own name on their tags. Migration: `PriceAxisOptions` and `ScalesAndLinesSettings` literals add `show_symbol_name: false` and `show_study_names: false` or use defaults. ([#1064](https://github.com/userFRM/egui-charts/issues/1064))
 
 - Point and Figure builds from high/low input, as before, or from closes through `ChartTypeParams::pnf_source` and the series settings Symbol tab. The choice is part of the cached build, so a change rebuilds the columns, and it persists with the chart type parameters. Migration: `ChartTypeParams` literals add `pnf_source: PriceBasedSource::HighLow` or use `..Default::default()`. ([#1062](https://github.com/userFRM/egui-charts/issues/1062))

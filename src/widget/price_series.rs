@@ -880,7 +880,12 @@ impl Chart {
                         map.range().contains(map.transform().to_scale(*value))
                     })
                     .map(move |(value, colors, last)| {
-                        (value, colors, map, self.series_tag_label(item, &map, value, last))
+                        (
+                            value,
+                            colors,
+                            map,
+                            self.series_tag_label(item, &map, value, last),
+                        )
                     })
             })
     }
@@ -1908,15 +1913,18 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let rect = chart.last_rendered_price_rect;
-        assert_eq!(labels(&chart, SeriesScale::Separate(2), rect), ["Alpha 200.500"]);
+        assert_eq!(
+            labels(&chart, SeriesScale::Separate(2), rect),
+            ["Alpha 200.500"]
+        );
         assert_eq!(labels(&chart, SeriesScale::Separate(3), rect), ["Beta 300"]);
         chart.config.price_axis.show_symbol_name = false;
         assert_eq!(labels(&chart, SeriesScale::Separate(2), rect), ["200.500"]);
         chart.set_series_formatter(
             alpha,
-            Some(std::sync::Arc::new(crate::scales::CustomPriceFormatter::new(
-                |price| format!("{price:.1} USD"),
-            ))),
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|price| format!("{price:.1} USD")),
+            )),
         );
         assert_eq!(
             labels(&chart, SeriesScale::Separate(2), rect),
