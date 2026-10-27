@@ -458,6 +458,11 @@ impl Chart {
             return false;
         };
         let current_view = self.get_time_scale_state();
+        let mut current: Vec<_> = action
+            .studies
+            .iter()
+            .map(|change| Study::capture(self, change.id))
+            .collect();
         if let Some((kind, params)) = &mut action.chart_type {
             let current = (self.chart_type, self.chart_type_params.clone());
             self.set_chart_type(*kind);
@@ -517,11 +522,6 @@ impl Chart {
         self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
         // templates retain order and stable ids while unrelated host studies stay present.
-        let mut current: Vec<_> = action
-            .studies
-            .iter()
-            .map(|change| Study::capture(self, change.id))
-            .collect();
         let show_volume = self.config.show_volume;
         for (change, current) in action.studies.iter().zip(&mut current) {
             let indicator = self.take_study(change.id);
@@ -720,6 +720,66 @@ mod tests {
         );
         assert!(chart.redo());
         assert!(chart.indicators().next().is_none());
+    }
+
+    #[test]
+    fn study_history_restores_visibility_before_an_interval_is_set() {
+        let mut chart = chart(&[10.0; 4], &[20.0; 4]);
+        let id = chart.add_indicator(Box::new(SMA::new(2)));
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.hidden_intervals = vec![Timeframe::Min1];
+        study.apply_settings(&[], settings).unwrap();
+        assert!(chart.indicators().next().unwrap().1.is_visible());
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_colors(vec![Color32::RED]);
+            chart.set_timeframe(Timeframe::Min1);
+        });
+        for redo in [false, true, false] {
+            assert!(if redo { chart.redo() } else { chart.undo() });
+            assert_eq!(chart.timeframe(), redo.then_some(Timeframe::Min1));
+            assert_eq!(chart.indicators().next().unwrap().1.is_visible(), !redo);
+        }
+    }
+
+    #[test]
+    fn study_history_restores_inputs_with_dependent_limits() {
+        use crate::studies::{AverageLine, AverageType, MACombination};
+
+        let mut chart = chart(&[10.0, 14.0, 18.0, 22.0], &[10.0, 14.0, 18.0, 22.0]);
+        let id = chart.add_indicator(Box::new(
+            MACombination::new(vec![
+                AverageLine::new(AverageType::Simple, 1, Color32::RED),
+                AverageLine::new(AverageType::Simple, 2, Color32::BLUE),
+            ])
+            .unwrap(),
+        ));
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("kind_0", InputValue::Choice(5))
+                .unwrap();
+        });
+        for redo in [false, true, false, true] {
+            assert!(if redo { chart.redo() } else { chart.undo() });
+            let study = chart.indicators().next().unwrap().1;
+            assert_eq!(
+                study.inputs()[0].value,
+                InputValue::Length(if redo { 2 } else { 1 })
+            );
+            assert_eq!(
+                study.inputs()[1].value,
+                InputValue::Choice(if redo { 5 } else { 0 })
+            );
+            assert_eq!(
+                study.values().value(0, 3),
+                Some(if redo { 70.0 / 3.0 } else { 22.0 })
+            );
+        }
     }
 
     #[test]

@@ -112,6 +112,7 @@ pub struct StudySettings {
 pub struct StudySettingsSnapshot {
     inputs: Vec<(String, InputValue)>,
     settings: StudySettings,
+    timeframe: Option<Timeframe>,
     colors: Vec<Color32>,
     visible: bool,
     overlay: Option<bool>,
@@ -155,6 +156,7 @@ impl StudySettingsSnapshot {
                 .map(|input| (input.id, input.value))
                 .collect(),
             settings: study.settings(),
+            timeframe: None,
             colors: study.colors(),
             visible,
             overlay: Some(study.is_overlay()),
@@ -611,6 +613,7 @@ impl Indicator for ConfiguredStudy {
         let mut snapshot =
             StudySettingsSnapshot::capture(self.study.as_ref(), self.study.is_visible());
         snapshot.settings = self.settings.clone();
+        snapshot.timeframe = self.timeframe;
         snapshot.overlay = self.overlay;
         snapshot.scale = self.scale;
         snapshot.source = self.source;
@@ -621,18 +624,35 @@ impl Indicator for ConfiguredStudy {
         snapshot
     }
     fn restore_settings(&mut self, snapshot: &StudySettingsSnapshot) -> Result<(), &'static str> {
-        let current = self.study.inputs();
-        for (id, value) in &snapshot.inputs {
-            if !current
-                .iter()
-                .any(|input| input.id == *id && input.value == *value)
-            {
-                self.study.set_input(id, value.clone())?;
+        let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
+        while !inputs.is_empty() {
+            let remaining = inputs.len();
+            let mut error = "invalid study input";
+            // An input can change another input's accepted range.
+            inputs.retain(|(id, value)| {
+                if self
+                    .study
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == *id && input.value == *value)
+                {
+                    return false;
+                }
+                if let Err(message) = self.study.set_input(id, value.clone()) {
+                    error = message;
+                    true
+                } else {
+                    false
+                }
+            });
+            if inputs.len() == remaining {
+                return Err(error);
             }
         }
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
         self.settings = snapshot.settings.clone();
+        self.timeframe = snapshot.timeframe;
         self.overlay = snapshot.overlay;
         self.scale = snapshot.scale;
         self.scale_mapping = None;
