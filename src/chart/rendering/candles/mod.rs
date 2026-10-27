@@ -342,10 +342,16 @@ pub fn render_chart_type(
             );
         }
         ChartType::Range => {
-            let built = price_based::range_bars(ctx.full_data, ctx.revision, params.type_params);
+            let built;
+            let shown = if ctx.shows_elements {
+                ctx.visible_data
+            } else {
+                built = price_based::range_bars(ctx.full_data, ctx.revision, params.type_params);
+                built.shown_bars(ctx.start_idx, ctx.visible_data.len())
+            };
             range::render_range_bars(
                 painter,
-                built.shown(ctx.start_idx, ctx.visible_data.len()),
+                shown,
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),

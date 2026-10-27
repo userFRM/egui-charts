@@ -114,86 +114,27 @@ impl RangeBar {
     }
 }
 
+/// What a chart's range bars are built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeBarSource {
+    /// The trades the feed supplied, in order, with their timestamps and volume.
+    Executions,
+    /// The open, high, low and close of the chart's bars: an approximation, used while the chart
+    /// holds no trades.
+    OhlcApproximation,
+}
+
 /// Build range bars from trades (exact construction). A trade's size that would make its bar's
 /// volume overflow is left out.
 ///
 /// # Safety Limits
 /// - At most the newest 5,000 range bars
 pub fn to_range_bars_from_ticks(ticks: &[Tick], config: &RangeBarConfig) -> Vec<RangeBar> {
-    if ticks.is_empty() {
-        return Vec::new();
+    let mut builder = RangeBarBuilder::new(config.range_size);
+    for tick in ticks {
+        builder.push_tick(tick);
     }
-
-    const MAX_BARS: usize = 5_000;
-    let range_size = config.range_size;
-    let mut bars: Vec<RangeBar> = Vec::new();
-
-    let first_tick = &ticks[0];
-    let mut curr_bar = RangeBar {
-        open: first_tick.price,
-        high: first_tick.price,
-        low: first_tick.price,
-        close: first_tick.price,
-        volume: add_volume(0.0, first_tick.size),
-        start_time: first_tick.ts,
-        end_time: first_tick.ts,
-        range_size,
-        tick_cnt: 1,
-    };
-
-    for tick in ticks.iter().skip(1) {
-        // Update current bar
-        curr_bar.high = curr_bar.high.max(tick.price);
-        curr_bar.low = curr_bar.low.min(tick.price);
-        curr_bar.close = tick.price;
-        curr_bar.volume = add_volume(curr_bar.volume, tick.size);
-        curr_bar.end_time = tick.ts;
-        curr_bar.tick_cnt += 1;
-
-        // A tick that crosses several ranges closes one bar per range; a range of 0 or less closes none.
-        // A tick closes at most 100 bars, which bounds the work for one bad print; raise it if gaps
-        // that large must chart in full.
-        const MAX_CLOSES: usize = 100;
-        let mut closes = 0;
-        while curr_bar.range() >= range_size && range_size > 0.0 && closes < MAX_CLOSES {
-            closes += 1;
-            // Determine close price based on direction
-            if tick.price >= curr_bar.open {
-                // Bar is moving up
-                curr_bar.close = curr_bar.low + range_size;
-                curr_bar.high = curr_bar.close;
-            } else {
-                // Bar is moving down
-                curr_bar.close = curr_bar.high - range_size;
-                curr_bar.low = curr_bar.close;
-            }
-
-            bars.push(curr_bar.clone());
-            if bars.len() == 2 * MAX_BARS {
-                bars.drain(..MAX_BARS);
-            }
-
-            // Start new bar from where the last one ended
-            curr_bar = RangeBar {
-                open: curr_bar.close,
-                high: tick.price.max(curr_bar.close),
-                low: tick.price.min(curr_bar.close),
-                close: tick.price,
-                volume: 0.0,
-                start_time: tick.ts,
-                end_time: tick.ts,
-                range_size,
-                tick_cnt: 1,
-            };
-        }
-    }
-
-    // The incomplete bar holds the last trade, unless that trade only closed the previous bar exactly.
-    if bars.is_empty() || curr_bar.tick_cnt > 1 || curr_bar.range() > 0.0 {
-        bars.push(curr_bar);
-    }
-    bars.drain(..bars.len().saturating_sub(MAX_BARS));
-    bars
+    builder.elements()
 }
 
 /// Convert OHLC bars to range bars (approximation). A bar's volume that would make its range bar's
@@ -244,6 +185,65 @@ impl RangeBarBuilder {
             curr_bar: None,
             bars: Vec::new(),
         }
+    }
+
+    /// Adds one trade, after the bars or trades already added. A trade that crosses several
+    /// ranges closes one bar per range; a range of 0 or less closes none. A trade closes at most
+    /// 100 bars, which bounds the work for one bad print; raise it if gaps that large must chart
+    /// in full. The bar that follows a close holds the trade only when it lies beyond the close.
+    pub(crate) fn push_tick(&mut self, tick: &Tick) {
+        let range_size = self.range_size;
+        let Some(mut curr_bar) = self.curr_bar.take() else {
+            self.curr_bar = Some(RangeBar {
+                open: tick.price,
+                high: tick.price,
+                low: tick.price,
+                close: tick.price,
+                volume: add_volume(0.0, tick.size),
+                start_time: tick.ts,
+                end_time: tick.ts,
+                range_size,
+                tick_cnt: 1,
+            });
+            return;
+        };
+        curr_bar.high = curr_bar.high.max(tick.price);
+        curr_bar.low = curr_bar.low.min(tick.price);
+        curr_bar.close = tick.price;
+        curr_bar.volume = add_volume(curr_bar.volume, tick.size);
+        curr_bar.end_time = tick.ts;
+        curr_bar.tick_cnt += 1;
+
+        const MAX_CLOSES: usize = 100;
+        let mut closes = 0;
+        while curr_bar.range() >= range_size && range_size > 0.0 && closes < MAX_CLOSES {
+            closes += 1;
+            if tick.price >= curr_bar.open {
+                curr_bar.close = curr_bar.low + range_size;
+                curr_bar.high = curr_bar.close;
+            } else {
+                curr_bar.close = curr_bar.high - range_size;
+                curr_bar.low = curr_bar.close;
+            }
+            self.bars.push(curr_bar.clone());
+            if self.bars.len() == 2 * MAX_BARS {
+                self.bars.drain(..MAX_BARS);
+            }
+
+            // Start the next bar where the last one ended
+            curr_bar = RangeBar {
+                open: curr_bar.close,
+                high: tick.price.max(curr_bar.close),
+                low: tick.price.min(curr_bar.close),
+                close: tick.price,
+                volume: 0.0,
+                start_time: tick.ts,
+                end_time: tick.ts,
+                range_size,
+                tick_cnt: usize::from(tick.price != curr_bar.close),
+            };
+        }
+        self.curr_bar = Some(curr_bar);
     }
 }
 

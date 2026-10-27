@@ -1097,6 +1097,7 @@ impl Chart {
                 visible_data: visible,
                 full_data: &item.bars,
                 revision: item.revision,
+                shows_elements: false,
                 heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,

@@ -117,6 +117,7 @@ impl Chart {
             studies: IndicatorRegistry::new(),
             study_data: Default::default(),
             element_studies: Default::default(),
+            execution_ranges: Default::default(),
             #[cfg(feature = "studies")]
             volume_setting: false,
             #[cfg(feature = "studies")]
@@ -433,6 +434,20 @@ impl Chart {
     /// Returns the current chart type (Candles, Bars, Line, Area, Renko, or Kagi).
     pub fn chart_type(&self) -> ChartType {
         self.chart_type
+    }
+
+    /// What a Range chart's bars are built from, or `None` for another chart type. The chart
+    /// builds them from the trades the feed supplied, including during replay up to its cutoff,
+    /// and falls back to the OHLC approximation while it holds none.
+    pub fn range_bar_source(&self) -> Option<crate::model::RangeBarSource> {
+        use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+        (self.chart_type == ChartType::Range).then(|| {
+            if self.execution_ranges.in_use() {
+                Executions
+            } else {
+                OhlcApproximation
+            }
+        })
     }
 
     /// Sets the parameters of the price-based chart types (Renko, Kagi, Range, Point and Figure,

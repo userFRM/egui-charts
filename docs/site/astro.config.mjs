@@ -18,6 +18,7 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         { slug: 'index', label: 'Introduction' },
+        { label: 'Status', link: '/progress/' },
         {
           label: 'Getting started',
           items: ['installation', 'first-chart', 'data-model', 'data'],
