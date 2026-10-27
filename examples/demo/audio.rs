@@ -1,5 +1,13 @@
 //! Local notification tones shared by native playback and browser audio.
 
+#[cfg(not(target_arch = "wasm32"))]
+use maudio::{
+    audio::sample_rate::SampleRate,
+    data_source::sources::buffer::{AudioBuffer, AudioBufferBuilder},
+    engine::{Engine, engine_builder::EngineBuilder},
+    sound::{Sound, sound_builder::SoundBuilder, sound_flags::SoundFlags},
+};
+
 const SAMPLE_RATE: u32 = 44_100;
 
 fn samples(name: &str, volume: f32) -> Vec<f32> {
@@ -30,8 +38,9 @@ fn samples(name: &str, volume: f32) -> Vec<f32> {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(super) struct AudioPlayer {
-    engine: Option<soloud::Soloud>,
-    voices: Vec<(soloud::Handle, soloud::audio::Wav)>,
+    engine: Option<Engine>,
+    // Each sound must be dropped before its source buffer.
+    voices: Vec<(Sound, AudioBuffer<f32>)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,28 +52,34 @@ impl AudioPlayer {
         _activate: bool,
         _ctx: &egui::Context,
     ) -> Result<(), String> {
-        use soloud::AudioExt;
         if !volume.is_finite() || volume <= 0.0 {
             return Ok(());
         }
         if self.engine.is_none() {
             self.engine = Some(
-                soloud::Soloud::default()
+                EngineBuilder::new()
+                    .set_sample_rate(SampleRate::Custom(SAMPLE_RATE))
+                    .build()
                     .map_err(|error| format!("Could not open audio: {error}"))?,
             );
         }
         let engine = self.engine.as_ref().unwrap();
-        self.voices
-            .retain(|(handle, _)| engine.is_valid_voice_handle(*handle));
+        self.voices.retain(|(sound, _)| sound.is_playing());
         if self.voices.len() >= 16 {
-            engine.stop(self.voices.remove(0).0);
+            self.voices.remove(0);
         }
-        let mut sound = soloud::audio::Wav::default();
         let pcm = samples(name, volume);
-        // SAFETY: finite mono samples fit u32; the engine copies them and owns no Rust allocation.
-        unsafe { sound.load_raw_wav_ex(&pcm, SAMPLE_RATE as f32, 1, true, false) }
+        let buffer = AudioBufferBuilder::build_f32(1, &pcm)
             .map_err(|error| format!("Could not load sound: {error}"))?;
-        self.voices.push((engine.play(&sound), sound));
+        let sound = SoundBuilder::new(engine)
+            .data_source(&buffer)
+            .flags(SoundFlags::NO_PITCH | SoundFlags::NO_SPATIALIZATION)
+            .build()
+            .map_err(|error| format!("Could not load sound: {error}"))?;
+        sound
+            .play_sound()
+            .map_err(|error| format!("Could not play sound: {error}"))?;
+        self.voices.push((sound, buffer));
         Ok(())
     }
 
@@ -136,6 +151,59 @@ impl AudioPlayer {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muted_native_tones_do_not_open_a_device() {
+        let mut player = AudioPlayer::default();
+        let ctx = egui::Context::default();
+        for volume in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            player.play("Bell", volume, false, &ctx).unwrap();
+        }
+        assert!(player.engine.is_none());
+        assert!(player.voices.is_empty());
+    }
+
+    #[test]
+    fn native_tones_mix_and_reclaim_bounded_voices() {
+        let mut player = AudioPlayer {
+            engine: Some(
+                EngineBuilder::new()
+                    .no_device(1, SampleRate::Custom(SAMPLE_RATE))
+                    .build()
+                    .unwrap(),
+            ),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        for _ in 0..17 {
+            player.play("Beep", 0.05, false, &ctx).unwrap();
+        }
+        assert_eq!(player.voices.len(), 16);
+
+        let mut reader = player
+            .engine
+            .as_ref()
+            .unwrap()
+            .try_acquire_reader()
+            .unwrap();
+        let mut output = vec![0.0; SAMPLE_RATE as usize];
+        assert_eq!(
+            reader.read_pcm_frames_into(&mut output).unwrap(),
+            output.len()
+        );
+        let expected = samples("Beep", 0.05);
+        assert!(expected.iter().any(|sample| sample.abs() > 0.001));
+        for (index, (actual, expected)) in output.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected * 16.0).abs() < 1e-5,
+                "sample {index}: {actual}, expected {}",
+                expected * 16.0
+            );
+        }
+        assert!(output[expected.len()..].iter().all(|sample| *sample == 0.0));
+        player.play("Bell", 0.5, false, &ctx).unwrap();
+        assert_eq!(player.voices.len(), 1);
+    }
 
     #[test]
     fn local_tones_have_distinct_finite_pcm_and_zero_volume_is_silent() {
