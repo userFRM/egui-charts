@@ -77,6 +77,7 @@ impl DemoApp {
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
         self.strategy_report.set_report(Some(report), source);
+        self.strategy_session = self.timeframe_toolbar.state.session_type;
         self.strategy_trade = None;
         self.refresh_strategy_signals();
     }
@@ -111,6 +112,11 @@ impl DemoApp {
                 self.stop_replay();
                 if self.state.symbol != trade.symbol {
                     self.switch_symbol(&trade.symbol);
+                }
+                // A symbol switch resets the session; the trade's bar may only exist in the report's.
+                if self.timeframe_toolbar.state.session_type != self.strategy_session {
+                    self.timeframe_toolbar.set_session(self.strategy_session);
+                    self.apply_session();
                 }
                 if self.state.timeframe != trade.timeframe {
                     self.switch_timeframe(trade.timeframe);
@@ -318,10 +324,6 @@ mod tests {
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
-                // Returning to SAMPLE selects regular hours; keep the report on that same session.
-                app.timeframe_toolbar
-                    .set_session(super::super::SessionType::RTH);
-                app.regenerate_bars();
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
                 let frame = |app: &mut DemoApp, events| {
                     ctx.run_ui(
@@ -400,6 +402,10 @@ mod tests {
                 click(&mut app, first);
                 assert_eq!(app.state.symbol, report.symbol);
                 assert_eq!(app.chart.timeframe(), Some(report.timeframe));
+                assert_eq!(
+                    app.timeframe_toolbar.state.session_type,
+                    super::super::SessionType::Full24x7
+                );
                 assert_eq!(app.strategy_trade, Some(0));
                 assert!(
                     app.chart
