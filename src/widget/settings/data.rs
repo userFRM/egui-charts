@@ -400,6 +400,7 @@ impl TradingNotifications {
 
 /// Alerts tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AlertsSettings {
     /// Whether to show alerts.
     pub show_alerts: bool,
@@ -407,6 +408,10 @@ pub struct AlertsSettings {
     pub show_alert_labels: bool,
     /// Alert color.
     pub alert_color: Color32,
+    /// Draw only active alerts; otherwise triggered, disabled and expired alerts are drawn dimmed.
+    pub show_active_only: bool,
+    /// Seconds an alert notification stays on screen.
+    pub notification_seconds: u32,
 }
 
 impl Default for AlertsSettings {
@@ -415,6 +420,8 @@ impl Default for AlertsSettings {
             show_alerts: true,
             show_alert_labels: true,
             alert_color: crate::studies::palette::ORANGE, // Orange
+            show_active_only: true,
+            notification_seconds: 5,
         }
     }
 }

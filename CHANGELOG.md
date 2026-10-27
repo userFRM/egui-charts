@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The Alerts settings tab adds Show active alerts only and the number of seconds a trigger notification stays on screen (`AlertsSettings::show_active_only`, `notification_seconds`). With `active_only` unset, `chart::render_alert_levels` draws triggered, disabled and expired alerts dimmed. `AlertsPanel::set_notification_seconds` sets the lifetime of trigger notifications, five seconds by default.
+
 - The Symbol settings tab switches candle bodies, borders and wicks on and off independently and can colour candles by the previous close. `ChartTypeStyles::candles` holds the body and wick visibility and the colouring as a `CandlesStyle`; borders follow `ChartConfig::candle_border_width` and are now drawn inside the body. Adjust data for dividends sets `ChartSettingsState::adjust_for_dividends`, which the host applies by reloading adjusted history, as the demo does. The Status line tab shows or hides the legend logo (`ChartConfig::show_legend_badge`) and the change of the last close from the previous session close (`show_last_day_change`), and sets the opacity of the backdrop behind study legend rows (`show_indicator_backdrop`, `indicator_backdrop_opacity`).
 
 - Alert expiry is entered in the alert dialog as a date (YYYY-MM-DD) and a 24-hour time in `AlertDialog::timezone`, which is UTC unless the host sets another zone, or turned off with No expiry; turning it back on proposes one month ahead. Malformed dates and times, local times skipped by a clock change and expiries that are not in the future are named beneath the form and block saving, and a repeated local time resolves to its first occurrence. The RFC 3339 text field is removed.
@@ -871,6 +873,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- `chart::render_alert_levels` takes `active_only` after `labels`; pass `true` to keep drawing only active alerts. `AlertsSettings` struct literals add `show_active_only` and `notification_seconds` or end with `..Default::default()`; saved settings without them take the defaults.
 
 - `ChartTypeStyles`, `CandleColorConfig`, `StatusLineOptions` and `ChartSettingsState` have new public fields for candle part visibility, previous-close colouring, the legend logo, the last day change, the study backdrop and dividend adjustment. Struct literals add the fields or end with `..Default::default()`; saved settings without them take the defaults.
 

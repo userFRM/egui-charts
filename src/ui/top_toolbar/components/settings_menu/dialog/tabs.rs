@@ -766,6 +766,23 @@ impl SettingsDialog {
                     "Show alert labels",
                     theme.ui.text,
                 );
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.alerts.show_active_only,
+                    "Show active alerts only",
+                    theme.ui.text,
+                );
+
+                ui.add_space(ui.active_theme().spacing.xxl);
+                self.draw_section_header(ui, "NOTIFICATIONS", theme);
+
+                self.draw_setting_row_with_controls(ui, "Lifetime", theme, |ui, dialog| {
+                    ui.add(
+                        egui::DragValue::new(&mut dialog.settings.alerts.notification_seconds)
+                            .range(1..=300)
+                            .suffix(l10n::text(ui.ctx(), " s")),
+                    );
+                });
             });
         });
     }

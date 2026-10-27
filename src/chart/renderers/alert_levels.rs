@@ -5,8 +5,9 @@ use egui::{Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 use crate::chart::coords::ChartMapping;
 use crate::model::{Alert, AlertCondition, AlertSource, AlertStatus};
 
-/// Draw active price thresholds and return a replacement alert after a drag.
+/// Draw price thresholds and return a replacement alert after a drag.
 /// Supply only alerts for this pane, resolving symbol or watchlist membership in the host.
+/// With `active_only` unset, triggered, disabled and expired alerts are drawn dimmed.
 /// Call after drawing the chart, then submit the result through the host's alerts service.
 /// Non-price sources require the host to resolve their own pane and coordinates.
 /// `format` supplies the instrument's precision and currency for labels.
@@ -16,15 +17,18 @@ pub fn render_alert_levels<'a>(
     alerts: impl IntoIterator<Item = &'a Alert>,
     color: Color32,
     labels: bool,
+    active_only: bool,
     format: impl Fn(f64) -> String,
 ) -> Option<Alert> {
     let mut changed = None;
     let painter = ui.painter().with_clip_rect(mapping.rect);
     for alert in alerts
         .into_iter()
-        .filter(|a| a.status == AlertStatus::Active)
+        .filter(|a| !active_only || a.status == AlertStatus::Active)
     {
         let Some(id) = &alert.id else { continue };
+        let active = alert.status == AlertStatus::Active;
+        let color = if active { color } else { color.gamma_multiply(0.5) };
         let rules = std::iter::once((&alert.source, &alert.condition)).chain(
             alert
                 .additional_conditions
@@ -112,7 +116,11 @@ pub fn render_alert_levels<'a>(
                     };
                     let text = format!("{name}  {}", format(value));
                     let font = FontId::proportional(12.0);
-                    let text_color = ui.visuals().text_color();
+                    let text_color = if active {
+                        ui.visuals().text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
                     let galley = painter.layout_no_wrap(text, font, text_color);
                     let label = Rect::from_min_size(
                         pos2(mapping.rect.left() + 8.0, y - galley.size().y - 4.0),

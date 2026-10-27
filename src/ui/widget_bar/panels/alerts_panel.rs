@@ -13,7 +13,7 @@ use crate::model::{Alert, AlertId, AlertStatus};
 use crate::services::{AlertEvent, Alerts, Listener};
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::notifications::Toasts;
+use crate::ui_kit::notifications::{Toast, Toasts};
 use crate::ui_kit::{EmptyState, IconButton, PanelHeader};
 
 /// Configuration for the alerts panel.
@@ -73,6 +73,7 @@ pub struct AlertsPanel {
     log: VecDeque<AlertTrigger>,
     error: Option<FeedError>,
     show_log: bool,
+    notification_seconds: f32,
 }
 
 impl Default for AlertsPanel {
@@ -94,7 +95,13 @@ impl AlertsPanel {
             log: VecDeque::new(),
             error: None,
             show_log: false,
+            notification_seconds: 5.0,
         }
+    }
+
+    /// Keep each trigger notification on screen for this many seconds, five by default.
+    pub fn set_notification_seconds(&mut self, seconds: f32) {
+        self.notification_seconds = seconds;
     }
 
     /// Attach a host service, clearing the previous account's alerts and log.
@@ -189,10 +196,13 @@ impl AlertsPanel {
                     .find(|a| a.id.as_ref() == Some(&id))
                     .map(|a| a.symbol.clone())
                     .unwrap_or_default();
-                toasts.info(format!(
-                    "Alert triggered: {}",
-                    if symbol.is_empty() { &id.0 } else { &symbol }
-                ));
+                toasts.add(
+                    Toast::info(format!(
+                        "Alert triggered: {}",
+                        if symbol.is_empty() { &id.0 } else { &symbol }
+                    ))
+                    .duration(self.notification_seconds),
+                );
                 let extra = toasts.len().saturating_sub(5);
                 toasts.toasts_mut().drain(..extra);
                 self.log.push_back(AlertTrigger {

@@ -1021,6 +1021,7 @@ impl DemoApp {
         self.chart.begin_user_action();
         self.settings_state = state.clone();
         self.trading.display = state.trading.clone();
+        self.alerts.set_notification_seconds(state.alerts.notification_seconds as f32);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
         if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
@@ -2485,6 +2486,7 @@ impl DemoApp {
                     if let Some(alert) = egui_charts::chart::render_alert_levels(
                         ui, &mapping, self.alerts.alerts().iter().filter(|a| a.symbol == self.chart.symbol() && a.watchlist.is_none()),
                         self.settings_state.alerts.alert_color, self.settings_state.alerts.show_alert_labels,
+                        self.settings_state.alerts.show_active_only,
                         |price| format!("{price:.decimals$} {currency}"),
                     ) { self.alerts.save(alert); }
                 }
