@@ -132,9 +132,15 @@ impl Chart {
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
         drawing_manager.snap_targets.clear();
+        let press =
+            if drawing_manager.active_tool.is_some() && drawing_manager.curr_drawing.is_none() {
+                interaction::primary_press_pos(ui)
+            } else {
+                None
+            };
         if drawing_manager.options.magnet_mode
-            && let Some(pointer) = response
-                .interact_pointer_pos()
+            && let Some(pointer) = press
+                .or_else(|| response.interact_pointer_pos())
                 .or_else(|| response.hover_pos())
         {
             let distance = drawing_manager.options.magnet_distance;
@@ -177,7 +183,8 @@ impl Chart {
                     .iter()
                     .zip(self.rendered_studies().indicators())
                     .filter(|(id, s)| {
-                        s.is_visible()
+                        drawing_manager.options.snap_to_indicators
+                            && s.is_visible()
                             && if pane.is_some() {
                                 members.contains(&Some(id.0))
                             } else {
@@ -222,8 +229,10 @@ impl Chart {
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
-            let uses_precise =
-                active_tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw;
+            let uses_precise = active_tool.interaction_mode()
+                == DrawingInteractionMode::ContinuousDraw
+                || (active_tool == crate::drawings::DrawingToolType::Rect
+                    && ui.input(|i| i.modifiers.shift));
             if uses_precise {
                 interaction::handle_active_tool(
                     ui,
@@ -317,6 +326,237 @@ mod tests {
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
 
+    /// Primary clicks place two anchors; secondary drags leave the preview and Escape cancels it.
+    #[test]
+    fn two_point_tools_accept_clicks_and_cancel_unfinished_previews() {
+        use crate::drawings::DrawingToolType::*;
+        use egui::pos2;
+        for tool in [
+            Rect,
+            Circle,
+            Ellipse,
+            Measure,
+            PriceRange,
+            DateRange,
+            DateAndPriceRange,
+            GannBox,
+            GannSquare,
+            GannFixed,
+            Forecast,
+            FixedRangeVolumeProfile,
+            FibonacciRetracement,
+            FibonacciSpeedResistanceArcs,
+            FibonacciTimeZones,
+            FibonacciCircles,
+            FibonacciSpeedFan,
+            FibonacciSpiral,
+            GannFan,
+            RegressionTrend,
+            CyclicLines,
+            TimeCycles,
+            SineLine,
+            Callout,
+            Arrow,
+            TrendLine,
+        ] {
+            for (cancel, batched, secondary_drag) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+            ] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.drawings_mut().set_active_tool(Some(tool));
+                let map = chart.get_chart_mapping();
+                let a = pos2(map.idx_to_x(30), map.price_to_y(16.0));
+                let b = pos2(map.idx_to_x(50), map.price_to_y(14.0));
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let frames = if batched {
+                    vec![
+                        vec![Event::PointerMoved(a), button(a, true), button(a, false)],
+                        vec![Event::PointerMoved(b)],
+                    ]
+                } else {
+                    vec![
+                        vec![Event::PointerMoved(a)],
+                        vec![button(a, true)],
+                        vec![button(a, false)],
+                        vec![Event::PointerMoved(b)],
+                    ]
+                };
+                for (i, events) in frames.into_iter().enumerate() {
+                    frame(&ctx, &mut chart, (i + 1) as f64 * 0.1, events);
+                }
+                let preview = chart
+                    .drawings()
+                    .curr_drawing
+                    .as_ref()
+                    .expect("live preview");
+                assert_eq!(preview.chart_points.len(), 2, "{tool:?}");
+                assert_eq!(preview.chart_points[0].bar_idx, 30.0, "{tool:?}");
+                assert_eq!(preview.chart_points[1].bar_idx, 50.0, "{tool:?}");
+                assert!(chart.drawings().drawings.is_empty());
+                if secondary_drag {
+                    for (i, events) in [
+                        vec![Event::PointerButton {
+                            pos: b,
+                            button: PointerButton::Secondary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        vec![Event::PointerMoved(b + egui::vec2(20.0, 0.0))],
+                        vec![Event::PointerButton {
+                            pos: b,
+                            button: PointerButton::Secondary,
+                            pressed: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        frame(&ctx, &mut chart, 0.41 + i as f64 * 0.01, events);
+                    }
+                    assert!(
+                        chart.drawings().drawings.is_empty(),
+                        "{tool:?}: secondary drag"
+                    );
+                    assert!(chart.drawings().curr_drawing.is_some());
+                }
+                if cancel {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        0.5,
+                        vec![Event::Key {
+                            key: Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                    );
+                    assert!(chart.drawings().drawings.is_empty());
+                } else {
+                    if batched {
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.5,
+                            vec![button(b, true), button(b, false)],
+                        );
+                    } else {
+                        frame(&ctx, &mut chart, 0.5, vec![button(b, true)]);
+                        frame(&ctx, &mut chart, 0.6, vec![button(b, false)]);
+                    }
+                    let drawing = &chart.drawings().drawings[0];
+                    assert_eq!(drawing.chart_points.len(), 2, "{tool:?}");
+                    assert_eq!(drawing.chart_points[0].bar_idx, 30.0, "{tool:?}");
+                    assert_eq!(drawing.chart_points[1].bar_idx, 50.0, "{tool:?}");
+                    assert!(chart.undo());
+                    assert!(chart.drawings().drawings.is_empty());
+                    assert!(chart.redo());
+                    assert_eq!(chart.drawings().drawings.len(), 1);
+                }
+                assert!(chart.drawings().curr_drawing.is_none(), "{tool:?}");
+            }
+        }
+    }
+
+    /// A square has equal screen sides in any quadrant, including against a pane edge.
+    #[test]
+    fn shift_rectangle_creation_is_square_in_preview_and_after_release() {
+        use egui::{pos2, vec2};
+        for (shift, delta) in [
+            (true, vec2(240.0, 60.0)),
+            (false, vec2(240.0, 60.0)),
+            (true, vec2(-240.0, 60.0)),
+            (true, vec2(240.0, -60.0)),
+            (true, vec2(-240.0, -60.0)),
+            (true, vec2(1000.0, 60.0)),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+                .drawings_mut()
+                .set_active_tool(Some(DrawingToolType::Rect));
+            let map = chart.get_chart_mapping();
+            let center = chart.get_rendered_price_rect().center();
+            let a = pos2(map.idx_to_x(map.x_to_idx(center.x)), center.y);
+            let b = a + delta;
+            let modifiers = Modifiers {
+                shift,
+                ..Modifiers::NONE
+            };
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            for (i, events) in [
+                vec![Event::PointerMoved(a)],
+                vec![button(a, true)],
+                vec![Event::PointerMoved(a + vec2(60.0, 15.0))],
+                vec![Event::PointerMoved(b)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut events = events;
+                events.insert(0, Event::ModifiersChanged(modifiers));
+                frame(&ctx, &mut chart, (i + 1) as f64 * 0.1, events);
+            }
+            let pane = chart.get_rendered_price_rect();
+            let expected_side = if delta.x > 500.0 {
+                pane.height().min(pane.width()) / 2.0
+            } else {
+                240.0
+            };
+            let square = |points: &[egui::Pos2]| {
+                let d = points[1] - points[0];
+                assert!(
+                    (d.x.abs() - expected_side).abs() < 0.01,
+                    "{delta:?}: {points:?}"
+                );
+                assert!(
+                    (d.x.abs() - d.y.abs()).abs() < 0.01,
+                    "{delta:?}: {points:?}"
+                );
+            };
+            if shift {
+                square(&chart.drawings().curr_drawing.as_ref().unwrap().points);
+            }
+            frame(
+                &ctx,
+                &mut chart,
+                0.5,
+                vec![Event::ModifiersChanged(modifiers), button(b, false)],
+            );
+            let drawing = &chart.drawings().drawings[0];
+            if shift {
+                square(&drawing.points);
+            } else {
+                let d = drawing.points[1] - drawing.points[0];
+                assert!(d.x.abs() > d.y.abs() * 3.0);
+            }
+            // Check the stored coordinates map back to the constrained screen geometry.
+            let map = chart.get_chart_mapping();
+            for (screen, point) in drawing.points.iter().zip(&drawing.chart_points) {
+                assert!((map.x_to_idx_f32(screen.x) - point.bar_idx).abs() < 1e-4);
+                assert!((screen.y - map.price_to_y(point.price)).abs() < 0.01);
+            }
+        }
+    }
+
     /// Drawing anchors use nearby bar and visible overlay values only while the magnet is on,
     /// including after a view change and a handle drag that can be undone and redone.
     #[test]
@@ -324,7 +564,11 @@ mod tests {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::{Pos2, vec2};
 
-        for ((magnet, strong, price, overlay_visible, snaps, offset, off_scale), kind) in [
+        for (
+            (magnet, strong, price, overlay_visible, snaps, offset, off_scale),
+            kind,
+            snap_to_indicators,
+        ) in [
             (true, false, 10.0, true, true, 3.0, false),
             (true, false, 20.0, true, true, 3.0, false),
             (true, false, 12.0, true, true, 3.0, false),
@@ -338,14 +582,30 @@ mod tests {
             (true, true, 20.0, false, true, 3.0, true),
         ]
         .into_iter()
-        .map(|case| (case, "main"))
+        .map(|case| (case, "main", true))
         .chain([
-            ((true, false, 15.0, true, false, 3.0, false), "independent"),
-            ((true, false, 15.0, true, false, 3.0, false), "none"),
-            ((true, false, 15.0, true, false, 3.0, false), "background"),
-            ((true, false, 15.0, true, true, 3.0, false), "displaced"),
-            ((true, false, 15.0, true, true, 3.0, false), "pane"),
-            ((true, true, 15.0, true, true, 30.0, false), "pane"),
+            (
+                (true, false, 15.0, true, false, 3.0, false),
+                "independent",
+                true,
+            ),
+            ((true, false, 15.0, true, false, 3.0, false), "none", true),
+            (
+                (true, false, 15.0, true, false, 3.0, false),
+                "background",
+                true,
+            ),
+            (
+                (true, false, 15.0, true, true, 3.0, false),
+                "displaced",
+                true,
+            ),
+            ((true, false, 15.0, true, true, 3.0, false), "pane", true),
+            ((true, true, 15.0, true, true, 30.0, false), "pane", true),
+            ((true, false, 15.0, true, false, 3.0, false), "main", false),
+            ((true, false, 17.0, true, false, 3.0, false), "main", false),
+            ((true, false, 20.0, true, true, 3.0, false), "main", false),
+            ((true, false, 15.0, true, false, 3.0, false), "pane", false),
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
@@ -391,6 +651,7 @@ mod tests {
                 chart.set_start_idx(start);
                 chart.drawings_mut().options.magnet_mode = magnet;
                 chart.drawings_mut().options.strong_magnet = strong;
+                chart.drawings_mut().options.snap_to_indicators = snap_to_indicators;
                 chart.drawings_mut().update_snap_options();
                 if off_scale {
                     chart.price_scale_mut().set_range(12.0, 18.0);

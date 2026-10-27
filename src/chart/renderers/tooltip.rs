@@ -134,6 +134,8 @@ pub fn render_tooltip_with_options(
 
 /// Renders the floating tooltip: a label and value grid in the top corner of `price_rect`
 /// on the side away from the pointer, so it never covers the hovered bar.
+/// Held values use time, OHLC and total volume instead of the hover change row;
+/// optional study rows follow these values.
 pub fn render_floating_tooltip(
     painter: &Painter,
     hover_pos: Pos2,
@@ -161,7 +163,7 @@ pub fn render_floating_tooltip(
     };
     let mut rows = Vec::new();
 
-    if options.show_time {
+    if options.show_time || options.on_long_press {
         rows.push(("Time", scale.format_crosshair(candle.time, bar_seconds)));
     }
 
@@ -172,7 +174,7 @@ pub fn render_floating_tooltip(
         rows.push(("Close", price(candle.close)));
     }
 
-    if options.show_change {
+    if options.show_change && !options.on_long_press {
         let reference = previous_close.unwrap_or(candle.open);
         let change = candle.close - reference;
         let change_pct = percent_change(reference, candle.close);
@@ -697,6 +699,7 @@ mod tests {
                             None,
                             &TooltipOptions {
                                 on_long_press: held,
+                                show_time: !held,
                                 ..Default::default()
                             },
                             egui::Color32::GREEN,
@@ -709,6 +712,18 @@ mod tests {
                     });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
+                    if held {
+                        let labels: Vec<_> = shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) => Some(text.galley.text()),
+                                _ => None,
+                            })
+                            .step_by(2)
+                            .take(6)
+                            .collect();
+                        assert_eq!(labels, ["Time", "Open", "High", "Low", "Close", "Vol"]);
+                    }
                     let mut labels = 0;
                     for shape in shapes {
                         match shape.shape {
