@@ -1143,6 +1143,21 @@ mod tests {
                     TopToolbarAction::Layout(LayoutAction::Save),
                 ),
                 (
+                    S::Save,
+                    "Download chart data",
+                    TopToolbarAction::Layout(LayoutAction::DownloadData),
+                ),
+                (
+                    S::Save,
+                    "Create new layout",
+                    TopToolbarAction::Layout(LayoutAction::CreateNew),
+                ),
+                (
+                    S::Save,
+                    "Open layout",
+                    TopToolbarAction::Layout(LayoutAction::OpenLayout),
+                ),
+                (
                     S::Layouts,
                     "2x2 Grid",
                     TopToolbarAction::Layout(LayoutAction::SelectGrid(

@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The save menu offers Save layout, Download chart data, Create new layout and Open layout as 32 point rows, retaining rename, save-as, image export and autosave. Hosts handle `LayoutAction::DownloadData` with `Chart::export_csv` and `LayoutAction::OpenLayout` with their saved-layout chooser; the demo routes both to its existing paths. The menu scrolls in short windows. ([#1005](https://github.com/userFRM/egui-charts/issues/1005))
+
 - The indicator templates menu has Indicators and Templates pages for one-click study additions and saved-template application. Hosts supply starred studies through `TopToolbar::favorite_indicators` and handle `TopToolbarAction::AddIndicator`. Save indicator template remains available, and empty pages explain how to fill them. ([#1004](https://github.com/userFRM/egui-charts/issues/1004))
 
 - Alt+Shift+Left and Home navigate to the first bar; Alt+Shift+Right and End return to the latest, preserving zoom. Period, Alt+D and Alt+Shift+E request Open layout, Data window and session switching through `ShortcutMap`; text fields keep their keys. The demo scrolls its saved-layout chooser and toggles SAMPLE between regular and extended hours, including from its initial 24/7 session. Continuous markets retain their session. ([#983](https://github.com/userFRM/egui-charts/issues/983))
