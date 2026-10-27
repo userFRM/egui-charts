@@ -357,6 +357,8 @@ pub struct DemoApp {
     time_and_sales: TimeAndSalesPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
+    /// The chart symbol's financials, shown in place of the chart while they are open.
+    financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
@@ -580,6 +582,7 @@ impl DemoApp {
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
             symbol_details: SymbolDetailsPanel::new(),
+            financials: None,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             calendar: CalendarPanel::new(),
@@ -2011,6 +2014,19 @@ impl DemoApp {
         }
         self.symbol_details
             .set_average_volume(self.live.daily_volume().1);
+        // Open financials follow the chart's symbol.
+        if self.symbol_details.take_financials_request()
+            || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
+        {
+            let title = (self.chart.instrument())
+                .and_then(|instrument| instrument.description.clone())
+                .unwrap_or_else(|| chart_symbol.clone());
+            let panel = egui_charts::ui::financials::FinancialsPanel::new(
+                title,
+                feeds::financials(&chart_symbol),
+            );
+            self.financials = Some((chart_symbol.clone(), panel));
+        }
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
@@ -2319,6 +2335,16 @@ impl DemoApp {
     }
 
     fn show_chart(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if let Some((_, financials)) = &mut self.financials {
+            let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
+            let back = egui::CentralPanel::default()
+                .frame(frame)
+                .show(ui, |ui| financials.show(ui));
+            if back.inner {
+                self.financials = None;
+            }
+            return;
+        }
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
