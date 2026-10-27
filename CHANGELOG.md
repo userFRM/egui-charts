@@ -868,6 +868,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Watchlist rows are 30 points high instead of 26 and start with an 18 point symbol mark, so symbol names line up whatever mark a row has. `WatchlistPanel::set_mark` supplies a symbol's mark, such as its issuer's logo; without one the row shows the symbol's first letter on a neutral disc. Last prices, changes and change percentages group their whole digits in thousands, so 43237.45 reads 43,237.45. ([#989](https://github.com/userFRM/egui-charts/issues/989))
+
 - The top toolbar's Chart layout button is a `ToolbarIconButton`: it has the dark toolbar tooltip with the other toolbar controls instead of egui's small neutral one, and the toolbar's 32 point square. Like them, it shows a shortcut chip only for a bound shortcut, and Chart layout has none. ([#1011](https://github.com/userFRM/egui-charts/issues/1011))
 
 - The legend's Sell and Buy buttons are outlined in the falling and accent colours on the chart background, with prices and labels in the same colours, and are at least 59 points wide instead of 66. Bid and ask axis tags from the quote source are off by default (`TradingSettings::bid_ask_labels`); saved settings keep their value. With study values on, overlay and pane volume put the last bar's compact volume on the axis in its up or down colour, as the moving average already did. ([#988](https://github.com/userFRM/egui-charts/issues/988))

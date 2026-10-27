@@ -24,6 +24,10 @@ use crate::ui_kit::{EmptyState, IconButton};
 
 /// Height shared by market data rows.
 pub(super) const ROW_HEIGHT: f32 = 26.0;
+/// Height of a watchlist row, which fits its symbol mark.
+const LIST_ROW_HEIGHT: f32 = 30.0;
+/// Diameter of a symbol's mark.
+const MARK_SIZE: f32 = 18.0;
 /// Height of a panel header row, which fits its title and action buttons.
 pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
@@ -229,6 +233,8 @@ pub struct WatchlistPanel {
     quotes: HashMap<String, Quote>,
     /// Decimals of the price columns per symbol, where the host knows them.
     decimals: HashMap<String, u8>,
+    /// Marks of the symbols, where the host supplies them.
+    marks: HashMap<String, egui::ImageSource<'static>>,
     sort: Option<(WatchlistColumn, bool)>,
     selected: Option<String>,
     service: Option<Arc<dyn Quotes>>,
@@ -257,6 +263,7 @@ impl WatchlistPanel {
             active: 0,
             quotes: HashMap::new(),
             decimals: HashMap::new(),
+            marks: HashMap::new(),
             sort: None,
             selected: None,
             service: None,
@@ -308,6 +315,12 @@ impl WatchlistPanel {
     /// them, the decimals follow the size of the last price.
     pub fn set_price_decimals(&mut self, symbol: &str, decimals: u8) {
         self.decimals.insert(symbol.to_owned(), decimals);
+    }
+
+    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, the
+    /// row shows the symbol's first letter on a neutral disc.
+    pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
+        self.marks.insert(symbol.to_owned(), mark);
     }
 
     /// Takes quotes from `service` from the next [`poll`](Self::poll) on.
@@ -373,6 +386,7 @@ impl WatchlistPanel {
             active,
             quotes,
             decimals,
+            marks,
             sort,
             selected,
             ..
@@ -646,7 +660,7 @@ impl WatchlistPanel {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for &index in &order {
                     let (rect, _) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), ROW_HEIGHT),
+                        vec2(ui.available_width(), LIST_ROW_HEIGHT),
                         Sense::hover(),
                     );
                     let sense = if sort.is_none() {
@@ -763,9 +777,32 @@ impl WatchlistPanel {
                                     egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
                                 painter.rect_filled(bar, 0.0, flag.color());
                             }
+                            let mark = egui::Rect::from_min_size(
+                                pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
+                                vec2(MARK_SIZE, MARK_SIZE),
+                            );
+                            match marks.get(symbol.as_str()) {
+                                Some(source) => egui::Image::new(source.clone())
+                                    .corner_radius(MARK_SIZE / 2.0)
+                                    .paint_at(ui, mark),
+                                None => {
+                                    painter.circle_filled(
+                                        mark.center(),
+                                        MARK_SIZE / 2.0,
+                                        theme.ui.btn_bg_active,
+                                    );
+                                    painter.text(
+                                        mark.center(),
+                                        Align2::CENTER_CENTER,
+                                        symbol.chars().next().unwrap_or(' ').to_uppercase(),
+                                        FontId::proportional(MARK_SIZE / 2.0),
+                                        theme.ui.text_secondary,
+                                    );
+                                }
+                            }
                             ui.new_child(
                                 egui::UiBuilder::new()
-                                    .max_rect(cells[0])
+                                    .max_rect(cells[0].with_min_x(mark.right() + 6.0))
                                     .layout(Layout::left_to_right(Align::Center)),
                             )
                             .add(
@@ -789,9 +826,17 @@ impl WatchlistPanel {
                                     theme.ui.text
                                 };
                                 for (column, text, color) in [
-                                    (1, format_price(quote.last, Some(decimals)), theme.ui.text),
-                                    (2, signed(change, usize::from(decimals)), color),
-                                    (3, format!("{}%", signed(quote.change_percent(), 2)), color),
+                                    (
+                                        1,
+                                        grouped(format_price(quote.last, Some(decimals))),
+                                        theme.ui.text,
+                                    ),
+                                    (2, grouped(signed(change, usize::from(decimals))), color),
+                                    (
+                                        3,
+                                        format!("{}%", grouped(signed(quote.change_percent(), 2))),
+                                        color,
+                                    ),
                                 ] {
                                     ui.new_child(
                                         egui::UiBuilder::new()
@@ -894,6 +939,25 @@ pub(super) fn signed(value: f64, decimals: usize) -> String {
     }
 }
 
+/// `number`, a formatted decimal such as `-43237.45`, with its whole digits grouped in
+/// thousands: `-43,237.45`. Text without digits is unchanged.
+pub(super) fn grouped(number: String) -> String {
+    let start = number
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(number.len());
+    let end = number[start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(number.len(), |len| start + len);
+    let mut text = number[..start].to_owned();
+    for (index, digit) in number[start..end].chars().enumerate() {
+        if index > 0 && (end - start - index) % 3 == 0 {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text + &number[end..]
+}
+
 /// Item indices in display order: list order, or with `sort`, each run of symbols between
 /// sections sorted while sections keep their place. Symbols without a value sort last in both
 /// directions; ties keep list order. The symbols of the `collapsed` sections are left out.
@@ -959,6 +1023,20 @@ mod tests {
         WatchlistItem::Symbol {
             symbol: symbol.into(),
             flag: None,
+        }
+    }
+
+    #[test]
+    fn prices_group_whole_digits_in_thousands() {
+        for (number, expected) in [
+            ("43237.45", "43,237.45"),
+            ("-1234567", "-1,234,567"),
+            ("+863.83", "+863.83"),
+            ("100000.5", "100,000.5"),
+            ("0.000123", "0.000123"),
+            ("\u{2014}", "\u{2014}"),
+        ] {
+            assert_eq!(grouped(number.to_owned()), expected);
         }
     }
 
