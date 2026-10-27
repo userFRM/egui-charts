@@ -346,6 +346,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Fibonacci retracement and extension fills span the same horizontal bounds as their level lines and hit regions. Channel levels extended left or right run on to the visible pane edge on that side and keep the anchor on a side that is not extended. ([#1069](https://github.com/userFRM/egui-charts/issues/1069))
+
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
 
 - `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))

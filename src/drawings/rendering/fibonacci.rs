@@ -25,6 +25,9 @@ impl Drawing {
             return;
         }
 
+        // Fills, lines and hit regions share the levels' horizontal bounds
+        let x_range = self.fib_level_x_range(&config, chart_rect);
+
         // Draw filled zones between levels if enabled
         if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
@@ -40,12 +43,11 @@ impl Drawing {
                     config.background_opacity,
                 );
                 let fill_rect =
-                    Rect::from_x_y_ranges(chart_rect.x_range(), y1.min(y2)..=y1.max(y2));
+                    Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                 painter.rect_filled(fill_rect, 0.0, fill_color);
             }
         }
 
-        let x_range = self.fib_level_x_range(&config, chart_rect);
         let (x_start, x_end) = (x_range.min, x_range.max);
 
         // Draw lines and labels for visible levels
@@ -105,6 +107,9 @@ impl Drawing {
             return;
         }
 
+        // Fills, lines and hit regions share the levels' horizontal bounds
+        let x_range = self.fib_level_x_range(&config, chart_rect);
+
         // Draw filled zones between levels if enabled
         if config.show_background && visible_levels.len() > 1 {
             for i in 0..visible_levels.len() - 1 {
@@ -123,13 +128,12 @@ impl Drawing {
                         config.background_opacity,
                     );
                     let fill_rect =
-                        Rect::from_x_y_ranges(chart_rect.x_range(), y1.min(y2)..=y1.max(y2));
+                        Rect::from_x_y_ranges(x_range, y1.min(y2)..=y1.max(y2));
                     painter.rect_filled(fill_rect, 0.0, fill_color);
                 }
             }
         }
 
-        let x_range = self.fib_level_x_range(&config, chart_rect);
         let (x_start, x_end) = (x_range.min, x_range.max);
 
         let mut label_ys: Vec<f32> = Vec::new();
@@ -323,8 +327,8 @@ impl Drawing {
     }
 
     /// Render Fibonacci Channel - Parallel channel with Fibonacci level lines
-    pub(crate) fn render_fibonacci_channel(&self, painter: &egui::Painter, _chart_rect: Rect) {
-        let Some((config, lines)) = self.fib_channel_level_lines() else {
+    pub(crate) fn render_fibonacci_channel(&self, painter: &egui::Painter, chart_rect: Rect) {
+        let Some((config, lines)) = self.fib_channel_level_lines(chart_rect) else {
             return;
         };
         let (start, end) = (self.points[0], self.points[1]);
@@ -382,16 +386,20 @@ impl Drawing {
                 .chart_axis_bg
                 .gamma_multiply(0.8);
             let label_text = format!("{:.1}%", level.value * 100.0);
+            // Past the line's end, or inside it when the line runs to the pane edge
+            let label_size = egui::Vec2::new(40.0, 14.0);
+            let label_x = if config.extend_right {
+                draw_end.x - DESIGN_TOKENS.rounding.sm - label_size.x
+            } else {
+                draw_end.x + DESIGN_TOKENS.rounding.sm
+            };
             let label_rect = Rect::from_min_size(
-                Pos2::new(
-                    draw_end.x + DESIGN_TOKENS.rounding.sm,
-                    draw_end.y - DESIGN_TOKENS.rounding.xl,
-                ),
-                egui::Vec2::new(40.0, 14.0),
+                Pos2::new(label_x, draw_end.y - DESIGN_TOKENS.rounding.xl),
+                label_size,
             );
             painter.rect_filled(label_rect, DESIGN_TOKENS.rounding.sm, label_bg);
             painter.text(
-                Pos2::new(draw_end.x + 23.0, draw_end.y),
+                Pos2::new(label_x + 20.0, draw_end.y),
                 egui::Align2::CENTER_CENTER,
                 &label_text,
                 egui::FontId::proportional(typography::XS),
@@ -711,10 +719,14 @@ impl Drawing {
     }
 
     /// The Fibonacci channel's config and the line of each visible level as
-    /// drawn, run on 500 px past the anchors on each side the config extends;
-    /// `None` below two anchors or when they nearly coincide. Without a third
-    /// anchor the channel is half as wide as the base line is long.
-    pub(crate) fn fib_channel_level_lines(&self) -> Option<(FibonacciConfig, Vec<[Pos2; 2]>)> {
+    /// drawn, run on to the edge of `rect` on each side (left or right on
+    /// screen) the config extends; `None` below two anchors or when they nearly
+    /// coincide. Without a third anchor the channel is half as wide as the base
+    /// line is long.
+    pub(crate) fn fib_channel_level_lines(
+        &self,
+        rect: Rect,
+    ) -> Option<(FibonacciConfig, Vec<[Pos2; 2]>)> {
         let &[start, end, ..] = self.points.as_slice() else {
             return None;
         };
@@ -728,18 +740,24 @@ impl Drawing {
             .get(2)
             .copied()
             .unwrap_or_else(|| start + egui::vec2(-d.y, d.x) * 0.5);
-        let run = |extend: bool| {
-            if extend {
-                d.normalized() * 500.0
-            } else {
-                egui::Vec2::ZERO
-            }
-        };
+        let forward = if d.x.abs() < 1e-6 { d.y >= 0.0 } else { d.x > 0.0 };
         let lines = config
             .visible_levels()
             .map(|level| {
                 let [a, b] = fib_channel_level_line(start, end, width_point, level.value);
-                [a - run(config.extend_left), b + run(config.extend_right)]
+                let (left, right) = if forward { (a, b) } else { (b, a) };
+                [
+                    if config.extend_left {
+                        super::lines::ray_end(right, left, rect)
+                    } else {
+                        left
+                    },
+                    if config.extend_right {
+                        super::lines::ray_end(left, right, rect)
+                    } else {
+                        right
+                    },
+                ]
             })
             .collect();
         Some((config, lines))
@@ -1068,6 +1086,57 @@ mod tests {
         let has_origin=output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::LineSegment{points,..} if points[0].x==30.0 && points[1].x==30.0));
         output.drop_without_applying_deltas();
         assert!(has_origin, "time projections must start at C, bar 30");
+
+        // Retracement fills span the level lines: the anchors at x 10 and 50, or on to the
+        // pane's right edge when only the right side extends.
+        let mut retracement =
+            Drawing::new(0, crate::drawings::DrawingToolType::FibonacciRetracement);
+        retracement.chart_points = vec![
+            crate::drawings::ChartPoint::new(10.0, 100.0),
+            crate::drawings::ChartPoint::new(50.0, 200.0),
+        ];
+        for (extend_right, want) in [(false, 10.0..=50.0), (true, 10.0..=400.0)] {
+            retracement.fib_config = Some(FibonacciConfig {
+                show_background: true,
+                extend_right,
+                ..FibonacciConfig::default()
+            });
+            retracement.update_screen_coords(|b| b, |p| (300.0 - p) as f32);
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                retracement.render_fibonacci(ui.painter(), rect)
+            });
+            let fills: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) => Some(r.rect.min.x..=r.rect.max.x),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            if fills.is_empty() || fills.iter().any(|x| *x != want) {
+                wrong.push(format!("retracement fills {fills:?}, want {want:?}"));
+            }
+        }
+
+        // A channel drawn right to left from (300, 100) to (100, 200), extended on the left only:
+        // each level runs from the pane's left edge to its right anchor at x 300.
+        let mut channel = Drawing::new(0, crate::drawings::DrawingToolType::FibonacciChannel);
+        channel.points = vec![
+            Pos2::new(300.0, 100.0),
+            Pos2::new(100.0, 200.0),
+            Pos2::new(200.0, 100.0),
+        ];
+        channel.fib_config = Some(FibonacciConfig {
+            extend_left: true,
+            ..FibonacciConfig::default()
+        });
+        let (_, lines) = channel.fib_channel_level_lines(rect).unwrap();
+        for [left, right] in lines {
+            if left.x != rect.min.x || right.x != 300.0 {
+                wrong.push(format!("channel level from {left:?} to {right:?}"));
+            }
+        }
 
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
