@@ -14,6 +14,8 @@ Apply `SymbolQuery::offset` before `limit`, preserving ordering between pages. A
 
 `SymbolSearchDialog::set_sources` fills the source menu, whose choice is the `SymbolQuery::exchange` filter. Give the contracts of a futures root, or the listings of one security, the same `Instrument::root`: the dialog lists the first and expands the others under it, and returns the instrument chosen.
 
+Text with an operator, such as `AAPL-MSFT`, is a `services::SymbolExpression`. The dialog searches the service for each of its symbols, lists the spread as a `SymbolType::Spread` instrument once every symbol is found, and otherwise reports the fault. Chart a picked spread from the histories of its symbols with `SymbolExpression::bars`.
+
 ## Signals
 
 Connect `Chart::set_signal_source(Some(source))` to an `Arc<dyn services::Signals>`. Each subscription starts empty. Push current signals first, then `SignalEvent::Upsert`, `Remove` and `Clear`. Identities belong to the subscription; an upsert replaces its prior identity. Markers carry a time, optional price and direction. Levels carry a price and optional start time. Zones carry price bounds and time bounds.

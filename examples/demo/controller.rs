@@ -311,6 +311,12 @@ pub struct DemoApp {
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
+    /// Spreads picked in symbol search, with feeds of their symbols.
+    spreads: Vec<(
+        egui_charts::services::SymbolExpression,
+        SeriesId,
+        Vec<Arc<LiveFeed>>,
+    )>,
     storage: Arc<storage::DemoStorage>,
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
@@ -540,6 +546,7 @@ impl DemoApp {
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
             comparisons: Vec::new(),
+            spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
             storage,
             grid_edits: 0,
@@ -971,6 +978,8 @@ impl DemoApp {
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
                 self.watchlist.add_symbol(&picked.symbol);
+            } else if picked.symbol_type == Some(egui_charts::model::SymbolType::Spread) {
+                self.add_spread(&picked.symbol);
             } else {
                 self.switch_symbol(&picked.symbol);
             }

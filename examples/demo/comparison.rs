@@ -3,6 +3,7 @@
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
 use egui_charts::model::{BarClock, ChartType, SeriesScale, Timeframe};
+use egui_charts::services::SymbolExpression;
 use egui_charts::ui::top_toolbar::{CompareAction, ComparePlacement, CompareSymbol};
 use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
 use std::sync::Arc;
@@ -65,6 +66,57 @@ impl DemoApp {
                 Some(entry)
             })
             .collect();
+        self.spreads
+            .retain(|(_, id, _)| self.chart.series().any(|(current, _)| current == *id));
+        let timeframe = self.chart.timeframe().unwrap_or(Timeframe::Hour1);
+        for (expression, id, feeds) in &self.spreads {
+            let histories: Vec<_> = feeds
+                .iter()
+                .map(|feed| {
+                    feed.set_paused(self.live.paused() || self.replay.is_some());
+                    feed.advance(chrono::Utc::now());
+                    feed.snapshot(
+                        timeframe,
+                        BarClock::new(timeframe),
+                        self.chart.extended_hours(),
+                    )
+                })
+                .collect();
+            let symbols = expression.symbols();
+            let history = |symbol: &str| {
+                let at = symbols.iter().position(|current| *current == symbol)?;
+                Some(&histories[at][..])
+            };
+            if let Ok(bars) = expression.bars(history) {
+                self.chart.set_data(*id, bars);
+            }
+        }
+    }
+
+    /// Charts a spread picked in symbol search, such as `AAPL-MSFT`, as candles in a pane of its
+    /// own, from feeds of its symbols.
+    pub(super) fn add_spread(&mut self, symbol: &str) {
+        let Ok(expression) = SymbolExpression::parse(symbol) else {
+            return;
+        };
+        let now = chrono::Utc::now();
+        let feeds = expression
+            .symbols()
+            .into_iter()
+            .map(|component| Arc::new(LiveFeed::new(component, now)))
+            .collect();
+        let id = self.chart.add_series(SeriesOptions {
+            name: symbol.to_owned(),
+            chart_type: ChartType::Candles,
+            color: self.theme.ui.info,
+            up_color: self.theme.ui.info,
+            down_color: self.theme.ui.warning,
+            ..Default::default()
+        });
+        let pane = self.chart.add_pane();
+        self.chart.move_series_to_pane(id, pane);
+        self.spreads.push((expression, id, feeds));
+        self.sync_comparisons();
     }
 
     /// Feeds another symbol as candles in a pane of its own, above the price pane, on the left

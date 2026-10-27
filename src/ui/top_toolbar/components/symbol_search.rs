@@ -48,7 +48,7 @@ mod service;
 
 use crate::icons::icons;
 use crate::model::{Instrument, SymbolType};
-use crate::services::{Storage, SymbolSearch};
+use crate::services::{Storage, SymbolExpression, SymbolSearch};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
@@ -172,6 +172,8 @@ pub struct SymbolSearchDialog {
     recent_symbols: Vec<String>,
     sources: Vec<String>,
     expanded: Vec<String>,
+    /// Why the query's expression is not listed: still being checked, or invalid.
+    expression_status: Option<(String, bool)>,
     config: SymbolSearchConfig,
     search: Search,
 }
@@ -204,6 +206,7 @@ impl SymbolSearchDialog {
             recent_symbols: Vec::new(),
             sources: Vec::new(),
             expanded: Vec::new(),
+            expression_status: None,
             config: SymbolSearchConfig::default(),
             search: Search::default(),
         }
@@ -486,6 +489,14 @@ impl SymbolSearchDialog {
                 ui.add_space(4.0);
 
                 self.search.status(ui);
+                if let Some((status, error)) = &self.expression_status {
+                    let status = l10n::text(ui.ctx(), status);
+                    if *error {
+                        ui.colored_label(ui.visuals().error_fg_color, status);
+                    } else {
+                        ui.weak(status);
+                    }
+                }
                 if self.search_query.is_empty()
                     && self.category.0.is_none()
                     && self.search.exchange.is_none()
@@ -628,6 +639,36 @@ impl SymbolSearchDialog {
                 .min(self.filtered_symbols.len().saturating_sub(1));
         } else {
             self.update_filtered_symbols(all_symbols);
+        }
+        self.list_expression(ctx, all_symbols);
+    }
+
+    /// Lists first the spread the query spells, such as `AAPL-MSFT`, once its symbols are found
+    /// in the catalog, or says why it cannot be charted.
+    fn list_expression(&mut self, ctx: &Context, all_symbols: &[Instrument]) {
+        self.expression_status = None;
+        let text = self.search_query.trim();
+        if !text.contains(['+', '-', '*', '/', '(', ')'])
+            || !matches!(self.category.0, None | Some(SymbolType::Spread))
+            || self
+                .filtered_symbols
+                .iter()
+                .any(|symbol| symbol.symbol.eq_ignore_ascii_case(text))
+        {
+            return;
+        }
+        let expression = match SymbolExpression::parse(text) {
+            Ok(expression) if !expression.is_spread() => return,
+            Ok(expression) => self.search.resolve(ctx, text, expression, all_symbols),
+            Err(error) => Some(Err(error)),
+        };
+        match expression {
+            Some(Ok(expression)) => self.filtered_symbols.insert(
+                0,
+                Instrument::new(expression.to_string()).with_symbol_type(SymbolType::Spread),
+            ),
+            Some(Err(error)) => self.expression_status = Some((error.to_string(), true)),
+            None => self.expression_status = Some(("Checking symbols…".into(), false)),
         }
     }
 
@@ -1802,6 +1843,31 @@ mod tests {
                 expected,
                 "{query:?} / {category:?} / {exchange:?}"
             );
+        }
+    }
+
+    /// An expression over listed symbols comes first, spelled as the catalog spells them;
+    /// unknown symbols and malformed text are reported instead.
+    #[test]
+    fn spread_queries_list_the_expression_or_report_why_not() {
+        let symbols = create_test_symbols();
+        for (query, expected, status) in [
+            ("aapl - tsla", Some("AAPL-TSLA"), None),
+            ("(btcusdt+ethusdt)/2", Some("(BTCUSDT+ETHUSDT)/2"), None),
+            ("aapl-xyz", None, Some("Unknown symbol xyz")),
+            ("aapl-", None, Some("A symbol or number is missing")),
+        ] {
+            let ctx = Context::default();
+            let mut dialog = SymbolSearchDialog::new();
+            dialog.search_query = query.into();
+            dialog.refresh_results(&ctx, &symbols);
+            let spread = dialog
+                .filtered_symbols
+                .first()
+                .filter(|symbol| symbol.symbol_type == Some(SymbolType::Spread));
+            assert_eq!(spread.map(|s| s.symbol.as_str()), expected, "{query}");
+            let shown = dialog.expression_status.as_ref();
+            assert_eq!(shown.map(|(text, _)| text.as_str()), status, "{query}");
         }
     }
 

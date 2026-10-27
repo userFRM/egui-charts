@@ -3,7 +3,7 @@
 use crate::data::{FeedError, inbox::Inbox};
 use crate::localization as l10n;
 use crate::model::{Instrument, SymbolType};
-use crate::services::{StoreKind, SymbolQuery, SymbolSearch};
+use crate::services::{ExpressionError, StoreKind, SymbolExpression, SymbolQuery, SymbolSearch};
 use crate::ui::dialogs::templates::TemplateStore;
 use std::sync::Arc;
 
@@ -43,6 +43,16 @@ pub(super) struct Search {
     pub(super) exchange: Option<String>,
     pub(super) recents: TemplateStore<Vec<Recent>>,
     opened: Vec<Recent>,
+    components: Components,
+}
+
+/// The lookups of an expression's symbols: one search each, answered under its position.
+#[derive(Default)]
+struct Components {
+    text: String,
+    inbox: Arc<Inbox>,
+    /// Per symbol: `None` while unanswered, then the catalog's spelling if the catalog has it.
+    found: Vec<Option<Option<String>>>,
 }
 
 impl Default for Search {
@@ -59,6 +69,7 @@ impl Default for Search {
             exchange: None,
             recents: TemplateStore::new(StoreKind::RecentSymbols),
             opened: Vec::new(),
+            components: Components::default(),
         }
     }
 }
@@ -81,6 +92,7 @@ impl Search {
         self.more = false;
         self.error = None;
         self.offset = 0;
+        self.components = Components::default();
     }
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
@@ -212,6 +224,71 @@ impl Search {
             self.loading = true;
             source.search(query, self.inbox.reply(0));
         }
+    }
+
+    /// Looks up each symbol of `expression`, parsed from `text`, through the host service, or in
+    /// `fallback` without one, and spells it as the catalog does, ignoring case. `None` while
+    /// lookups are outstanding.
+    pub(super) fn resolve(
+        &mut self,
+        ctx: &egui::Context,
+        text: &str,
+        mut expression: SymbolExpression,
+        fallback: &[Instrument],
+    ) -> Option<Result<SymbolExpression, ExpressionError>> {
+        let symbols: Vec<String> = expression.symbols().into_iter().map(Into::into).collect();
+        if self.components.text != text {
+            self.components = Components {
+                text: text.into(),
+                inbox: Arc::default(),
+                found: vec![None; symbols.len()],
+            };
+            let source: Arc<dyn SymbolSearch> = match &self.source {
+                Some(source) => source.clone(),
+                None => Arc::new(fallback.to_vec()),
+            };
+            for (at, symbol) in symbols.iter().enumerate() {
+                let query = SymbolQuery {
+                    text: symbol.clone(),
+                    symbol_type: None,
+                    exchange: None,
+                    offset: 0,
+                    limit: 20,
+                };
+                source.search(query, self.components.inbox.reply(at as u64));
+            }
+        }
+        let repaint = ctx.clone();
+        let viewport = ctx.viewport_id();
+        self.components
+            .inbox
+            .set_waker(move || repaint.request_repaint_of(viewport));
+        for (at, answer) in self.components.inbox.drain().answers {
+            let at = at as usize;
+            let rows = *answer
+                .downcast::<Result<Vec<Instrument>, FeedError>>()
+                .expect("symbol search");
+            self.components.found[at] = Some(rows.ok().and_then(|rows| {
+                rows.into_iter()
+                    .map(|row| row.symbol)
+                    .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
+            }));
+        }
+        let found = &self.components.found;
+        if found.iter().any(Option::is_none) {
+            return None;
+        }
+        if let Some(at) = found.iter().position(|name| name == &Some(None)) {
+            return Some(Err(ExpressionError::UnknownSymbol(symbols[at].clone())));
+        }
+        expression.rename_symbols(|symbol| {
+            let at = symbols.iter().position(|name| name == symbol);
+            found[at.expect("symbol of the expression")]
+                .clone()
+                .flatten()
+                .expect("resolved symbol")
+        });
+        Some(Ok(expression))
     }
 
     pub(super) fn results(&self) -> Vec<Instrument> {

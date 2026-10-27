@@ -41,7 +41,7 @@ pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, Notifications};
 pub use paper::PaperAccount;
 pub use quotes::Quotes;
-pub use search::{SymbolQuery, SymbolSearch};
+pub use search::{ExpressionError, SymbolExpression, SymbolQuery, SymbolSearch};
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
 pub use settings::{SettingsStore, UserSettings};
