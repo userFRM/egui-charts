@@ -346,6 +346,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Kagi lines change thickness where a continuing line crosses the prior shoulder or waist and are painted in two parts there, instead of only at reversals. `ChartTypeStyles::kagi` sets the thick and thin stroke widths, 2.5 and 1.5 points by default, and serializes with the chart type settings. Migration: `KagiLine` literals add `crossing: None`; `ChartTypeStyles` literals add `kagi` or use defaults. ([#1061](https://github.com/userFRM/egui-charts/issues/1061))
 - Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
 
 - `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))

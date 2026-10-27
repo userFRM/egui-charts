@@ -373,6 +373,7 @@ pub fn render_chart_type(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
                 ctx.price_scale,
+                params.type_params.styles.kagi,
                 params.bullish_color(),
                 params.bearish_color(),
                 x_of,

@@ -64,8 +64,8 @@ pub(crate) use bar::{index_at, time_at};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
-    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, LastPriceAnimation,
-    LinePlotStyle, LineType,
+    AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, KagiStyle,
+    LastPriceAnimation, LinePlotStyle, LineType,
 };
 pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
 pub use clock::BarClock;

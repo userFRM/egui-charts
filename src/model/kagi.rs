@@ -3,10 +3,13 @@
 //! Kagi charts display price movements as a series of connected vertical
 //! lines whose thickness changes based on trend direction:
 //!
-//! - **Thick** -- uptrend; price has broken above the previous
-//!   significant high.
-//! - **Thin** -- downtrend; price has broken below the previous
-//!   significant low.
+//! - **Thick** -- uptrend; price has risen above the prior shoulder, the
+//!   high where the last falling line began.
+//! - **Thin** -- downtrend; price has fallen below the prior waist, the
+//!   low where the last rising line began.
+//!
+//! The thickness changes at the crossing itself, so a line that crosses
+//! the shoulder or waist is drawn in two parts.
 //!
 //! A new line segment is created whenever price reverses by at least the
 //! configured [`reversal_amount`](KagiConfig::reversal_amount). Time is
@@ -27,8 +30,12 @@ pub struct KagiLine {
     pub start_price: f64,
     /// Price at the end of this segment.
     pub end_price: f64,
-    /// Line thickness indicating trend state.
+    /// Line thickness at the end of the segment, indicating trend state.
     pub thickness: KagiThickness,
+    /// Price where the segment crosses the prior shoulder or waist and takes `thickness`; the
+    /// part from `start_price` to it has the opposite thickness. `None` when the whole segment
+    /// has `thickness`.
+    pub crossing: Option<f64>,
 }
 
 /// Kagi line thickness, encoding the current trend direction.
@@ -138,9 +145,11 @@ struct KagiState {
     line_start_price: f64,
     line_direction_up: bool,
     last_ts: DateTime<Utc>,
-    /// Significant highs and lows decide when the thickness changes.
-    significant_high: f64,
-    significant_low: f64,
+    /// The prior shoulder of a rising line or the prior waist of a falling one, where the
+    /// line before it began; `None` on the first line.
+    level: Option<f64>,
+    /// Where the line in progress crossed `level`.
+    crossing: Option<f64>,
     is_thick: bool,
 }
 
@@ -155,7 +164,17 @@ impl KagiState {
             } else {
                 KagiThickness::Thin
             },
+            crossing: self.crossing,
         }
+    }
+
+    /// Starts the next line at the current price, turning against the line just closed.
+    fn reverse(&mut self, price: f64) {
+        self.level = Some(self.line_start_price);
+        self.crossing = None;
+        self.line_start_price = self.curr_price;
+        self.curr_price = price;
+        self.line_direction_up = !self.line_direction_up;
     }
 }
 
@@ -191,8 +210,8 @@ impl PriceBuilder for KagiBuilder {
                 line_start_price: bar.close,
                 line_direction_up: true,
                 last_ts: bar.time,
-                significant_high: bar.close,
-                significant_low: bar.close,
+                level: None,
+                crossing: None,
                 is_thick: false,
             });
             return;
@@ -216,49 +235,25 @@ impl PriceBuilder for KagiBuilder {
             }
         };
 
-        // Check for continuation or reversal
-        if st.line_direction_up {
-            // Currently moving up
-            if price > st.curr_price {
-                // Continue up
-                st.curr_price = price;
-                if price > st.significant_high {
-                    st.significant_high = price;
-                }
-            } else if price < (st.curr_price - reversal) {
-                // Reversal down: save the current line and start a new one going down
-                self.lines.push(st.line());
-                st.line_start_price = st.curr_price;
-                st.curr_price = price;
-                st.line_direction_up = false;
-
-                // Check thickness change
-                if price < st.significant_low {
-                    st.is_thick = false; // Switch to thin (downtrend)
-                    st.significant_low = price;
-                }
-            }
+        let up = st.line_direction_up;
+        if up && price < st.curr_price - reversal || !up && price > st.curr_price + reversal {
+            self.lines.push(st.line());
+            st.reverse(price);
+        } else if up && price > st.curr_price || !up && price < st.curr_price {
+            st.curr_price = price;
         } else {
-            // Currently moving down
-            if price < st.curr_price {
-                // Continue down
-                st.curr_price = price;
-                if price < st.significant_low {
-                    st.significant_low = price;
-                }
-            } else if price > (st.curr_price + reversal) {
-                // Reversal up: save the current line and start a new one going up
-                self.lines.push(st.line());
-                st.line_start_price = st.curr_price;
-                st.curr_price = price;
-                st.line_direction_up = true;
+            return;
+        }
 
-                // Check thickness change
-                if price > st.significant_high {
-                    st.is_thick = true; // Switch to thick (uptrend)
-                    st.significant_high = price;
-                }
-            }
+        // A rising thin line turns thick above the shoulder, a falling thick line thin below
+        // the waist.
+        let up = st.line_direction_up;
+        if let Some(level) = st.level
+            && st.is_thick != up
+            && (up && st.curr_price > level || !up && st.curr_price < level)
+        {
+            st.is_thick = up;
+            st.crossing = Some(level);
         }
 
         // Bound memory by dropping the oldest lines; the state never reads them.
@@ -287,59 +282,39 @@ mod tests {
     use super::*;
     use chrono::Duration;
 
-    fn create_test_bars() -> Vec<Bar> {
-        let start = Utc::now();
-        vec![
-            Bar {
-                time: start,
-                open: 100.0,
-                high: 102.0,
-                low: 99.0,
-                close: 100.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(1),
-                open: 100.0,
-                high: 105.0,
-                low: 99.0,
-                close: 105.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(2),
-                open: 105.0,
-                high: 106.0,
-                low: 101.0,
-                close: 102.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-            Bar {
-                time: start + Duration::minutes(3),
-                open: 102.0,
-                high: 108.0,
-                low: 101.0,
-                close: 107.0,
-                volume: 1000.0,
-                colors: None,
-                payload: None,
-            },
-        ]
-    }
-
     #[test]
-    fn test_kagi_line_creation() {
-        let bars = create_test_bars();
-        let config = KagiConfig::new(2.0);
-        let lines = to_kagi_lines(&bars, &config);
-
-        assert!(!lines.is_empty());
+    fn thickness_changes_where_a_line_crosses_the_prior_shoulder_or_waist() {
+        use KagiThickness::{Thick, Thin};
+        let start = Utc::now();
+        // 100 up to 105, down to 102, up through the 105 shoulder to 107 in one bar, down to
+        // 103 and on through the 102 waist to 101.
+        let bars: Vec<Bar> = [100.0, 105.0, 102.0, 107.0, 103.0, 101.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| Bar {
+                time: start + Duration::minutes(i as i64),
+                open: close,
+                high: close,
+                low: close,
+                close,
+                volume: 0.0,
+                colors: None,
+                payload: None,
+            })
+            .collect();
+        let lines: Vec<_> = to_kagi_lines(&bars, &KagiConfig::new(1.0))
+            .into_iter()
+            .map(|l| (l.start_price, l.end_price, l.thickness, l.crossing))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (100.0, 105.0, Thin, None),
+                (105.0, 102.0, Thin, None),
+                (102.0, 107.0, Thick, Some(105.0)),
+                (107.0, 101.0, Thin, Some(102.0)),
+            ]
+        );
     }
 
     #[test]
@@ -349,6 +324,7 @@ mod tests {
             start_price: 100.0,
             end_price: 105.0,
             thickness: KagiThickness::Thick,
+            crossing: None,
         };
 
         let bar = line.to_bar();
@@ -365,6 +341,7 @@ mod tests {
             start_price: 100.0,
             end_price: 105.0,
             thickness: KagiThickness::Thick,
+            crossing: None,
         };
         assert!(up_line.is_up());
 
@@ -373,6 +350,7 @@ mod tests {
             start_price: 105.0,
             end_price: 100.0,
             thickness: KagiThickness::Thin,
+            crossing: None,
         };
         assert!(!down_line.is_up());
     }

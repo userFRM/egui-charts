@@ -161,6 +161,26 @@ impl Default for CandlesStyle {
     }
 }
 
+/// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
+/// the lines of that thickness.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KagiStyle {
+    /// Width of the thick lines of an uptrend.
+    pub thick_width: f32,
+    /// Width of the thin lines of a downtrend.
+    pub thin_width: f32,
+}
+
+impl Default for KagiStyle {
+    fn default() -> Self {
+        Self {
+            thick_width: 2.5,
+            thin_width: 1.5,
+        }
+    }
+}
+
 /// Styles of the candles, bars, line, step, marker, area and baseline chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,6 +202,8 @@ pub struct ChartTypeStyles {
     pub candles: CandlesStyle,
     /// Bars chart.
     pub bars: BarsStyle,
+    /// Kagi chart.
+    pub kagi: KagiStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
@@ -201,6 +223,7 @@ impl Default for ChartTypeStyles {
             baseline: BaselineStyle::default(),
             candles: CandlesStyle::default(),
             bars: BarsStyle::default(),
+            kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,
             last_price_animation: LastPriceAnimation::Disabled,
         }
