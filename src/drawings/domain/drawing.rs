@@ -72,6 +72,10 @@ pub struct Drawing {
     /// Host-defined group identity, retained through saving and undo.
     #[serde(default)]
     pub group: Option<String>,
+    /// Named object-tree folder path, from outermost to innermost; empty means the root.
+    /// Independent of host-defined groups. Older saved drawings start at the root.
+    #[serde(default)]
+    pub folder: Vec<String>,
     /// Stable id of a host-registered tool; `None` uses the built-in renderer.
     #[serde(default)]
     pub custom_tool: Option<String>,
@@ -175,6 +179,7 @@ impl Drawing {
             saveable: true,
             listed: true,
             group: None,
+            folder: Vec::new(),
             tool_type,
             custom_tool: None,
             custom_settings: serde_json::Value::Null,

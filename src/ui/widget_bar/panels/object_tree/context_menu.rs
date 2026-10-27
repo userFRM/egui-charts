@@ -18,6 +18,37 @@ pub(super) fn render_item_menu(
     let mut action = ObjectTreeAction::None;
     let id = item.id;
 
+    if item.is_drawing() {
+        ui.menu_button(l10n::text(ui.ctx(), "Move to folder"), |ui| {
+            let ids = if state.is_selected(id) {
+                state.selected_ids.iter().copied().collect()
+            } else {
+                vec![id]
+            };
+            for path in std::iter::once(Vec::new()).chain(state.folders.iter().cloned()) {
+                let title = if path.is_empty() {
+                    l10n::text(ui.ctx(), "Root")
+                } else {
+                    path.join(" / ")
+                };
+                if ui.selectable_label(item.folder == path, title).clicked() {
+                    action = ObjectTreeAction::MoveToFolder(ids.clone(), path);
+                    ui.close();
+                }
+            }
+            if ui
+                .button(l10n::text(ui.ctx(), "New folder with selected drawings"))
+                .clicked()
+            {
+                if !state.is_selected(id) {
+                    state.select(id);
+                }
+                state.creating_folder = Some(item.folder.clone());
+                ui.close();
+            }
+        });
+    }
+
     // Properties/Settings
     if ui
         .selectable_label(false, l10n::text(ui.ctx(), "Properties…"))

@@ -2,13 +2,16 @@
 //!
 //! Use [`ObjectTreePanel`] with host-supplied [`SourceItem`] records and optional
 //! [`DataWindowInfo`]. Apply drawing and study actions through
-//! [`ObjectTreePanel::apply_to_chart`].
+//! [`ObjectTreePanel::apply_to_chart`]. Copy each drawing's `folder` into its source row.
+//! Folder paths persist with drawings. Hosts retain [`ObjectTreeState::folders`] per chart
+//! when empty folders must survive closing the panel or restarting the application.
 
 mod actions;
 mod chart_actions;
 mod config;
 mod context_menu;
 mod data_window;
+mod folders;
 mod item_row;
 mod panel;
 mod source_tree;

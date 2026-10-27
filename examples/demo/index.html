@@ -4,9 +4,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>egui-charts | Live Demo</title>
+    <script>
+        // Read the same settings document as DemoStorage before the loading screen paints.
+        let theme;
+        try {
+            theme = localStorage.getItem('dark_theme');
+            theme = theme === 'true' ? 'dark' : theme === 'false' ? 'light' : null;
+            const documents = localStorage.getItem('templates') || '';
+            const entry = documents.match(/"Settings\/settings"\s*:\s*("(?:\\.|[^"\\])*")/);
+            if (entry) {
+                // eframe stores the string map as RON; JSON also decodes its standard escapes.
+                const encoded = entry[1].replace(/\\(?:'|u\{([0-9a-fA-F]+)\}|.)/g, (escape, code) =>
+                    escape === "\\'" ? "'" : code ?
+                        JSON.stringify(String.fromCodePoint(parseInt(code, 16))).slice(1, -1) : escape);
+                const document = JSON.parse(JSON.parse(encoded));
+                if (document.version === 1) theme = document.theme;
+            }
+        } catch (_) {
+            // Unreadable settings keep the legacy choice or system appearance.
+        }
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    </script>
     <style>
+        :root { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }
+        @media (prefers-color-scheme: dark) {
+            :root { color-scheme: dark; --bg: #000; --text: #a6a6a6; --border: #2a2a2a; }
+        }
+        :root[data-theme="light"] { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }
+        :root[data-theme="dark"] { color-scheme: dark; --bg: #000; --text: #a6a6a6; --border: #2a2a2a; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #131722; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
         canvas { width: 100vw; height: 100vh; height: 100dvh; display: block; outline: none; }
         #loading {
             position: fixed;
@@ -14,8 +41,8 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #131722;
-            color: #787b86;
+            background: var(--bg);
+            color: var(--text);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-size: 16px;
             z-index: 10;
@@ -23,7 +50,7 @@
         #loading .spinner {
             width: 28px;
             height: 28px;
-            border: 3px solid #2a2e39;
+            border: 3px solid var(--border);
             border-top-color: #2962ff;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;

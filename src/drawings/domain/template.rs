@@ -23,6 +23,7 @@ impl DrawingTemplate {
         settings.screen_anchor = None;
         settings.pane = None;
         settings.group = None;
+        settings.folder.clear();
         settings.selectable = true;
         settings.saveable = true;
         settings.listed = true;
@@ -58,6 +59,7 @@ impl DrawingTemplate {
             screen_anchor: drawing.screen_anchor,
             pane: drawing.pane,
             group: drawing.group.clone(),
+            folder: drawing.folder.clone(),
             selectable: drawing.selectable,
             saveable: drawing.saveable,
             listed: drawing.listed,

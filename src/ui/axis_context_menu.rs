@@ -10,6 +10,7 @@ use egui::{Context, Id, Pos2, Rect};
 #[derive(Clone)]
 enum Action {
     Auto,
+    PriceOnly,
     Mode(PriceScaleMode),
     Invert,
     LockRatio,
@@ -140,6 +141,11 @@ impl AxisMenus {
             let scale = chart.state().price_scale();
             let mut entries = vec![
                 row("Auto scale", Action::Auto, !scale.is_manual()),
+                row(
+                    "Scale price chart only",
+                    Action::PriceOnly,
+                    config.scale_price_chart_only,
+                ),
                 MenuEntry::Separator,
             ];
             for (label, mode) in [
@@ -239,6 +245,10 @@ impl AxisMenus {
                         let range = scale.range();
                         scale.set_range(range.min, range.max);
                     }
+                }
+                Action::PriceOnly => {
+                    chart.config_mut().scale_price_chart_only =
+                        !chart.config().scale_price_chart_only;
                 }
                 Action::Mode(mode) => {
                     scale.reset();

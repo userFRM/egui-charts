@@ -6,6 +6,7 @@ use crate::data::inbox::Inbox;
 use crate::localization as l10n;
 use crate::services::{Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::widget::SavedLayout;
 use egui::Ui;
 use std::collections::VecDeque;
@@ -37,6 +38,10 @@ pub enum LayoutAction {
     Save,
     /// Save the current layout under a new name, which becomes current (Save layout as).
     SaveAs(String),
+    /// Export the displayed series through [`Chart::export_csv`](crate::Chart::export_csv).
+    DownloadData,
+    /// Open the host's saved-layout chooser.
+    OpenLayout,
     /// Request a chart image download.
     DownloadImage,
     /// Request a new layout.
@@ -412,6 +417,15 @@ impl LayoutMenu {
 
     /// Named layout menu contents, shared with the save dropdown.
     pub fn show_menu(&mut self, ui: &mut Ui) -> LayoutAction {
+        let height =
+            (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0).max(0.0);
+        egui::ScrollArea::vertical()
+            .max_height(height)
+            .show(ui, |ui| self.show_contents(ui))
+            .inner
+    }
+
+    fn show_contents(&mut self, ui: &mut Ui) -> LayoutAction {
         let width = self
             .config
             .menu_width
@@ -432,13 +446,34 @@ impl LayoutMenu {
                 .map(|s| ctx.format_shortcut(&s))
                 .unwrap_or_default(),
         );
-        if ui.add(save).clicked() {
+        if ui.add_sized([ui.available_width(), 32.0], save).clicked() {
             action = LayoutAction::Save;
             ui.close();
         }
+        for (label, value) in [
+            ("Download chart data", LayoutAction::DownloadData),
+            ("Create new layout", LayoutAction::CreateNew),
+            ("Open layout", LayoutAction::OpenLayout),
+        ] {
+            if ListItem::new()
+                .height(32.0)
+                .show(ui, LabelContent::new(label))
+                .clicked()
+            {
+                action = value;
+                ui.close();
+            }
+        }
+        ui.separator();
         let curr = self.curr_layout.clone().unwrap_or_default();
-        let rename = ui.button(l10n::text(ui.ctx(), "Rename…")).clicked();
-        let save_as = ui.button(l10n::text(ui.ctx(), "Save layout as…")).clicked();
+        let rename = ListItem::new()
+            .height(32.0)
+            .show(ui, LabelContent::new("Rename…"))
+            .clicked();
+        let save_as = ListItem::new()
+            .height(32.0)
+            .show(ui, LabelContent::new("Save layout as…"))
+            .clicked();
         if rename {
             self.editing = Some(true);
             self.new_name = curr.clone();
@@ -447,14 +482,12 @@ impl LayoutMenu {
             self.editing = Some(false);
             self.new_name.clear();
         }
-        for (label, value) in [
-            ("New layout", LayoutAction::CreateNew),
-            ("Download chart image", LayoutAction::DownloadImage),
-        ] {
-            if ui.button(l10n::text(ui.ctx(), label)).clicked() {
-                action = value;
-                ui.close();
-            }
+        if ui
+            .button(l10n::text(ui.ctx(), "Download chart image"))
+            .clicked()
+        {
+            action = LayoutAction::DownloadImage;
+            ui.close();
         }
         ui.toggle_value(&mut self.autosave, "Autosave")
             .on_hover_text(l10n::text(ui.ctx(), "Save the layout after each change"));

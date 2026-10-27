@@ -609,6 +609,114 @@ impl Trading {
         }
     }
 
+    fn draw_overlays(&self, ui: &mut egui::Ui, chart: &Chart) -> crate::chart::TradingLines {
+        let symbol = chart.symbol();
+        let market = self.market(chart);
+        let (decimals, tick, last) = (market.decimals, market.tick, market.last);
+        let capabilities = self.capabilities();
+        let mapping = chart.get_chart_mapping();
+        let display = &self.display;
+        let options = TradingLineOptions {
+            show_orders: display.show_orders,
+            extend_lines: display.extend_lines,
+            label_alignment: display.label_alignment,
+            show_positions: display.show_positions,
+            submit: false,
+            modify: capabilities.modify,
+            close: capabilities.market,
+            reverse: display.reverse_button,
+            take_profit: capabilities.limit,
+            stop_loss: capabilities.stop,
+            pnl: display.position_pnl.then_some(display.position_pnl_unit),
+            bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
+            last_price: last,
+            point_value: if self.rules.symbol == symbol {
+                self.rules.point_value
+            } else {
+                1.0
+            },
+            currency: self
+                .account
+                .as_ref()
+                .map_or("", |account| account.currency.as_str()),
+            tick_size: tick,
+        };
+        let mut shown_orders = self.orders.clone();
+        if let Some(TradingLineAction::Modify(old, request)) = &self.pending
+            && let Some(order) = shown_orders.iter_mut().find(|order| order.id == old.id)
+        {
+            order.request = request.clone();
+        }
+        if let Some(TradingLineAction::Exit(_, request)) = &self.pending {
+            shown_orders.push(Order::new(
+                OrderId::new("pending-exit"),
+                request.clone(),
+                OrderStatus::Working,
+            ));
+        }
+        {
+            let _theme = chart
+                .theme_override
+                .as_ref()
+                .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+            // Under the lines, so that no mark covers an order's or a position's label.
+            if display.show_executions {
+                let fills: Vec<_> = self
+                    .account_panel
+                    .fills
+                    .executions
+                    .iter()
+                    .filter(|fill| {
+                        self.account_panel
+                            .fills
+                            .orders
+                            .get(&fill.order)
+                            .is_some_and(|request| request.symbol == symbol)
+                    })
+                    .collect();
+                executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
+            }
+            render_trading_lines(
+                ui,
+                &mapping,
+                shown_orders.iter().filter(|o| o.request.symbol == symbol),
+                self.positions.iter().filter(|p| p.symbol == symbol),
+                &options,
+            )
+        }
+    }
+
+    /// Exports the chart with its visible trading overlays when
+    /// [`TradingSettings::include_in_image`] is enabled. Account data and display settings
+    /// stay unchanged; the host delivers the returned frame.
+    pub fn export_image(
+        &self,
+        chart: &Chart,
+        ctx: &egui::Context,
+        options: &crate::widget::ImageExportOptions,
+    ) -> Result<crate::widget::ChartImage, String> {
+        chart.export_image_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+    }
+
+    /// Encodes [`Self::export_image`] as PNG bytes for host file, clipboard or sharing delivery.
+    pub fn export_png(
+        &self,
+        chart: &Chart,
+        ctx: &egui::Context,
+        options: &crate::widget::ImageExportOptions,
+    ) -> Result<Vec<u8>, String> {
+        chart.export_png_with(ctx, options, |ui, chart| self.draw_export(ui, chart))
+    }
+
+    fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
+        if self.display.include_in_image {
+            chart.trading_bid_ask = self.display.bid_ask_labels;
+            let lines = self.draw_overlays(ui, chart);
+            chart.trading_tags = lines.tags;
+            chart.trading_outlined = lines.outlined;
+        }
+    }
+
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
     /// respecting [`display`](Self::display). Hovering a mark lists every fill grouped in it.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
@@ -622,77 +730,9 @@ impl Trading {
         if self.account_panel.editing.is_none() {
             self.load_rules(symbol);
         }
-        let capabilities = self.capabilities();
 
         if self.service.is_some() {
-            let mapping = chart.get_chart_mapping();
-            let display = &self.display;
-            let options = TradingLineOptions {
-                show_orders: display.show_orders,
-                show_positions: display.show_positions,
-                submit: false,
-                modify: capabilities.modify,
-                close: capabilities.market,
-                reverse: display.reverse_button,
-                take_profit: capabilities.limit,
-                stop_loss: capabilities.stop,
-                pnl: display.position_pnl.then_some(display.position_pnl_unit),
-                bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
-                last_price: last,
-                point_value: if self.rules.symbol == symbol {
-                    self.rules.point_value
-                } else {
-                    1.0
-                },
-                currency: self
-                    .account
-                    .as_ref()
-                    .map_or("", |account| account.currency.as_str()),
-                tick_size: tick,
-            };
-            let mut shown_orders = self.orders.clone();
-            if let Some(TradingLineAction::Modify(old, request)) = &self.pending
-                && let Some(order) = shown_orders.iter_mut().find(|order| order.id == old.id)
-            {
-                order.request = request.clone();
-            }
-            if let Some(TradingLineAction::Exit(_, request)) = &self.pending {
-                shown_orders.push(Order::new(
-                    OrderId::new("pending-exit"),
-                    request.clone(),
-                    OrderStatus::Working,
-                ));
-            }
-            let lines = {
-                let _theme = chart
-                    .theme_override
-                    .as_ref()
-                    .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-                // Under the lines, so that no mark covers an order's or a position's label.
-                if display.show_executions {
-                    let fills: Vec<_> = self
-                        .account_panel
-                        .fills
-                        .executions
-                        .iter()
-                        .filter(|fill| {
-                            self.account_panel
-                                .fills
-                                .orders
-                                .get(&fill.order)
-                                .is_some_and(|request| request.symbol == symbol)
-                        })
-                        .collect();
-                    executions::show(ui, chart, &fills, display.show_execution_labels, decimals);
-                }
-                render_trading_lines(
-                    ui,
-                    &mapping,
-                    shown_orders.iter().filter(|o| o.request.symbol == symbol),
-                    self.positions.iter().filter(|p| p.symbol == symbol),
-                    &options,
-                )
-            };
+            let lines = self.draw_overlays(ui, chart);
             chart.trading_tags = lines.tags;
             chart.trading_outlined = lines.outlined;
             if self.display.instant_orders {
@@ -758,6 +798,8 @@ impl Trading {
             let mapping = chart.get_chart_mapping();
             let options = TradingLineOptions {
                 show_orders: true,
+                extend_lines: self.display.extend_lines,
+                label_alignment: self.display.label_alignment,
                 show_positions: false,
                 submit: true,
                 modify: true,
@@ -1262,9 +1304,13 @@ mod tests {
     /// Line gestures wait for the actual confirmation button and send one broker call.
     #[test]
     fn line_changes_wait_for_confirmation_and_send_one_call() {
+        use crate::chart::TradingLabelAlignment::{Center, Left, Right};
         use crate::theme::{Theme, apply_to_egui};
         for theme in [Theme::light(), Theme::dark()] {
-            for width in [800.0, 320.0, 260.0] {
+            for (width, alignment) in [800.0, 320.0, 260.0]
+                .into_iter()
+                .flat_map(|width| [Left, Center, Right].map(|alignment| (width, alignment)))
+            {
                 for instant in [false, true] {
                     for (operation, edge, handle) in [
                         ("Cancel order", false, false),
@@ -1292,6 +1338,7 @@ mod tests {
                         let mut trading = Trading::default();
                         trading.set_service(broker.clone());
                         trading.display.instant_orders = instant;
+                        trading.display.label_alignment = alignment;
                         let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
                         chart.symbol = "SYM".into();
                         if edge {
@@ -1336,6 +1383,13 @@ mod tests {
                                         text.galley.text().to_owned(),
                                         text.galley.rect.translate(text.pos.to_vec2()),
                                     )),
+                                    egui::Shape::Rect(rect)
+                                        if rect.rect.size() == egui::vec2(22.0, 22.0)
+                                            && rect.stroke.width == 1.0
+                                            && rect.stroke.color == theme.chart.candle_down =>
+                                    {
+                                        Some(("Reverse position".into(), rect.rect))
+                                    }
                                     _ => None,
                                 })
                                 .collect();
@@ -1390,19 +1444,19 @@ mod tests {
                         let x = match operation {
                             "Modify order" if handle => mapping.rect.right() - 42.0,
                             "Modify order" => find(texts.clone(), "Limit").unwrap().center().x,
-                            "Reverse position" => take_profit.left() - 30.2,
                             "Place take profit" => take_profit.center().x,
                             "Place stop loss" => {
-                                find(texts, "SL").expect("an SL button").center().x
+                                find(texts.clone(), "SL").expect("an SL button").center().x
                             }
                             _ => close.x,
                         };
-                        let start =
-                            if operation == "Reverse position" && x - 11.0 < mapping.rect.left() {
-                                egui::pos2(take_profit.left() - 6.0 + 11.0, y + 26.0)
-                            } else {
-                                egui::pos2(x, y)
-                            };
+                        let start = if operation == "Reverse position" {
+                            find(texts.clone(), "Reverse position")
+                                .expect("reverse button")
+                                .center()
+                        } else {
+                            egui::pos2(x, y)
+                        };
                         assert!(mapping.rect.contains(start), "{operation} at {width}");
                         frame(
                             &mut trading,
@@ -1430,7 +1484,8 @@ mod tests {
                         if !instant {
                             assert!(
                                 trading.pending.is_some(),
-                                "{operation} at {width}, handle={handle}, instant={instant}"
+                                "{operation} at {width}, {alignment:?}, handle={handle}, instant={instant}, start={start:?}, TP={take_profit:?}, pane={:?}",
+                                mapping.rect
                             );
                             assert!(broker.placed.lock().unwrap().is_empty());
                             assert!(broker.cancelled.lock().unwrap().is_empty());
@@ -1526,6 +1581,141 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn trading_display_preferences_position_lines_and_control_image_exports() {
+        use crate::chart::TradingLabelAlignment::{Center, Left, Right};
+        let defaults: TradingSettings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.extend_lines);
+        assert_eq!(defaults.label_alignment, Right);
+        assert!(!defaults.include_in_image);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let broker = Arc::new(Recorder {
+                state: vec![AccountEvent::Order(Order::new(
+                    OrderId::new("working"),
+                    OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0)),
+                    OrderStatus::Working,
+                ))],
+                ..Default::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&ctx, &mut Toasts::new());
+            let mut centres = Vec::new();
+            for alignment in [Left, Center, Right] {
+                for extended in [false, true] {
+                    trading.display.label_alignment = alignment;
+                    trading.display.extend_lines = extended;
+                    let json = serde_json::to_string(&trading.display).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<TradingSettings>(&json).unwrap(),
+                        trading.display
+                    );
+                    let mut label = egui::Rect::NOTHING;
+                    let mut line_start = f32::INFINITY;
+                    for frame in 0..3 {
+                        let output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1440.0, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                chart.show(ui);
+                                trading.show(ui, &mut chart);
+                            },
+                        );
+                        if frame < 2 {
+                            output.drop_without_applying_deltas();
+                            continue;
+                        }
+                        let y = chart.get_chart_mapping().price_to_y(95.0);
+                        for shape in &output.shapes {
+                            match &shape.shape {
+                                egui::Shape::Rect(rect)
+                                    if rect.stroke.color == theme.ui.accent
+                                        && rect.rect.height() == 22.0
+                                        && rect.rect.width() > 40.0 =>
+                                {
+                                    label = rect.rect
+                                }
+                                egui::Shape::LineSegment { points, stroke }
+                                    if stroke.color == theme.ui.accent
+                                        && (points[0].y - y).abs() < 0.1
+                                        && (points[1].y - y).abs() < 0.1 =>
+                                {
+                                    line_start = line_start.min(points[0].x.min(points[1].x));
+                                }
+                                _ => {}
+                            }
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(label.is_positive(), "order label");
+                    let pane = chart.get_chart_mapping().rect;
+                    assert!(pane.contains_rect(label));
+                    let expected = if extended { pane.left() } else { label.left() };
+                    assert!(
+                        (line_start - expected).abs() < 0.1,
+                        "line starts at {line_start}, expected {expected}"
+                    );
+                    if !extended {
+                        centres.push(label.center().x);
+                        match alignment {
+                            Left => assert!((label.left() - pane.left() - 8.0).abs() < 0.1),
+                            Center => assert!((label.center().x - pane.center().x).abs() < 0.1),
+                            Right => assert!(label.right() < pane.right()),
+                        }
+                    }
+                }
+            }
+            assert!(centres.windows(2).all(|pair| pair[0] < pair[1]));
+            let options = crate::widget::ImageExportOptions {
+                size: [480, 320],
+                include_timestamp: false,
+                ..Default::default()
+            };
+            let before = chart.get_time_scale_state();
+            let plain = chart.export_png(&ctx, &options).unwrap();
+            assert_eq!(trading.export_png(&chart, &ctx, &options).unwrap(), plain);
+            trading.display.include_in_image = true;
+            let with_orders = trading.export_png(&chart, &ctx, &options).unwrap();
+            assert_ne!(with_orders, plain, "visible broker orders are exported");
+            trading.display.show_orders = false;
+            assert_eq!(
+                trading.export_png(&chart, &ctx, &options).unwrap(),
+                plain,
+                "hidden orders stay hidden"
+            );
+            assert_eq!(chart.get_time_scale_state(), before);
+            assert!(broker.placed.lock().unwrap().is_empty());
+            trading.disconnect();
+            trading.display.bid_ask_labels = true;
+            chart.set_quote(Some(crate::model::Level1Quote {
+                symbol: "SYM".into(),
+                ts: chart.bars(SeriesId::MAIN)[99].time,
+                bid: 99.0,
+                ask: 101.0,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            }));
+            let plain = chart.export_png(&ctx, &options).unwrap();
+            for include in [false, true] {
+                trading.display.include_in_image = include;
+                assert_eq!(
+                    trading.export_png(&chart, &ctx, &options).unwrap() != plain,
+                    include,
+                    "bid and ask labels do not require a broker connection"
+                );
             }
         }
     }

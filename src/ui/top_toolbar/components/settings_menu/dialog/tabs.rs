@@ -895,6 +895,35 @@ impl SettingsDialog {
                 |ui| pnl_unit_dropdown(ui, "bracket_pnl_unit", shown, unit, text),
             );
         });
+        styled_checkbox(ui, &mut trading.extend_lines, "Extend lines left", text);
+        ui.horizontal(|ui| {
+            ui.set_min_height(42.0);
+            ui.label(
+                RichText::new(l10n::text(ui.ctx(), "Label alignment"))
+                    .size(ui.active_theme().text.title)
+                    .color(text),
+            );
+            ui.add_space((TRADING_LABEL_WIDTH - ui.min_rect().width()).max(0.0));
+            let alignment = &mut trading.label_alignment;
+            use crate::chart::TradingLabelAlignment::{Center, Left, Right};
+            let label = match alignment {
+                Left => "Left",
+                Center => "Center",
+                Right => "Right",
+            };
+            styled_dropdown(ui, "trading_label_alignment", 140.0, text, label, |ui| {
+                for (option, label) in [(Left, "Left"), (Center, "Center"), (Right, "Right")] {
+                    ui.selectable_value(alignment, option, l10n::text(ui.ctx(), label));
+                }
+            });
+        });
+        ui.add_space(ui.active_theme().spacing.sm);
+        styled_checkbox(
+            ui,
+            &mut trading.include_in_image,
+            "Include trading overlays in images",
+            text,
+        );
         styled_checkbox(ui, &mut trading.show_executions, "Executions", text);
         ui.add_enabled_ui(trading.show_executions, |ui| {
             trading_option(

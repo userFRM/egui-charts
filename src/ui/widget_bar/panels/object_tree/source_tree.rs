@@ -27,6 +27,7 @@ pub fn render_source_tree(
     let mut action = ObjectTreeAction::None;
 
     state.hovered_id = None;
+    state.visible_ids.clear();
 
     // Filter sources
     let filter_lower = state.filter_text.to_lowercase();
@@ -100,8 +101,12 @@ fn render_grouped_tree(
         }
     }
 
+    let has_folders = state
+        .folders
+        .iter()
+        .any(|path| super::folders::matches_folder_filter(path, sources, state, filter));
     // Drawings group
-    if drawing_count > 0 {
+    if drawing_count > 0 || has_folders {
         let group_action = render_group(
             ui,
             "Drawings",
@@ -135,7 +140,7 @@ fn render_grouped_tree(
     }
 
     // Empty state
-    if data_source_count + indicator_count + drawing_count + template_count == 0 {
+    if data_source_count + indicator_count + drawing_count + template_count == 0 && !has_folders {
         render_empty_state(ui, state.has_filter());
     }
 
@@ -202,13 +207,23 @@ fn render_group(
             // Sort by z-index for drawings
             let items: Vec<_> = sources
                 .iter_mut()
-                .filter(|s| s.source_type == source_type && matches_filter(s, filter, state))
+                .filter(|s| {
+                    s.source_type == source_type
+                        && (!s.is_drawing() || s.folder.is_empty())
+                        && matches_filter(s, filter, state)
+                })
                 .collect();
 
             for item in items {
                 let item_action = render_item_row(ui, item, config, state, 0);
                 if !item_action.is_none() {
                     action = item_action;
+                }
+            }
+            if source_type == SourceType::Drawing {
+                let next = super::folders::render_folders(ui, sources, config, state, filter);
+                if !next.is_none() {
+                    action = next;
                 }
             }
         });
@@ -227,23 +242,34 @@ fn render_flat_tree(
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
 
+    let has_folders = state
+        .folders
+        .iter()
+        .any(|path| super::folders::matches_folder_filter(path, sources, state, filter));
     let visible_items: Vec<_> = sources
         .iter_mut()
         .filter(|s| matches_filter(s, filter, state))
         .collect();
 
-    if visible_items.is_empty() {
+    if visible_items.is_empty() && !has_folders {
         render_empty_state(ui, state.has_filter());
         return action;
     }
 
-    for item in visible_items {
+    for item in visible_items
+        .into_iter()
+        .filter(|s| !s.is_drawing() || s.folder.is_empty())
+    {
         let item_action = render_item_row(ui, item, config, state, 0);
         if !item_action.is_none() {
             action = item_action;
         }
     }
 
+    let folder_action = super::folders::render_folders(ui, sources, config, state, filter);
+    if !folder_action.is_none() {
+        action = folder_action;
+    }
     action
 }
 
@@ -276,7 +302,12 @@ pub(super) fn matches_filter(item: &SourceItem, filter: &str, state: &ObjectTree
             .map(|p| p.to_lowercase().contains(filter))
             .unwrap_or(false);
 
-        if !name_matches && !label_matches && !params_matches {
+        let folder_matches = item.is_drawing()
+            && item
+                .folder
+                .iter()
+                .any(|name| name.to_lowercase().contains(filter));
+        if !name_matches && !label_matches && !params_matches && !folder_matches {
             return false;
         }
     }

@@ -39,6 +39,15 @@ pub enum TopToolbarAction {
     Redo,
     /// Capture a chart screenshot
     TakeScreenshot,
+    /// Capture the chart with [`Chart::export_png`](crate::Chart::export_png) and deliver the
+    /// decoded image to the clipboard, for example with `egui::Context::copy_image`.
+    CopyImage,
+    /// Capture the chart and open the rendered image in a new browser tab or native viewer.
+    /// The host owns the image URL or local file and its lifetime.
+    OpenImage,
+    /// Publish the captured image through the host's service and copy its returned URL.
+    /// Offered only with [`TopToolbarState::can_publish_image`](super::TopToolbarState::can_publish_image).
+    CopyImageLink,
     /// Ask the host to publish the chart: capture it with
     /// [`Chart::export_image`](crate::widget::Chart::export_image) and share or post the image
     /// through the host's own service.

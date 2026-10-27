@@ -270,6 +270,7 @@ const EXPORT_FORMATS: &[ExportFormat] = &[
 enum ScreenshotTarget {
     File(Option<std::path::PathBuf>),
     Clipboard,
+    NewTab,
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
@@ -319,6 +320,8 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     pub theme: Theme,
+    /// No explicit choice follows the system appearance without saving its current value.
+    theme_choice: Option<bool>,
 
     // Persistent toolbars.
     top_toolbar: TopToolbar,
@@ -451,9 +454,15 @@ impl DemoApp {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let dark = cc
+        let theme_choice = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, "dark_theme"))
+            .and_then(|storage| eframe::get_value(storage, "dark_theme"));
+        let dark = theme_choice
+            .or_else(|| {
+                cc.egui_ctx
+                    .system_theme()
+                    .map(|theme| theme == egui::Theme::Dark)
+            })
             .unwrap_or(false);
         let theme = if dark { Theme::dark() } else { Theme::light() };
         let timeframe = Timeframe::Min1;
@@ -554,6 +563,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             theme,
+            theme_choice,
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             timeframe_toolbar,
@@ -1231,6 +1241,7 @@ impl eframe::App for DemoApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.update_theme(&ctx);
         egui_charts::theme::apply_to_egui(&ctx, &self.theme);
         // The root Ui was created before the theme was applied this frame.
         ui.set_style(ctx.global_style());
@@ -1560,14 +1571,15 @@ impl DemoApp {
             TopToolbarAction::OpenSettings => {
                 self.open_chart_settings_dialog();
             }
-            TopToolbarAction::TakeScreenshot | TopToolbarAction::Publish => {
+            TopToolbarAction::TakeScreenshot
+            | TopToolbarAction::CopyImage
+            | TopToolbarAction::OpenImage => {
                 self.export_dialog.close();
                 self.toasts.clear();
-                // The demo has no sharing service, so a published image goes to the clipboard.
-                let target = if action == TopToolbarAction::Publish {
-                    ScreenshotTarget::Clipboard
-                } else {
-                    ScreenshotTarget::File(None)
+                let target = match action {
+                    TopToolbarAction::CopyImage => ScreenshotTarget::Clipboard,
+                    TopToolbarAction::OpenImage => ScreenshotTarget::NewTab,
+                    _ => ScreenshotTarget::File(None),
                 };
                 self.screenshot_requested = Some((target, {
                     let mut options = egui_charts::widget::ImageExportOptions::default();
@@ -2005,6 +2017,7 @@ impl DemoApp {
             item.locked = d.locked;
             item.z_index = d.z_order;
             item.label = d.label.clone();
+            item.folder = d.folder.clone();
             items.push(item);
         }
         items
@@ -2986,10 +2999,11 @@ impl DemoApp {
             return;
         };
         let result = self
-            .chart
-            .export_png(ctx, &options)
+            .trading
+            .export_png(&self.chart, ctx, &options)
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
+                ScreenshotTarget::NewTab => open_image(ctx, &png),
                 ScreenshotTarget::Clipboard => {
                     let image = image::load_from_memory(&png)
                         .map_err(|error| error.to_string())?
@@ -3045,6 +3059,50 @@ impl DemoApp {
 // ---------------------------------------------------------------------------
 // Free helpers.
 // ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_image(ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
+    let path = std::env::temp_dir().join(format!(
+        "egui-charts-image-{}.png",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    std::fs::write(&path, png).map_err(|error| error.to_string())?;
+    ctx.open_url(egui::OpenUrl::new_tab(path.to_string_lossy()));
+    Ok("Image opened in viewer".into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_image(_ctx: &egui::Context, png: &[u8]) -> Result<String, String> {
+    use wasm_bindgen::{JsCast, closure::Closure};
+    use web_sys::{Blob, BlobPropertyBag, Url, js_sys};
+    let open = || -> Result<(), wasm_bindgen::JsValue> {
+        let window = web_sys::window()
+            .ok_or_else(|| wasm_bindgen::JsValue::from_str("No browser window"))?;
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(png));
+        let properties = BlobPropertyBag::new();
+        properties.set_type("image/png");
+        let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &properties)?;
+        let url = Url::create_object_url_with_blob(&blob)?;
+        let opened = window.open_with_url_and_target(&url, "_blank");
+        if !matches!(opened, Ok(Some(_))) {
+            Url::revoke_object_url(&url)?;
+            return Err(wasm_bindgen::JsValue::from_str(
+                "The browser blocked the image tab",
+            ));
+        }
+        // Leave time for the new tab to read the image before releasing its URL.
+        let release = Closure::once_into_js(move || {
+            let _ = Url::revoke_object_url(&url);
+        });
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            release.unchecked_ref(),
+            60_000,
+        )?;
+        Ok(())
+    };
+    open().map_err(|error| format!("Could not open image: {error:?}"))?;
+    Ok("Image opened in new tab".into())
+}
 
 #[cfg(target_arch = "wasm32")]
 fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> {
@@ -3504,28 +3562,82 @@ mod tests {
     #[test]
     fn theme_selection_survives_restart_and_initializes_the_chart() {
         use eframe::App;
-        let ctx = egui::Context::default();
-        let mut storage = AppStorage::default();
-        for dark in [true, false] {
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let mut app = DemoApp::new(&cc);
-            app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
-            assert_eq!(app.theme.dark, dark);
-            app.save(&mut storage);
-            drop(app);
-            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            cc.storage = Some(&storage);
-            let restored = DemoApp::new(&cc);
-            assert_eq!(restored.theme.dark, dark);
-            assert_eq!(
-                restored.chart.config().background_color,
-                restored.theme.chart.bg
-            );
-            assert_eq!(
-                restored.chart.config().bearish_color,
-                restored.theme.chart.candle_down
-            );
+        for initial in [None, Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            let ctx = egui::Context::default();
+            ctx.run_ui(
+                egui::RawInput {
+                    system_theme: initial,
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .drop_without_applying_deltas();
+            let mut storage = AppStorage::default();
+            for explicit in [false, true, true] {
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let mut app = DemoApp::new(&cc);
+                if !explicit {
+                    assert_eq!(app.theme.dark, initial == Some(egui::Theme::Dark));
+                }
+                if explicit {
+                    app.handle_top_toolbar(&ctx, TopToolbarAction::ThemeToggle);
+                }
+                let choice = explicit.then_some(app.theme.dark);
+                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+                for system in [egui::Theme::Dark, egui::Theme::Light, egui::Theme::Dark] {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            system_theme: Some(system),
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(393.0, 852.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                    )
+                    .drop_without_applying_deltas();
+                    let expected = if choice.unwrap_or(system == egui::Theme::Dark) {
+                        Theme::dark()
+                    } else {
+                        Theme::light()
+                    };
+                    assert_eq!(app.theme, expected);
+                    assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                    assert_eq!(
+                        app.extra_charts[0].chart.config().background_color,
+                        expected.chart.bg
+                    );
+                    assert_eq!(egui_charts::theme::ThemeExt::active_theme(&ctx), expected);
+                }
+                app.save(&mut storage);
+                drop(app);
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(egui::Theme::Light),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, choice.unwrap_or(false));
+                assert_eq!(
+                    restored.user_settings().theme,
+                    choice.map(|dark| if dark { "dark" } else { "light" }.into())
+                );
+                assert_eq!(
+                    restored.chart.config().background_color,
+                    restored.theme.chart.bg
+                );
+                assert_eq!(
+                    restored.chart.config().bearish_color,
+                    restored.theme.chart.candle_down
+                );
+            }
         }
     }
 
@@ -4337,6 +4449,35 @@ mod tests {
         }
         std::fs::remove_file(path).unwrap();
         assert_ne!(images[0], images[1]);
+        for action in [TopToolbarAction::CopyImage, TopToolbarAction::OpenImage] {
+            let copy = action == TopToolbarAction::CopyImage;
+            app.handle_top_toolbar(&ctx, action);
+            let (target, options) = app.screenshot_requested.as_mut().unwrap();
+            assert_eq!(matches!(target, ScreenshotTarget::Clipboard), copy);
+            options.size = [200, 120];
+            let output = ctx.run_ui(Default::default(), |ui| app.handle_screenshot(ui.ctx()));
+            assert!(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|command| match command {
+                        egui::OutputCommand::CopyImage(image) => copy && image.size == [200, 120],
+                        egui::OutputCommand::OpenUrl(url) =>
+                            !copy
+                                && url.new_tab
+                                && std::path::Path::new(&url.url).is_absolute()
+                                && url.url.ends_with(".png"),
+                        _ => false,
+                    })
+            );
+            for command in &output.platform_output.commands {
+                if let egui::OutputCommand::OpenUrl(url) = command {
+                    std::fs::remove_file(&url.url).unwrap();
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]

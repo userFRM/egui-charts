@@ -10,7 +10,7 @@ use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::IconButton;
-use crate::ui_kit::list_item::ListItem;
+use crate::ui_kit::list_item::{LabelContent, ListItem};
 use crate::ui_kit::tab_bar::{TabBar, TabLabel};
 use egui::Ui;
 
@@ -258,6 +258,7 @@ impl TopToolbar {
     fn is_shown(&self, slot: Slot) -> bool {
         !self.host_hidden.contains(&slot.host_control())
             && (slot != S::Trade || self.state.can_trade)
+            && (slot != S::Publish || self.state.can_publish_image)
     }
 
     /// Show the full toolbar, reading the active symbol from app state.
@@ -591,21 +592,45 @@ impl TopToolbar {
                     .align_alternatives(&[])
                     .frame(egui::Frame::popup(ui.style()).fill(ui.active_theme().ui.panel_bg))
                     .show(|ui| {
-                        ui.set_width(240.0);
+                        ui.set_width((ui.ctx().content_rect().width() - 24.0).clamp(0.0, 240.0));
                         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-                        ui.label(
-                            egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
-                                .size(11.0)
-                                .color(ui.active_theme().ui.text_secondary),
-                        );
-                        if ListItem::new()
-                            .height(32.0)
-                            .show_with_icon(ui, "Download image", &embedded_icons::IMAGE)
-                            .clicked()
-                        {
-                            *action = TopToolbarAction::TakeScreenshot;
-                            ui.close();
-                        }
+                        let height =
+                            (ui.ctx().content_rect().bottom() - ui.next_widget_position().y - 16.0)
+                                .max(0.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(height)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
+                                        .size(11.0)
+                                        .color(ui.active_theme().ui.text_secondary),
+                                );
+                                for (label, value, available) in [
+                                    ("Download image", TopToolbarAction::TakeScreenshot, true),
+                                    ("Copy image", TopToolbarAction::CopyImage, true),
+                                    ("Open in new tab", TopToolbarAction::OpenImage, true),
+                                    (
+                                        "Copy link",
+                                        TopToolbarAction::CopyImageLink,
+                                        self.state.can_publish_image,
+                                    ),
+                                    (
+                                        "Post image",
+                                        TopToolbarAction::Publish,
+                                        self.state.can_publish_image,
+                                    ),
+                                ] {
+                                    if available
+                                        && ListItem::new()
+                                            .height(32.0)
+                                            .show(ui, LabelContent::new(label))
+                                            .clicked()
+                                    {
+                                        *action = value;
+                                        ui.close();
+                                    }
+                                }
+                            });
                     });
                 return;
             }
@@ -834,6 +859,7 @@ mod tests {
                 toolbar.timeframe_selector.current = Timeframe::Hour1;
                 toolbar.state.can_undo = true;
                 toolbar.state.can_redo = true;
+                toolbar.state.can_publish_image = true;
                 ctx.global_style_mut(|style| {
                     style.scroll_animation = egui::style::ScrollAnimation::none();
                     style.spacing.scroll.kinetic.decay_time = 0.0;
@@ -1137,10 +1163,33 @@ mod tests {
                     "Download image",
                     TopToolbarAction::TakeScreenshot,
                 ),
+                (S::Screenshot, "Copy image", TopToolbarAction::CopyImage),
+                (
+                    S::Screenshot,
+                    "Open in new tab",
+                    TopToolbarAction::OpenImage,
+                ),
+                (S::Screenshot, "Copy link", TopToolbarAction::CopyImageLink),
+                (S::Screenshot, "Post image", TopToolbarAction::Publish),
                 (
                     S::Save,
                     "Save layout",
                     TopToolbarAction::Layout(LayoutAction::Save),
+                ),
+                (
+                    S::Save,
+                    "Download chart data",
+                    TopToolbarAction::Layout(LayoutAction::DownloadData),
+                ),
+                (
+                    S::Save,
+                    "Create new layout",
+                    TopToolbarAction::Layout(LayoutAction::CreateNew),
+                ),
+                (
+                    S::Save,
+                    "Open layout",
+                    TopToolbarAction::Layout(LayoutAction::OpenLayout),
                 ),
                 (
                     S::Layouts,
@@ -1189,6 +1238,8 @@ mod tests {
             ] {
                 let direct = matches!(slot, S::Undo | S::Redo | S::Replay | S::Publish | S::Trade);
                 let mut toolbar = TopToolbar::new();
+                let publishing = label != "Copy image";
+                toolbar.state.can_publish_image = publishing;
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
                 toolbar
@@ -1204,12 +1255,13 @@ mod tests {
                 ) {
                     toolbar.templates_page = TemplatesPage::Templates;
                 }
+                let height = if slot == S::Screenshot { 120.0 } else { 900.0 };
                 let mut frame = |events| {
                     let mut action = TopToolbarAction::None;
                     let mut rect = Rect::NOTHING;
                     let output = ctx.run_ui(
                         RawInput {
-                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(320.0, height))),
                             events,
                             ..Default::default()
                         },
@@ -1282,11 +1334,34 @@ mod tests {
                     "opening the menu must not capture an image"
                 );
                 frame(vec![]);
-                let (_, _, labels) = frame(vec![]);
+                let (_, _, mut labels) = frame(vec![]);
+                if slot == S::Screenshot && !publishing {
+                    assert!(!labels.iter().any(|(text, _)| text == "Copy link"));
+                    assert!(!labels.iter().any(|(text, _)| text == "Post image"));
+                }
+                for _ in 0..32 {
+                    if labels
+                        .iter()
+                        .any(|(text, at)| text == label && (5.0..height - 16.0).contains(&at.y))
+                    {
+                        break;
+                    }
+                    labels = frame(vec![
+                        Event::PointerMoved(pos2(150.0, 100.0)),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: vec2(0.0, -6.0),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                            modifiers: Default::default(),
+                        },
+                    ])
+                    .2;
+                }
                 let pos = labels
                     .iter()
-                    .find(|(text, _)| text == label)
-                    .expect("menu choice")
+                    .find(|(text, at)| text == label && (5.0..height - 16.0).contains(&at.y))
+                    .unwrap_or_else(|| panic!("reachable {label}: {labels:?}"))
                     .1;
                 frame(vec![Event::PointerMoved(pos)]);
                 frame(vec![click(pos, true)]);
@@ -1322,6 +1397,10 @@ mod tests {
         let rows: &[(Off, &[TopToolbarAction])] = &[
             (|t| t.state.can_undo = false, &[TopToolbarAction::Undo]),
             (|t| t.state.can_redo = false, &[TopToolbarAction::Redo]),
+            (
+                |t| t.state.can_publish_image = false,
+                &[TopToolbarAction::Publish],
+            ),
             (
                 |t| t.set_control_visible(Control::SymbolSearch, false),
                 &[TopToolbarAction::OpenSymbolSearch],
@@ -1381,6 +1460,7 @@ mod tests {
         let broker = || {
             let mut toolbar = TopToolbar::default();
             toolbar.state.can_trade = true;
+            toolbar.state.can_publish_image = true;
             toolbar
         };
         let on = click_along(&ctx, &mut broker());

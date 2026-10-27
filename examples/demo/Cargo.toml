@@ -27,12 +27,12 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # WASM uses the canvas backend and browser downloads.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 maudio = "0.1.15"
-eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "x11", "wayland"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.108"
 wasm-bindgen-futures = "0.4.58"
-web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "Url", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioContextState"] }
+web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioContextState"] }
 console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
 

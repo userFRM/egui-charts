@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
+
+- The snapshot menu offers Download image, Copy image and Open in new tab. Hosts with publishing enable `TopToolbarState::can_publish_image` and handle Copy link, Post image and Publish through their service. The demo copies images or opens them in a browser tab or native viewer. Migration: `TopToolbarState` literals add `can_publish_image: false` or use defaults. ([#1006](https://github.com/userFRM/egui-charts/issues/1006))
+
+- The save menu offers Save layout, Download chart data, Create new layout and Open layout as 32-point rows, retaining rename, save-as, image export and autosave. The demo routes data download and layout opening through its existing handlers. Save and snapshot menus scroll in short windows. ([#1005](https://github.com/userFRM/egui-charts/issues/1005))
+- The object tree creates named folders from selected drawings, nests folders and moves selected drawings between folders or back to the root. Folder visibility and locking apply to all descendants as one undoable edit. Drawing folder paths persist with drawing identities, independently of host groups; hosts retain empty folders through `ObjectTreeState::folders`. Migration: `Drawing` and `SourceItem` literals add `folder: Vec::new()`; `ObjectTreeState` literals use `..Default::default()` for its folder and rendered-order state; copy `Drawing::folder` into live drawing rows. Older saved drawings start at the root. ([#978](https://github.com/userFRM/egui-charts/issues/978))
+
 - Scales and lines settings expose currency and unit headers, scale-mode and price-action visibility, a numeric price-to-bar ratio lock, label overlap policy, and symbol, study and extended-session value colours and visibility. Units come from host metadata without converting data. ([#993](https://github.com/userFRM/egui-charts/issues/993))
 
 - Alert settings filter active levels and set trigger notification lifetime. Inactive levels can be shown dimmed; the existing local sound controls apply the selected volume. ([#995](https://github.com/userFRM/egui-charts/issues/995))
@@ -339,6 +346,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Box zoom uses a faint fill and visible border from the active theme's info colour, with unmultiplied alpha. Its handles and dimension labels follow the theme. ([#608](https://github.com/userFRM/egui-charts/issues/608))
+
+- `CurrencyFormatter::eur()` writes `1.234,56 €` for `1234.56`. Matching thousands and decimal separators omit grouping. Migration: `CurrencyFormatter` literals add `decimal_sep` (`','` for EUR, `'.'` for USD, BTC and custom currencies), or use a constructor. ([#676](https://github.com/userFRM/egui-charts/issues/676))
+
+- The price axis menu offers Scale price chart only, and the quick setting applies `ChartConfig::scale_price_chart_only`. It excludes overlay studies and their primitives from the main price range without hiding them; turning it off restores their individual autoscale participation. Other scales keep their own ranges. Saved configurations without the option default to including studies. ([#964](https://github.com/userFRM/egui-charts/issues/964))
+
+- Changing symbols returns the main price scale to autoscaling, clears its price-to-bar ratio lock and discards the previous symbol's zoom history, so prices outside a manually fixed range remain visible. Repeating the symbol or replacing or reloading its data keeps manual scaling. Initial ratio-lock settings are preserved. ([#955](https://github.com/userFRM/egui-charts/issues/955))
+- Maximized indicator panes keep plot dragging, wheel and pinch zoom, axis scaling and reset, clicks and drawing placement. Crosshair positions reach host readouts in either pane order. Restoring the layout retains the shared time position and zoom without moving the hidden price pane's manual range. ([#1030](https://github.com/userFRM/egui-charts/issues/1030))
+- The demo follows the system light or dark appearance at startup and live until a theme is explicitly selected. Explicit choices remain saved between sessions, and the web loading screen uses the same saved choice or system appearance before the app starts. ([#1032](https://github.com/userFRM/egui-charts/issues/1032))
+
+- Drawing sync notifications coalesce repeated saves and updates per drawing, and automatic storage disables them, so the queue no longer grows with every edit. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`. ([#948](https://github.com/userFRM/egui-charts/issues/948))
 - Saving an alert with unchanged expiry fields preserves its exact saved instant, including seconds and the later occurrence of a repeated local time when clocks go back. Edited date/time fields still resolve in the explicit entry zone and validate before saving. ([#981](https://github.com/userFRM/egui-charts/issues/981))
 
 - Session volume profiles keep their histogram visible when the session opens before the viewport, retaining the whole session's executed volumes and their proportions. ([#967](https://github.com/userFRM/egui-charts/issues/967))
