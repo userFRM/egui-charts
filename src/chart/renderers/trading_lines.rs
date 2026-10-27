@@ -485,10 +485,18 @@ fn show_position(
     let reverse = options.close && options.reverse;
     let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
     let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
-    let left = options
-        .label_alignment
-        .left(mapping.rect, label_width, inset);
-    let right = left + label_width;
+    let (left, right) = match options.label_alignment {
+        TradingLabelAlignment::Right => {
+            let right = mapping.rect.right() - inset;
+            // Preserve the rounding at the edge where the reverse button moves to another row.
+            let left = right - total - if reverse { HEIGHT * 1.6 } else { 0.0 };
+            (left, right)
+        }
+        alignment => {
+            let left = alignment.left(mapping.rect, label_width, inset);
+            (left, left + label_width)
+        }
+    };
     let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
     render_price_line(
         &painter,
