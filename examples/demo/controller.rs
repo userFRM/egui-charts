@@ -326,6 +326,8 @@ pub struct DemoApp {
     keyboard_shortcuts: KeyboardShortcutsDialog,
     interval_entry: Option<String>,
     interval_focus: bool,
+    /// The saved-layout chooser of the Open layout shortcut is open.
+    open_layout: bool,
     copied_drawing: Option<String>,
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
@@ -560,6 +562,7 @@ impl DemoApp {
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
             interval_entry: None,
             interval_focus: false,
+            open_layout: false,
             copied_drawing: None,
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
@@ -952,7 +955,7 @@ impl DemoApp {
             self.indicator_dialog.show(ctx, &self.theme)
         {
             self.chart.begin_user_action();
-            let inputs = self.indicator_dialog.input_summary(study.name());
+            let inputs = study_input_summary(study.as_ref());
             let id = self.chart.add_indicator(study);
             self.chart.set_indicator_inputs(id, inputs);
             self.chart.end_user_action();
@@ -1026,6 +1029,7 @@ impl DemoApp {
             .keyboard_shortcuts
             .show_with_shortcuts(ctx, self.chart.shortcuts());
         self.show_interval_entry(ctx);
+        self.show_open_layout(ctx);
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show(ctx) {
@@ -1599,6 +1603,15 @@ impl DemoApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
+            TopToolbarAction::AddIndicator(name) => {
+                if let Some(study) = self.indicator_dialog.factory().create(&name) {
+                    self.chart.begin_user_action();
+                    let inputs = study_input_summary(study.as_ref());
+                    let id = self.chart.add_indicator(study);
+                    self.chart.set_indicator_inputs(id, inputs);
+                    self.chart.end_user_action();
+                }
+            }
             TopToolbarAction::SaveIndicatorTemplate => {
                 self.study_templates.open(self.current_study_template());
             }
@@ -2892,6 +2905,7 @@ impl DemoApp {
             || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
+            || self.open_layout
             || self.date_picker.is_open
             || self.replay_start.is_open
             || self.replay_selecting
@@ -2928,6 +2942,19 @@ impl DemoApp {
                     A::GoToDate => self.date_picker.open(),
                     A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
                     A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
+                    A::OpenLayout => self.open_layout = true,
+                    A::OpenDataWindow => self.open_panel = Some(SidePanel::DataWindow),
+                    A::ToggleSession if self.state.symbol == "SAMPLE" => {
+                        let session =
+                            if self.timeframe_toolbar.state.session_type == SessionType::RTH {
+                                SessionType::ETH
+                            } else {
+                                SessionType::RTH
+                            };
+                        self.timeframe_toolbar.set_session(session);
+                        self.stop_replay();
+                        self.apply_session();
+                    }
                     A::CreateAlert => {
                         let mapping = self.chart.get_chart_mapping();
                         if let Some(pos) = ctx
@@ -3906,11 +3933,6 @@ mod tests {
                     }
                 };
                 click(&mut app, row);
-                let output = frame(&mut app, vec![]);
-                let add = text_at(&output, "Add");
-                assert!(ctx.content_rect().contains(add));
-                output.drop_without_applying_deltas();
-                click(&mut app, add);
                 let child = app
                     .chart
                     .indicators()
@@ -4250,6 +4272,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn session_shortcut_switches_the_default_sample_and_keeps_continuous_markets() {
+        for (symbol, initial, expected) in [
+            ("SAMPLE", SessionType::Full24x7, SessionType::RTH),
+            ("SAMPLE", SessionType::RTH, SessionType::ETH),
+            ("SAMPLE", SessionType::ETH, SessionType::RTH),
+            ("BTCUSD", SessionType::Full24x7, SessionType::Full24x7),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            if symbol != "SAMPLE" {
+                app.switch_symbol(symbol);
+            }
+            app.timeframe_toolbar.set_session(initial);
+            app.apply_session();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::E,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::ALT.plus(egui::Modifiers::SHIFT),
+                    }],
+                    ..Default::default()
+                },
+                |ui| app.handle_keyboard(ui.ctx()),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(
+                app.timeframe_toolbar.state.session_type, expected,
+                "{symbol} / {initial:?}"
+            );
+            assert_eq!(app.chart.extended_hours(), expected != SessionType::RTH);
+            assert_eq!(app.live.view(app.chart.extended_hours()).0, expected);
+        }
+    }
+
     /// The dialog gets Escape before the chart or replay transport.
     #[test]
     fn dialogs_keep_drawing_and_replay_keys_with_their_owner() {
@@ -4491,6 +4552,35 @@ mod tests {
         assert!(app.chart.can_undo());
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
         assert_eq!(app.chart.chart_type(), ChartType::Line);
+
+        // A long catalogue and long names must fit the shortcut's chooser on small screens.
+        app.top_toolbar.layout_menu.layouts = (0..40)
+            .map(|i| format!("Saved layout {i}: {}", "a long name ".repeat(10)))
+            .collect();
+        for theme in [Theme::light(), Theme::dark()] {
+            egui_charts::theme::apply_to_egui(&ctx, &theme);
+            for size in [egui::vec2(320.0, 360.0), egui::vec2(1440.0, 900.0)] {
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                app.open_layout = true;
+                for _ in 0..3 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ui| app.show_open_layout(ui.ctx()),
+                    );
+                    output.drop_without_applying_deltas();
+                }
+                let bounds = ctx
+                    .memory(|memory| memory.area_rect(egui::Id::unique("open_layout")))
+                    .unwrap();
+                assert!(
+                    screen.contains_rect(bounds),
+                    "Open layout exceeds {size:?}: {bounds:?}"
+                );
+            }
+        }
     }
 
     #[test]

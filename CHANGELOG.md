@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The indicator templates menu has Indicators and Templates pages for one-click study additions and saved-template application. Hosts supply starred studies through `TopToolbar::favorite_indicators` and handle `TopToolbarAction::AddIndicator`. Save indicator template remains available, and empty pages explain how to fill them. ([#1004](https://github.com/userFRM/egui-charts/issues/1004))
+
+- Alt+Shift+Left and Home navigate to the first bar; Alt+Shift+Right and End return to the latest, preserving zoom. Period, Alt+D and Alt+Shift+E request Open layout, Data window and session switching through `ShortcutMap`; text fields keep their keys. The demo scrolls its saved-layout chooser and toggles SAMPLE between regular and extended hours, including from its initial 24/7 session. Continuous markets retain their session. ([#983](https://github.com/userFRM/egui-charts/issues/983))
 - The drawing bar's text group and the demo command search offer the image, post and idea drawings in a content section. Placing or double-clicking one opens an editor for its content, kept in the drawing's text: an image drawing shows the picture at that address, fitted inside its frame, through the image loaders the host installs, with an empty, loading or failed state instead of sample art, and the post and idea cards show the supplied author or title on the first line and the text after it, growing to fit. The demo installs the PNG and JPEG file loaders. ([#985](https://github.com/userFRM/egui-charts/issues/985))
 - The table drawing is offered with the text and note tools and in the demo command search. Placing or double-clicking a table opens a cell editor that adds and removes rows and columns; the cells are saved in the drawing's text, one row per line and one tab-separated cell per column, and the table paints them with its first row as the header and each column as wide as its widest cell, instead of fixed sample cells. ([#984](https://github.com/userFRM/egui-charts/issues/984))
 - The drawing bar's projection group and the demo command search offer the ghost feed tool, which places and edits its path through the existing multi-point anchors. ([#986](https://github.com/userFRM/egui-charts/issues/986))
@@ -318,6 +321,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Starred intervals appear in the top toolbar as one-click buttons after the interval menu, in the menu's order, with the current interval's button pressed. Unstarring an interval removes its button, and intervals the source cannot serve are left out. ([#973](https://github.com/userFRM/egui-charts/issues/973))
 - Table, post and idea drawings follow the active surface and text colours in both themes. Ghost feed labels keep readable text while the path fades. Image states, empty content prompts and ghost labels use the host translation lookup. ([#984](https://github.com/userFRM/egui-charts/issues/984), [#985](https://github.com/userFRM/egui-charts/issues/985), [#986](https://github.com/userFRM/egui-charts/issues/986))
 - Table editors keep their cells and wrapping row and column controls within narrow panes by scrolling them together. ([#984](https://github.com/userFRM/egui-charts/issues/984))
 - Drawing alert sources escape `%` and `#` in stored drawing identities, keeping a drawing such as `a#1` distinct from level 1 of drawing `a`. Migration: regenerate saved alert sources containing those identity characters with `Drawing::alert_source`; numeric identities are unchanged. ([#980](https://github.com/userFRM/egui-charts/issues/980))
@@ -347,7 +351,7 @@ All notable changes to this project are documented in this file. The format is b
 - Notifications default to the bottom-left corner with a 16-point inset. The demo fits notices beside the order ticket and hides them while no room remains; trading notices respect the configured width. Hosts can still select any corner with `NotificationPanel::position`. ([#1009](https://github.com/userFRM/egui-charts/issues/1009))
 
 - Held values show six base rows: time, open, high, low, close and total volume. Change remains in hover readouts. Volume study plots are opt-in through `TooltipOptions::show_volume_details`; other study values and host data windows retain their existing rows. Older saved tooltip options default to hiding volume details. ([#1008](https://github.com/userFRM/egui-charts/issues/1008))
-- Selecting a report trade in the demo opens the full-day session when regular hours hide its entry after switching symbols, so the selected trade remains visible.
+- Selecting a report trade in the demo restores the session used by its backtest after switching symbols, so the selected trade remains visible without changing the report scope.
 
 - The registry documentation guards its built-in study example with the `studies` feature, so the documented headless configuration compiles every example. CI also runs doctests with no default features. ([#951](https://github.com/userFRM/egui-charts/issues/951))
 
@@ -918,6 +922,12 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- The chart layout menu shows arrangement diagrams grouped by chart count from 1 through 16, including available alternatives, and highlights the active arrangement. Hover labels name each arrangement and explain synchronization effects. Short windows scroll the menu. ([#997](https://github.com/userFRM/egui-charts/issues/997))
+
+- The indicator browser lists Profiles and Patterns and searches across built-in pages. `IndicatorFactory::register_in` accepts host categories, including `PERSONAL` for My scripts and `COMMUNITY` for shared studies. Destinations without compatible studies stay hidden, host-only catalogues open their populated page, and Favorites retains its explanatory empty state. Migration: exhaustive `IndicatorCategory` matches handle `MyScripts`; volume and time price profiles now use the `Profiles` factory category (`IndicatorFactory::PROFILES`) instead of `Volume`. ([#972](https://github.com/userFRM/egui-charts/issues/972))
+
+- A click, or Enter or Space, on an indicator browser result adds the study at once with its default inputs, and the browser stays open for the next one; an added study's inputs are edited through its settings with `IndicatorSettingsDialog`. A source the study rejects is reported above the results. Migration: the parameter panel is removed with `IndicatorParams`, `IndicatorDialog::{selected, params, params_mut, input_summary}` and `IndicatorDialogConfig::{sel_color, sel_text_color}`; caption an added study from its `Indicator::inputs`, and call `IndicatorDialog::close` on `IndicatorDialogAction::AddIndicator` to keep adding one study per visit. ([#971](https://github.com/userFRM/egui-charts/issues/971))
 
 - Symbol details inset the title and price by 10 points inside the host panel and enlarge the main price to 26 points. The supplied `SymbolDetails::category` appears below the name, key statistics sit on a tinted card, and prices use the watchlist's thousands grouping. ([#990](https://github.com/userFRM/egui-charts/issues/990))
 

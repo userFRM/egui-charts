@@ -130,12 +130,12 @@ fn parts(tf: Timeframe) -> (u64, TimeframeUnit) {
     }
 }
 
-fn display(tf: Timeframe) -> String {
+pub(crate) fn display(tf: Timeframe) -> String {
     let (value, unit) = parts(tf);
     format!("{value}{}", unit.short_name())
 }
 
-fn display_long(tf: Timeframe) -> String {
+pub(crate) fn display_long(tf: Timeframe) -> String {
     let (value, unit) = parts(tf);
     let name = if value == 1 {
         match unit {
@@ -455,7 +455,7 @@ impl TimeframeSelector {
         self.supported_timeframes = timeframes.map(|values| values.into_iter().collect());
     }
 
-    fn supports(&self, timeframe: Timeframe) -> bool {
+    pub(crate) fn supports(&self, timeframe: Timeframe) -> bool {
         self.supported_timeframes
             .as_ref()
             .is_none_or(|supported| supported.contains(&timeframe))
