@@ -81,9 +81,9 @@ impl Drawing {
                 );
                 return;
             }
-            None => "Double-click to add an image",
+            None => "Double-click to add",
             Some(Ok(TexturePoll::Pending { .. })) => "Loading image…",
-            Some(_) => "Image could not be loaded",
+            Some(_) => "Could not load image",
         };
 
         // Background with subtle pattern (checkerboard for transparency indication)
@@ -138,8 +138,6 @@ impl Drawing {
 
         // Image icon (landscape with sun and mountains)
         let icon_rect = Rect::from_center_size(frame_rect.center(), egui::vec2(50.0, 35.0));
-        let icon_color =
-            Color32::from_rgba_unmultiplied(self.color[0], self.color[1], self.color[2], 200);
 
         // Sun
         painter.circle_filled(
@@ -173,10 +171,11 @@ impl Drawing {
         );
         painter.add(mountain2_shape);
 
+        // White reads on the dark frame and its checkers in every theme.
         let status = painter.layout(
             status.to_owned(),
             egui::FontId::proportional(typography::XS),
-            icon_color,
+            Color32::WHITE,
             frame_rect.width() - 2.0 * DESIGN_TOKENS.spacing.sm,
         );
         painter.galley(
@@ -185,7 +184,7 @@ impl Drawing {
                 frame_rect.max.y - DESIGN_TOKENS.spacing.sm - status.size().y,
             ),
             status,
-            icon_color,
+            Color32::WHITE,
         );
     }
 
@@ -468,7 +467,7 @@ mod tests {
             (
                 DrawingToolType::Image,
                 None,
-                vec!["Double-click to add an image"],
+                vec!["Double-click to add"],
                 None,
             ),
             (
@@ -480,7 +479,7 @@ mod tests {
             (
                 DrawingToolType::Image,
                 Some("other://picture.png"),
-                vec!["Image could not be loaded"],
+                vec!["Could not load image"],
                 None,
             ),
             // The square picture fills the 100 px height of the 200 x 100 frame, centred.
