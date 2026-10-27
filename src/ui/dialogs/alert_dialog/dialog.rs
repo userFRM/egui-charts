@@ -365,7 +365,11 @@ impl AlertDialog {
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Frequency"));
             ui.end_row();
-            ui.label(l10n::text(ui.ctx(), "Expiry"));
+            // The widest expiry label's width keeps the fields in place when No expiry toggles.
+            ui.scope(|ui| {
+                ui.set_min_width(label_width);
+                ui.label(l10n::text(ui.ctx(), "Expiry"));
+            });
             let mut no_expiry = !self.expires;
             if ui
                 .checkbox(&mut no_expiry, l10n::text(ui.ctx(), "No expiry"))
