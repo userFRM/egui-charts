@@ -1,11 +1,13 @@
 //! Drawing context menu - right-click menu when drawing is selected.
 //!
-//! Provides actions for editing, layering, locking, and deleting drawings.
+//! Provides actions for alerts, editing, layering, locking, and deleting drawings.
 
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
+use crate::model::{Alert, AlertComparison, AlertCondition};
 use crate::theme::Theme;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
+use crate::widget::Chart;
 
 use egui::{Context, Id, Pos2};
 
@@ -20,6 +22,11 @@ pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
+    /// Open the alert dialog on this alert, the price crossing the drawing's first level, for
+    /// example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// listing the levels of [`Drawing::alert_levels`](crate::drawings::Drawing::alert_levels)
+    /// as its sources.
+    AddAlert(Box<Alert>),
     /// Open drawing settings dialog
     Edit,
     /// Bring drawing to front of render order
@@ -48,6 +55,8 @@ pub struct DrawingContextMenu {
     pub is_locked: bool,
     /// Whether the drawing is currently visible
     pub is_visible: bool,
+    /// The alert the Add alert entry offers; `None` leaves the entry out.
+    pub alert: Option<Alert>,
     /// Last action taken
     pub last_action: DrawingContextMenuAction,
     /// Skip close detection on first frame
@@ -70,6 +79,7 @@ impl DrawingContextMenu {
             drawing_type: "Drawing".to_string(),
             is_locked: false,
             is_visible: true,
+            alert: None,
             last_action: DrawingContextMenuAction::None,
             just_opened: false,
         }
@@ -89,6 +99,31 @@ impl DrawingContextMenu {
         self.drawing_type = drawing_type.into();
         self.is_locked = locked;
         self.is_visible = visible;
+    }
+
+    /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
+    /// symbol and the drawing has price levels.
+    pub(crate) fn open_on(&mut self, chart: &Chart, pos: Pos2, drawing_id: usize) {
+        let drawing = chart
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == drawing_id);
+        if let Some(drawing) = drawing {
+            self.set_context(drawing.tool_type.as_str(), drawing.locked, drawing.visible);
+        }
+        self.alert = drawing
+            .filter(|drawing| !chart.symbol.is_empty() && !drawing.alert_levels(0.0).is_empty())
+            .map(|drawing| {
+                Alert::new(
+                    chart.symbol.clone(),
+                    AlertCondition::Compare {
+                        other: drawing.alert_source(0),
+                        comparison: AlertComparison::Crossing,
+                    },
+                )
+            });
+        self.open(pos, drawing_id);
     }
 
     /// Close the context menu
@@ -111,57 +146,71 @@ impl DrawingContextMenu {
         &self,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
-        vec![
-            // Edit section
-            MenuEntry::Item(
-                MenuItem::new("Edit…", DrawingContextMenuAction::Edit)
-                    .with_icon(&embedded_icons::PENCIL),
-            ),
-            MenuEntry::Separator,
-            // Layer ordering
-            MenuEntry::Item(MenuItem::new(
-                "Bring to front",
-                DrawingContextMenuAction::BringToFront,
-            )),
-            MenuEntry::Item(MenuItem::new(
-                "Send to back",
-                DrawingContextMenuAction::SendToBack,
-            )),
-            MenuEntry::Separator,
-            // State toggles
-            MenuEntry::Item(
-                MenuItem::new(
-                    if self.is_locked { "Unlock" } else { "Lock" },
-                    DrawingContextMenuAction::Lock,
-                )
-                .with_icon(if self.is_locked {
-                    &embedded_icons::UNLOCK
-                } else {
-                    &embedded_icons::LOCK
-                }),
-            ),
-            MenuEntry::Item(
-                MenuItem::new(
-                    if self.is_visible { "Hide" } else { "Show" },
-                    DrawingContextMenuAction::Hide,
-                )
-                .with_icon(if self.is_visible {
-                    &embedded_icons::EYE_HIDE
-                } else {
-                    &embedded_icons::EYE
-                }),
-            ),
-            MenuEntry::Separator,
-            MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
-            MenuEntry::Separator,
-            // Delete (last item, potentially destructive)
-            MenuEntry::Item(
-                MenuItem::new("Delete", DrawingContextMenuAction::Delete)
-                    .with_icon(&embedded_icons::TRASH)
-                    .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
-                    .danger(),
-            ),
-        ]
+        let alert = self.alert.iter().flat_map(|alert| {
+            [
+                MenuEntry::Item(
+                    MenuItem::new(
+                        format!("Add alert on {}…", self.drawing_type),
+                        DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
+                    )
+                    .with_icon(&embedded_icons::ALERTS),
+                ),
+                MenuEntry::Separator,
+            ]
+        });
+        alert
+            .chain([
+                // Edit section
+                MenuEntry::Item(
+                    MenuItem::new("Edit…", DrawingContextMenuAction::Edit)
+                        .with_icon(&embedded_icons::PENCIL),
+                ),
+                MenuEntry::Separator,
+                // Layer ordering
+                MenuEntry::Item(MenuItem::new(
+                    "Bring to front",
+                    DrawingContextMenuAction::BringToFront,
+                )),
+                MenuEntry::Item(MenuItem::new(
+                    "Send to back",
+                    DrawingContextMenuAction::SendToBack,
+                )),
+                MenuEntry::Separator,
+                // State toggles
+                MenuEntry::Item(
+                    MenuItem::new(
+                        if self.is_locked { "Unlock" } else { "Lock" },
+                        DrawingContextMenuAction::Lock,
+                    )
+                    .with_icon(if self.is_locked {
+                        &embedded_icons::UNLOCK
+                    } else {
+                        &embedded_icons::LOCK
+                    }),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new(
+                        if self.is_visible { "Hide" } else { "Show" },
+                        DrawingContextMenuAction::Hide,
+                    )
+                    .with_icon(if self.is_visible {
+                        &embedded_icons::EYE_HIDE
+                    } else {
+                        &embedded_icons::EYE
+                    }),
+                ),
+                MenuEntry::Separator,
+                MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
+                MenuEntry::Separator,
+                // Delete (last item, potentially destructive)
+                MenuEntry::Item(
+                    MenuItem::new("Delete", DrawingContextMenuAction::Delete)
+                        .with_icon(&embedded_icons::TRASH)
+                        .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
+                        .danger(),
+                ),
+            ])
+            .collect()
     }
 
     /// Show the context menu

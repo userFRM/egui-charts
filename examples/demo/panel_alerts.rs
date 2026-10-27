@@ -241,31 +241,11 @@ fn source_value(
             .find(|(key, _)| key.0.to_string() == *id)?
             .1
             .plot_value(*output, index)?,
-        AlertSource::Drawing(id) => {
-            use egui_charts::drawings::DrawingToolType;
-            let drawing = chart
-                .drawings()
-                .drawings
-                .iter()
-                .find(|d| d.id.to_string() == *id)?;
-            let first = drawing.chart_points.first()?;
-            match drawing.tool_type {
-                DrawingToolType::HorizontalLine | DrawingToolType::HorizontalRay => first.price,
-                DrawingToolType::TrendLine
-                | DrawingToolType::Ray
-                | DrawingToolType::ExtendedLine => {
-                    let second = drawing.chart_points.get(1)?;
-                    let span = f64::from(second.bar_idx - first.bar_idx);
-                    if span == 0.0 {
-                        return None;
-                    }
-                    first.price
-                        + (index as f64 - f64::from(first.bar_idx)) * (second.price - first.price)
-                            / span
-                }
-                _ => return None,
-            }
-        }
+        AlertSource::Drawing(_) => chart.drawings().drawings.iter().find_map(|d| {
+            let level = d.alert_level(source)?;
+            let levels = d.alert_levels(index as f64);
+            levels.into_iter().find(|l| l.0 == level).map(|l| l.2)
+        })?,
     };
     value.is_finite().then_some(value)
 }
@@ -582,5 +562,22 @@ mod tests {
         host.evaluate(&chart, now);
         panel.poll(&ctx, &mut toasts);
         assert_eq!(panel.log().len(), 7);
+
+        // A level after the first, here a rectangle's bottom at 100, by its stored identity.
+        let mut drawing = Drawing::new(8, DrawingToolType::Rect);
+        drawing.stored_id = Some("host-8".into());
+        drawing.chart_points = vec![ChartPoint::new(0.0, 120.0), ChartPoint::new(1.0, 100.0)];
+        let bottom = drawing.alert_source(1);
+        chart.drawings_mut().drawings.push(drawing);
+        panel.save(Alert::new(
+            chart.symbol(),
+            C::Compare {
+                other: bottom,
+                comparison: AlertComparison::CrossingDown,
+            },
+        ));
+        host.evaluate(&chart, now);
+        panel.poll(&ctx, &mut toasts);
+        assert_eq!(panel.log().len(), 8, "101 to 99 crosses the bottom at 100");
     }
 }

@@ -18,6 +18,8 @@ pub enum FloatingToolbarAction {
     ChangeColor(usize, Color32),
     /// Open settings dialog
     OpenSettings,
+    /// Add an alert on the selected object
+    AddAlert,
     /// Duplicate the selected object
     Duplicate,
     /// Delete the selected object
@@ -54,6 +56,8 @@ pub struct FloatingSelectionToolbar {
     is_locked: bool,
     /// Whether object is visible
     is_visible: bool,
+    /// Whether to offer an alert on the object
+    alert_available: bool,
     /// Last rendered rect (for hit testing)
     last_rect: Rect,
 }
@@ -77,6 +81,7 @@ impl FloatingSelectionToolbar {
             color_slots: Vec::new(),
             is_locked: false,
             is_visible: true,
+            alert_available: false,
             last_rect: Rect::NOTHING,
         }
     }
@@ -121,6 +126,12 @@ impl FloatingSelectionToolbar {
     /// Set visibility state
     pub fn set_object_visible(&mut self, visible: bool) {
         self.is_visible = visible;
+    }
+
+    /// Show the Add alert button, for an object an alert can follow, such as a drawing with
+    /// [`alert_levels`](crate::drawings::Drawing::alert_levels). Hidden by default.
+    pub fn set_alert_available(&mut self, available: bool) {
+        self.alert_available = available;
     }
 
     /// Render the toolbar
@@ -176,6 +187,7 @@ impl FloatingSelectionToolbar {
         let color_slots_len = self.color_slots.len();
         let is_locked = self.is_locked;
         let is_visible = self.is_visible;
+        let alert_available = self.alert_available;
 
         // We need to track color changes
         let mut color_changes: Vec<(usize, Color32)> = Vec::new();
@@ -244,6 +256,16 @@ impl FloatingSelectionToolbar {
                                 .clicked()
                             {
                                 inner_action = Some(FloatingToolbarAction::OpenSettings);
+                            }
+
+                            if alert_available
+                                && IconButton::new(&icons::ALERTS)
+                                    .size(ButtonSize::SM)
+                                    .tooltip("Add alert")
+                                    .show(ui)
+                                    .clicked()
+                            {
+                                inner_action = Some(FloatingToolbarAction::AddAlert);
                             }
 
                             // Duplicate button
@@ -336,7 +358,8 @@ impl FloatingSelectionToolbar {
         let sep_width = DESIGN_TOKENS.sizing.floating_toolbar.separator_width;
         let drag_handle = DESIGN_TOKENS.sizing.floating_toolbar.drag_handle_height;
         let padding = ui.active_theme().spacing.xl;
-        let icon_buttons = 5; // settings, duplicate, lock, visibility, delete
+        // Settings, duplicate, lock, visibility, delete and the optional alert.
+        let icon_buttons = 5 + usize::from(self.alert_available);
 
         Vec2::new(
             drag_handle
@@ -396,7 +419,8 @@ impl FloatingSelectionToolbar {
 mod tests {
     use super::*;
 
-    /// Keyboard navigation announces each action, including the current lock and visibility state.
+    /// Keyboard navigation announces each action, including the current lock and visibility state
+    /// and the alert when it is available.
     #[test]
     fn action_buttons_have_accessible_names() {
         for locked in [false, true] {
@@ -405,6 +429,7 @@ mod tests {
             toolbar.show_at(Pos2::new(100.0, 100.0));
             toolbar.set_locked(locked);
             toolbar.set_object_visible(!locked);
+            toolbar.set_alert_available(locked);
             let mut frame = |tab| {
                 ctx.run_ui(
                     egui::RawInput {
@@ -432,13 +457,13 @@ mod tests {
             };
             frame(false).drop_without_applying_deltas();
             frame(false).drop_without_applying_deltas();
-            for label in [
-                "Settings",
+            let alert = locked.then_some("Add alert");
+            for label in ["Settings"].into_iter().chain(alert).chain([
                 "Duplicate",
                 if locked { "Unlock" } else { "Lock" },
                 if locked { "Show" } else { "Hide" },
                 "Delete",
-            ] {
+            ]) {
                 let mut output = frame(true);
                 let events = std::mem::take(&mut output.platform_output.events);
                 output.drop_without_applying_deltas();
