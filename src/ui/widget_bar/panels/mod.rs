@@ -37,9 +37,9 @@ mod tests {
     use super::*;
     use crate::data::{
         Datafeed, FeedError, HistoryPage, HistoryRequest, HotlistEntry, HotlistQuery, Reply,
-        ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow,
+        ScreenerColumn, ScreenerColumnSet, ScreenerQuery, ScreenerRow, SymbolDetails,
     };
-    use crate::model::{OrderSide, Quote, Tick};
+    use crate::model::{Instrument, OrderSide, Quote, Tick};
     use crate::theme::{Theme, apply_to_egui};
 
     struct Feed;
@@ -59,13 +59,27 @@ mod tests {
                 ScreenerRow::new("B", vec!["10.00".into()]),
             ]));
         }
+        fn symbol_details(&self, _: &str, reply: Reply<SymbolDetails>) {
+            reply.send(Ok(SymbolDetails::new(
+                vec![("Market capitalization".into(), "2.95T USD".into())],
+                vec![("Sector".into(), "Technology".into())],
+            )
+            .with_category("Software")));
+        }
     }
 
     #[test]
     fn market_panel_cells_stay_separate_in_narrow_windows() {
         for theme in [Theme::light(), Theme::dark()] {
             for width in [220.0, 280.0] {
-                for panel in ["watchlist", "tape", "hotlist", "screener", "news"] {
+                for panel in [
+                    "watchlist",
+                    "details",
+                    "tape",
+                    "hotlist",
+                    "screener",
+                    "news",
+                ] {
                     let tape = panel == "tape";
                     let ctx = egui::Context::default();
                     apply_to_egui(&ctx, &theme);
@@ -79,6 +93,23 @@ mod tests {
                     watchlist.set_price_decimals(symbol, 3);
                     watchlist.set_quote("A", Quote::new(10.0, 10.0, time));
                     watchlist.set_price_decimals("A", 2);
+                    watchlist.set_mark(
+                        "A",
+                        egui::load::SizedTexture::new(
+                            egui::TextureId::User(1),
+                            egui::Vec2::splat(18.0),
+                        )
+                        .into(),
+                    );
+                    let mut details = SymbolDetailsPanel::new();
+                    details.set_instrument(
+                        &Instrument::new(symbol)
+                            .with_description("A long description supplied by the feed")
+                            .with_price_decimals(3),
+                    );
+                    details.set_quote(Quote::new(123456.789, 100000.0, time));
+                    details.set_feed(std::sync::Arc::new(Feed));
+                    details.poll(&ctx);
                     let mut trades = TimeAndSalesPanel::default();
                     trades.config.price_decimals = Some(2);
                     trades.push(Tick::new(
@@ -121,7 +152,9 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            if panel == "news" {
+                            if panel == "details" {
+                                details.show(ui);
+                            } else if panel == "news" {
                                 news.show(ui);
                             } else if panel == "hotlist" {
                                 hotlist.show(ui);
@@ -149,8 +182,14 @@ mod tests {
                     output.drop_without_applying_deltas();
                     assert!(
                         used.right() <= width,
-                        "panel expanded beyond {width}: {used:?}"
+                        "{panel} expanded beyond {width}: {used:?}"
                     );
+                    if panel == "details" {
+                        for label in ["Software", "Key statistics", "2.95T USD", "Profile"] {
+                            assert!(texts.iter().any(|(text, _)| text == label), "{texts:?}");
+                        }
+                        continue;
+                    }
                     if panel == "news" {
                         assert!(texts.iter().any(|(text, _)| text == "Market"), "{texts:?}");
                         continue;
@@ -183,16 +222,28 @@ mod tests {
                             if tape {
                                 matches!(text.as_str(), "12:34:56" | "123456789.12" | "123.46K")
                             } else {
-                                [symbol, "123456.789", "+23456.789", "+23.46%"]
+                                [symbol, "123,456.789", "+23,456.789", "+23.46%"]
                                     .contains(&text.as_str())
                             }
                         })
                         .collect();
                     assert_eq!(row.len(), if tape { 3 } else { 4 }, "{texts:?}");
-                    let bounds =
-                        |label: &str| texts.iter().find(|(text, _)| text == label).unwrap().1;
+                    // The last match, so a symbol's name wins over its mark's initial.
+                    let bounds = |label: &str| {
+                        texts
+                            .iter()
+                            .rev()
+                            .find(|(text, _)| text == label)
+                            .unwrap()
+                            .1
+                    };
                     if !tape {
-                        assert!((bounds("A").left() - 10.0).abs() < 2.0, "{texts:?}");
+                        // The name follows the 18 point mark at the symbol column's edge.
+                        assert!((bounds("A").left() - 34.0).abs() < 2.0, "{texts:?}");
+                        assert!(
+                            (bounds("A").center().y - bounds(symbol).center().y - 30.0).abs() < 1.0,
+                            "{texts:?}"
+                        );
                     }
                     let (value, heading) = if tape {
                         ("2.00", "Price")

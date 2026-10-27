@@ -449,7 +449,7 @@ impl DemoApp {
             .with_visible_candles(0)
             .with_chart_options(options)
             .build();
-        chart.config_mut().volume_height_fraction = 0.12;
+        chart.config_mut().volume_height_fraction = 0.25;
         chart.config_mut().volume_baseline_inset = 0.0;
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
