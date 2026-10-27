@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -15,6 +15,7 @@ pub struct ChaikinVolatility {
     /// ROC period (typically 10)
     roc_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(usize, Smoothing, std::collections::VecDeque<f64>)>,
     color: Color32,
     visible: bool,
 }
@@ -26,6 +27,7 @@ impl ChaikinVolatility {
             ema_period: ema_period.max(1),
             roc_period: roc_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::DEEP_ORANGE,
             visible: true,
         }
@@ -35,45 +37,6 @@ impl ChaikinVolatility {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let min_period = self.ema_period.saturating_add(self.roc_period);
-        if data.len() < min_period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate H-L range
-        let hl_range: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
-
-        // Calculate EMA of H-L range
-        let hl_ema = helpers::ema(&hl_range, self.ema_period);
-
-        // Calculate Rate of Change of EMA
-        for i in 0..data.len() {
-            if i < min_period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                let current = hl_ema[i];
-                let past = hl_ema[i - self.roc_period];
-
-                let cv = if past != 0.0 {
-                    (current - past) / past * 100.0
-                } else {
-                    0.0
-                };
-
-                values.push(IndicatorValue::Single(cv));
-            }
-        }
-
-        values
     }
 }
 
@@ -102,11 +65,39 @@ impl Indicator for ChaikinVolatility {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.0 += 1;
+                let ema = state
+                    .1
+                    .next(bar.high - bar.low, 1, 2.0 / (self.ema_period as f64 + 1.0));
+                state.2.push_back(ema);
+                let past = if state.2.len() > self.roc_period {
+                    state.2.pop_front().unwrap()
+                } else {
+                    f64::NAN
+                };
+                if state.0 < self.ema_period.saturating_add(self.roc_period) {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(if past != 0.0 {
+                        (ema - past) / past * 100.0
+                    } else {
+                        0.0
+                    })
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

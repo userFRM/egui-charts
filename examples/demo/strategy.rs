@@ -318,6 +318,10 @@ mod tests {
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
+                // Returning to SAMPLE selects regular hours; keep the report on that same session.
+                app.timeframe_toolbar
+                    .set_session(super::super::SessionType::RTH);
+                app.regenerate_bars();
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
                 let frame = |app: &mut DemoApp, events| {
                     ctx.run_ui(

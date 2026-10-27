@@ -1,6 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -46,6 +47,25 @@ impl Default for MarketFacilitationIndex {
     }
 }
 
+impl MarketFacilitationIndex {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let range = bar.high - bar.low;
+            let volume = bar.volume / self.divisor;
+
+            if volume == 0.0 {
+                values.push(IndicatorValue::None);
+            } else {
+                let mfi = range / volume;
+                values.push(IndicatorValue::Single(mfi));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for MarketFacilitationIndex {
     crate::studies::inputs::study_inputs!(self;
         divisor: number("Divisor", f64::EPSILON, f64::MAX)
@@ -60,19 +80,23 @@ impl Indicator for MarketFacilitationIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let range = bar.high - bar.low;
-            let volume = bar.volume / self.divisor;
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-            if volume == 0.0 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let mfi = range / volume;
-                self.values.push(IndicatorValue::Single(mfi));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

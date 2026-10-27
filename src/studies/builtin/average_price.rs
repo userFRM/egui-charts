@@ -4,6 +4,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -38,6 +39,18 @@ impl Default for OHLC4 {
     }
 }
 
+impl OHLC4 {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let ohlc4 = (bar.open + bar.high + bar.low + bar.close) / 4.0;
+            values.push(IndicatorValue::Single(ohlc4));
+        }
+        values
+    }
+}
+
 impl Indicator for OHLC4 {
     fn name(&self) -> &str {
         "OHLC4"
@@ -48,12 +61,23 @@ impl Indicator for OHLC4 {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let ohlc4 = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-            self.values.push(IndicatorValue::Single(ohlc4));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -124,6 +148,18 @@ impl Default for HLC3 {
     }
 }
 
+impl HLC3 {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let hlc3 = (bar.high + bar.low + bar.close) / 3.0;
+            values.push(IndicatorValue::Single(hlc3));
+        }
+        values
+    }
+}
+
 impl Indicator for HLC3 {
     fn name(&self) -> &str {
         "HLC3"
@@ -134,12 +170,23 @@ impl Indicator for HLC3 {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let hlc3 = (bar.high + bar.low + bar.close) / 3.0;
-            self.values.push(IndicatorValue::Single(hlc3));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -210,6 +257,18 @@ impl Default for HL2 {
     }
 }
 
+impl HL2 {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let hl2 = (bar.high + bar.low) / 2.0;
+            values.push(IndicatorValue::Single(hl2));
+        }
+        values
+    }
+}
+
 impl Indicator for HL2 {
     fn name(&self) -> &str {
         "HL2"
@@ -220,12 +279,23 @@ impl Indicator for HL2 {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let hl2 = (bar.high + bar.low) / 2.0;
-            self.values.push(IndicatorValue::Single(hl2));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -332,11 +402,31 @@ impl Indicator for TrueRange {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(1, |b| {
+                b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
+                    |data| self.compute(data),
+                )
+            },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

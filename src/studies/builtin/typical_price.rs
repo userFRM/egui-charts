@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -38,6 +39,18 @@ impl Default for TypicalPrice {
     }
 }
 
+impl TypicalPrice {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let tp = (bar.high + bar.low + bar.close) / 3.0;
+            values.push(IndicatorValue::Single(tp));
+        }
+        values
+    }
+}
+
 impl Indicator for TypicalPrice {
     fn name(&self) -> &str {
         "TP"
@@ -48,12 +61,23 @@ impl Indicator for TypicalPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let tp = (bar.high + bar.low + bar.close) / 3.0;
-            self.values.push(IndicatorValue::Single(tp));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -122,6 +146,18 @@ impl Default for WeightedClose {
     }
 }
 
+impl WeightedClose {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let wc = (bar.high + bar.low + 2.0 * bar.close) / 4.0;
+            values.push(IndicatorValue::Single(wc));
+        }
+        values
+    }
+}
+
 impl Indicator for WeightedClose {
     fn name(&self) -> &str {
         "WC"
@@ -132,12 +168,23 @@ impl Indicator for WeightedClose {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let wc = (bar.high + bar.low + 2.0 * bar.close) / 4.0;
-            self.values.push(IndicatorValue::Single(wc));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -208,6 +255,18 @@ impl Default for MedianPrice {
     }
 }
 
+impl MedianPrice {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for bar in data {
+            let mp = (bar.high + bar.low) / 2.0;
+            values.push(IndicatorValue::Single(mp));
+        }
+        values
+    }
+}
+
 impl Indicator for MedianPrice {
     fn name(&self) -> &str {
         "MP"
@@ -218,12 +277,23 @@ impl Indicator for MedianPrice {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for bar in data {
-            let mp = (bar.high + bar.low) / 2.0;
-            self.values.push(IndicatorValue::Single(mp));
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from,
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

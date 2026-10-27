@@ -1,6 +1,7 @@
-use super::{ADX, over_finite_bars};
+use super::ADX;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -12,9 +13,21 @@ pub struct DirectionalMovement {
     /// Period for smoothing (typically 14)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    adx: ADX,
     /// Colors: [+DI, -DI, ADX]
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    index: usize,
+    previous: Option<[f64; 3]>,
+    count: usize,
+    plus: f64,
+    minus: f64,
+    tr: f64,
 }
 
 impl DirectionalMovement {
@@ -23,6 +36,8 @@ impl DirectionalMovement {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            adx: ADX::new(period),
             colors: vec![
                 palette::GREEN, // Green - +DI
                 palette::RED,   // Red - -DI
@@ -36,108 +51,6 @@ impl DirectionalMovement {
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
         self.colors = colors;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period.saturating_add(1) {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Calculate +DM, -DM, and TR
-        let mut plus_dm = Vec::with_capacity(data.len());
-        let mut minus_dm = Vec::with_capacity(data.len());
-        let mut tr = Vec::with_capacity(data.len());
-
-        plus_dm.push(0.0);
-        minus_dm.push(0.0);
-        tr.push(data[0].high - data[0].low);
-
-        for i in 1..data.len() {
-            let current = &data[i];
-            let prev = &data[i - 1];
-
-            // True Range
-            let high_low = current.high - current.low;
-            let high_close = (current.high - prev.close).abs();
-            let low_close = (current.low - prev.close).abs();
-            tr.push(high_low.max(high_close).max(low_close));
-
-            // Directional Movement
-            let up_move = current.high - prev.high;
-            let down_move = prev.low - current.low;
-
-            let pdm = if up_move > down_move && up_move > 0.0 {
-                up_move
-            } else {
-                0.0
-            };
-            let mdm = if down_move > up_move && down_move > 0.0 {
-                down_move
-            } else {
-                0.0
-            };
-
-            plus_dm.push(pdm);
-            minus_dm.push(mdm);
-        }
-
-        // Calculate smoothed values using Wilder's smoothing (like RMA/SMMA)
-        let mut smoothed_plus_dm = Vec::with_capacity(data.len());
-        let mut smoothed_minus_dm = Vec::with_capacity(data.len());
-        let mut smoothed_tr = Vec::with_capacity(data.len());
-
-        // First sum
-        let mut sum_plus_dm: f64 = plus_dm[1..=self.period].iter().sum();
-        let mut sum_minus_dm: f64 = minus_dm[1..=self.period].iter().sum();
-        let mut sum_tr: f64 = tr[1..=self.period].iter().sum();
-
-        for i in 0..data.len() {
-            if i < self.period {
-                smoothed_plus_dm.push(f64::NAN);
-                smoothed_minus_dm.push(f64::NAN);
-                smoothed_tr.push(f64::NAN);
-            } else if i == self.period {
-                smoothed_plus_dm.push(sum_plus_dm);
-                smoothed_minus_dm.push(sum_minus_dm);
-                smoothed_tr.push(sum_tr);
-            } else {
-                // Wilder smoothing: prev - (prev/period) + current
-                sum_plus_dm = sum_plus_dm - sum_plus_dm / self.period as f64 + plus_dm[i];
-                sum_minus_dm = sum_minus_dm - sum_minus_dm / self.period as f64 + minus_dm[i];
-                sum_tr = sum_tr - sum_tr / self.period as f64 + tr[i];
-
-                smoothed_plus_dm.push(sum_plus_dm);
-                smoothed_minus_dm.push(sum_minus_dm);
-                smoothed_tr.push(sum_tr);
-            }
-        }
-
-        // Calculate +DI and -DI, next to the ADX line of the ADX study
-        let mut adx = ADX::new(self.period);
-        adx.calculate(data);
-        let adx = adx.values();
-        for i in 0..data.len() {
-            let adx = adx.value(0, i).unwrap_or(f64::NAN);
-            if smoothed_tr[i].is_nan() || smoothed_tr[i] == 0.0 {
-                values.push(if adx.is_nan() {
-                    IndicatorValue::None
-                } else {
-                    IndicatorValue::Multiple(vec![f64::NAN, f64::NAN, adx])
-                });
-            } else {
-                let plus_di = 100.0 * smoothed_plus_dm[i] / smoothed_tr[i];
-                let minus_di = 100.0 * smoothed_minus_dm[i] / smoothed_tr[i];
-                values.push_lines(&[plus_di, minus_di, adx]);
-            }
-        }
-
-        values
     }
 }
 
@@ -161,11 +74,63 @@ impl Indicator for DirectionalMovement {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.adx = ADX::new(self.period);
+        }
+        self.adx.update(data, from);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.index;
+                state.index += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let Some(previous) = state.previous.replace([bar.high, bar.low, bar.close]) else {
+                    return IndicatorValue::None;
+                };
+                state.count += 1;
+                let up = bar.high - previous[0];
+                let down = previous[1] - bar.low;
+                let plus = if up > down && up > 0.0 { up } else { 0.0 };
+                let minus = if down > up && down > 0.0 { down } else { 0.0 };
+                let tr = (bar.high - bar.low)
+                    .max((bar.high - previous[2]).abs())
+                    .max((bar.low - previous[2]).abs());
+                if state.count <= self.period {
+                    state.plus += plus;
+                    state.minus += minus;
+                    state.tr += tr;
+                    if state.count < self.period {
+                        return IndicatorValue::None;
+                    }
+                } else {
+                    state.plus = state.plus - state.plus / self.period as f64 + plus;
+                    state.minus = state.minus - state.minus / self.period as f64 + minus;
+                    state.tr = state.tr - state.tr / self.period as f64 + tr;
+                }
+                let adx = self.adx.values().value(0, index).unwrap_or(f64::NAN);
+                if state.tr.is_nan() || state.tr == 0.0 {
+                    if adx.is_nan() {
+                        IndicatorValue::None
+                    } else {
+                        IndicatorValue::Multiple(vec![f64::NAN, f64::NAN, adx])
+                    }
+                } else {
+                    IndicatorValue::Multiple(vec![
+                        100.0 * state.plus / state.tr,
+                        100.0 * state.minus / state.tr,
+                        adx,
+                    ])
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -21,8 +21,18 @@ pub struct ConnorsRSI {
     /// Percent Rank lookback (typically 100)
     rank_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<f64>,
+    streak: f64,
+    price_rsi: (usize, f64, f64),
+    streak_rsi: (usize, f64, f64),
+    roc: std::collections::VecDeque<f64>,
 }
 
 impl ConnorsRSI {
@@ -33,6 +43,7 @@ impl ConnorsRSI {
             streak_period: 2,
             rank_period: 100,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::PINK, // Pink
             visible: true,
         }
@@ -52,160 +63,35 @@ impl ConnorsRSI {
         self
     }
 
-    /// Calculate standard RSI
-    fn calculate_rsi(data: &[f64], period: usize) -> Vec<f64> {
-        if data.len() < period + 1 {
-            return vec![f64::NAN; data.len()];
-        }
-
-        let mut result = vec![f64::NAN; data.len()];
-        let mut gains = Vec::with_capacity(data.len());
-        let mut losses = Vec::with_capacity(data.len());
-
-        // Calculate changes
-        gains.push(0.0);
-        losses.push(0.0);
-
-        for i in 1..data.len() {
-            let change = data[i] - data[i - 1];
-            gains.push(if change > 0.0 { change } else { 0.0 });
-            losses.push(if change < 0.0 { -change } else { 0.0 });
-        }
-
-        // Calculate first avgs
-        let mut avg_gain: f64 = gains[1..=period].iter().sum::<f64>() / period as f64;
-        let mut avg_loss: f64 = losses[1..=period].iter().sum::<f64>() / period as f64;
-
-        for i in period..data.len() {
-            if i == period {
-                // First RSI value
-            } else {
-                avg_gain = (avg_gain * (period - 1) as f64 + gains[i]) / period as f64;
-                avg_loss = (avg_loss * (period - 1) as f64 + losses[i]) / period as f64;
+    /// Resume the mean of gains and losses, then Wilder smoothing.
+    fn next_rsi(state: &mut (usize, f64, f64), change: f64, period: usize) -> f64 {
+        let gain = if change > 0.0 { change } else { 0.0 };
+        let loss = if change < 0.0 { -change } else { 0.0 };
+        if state.0 < period {
+            state.0 += 1;
+            state.1 += gain;
+            state.2 += loss;
+            if state.0 < period {
+                return f64::NAN;
             }
-
-            let rs = if avg_loss > 0.0 {
-                avg_gain / avg_loss
-            } else {
-                100.0
-            };
-            result[i] = 100.0 - (100.0 / (1.0 + rs));
+            state.1 /= period as f64;
+            state.2 /= period as f64;
+        } else {
+            state.1 = (state.1 * (period - 1) as f64 + gain) / period as f64;
+            state.2 = (state.2 * (period - 1) as f64 + loss) / period as f64;
         }
-
-        result
-    }
-
-    /// Calculate up/down streak
-    fn calculate_streak(data: &[Bar]) -> Vec<f64> {
-        let mut streak = vec![0.0; data.len()];
-
-        for i in 1..data.len() {
-            let prev_streak = streak[i - 1];
-
-            if data[i].close > data[i - 1].close {
-                // Up day
-                streak[i] = if prev_streak > 0.0 {
-                    prev_streak + 1.0
-                } else {
-                    1.0
-                };
-            } else if data[i].close < data[i - 1].close {
-                // Down day
-                streak[i] = if prev_streak < 0.0 {
-                    prev_streak - 1.0
-                } else {
-                    -1.0
-                };
-            } else {
-                // Unchanged
-                streak[i] = 0.0;
-            }
-        }
-
-        streak
-    }
-
-    /// Calculate percent rank
-    fn calculate_percent_rank(data: &[f64], period: usize) -> Vec<f64> {
-        let mut result = vec![f64::NAN; data.len()];
-
-        for i in period..data.len() {
-            let current = data[i];
-            if current.is_nan() {
-                continue;
-            }
-
-            let window = &data[i - period..i];
-            let cnt_below = window
-                .iter()
-                .filter(|&&v| !v.is_nan() && v < current)
-                .count();
-
-            result[i] = (cnt_below as f64 / period as f64) * 100.0;
-        }
-
-        result
-    }
-
-    /// Calculate ROC
-    fn calculate_roc(data: &[Bar]) -> Vec<f64> {
-        let mut roc = vec![f64::NAN; data.len()];
-
-        for i in 1..data.len() {
-            if data[i - 1].close != 0.0 {
-                roc[i] = (data[i].close - data[i - 1].close) / data[i - 1].close * 100.0;
-            }
-        }
-
-        roc
+        let rs = if state.2 > 0.0 {
+            state.1 / state.2
+        } else {
+            100.0
+        };
+        100.0 - (100.0 / (1.0 + rs))
     }
 }
 
 impl Default for ConnorsRSI {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ConnorsRSI {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        let required = self
-            .rsi_period
-            .max(self.streak_period)
-            .max(self.rank_period)
-            .saturating_add(1);
-        if data.len() < required {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // 1. Calculate standard RSI of close prices
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-        let rsi = Self::calculate_rsi(&closes, self.rsi_period);
-
-        // 2. Calculate streak and RSI of streak
-        let streak = Self::calculate_streak(data);
-        let streak_rsi = Self::calculate_rsi(&streak, self.streak_period);
-
-        // 3. Calculate percent rank of ROC
-        let roc = Self::calculate_roc(data);
-        let percent_rank = Self::calculate_percent_rank(&roc, self.rank_period);
-
-        // Combine: CRSI = (RSI + StreakRSI + PercentRank) / 3
-        for i in 0..data.len() {
-            if rsi[i].is_nan() || streak_rsi[i].is_nan() || percent_rank[i].is_nan() {
-                values.push(IndicatorValue::None);
-            } else {
-                let crsi = (rsi[i] + streak_rsi[i] + percent_rank[i]) / 3.0;
-                values.push(IndicatorValue::Single(crsi));
-            }
-        }
-
-        values
     }
 }
 
@@ -231,7 +117,70 @@ impl Indicator for ConnorsRSI {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let previous = state.previous.replace(bar.close);
+                let (mut price_rsi, mut streak_rsi, mut roc) = (f64::NAN, f64::NAN, f64::NAN);
+                if let Some(previous) = previous {
+                    price_rsi =
+                        Self::next_rsi(&mut state.price_rsi, bar.close - previous, self.rsi_period);
+                    let streak = if bar.close > previous {
+                        if state.streak > 0.0 {
+                            state.streak + 1.0
+                        } else {
+                            1.0
+                        }
+                    } else if bar.close < previous {
+                        if state.streak < 0.0 {
+                            state.streak - 1.0
+                        } else {
+                            -1.0
+                        }
+                    } else {
+                        0.0
+                    };
+                    streak_rsi = Self::next_rsi(
+                        &mut state.streak_rsi,
+                        streak - state.streak,
+                        self.streak_period,
+                    );
+                    state.streak = streak;
+                    if previous != 0.0 {
+                        roc = (bar.close - previous) / previous * 100.0;
+                    }
+                }
+                let rank = if state.roc.len() == self.rank_period && !roc.is_nan() {
+                    state
+                        .roc
+                        .iter()
+                        .filter(|&&v| !v.is_nan() && v < roc)
+                        .count() as f64
+                        / self.rank_period as f64
+                        * 100.0
+                } else {
+                    f64::NAN
+                };
+                state.roc.push_back(roc);
+                if state.roc.len() > self.rank_period {
+                    state.roc.pop_front();
+                }
+                if price_rsi.is_nan() || streak_rsi.is_nan() || rank.is_nan() {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single((price_rsi + streak_rsi + rank) / 3.0)
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -292,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_streak_calculation() {
-        let data = vec![
+        let data = [
             make_bar(100.0),
             make_bar(101.0), // +1
             make_bar(102.0), // +2
@@ -301,14 +250,11 @@ mod tests {
             make_bar(100.0), // 0
         ];
 
-        let streak = ConnorsRSI::calculate_streak(&data);
-
-        assert_eq!(streak[0], 0.0);
-        assert_eq!(streak[1], 1.0);
-        assert_eq!(streak[2], 2.0);
-        assert_eq!(streak[3], -1.0);
-        assert_eq!(streak[4], -2.0);
-        assert_eq!(streak[5], 0.0);
+        let mut study = ConnorsRSI::new();
+        for (i, expected) in [0.0, 1.0, 2.0, -1.0, -2.0, 0.0].into_iter().enumerate() {
+            study.update(&data[..=i], i);
+            assert_eq!(study.stepper.state().streak, expected);
+        }
     }
 
     #[test]

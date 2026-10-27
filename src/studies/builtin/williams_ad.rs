@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -10,8 +10,18 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct WilliamsAD {
     values: IndicatorValues,
+    stepper: Stepper<State>,
     color: Color32,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    bars: usize,
+    count: usize,
+    first: Option<usize>,
+    previous: Option<Bar>,
+    total: f64,
 }
 
 impl WilliamsAD {
@@ -19,6 +29,7 @@ impl WilliamsAD {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::UP, // Teal
             visible: true,
         }
@@ -28,43 +39,6 @@ impl WilliamsAD {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low and close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let mut cumulative = 0.0;
-        values.push(IndicatorValue::Single(0.0)); // First bar
-
-        for i in 1..data.len() {
-            let current = &data[i];
-            let prev = &data[i - 1];
-
-            let ad = if current.close > prev.close {
-                // Accumulation: Close - True Low
-                let true_low = current.low.min(prev.close);
-                current.close - true_low
-            } else if current.close < prev.close {
-                // Distribution: Close - True High
-                let true_high = current.high.max(prev.close);
-                current.close - true_high
-            } else {
-                0.0
-            };
-
-            cumulative += ad;
-            values.push(IndicatorValue::Single(cumulative));
-        }
-
-        values
     }
 }
 
@@ -88,11 +62,46 @@ impl Indicator for WilliamsAD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bars;
+                state.bars += 1;
+                if !([bar.high, bar.low, bar.close].iter().all(|x| x.is_finite())) {
+                    return IndicatorValue::None;
+                }
+                state.count += 1;
+                if let Some(previous) = &state.previous {
+                    state.total += if bar.close > previous.close {
+                        bar.close - bar.low.min(previous.close)
+                    } else if bar.close < previous.close {
+                        bar.close - bar.high.max(previous.close)
+                    } else {
+                        0.0
+                    };
+                }
+                state.first.get_or_insert(index);
+                state.previous = Some(bar.clone());
+                IndicatorValue::Single(state.total)
+            });
+        // The batch definition reveals the initial zero only once a second usable bar exists.
+        if let Some(first) = self.stepper.state().first {
+            self.values.set(
+                first,
+                if self.stepper.state().count < 2 {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(0.0)
+                },
+            );
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

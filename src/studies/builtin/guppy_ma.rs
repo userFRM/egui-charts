@@ -1,5 +1,5 @@
-use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -12,6 +12,7 @@ const LONG_PERIODS: [usize; 6] = [30, 35, 40, 45, 50, 60];
 #[derive(Clone)]
 pub struct GuppyMA {
     values: IndicatorValues,
+    stepper: Stepper<Option<[f64; 12]>>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -21,6 +22,7 @@ impl GuppyMA {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 // Short group - shades of green
                 Color32::from_rgb(0, 200, 83),
@@ -39,39 +41,6 @@ impl GuppyMA {
             ],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let closes: Vec<_> = data.iter().map(|bar| bar.close).collect();
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // Calculate all 12 EMA series
-        let short_emas: Vec<Vec<f64>> = SHORT_PERIODS
-            .iter()
-            .map(|&p| crate::studies::helpers::ema(&closes, p))
-            .collect();
-        let long_emas: Vec<Vec<f64>> = LONG_PERIODS
-            .iter()
-            .map(|&p| crate::studies::helpers::ema(&closes, p))
-            .collect();
-
-        for i in 0..data.len() {
-            let mut vals = Vec::with_capacity(12);
-            for series in &short_emas {
-                vals.push(series[i]);
-            }
-            for series in &long_emas {
-                vals.push(series[i]);
-            }
-            values.push(IndicatorValue::Multiple(vals));
-        }
-
-        values
     }
 }
 
@@ -97,7 +66,28 @@ impl Indicator for GuppyMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let averages = state.get_or_insert([bar.close; 12]);
+                for (average, period) in averages
+                    .iter_mut()
+                    .zip(SHORT_PERIODS.into_iter().chain(LONG_PERIODS))
+                {
+                    *average = (bar.close - *average) * (2.0 / (period as f64 + 1.0)) + *average;
+                }
+                IndicatorValue::Multiple(averages.to_vec())
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

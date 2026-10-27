@@ -159,7 +159,19 @@ fn main() {
 fn tail_updates() {
     println!("| study | bars | tick median us | append median us | incremental |");
     println!("|---|---:|---:|---:|---|");
-    let factory = IndicatorFactory::new();
+    let mut factory = IndicatorFactory::new();
+    factory.register("C2C Vol", || Box::new(CloseToCloseVol::default()));
+    factory.register("Price Channel", || Box::new(PriceChannel::default()));
+    factory.register("HLC3", || Box::new(HLC3::default()));
+    factory.register("HL2", || Box::new(HL2::default()));
+    factory.register("CVD", || Box::new(CVD::default()));
+    factory.register("Ehlers Fisher", || Box::new(EhlersFisher::default()));
+    let mut names: Vec<_> = factory
+        .list()
+        .into_iter()
+        .filter(|name| !name.starts_with("Vol Profile ") && name != "Visible Average Price")
+        .collect();
+    names.sort_unstable();
     for count in [1_000, 100_000, 1_000_000] {
         let mut bars: Vec<_> = (0..count + 5)
             .map(|i| {
@@ -174,30 +186,7 @@ fn tail_updates() {
                 )
             })
             .collect();
-        for name in [
-            "KST",
-            "Ichimoku",
-            "PSAR",
-            "WMA",
-            "DEMA",
-            "TEMA",
-            "HMA",
-            "Keltner",
-            "Donchian",
-            "ADX",
-            "CCI",
-            "Williams %R",
-            "MFI",
-            "ROC",
-            "StochRSI",
-            "TRIX",
-            "Aroon",
-            "CMF",
-            "AO",
-            "Envelopes",
-            "StdDev",
-            "VWMA",
-        ] {
+        for name in &names {
             let mut study = factory.create(name).expect("a built-in study");
             study.calculate(&bars[..count]);
             let mut ticks = Vec::new();

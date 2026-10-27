@@ -47,8 +47,10 @@
 use crate::model::Bar;
 use crate::model::LineStyle;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{
-    Indicator, IndicatorValues, PlotStyle, PlotType, StudyCell, StudyProjection, StudyTable,
+    Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, StudyCell, StudyProjection,
+    StudyTable,
 };
 use chrono::{Datelike, Months};
 use egui::Color32;
@@ -60,6 +62,11 @@ use std::collections::BTreeMap;
 pub struct Seasonality {
     start_year: i32,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    history: [Vec<(i32, f64)>; 12],
+    year_counts: BTreeMap<i32, usize>,
+    before_last_history: [usize; 12],
+    before_last_year: Option<i32>,
     table: StudyTable,
     projection: Vec<StudyProjection>,
     /// One per line: Expected, Previous close, Average, Standard deviation, Months.
@@ -69,6 +76,27 @@ pub struct Seasonality {
     visible: bool,
 }
 
+#[derive(Clone)]
+struct State {
+    source: usize,
+    latest_source: Option<usize>,
+    month: Option<((i32, u32), f64)>,
+    previous_close: Option<f64>,
+    row: [f64; 5],
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            source: 0,
+            latest_source: None,
+            month: None,
+            previous_close: None,
+            row: [f64::NAN; 5],
+        }
+    }
+}
+
 impl Seasonality {
     /// Seasonality over every loaded year.
     pub fn new() -> Self {
@@ -76,6 +104,11 @@ impl Seasonality {
         Self {
             start_year: 1900,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            history: Default::default(),
+            year_counts: BTreeMap::new(),
+            before_last_history: [0; 12],
+            before_last_year: None,
             table: StudyTable {
                 title: "Seasonality".into(),
                 columns: [
@@ -133,73 +166,129 @@ impl Indicator for Seasonality {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let mut values = IndicatorValues::missing(data.len());
-        if !data.is_empty() {
-            // Every bar holds a value for each of the five plots.
-            values.set_value(4, 0, f64::NAN);
-        }
-        // Per calendar month, the year and percentage change of each complete month.
-        let mut history: [Vec<(i32, f64)>; 12] = Default::default();
-        let mut month: Option<((i32, u32), f64)> = None;
-        let mut previous_close: Option<f64> = None;
-        for (i, bar) in data.iter().enumerate() {
-            if !bar.close.is_finite() {
-                continue;
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        let start = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            0
+        };
+        if start == 0 {
+            for history in &mut self.history {
+                history.clear();
             }
-            let date = bar.time.date_naive();
-            let key = (date.year(), date.month0());
-            if let Some((done, last)) = month.filter(|(other, _)| *other != key) {
-                let change = previous_close.map(|base| (last / base - 1.0) * 100.0);
-                if let Some(change) = change.filter(|c| c.is_finite() && done.0 >= self.start_year)
-                {
-                    history[done.1 as usize].push((done.0, change));
+            self.year_counts.clear();
+        } else if start < len {
+            for (history, &len) in self.history.iter_mut().zip(&self.before_last_history) {
+                history.truncate(len);
+            }
+            if let Some(year) = self.before_last_year {
+                let count = self.year_counts.get_mut(&year).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    self.year_counts.remove(&year);
                 }
-                previous_close = Some(last);
-            }
-            month = Some((key, bar.close));
-            let Some(base) = previous_close else {
-                continue;
-            };
-            let past: Vec<f64> = history[key.1 as usize]
-                .iter()
-                .filter(|(year, _)| *year < key.0)
-                .map(|&(_, change)| change)
-                .collect();
-            if past.is_empty() {
-                continue;
-            }
-            let n = past.len() as f64;
-            let average = past.iter().sum::<f64>() / n;
-            let variance = past.iter().map(|c| (c - average).powi(2)).sum::<f64>() / n;
-            for (line, value) in [
-                base * (1.0 + average / 100.0),
-                base,
-                average,
-                variance.sqrt(),
-                n,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                values.set_value(line, i, value);
             }
         }
-        // The developing month's change belongs in the latest table, never in its projection.
-        if let Some(((year, month), last)) = month.filter(|((year, _), _)| *year >= self.start_year)
-            && let Some(change) = previous_close
-                .map(|base| (last / base - 1.0) * 100.0)
-                .filter(|c| c.is_finite())
-        {
-            history[month as usize].push((year, change));
+        self.before_last_year = None;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let source = state.source;
+                state.source += 1;
+                let last = source + 1 == data.len();
+                if last {
+                    self.before_last_history = self.history.each_ref().map(Vec::len);
+                    self.before_last_year = None;
+                }
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.latest_source = Some(source);
+                let date = bar.time.date_naive();
+                let key = (date.year(), date.month0());
+                if key.0 >= self.start_year {
+                    *self.year_counts.entry(key.0).or_default() += 1;
+                    if last {
+                        self.before_last_year = Some(key.0);
+                    }
+                }
+                let new_month = state.month.is_none_or(|(other, _)| other != key);
+                if let Some((done, last)) = state.month.filter(|(other, _)| *other != key) {
+                    let change = state.previous_close.map(|base| (last / base - 1.0) * 100.0);
+                    if let Some(change) =
+                        change.filter(|c| c.is_finite() && done.0 >= self.start_year)
+                    {
+                        self.history[done.1 as usize].push((done.0, change));
+                    }
+                    state.previous_close = Some(last);
+                }
+                state.month = Some((key, bar.close));
+                if new_month {
+                    state.row = [f64::NAN; 5];
+                    if let Some(base) = state.previous_close {
+                        let past: Vec<f64> = self.history[key.1 as usize]
+                            .iter()
+                            .filter(|(year, _)| *year < key.0)
+                            .map(|&(_, change)| change)
+                            .collect();
+                        if !past.is_empty() {
+                            let n = past.len() as f64;
+                            let average = past.iter().sum::<f64>() / n;
+                            let variance =
+                                past.iter().map(|c| (c - average).powi(2)).sum::<f64>() / n;
+                            state.row = [
+                                base * (1.0 + average / 100.0),
+                                base,
+                                average,
+                                variance.sqrt(),
+                                n,
+                            ];
+                        }
+                    }
+                }
+                IndicatorValue::Multiple(state.row.to_vec())
+            });
+        if !data.is_empty() {
+            self.values.set_value(4, 0, f64::NAN);
         }
-        let mut years: BTreeMap<i32, [Option<f64>; 12]> = data
-            .iter()
-            .filter(|bar| bar.close.is_finite() && bar.time.year() >= self.start_year)
-            .map(|bar| (bar.time.year(), [None; 12]))
+        let state = self.stepper.state();
+        let developing = state
+            .month
+            .filter(|((year, _), _)| *year >= self.start_year)
+            .and_then(|((year, month), last)| {
+                state
+                    .previous_close
+                    .map(|base| (last / base - 1.0) * 100.0)
+                    .filter(|c| c.is_finite())
+                    .map(|change| (month as usize, year, change))
+            });
+        let mut years: BTreeMap<i32, [Option<f64>; 12]> = self
+            .year_counts
+            .keys()
+            .map(|&year| (year, [None; 12]))
             .collect();
-        for (month, changes) in history.iter().enumerate() {
-            for &(year, change) in changes {
+        let mut summaries = [Vec::new(), Vec::new(), Vec::new()];
+        for (month, history) in self.history.iter().enumerate() {
+            let current = developing
+                .filter(|&(at, _, _)| at == month)
+                .map(|(_, year, change)| (year, change));
+            let changes = || history.iter().copied().chain(current);
+            for (year, change) in changes() {
                 years.entry(year).or_insert([None; 12])[month] = Some(change);
+            }
+            let n = changes().count() as f64;
+            let mean = changes().map(|(_, change)| change).sum::<f64>() / n;
+            let deviation = (changes()
+                .map(|(_, change)| (change - mean).powi(2))
+                .sum::<f64>()
+                / n)
+                .sqrt();
+            let positive = changes().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
+            for (row, value) in summaries.iter_mut().zip([mean, deviation, positive]) {
+                row.push(StudyCell::Percent(value.is_finite().then_some(value)));
             }
         }
         self.table.rows = years
@@ -210,22 +299,6 @@ impl Indicator for Seasonality {
                     .collect()
             })
             .collect();
-        let mut summaries = [Vec::new(), Vec::new(), Vec::new()];
-        for changes in &history {
-            let n = changes.len() as f64;
-            let mean = changes.iter().map(|(_, change)| change).sum::<f64>() / n;
-            let deviation = (changes
-                .iter()
-                .map(|(_, change)| (change - mean).powi(2))
-                .sum::<f64>()
-                / n)
-                .sqrt();
-            let positive =
-                changes.iter().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
-            for (row, value) in summaries.iter_mut().zip([mean, deviation, positive]) {
-                row.push(StudyCell::Percent(value.is_finite().then_some(value)));
-            }
-        }
         for (label, cells) in ["Average", "Standard deviation", "Positive"]
             .into_iter()
             .zip(summaries)
@@ -237,8 +310,8 @@ impl Indicator for Seasonality {
             );
         }
         self.projection.clear();
-        if let Some(i) = data.iter().rposition(|bar| bar.close.is_finite())
-            && let (Some(expected), Some(base)) = (values.value(0, i), values.value(1, i))
+        if let Some(i) = self.stepper.state().latest_source
+            && let (Some(expected), Some(base)) = (self.values.value(0, i), self.values.value(1, i))
         {
             let last = &data[i];
             if let Some(end) = last
@@ -275,7 +348,10 @@ impl Indicator for Seasonality {
                 }
             }
         }
-        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn table(&self) -> Option<&StudyTable> {

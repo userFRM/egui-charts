@@ -1,6 +1,7 @@
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{Stepper, update_window};
 use crate::studies::{ADX, ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -20,6 +21,9 @@ pub struct CommoditySelectionIndex {
     margin: f64,
     commission: f64,
     values: IndicatorValues,
+    adx: ADX,
+    atr: ATR,
+    stepper: Stepper<(usize, std::collections::VecDeque<f64>)>,
     color: Color32,
     visible: bool,
 }
@@ -33,6 +37,9 @@ impl CommoditySelectionIndex {
             margin: 1.0,
             commission: 0.0,
             values: IndicatorValues::new(),
+            adx: ADX::new(period),
+            atr: ATR::new(period),
+            stepper: Stepper::default(),
             color: palette::BROWN, // Brown
             visible: true,
         }
@@ -61,30 +68,6 @@ impl CommoditySelectionIndex {
         self.color = color;
         self
     }
-
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        let mut adx = ADX::new(self.period);
-        adx.calculate(data);
-        let mut atr = ATR::new(self.period);
-        atr.calculate(data);
-        let adx_at = |i: usize| adx.values().value(0, i);
-        let scale = self.point_value / self.margin.sqrt() / (150.0 + self.commission) * 100.0;
-
-        for i in 0..data.len() {
-            let adxr = i
-                .checked_sub(self.period)
-                .and_then(|lagged| Some((adx_at(i)? + adx_at(lagged)?) / 2.0));
-            let atr_i = atr.values().value(0, i);
-            values.push(match (adxr, atr_i) {
-                (Some(adxr), Some(atr)) => IndicatorValue::Single(adxr * atr * scale),
-                _ => IndicatorValue::None,
-            });
-        }
-        values
-    }
 }
 
 impl Default for CommoditySelectionIndex {
@@ -110,11 +93,48 @@ impl Indicator for CommoditySelectionIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| [b.high, b.low, b.close].iter().all(|p| p.is_finite()),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        if from == 0 {
+            self.adx = ADX::new(self.period);
+        }
+        self.adx.update(data, from);
+        if from == 0 {
+            self.atr = ATR::new(self.period);
+        }
+        self.atr.update(data, from);
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.0;
+                state.0 += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                let adx = self.adx.values().value(0, index).unwrap_or(f64::NAN);
+                state.1.push_back(adx);
+                let past = if state.1.len() > self.period {
+                    state.1.pop_front().unwrap()
+                } else {
+                    f64::NAN
+                };
+                let atr = self.atr.values().value(0, index);
+                match atr.filter(|_| adx.is_finite() && past.is_finite()) {
+                    Some(atr) => {
+                        let adxr = (adx + past) / 2.0;
+                        let scale =
+                            self.point_value / self.margin.sqrt() / (150.0 + self.commission)
+                                * 100.0;
+                        IndicatorValue::Single(adxr * atr * scale)
+                    }
+                    None => IndicatorValue::None,
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -189,21 +209,9 @@ impl Default for TrendDetectionIndex {
     }
 }
 
-impl Indicator for TrendDetectionIndex {
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "TDI"
-    }
-
-    fn desc(&self) -> &str {
-        "Trend Detection Index - Positive when trending, negative when consolidating"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl TrendDetectionIndex {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let n = self.period;
         // mom[i] = close[i] - close[i - n], defined from bar n.
@@ -221,14 +229,48 @@ impl Indicator for TrendDetectionIndex {
 
         for i in 0..data.len() {
             if i < first {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
             let net: f64 = mom[i + 1 - n..=i].iter().sum();
             let older_abs: f64 = mom[i + 1 - 2 * n..=i - n].iter().map(|m| m.abs()).sum();
-            self.values
-                .push(IndicatorValue::Single(net.abs() - older_abs));
+            values.push(IndicatorValue::Single(net.abs() - older_abs));
         }
+        values
+    }
+}
+
+impl Indicator for TrendDetectionIndex {
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "TDI"
+    }
+
+    fn desc(&self) -> &str {
+        "Trend Detection Index - Positive when trending, negative when consolidating"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period.saturating_mul(3) - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

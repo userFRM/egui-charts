@@ -50,8 +50,8 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::rolling_mean;
-use crate::studies::{Indicator, IndicatorValues, StudyZone};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyZone};
 use egui::Color32;
 
 /// Most gaps a chart shows.
@@ -69,6 +69,7 @@ pub struct Gaps {
     limit_trail: bool,
     trail_length: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     zones: Vec<StudyZone>,
     up_color: Color32,
     down_color: Color32,
@@ -76,6 +77,7 @@ pub struct Gaps {
 }
 
 /// One open gap.
+#[derive(Clone)]
 struct Gap {
     /// Gaps found before it.
     index: usize,
@@ -83,19 +85,32 @@ struct Gap {
     near: f64,
     far: f64,
     left: usize,
+    source_left: usize,
 }
 
 impl Gap {
     /// Its current extent from its left edge to `last`, inclusive.
     fn zone(&self, last: usize) -> (usize, StudyZone) {
         let zone = StudyZone {
-            bars: self.left..last + 1,
+            bars: self.source_left..last + 1,
             top: self.near.max(self.far),
             bottom: self.near.min(self.far),
             plot: usize::from(!self.up),
         };
         (self.index, zone)
     }
+}
+
+#[derive(Clone, Default)]
+struct State {
+    source: usize,
+    usable: usize,
+    previous: Option<(usize, [f64; 2])>,
+    last_source: Option<usize>,
+    ranges: std::collections::VecDeque<f64>,
+    open: Vec<Gap>,
+    closed: Vec<(usize, StudyZone)>,
+    found: usize,
 }
 
 impl Gaps {
@@ -109,6 +124,7 @@ impl Gaps {
             limit_trail: false,
             trail_length: 300,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             zones: Vec::new(),
             up_color: palette::GREEN,
             down_color: palette::RED,
@@ -129,74 +145,6 @@ impl Gaps {
             self.trail_length = length.max(1);
         }
         self
-    }
-
-    /// The zones over `data`, every bar of which has a finite high and low.
-    fn compute(&self, data: &[Bar]) -> Vec<StudyZone> {
-        let ranges: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
-        let average = rolling_mean(&ranges, RANGE_LENGTH);
-        let mut open: Vec<Gap> = Vec::new();
-        // Each zone with the index of its gap.
-        let mut zones = Vec::new();
-        let mut found = 0;
-        for (i, bar) in data.iter().enumerate() {
-            open.retain_mut(|gap| {
-                let (entered, covered) = if gap.up {
-                    (bar.low < gap.near, bar.low <= gap.far)
-                } else {
-                    (bar.high > gap.near, bar.high >= gap.far)
-                };
-                if entered {
-                    zones.push(gap.zone(i));
-                    if covered || !self.close_partially {
-                        return false;
-                    }
-                    gap.near = if gap.up { bar.low } else { bar.high };
-                    gap.left = i;
-                } else if self.limit_trail && i - gap.left >= self.trail_length {
-                    zones.push(gap.zone(i));
-                    return false;
-                }
-                true
-            });
-            let Some(previous) = i.checked_sub(1).map(|p| &data[p]) else {
-                continue;
-            };
-            let threshold = average[i] * self.deviation / 100.0;
-            let (up, near, far) = if bar.low > previous.high && bar.low - previous.high >= threshold
-            {
-                (true, bar.low, previous.high)
-            } else if bar.high < previous.low && previous.low - bar.high >= threshold {
-                (false, bar.high, previous.low)
-            } else {
-                continue;
-            };
-            let gap = Gap {
-                index: found,
-                up,
-                near,
-                far,
-                left: i - 1,
-            };
-            found += 1;
-            // A trail of one bar ends on the bar that opens the gap.
-            if self.limit_trail && self.trail_length == 1 {
-                zones.push(gap.zone(i));
-            } else {
-                open.push(gap);
-            }
-            // Gaps no longer shown need not be followed.
-            open.retain(|gap| gap.index + self.max_gaps >= found);
-        }
-        if let Some(last) = data.len().checked_sub(1) {
-            zones.extend(open.iter().map(|gap| gap.zone(last)));
-        }
-        let shown = found.saturating_sub(self.max_gaps);
-        zones
-            .into_iter()
-            .filter(|(gap, _)| *gap >= shown)
-            .map(|(_, zone)| zone)
-            .collect()
     }
 }
 
@@ -225,19 +173,94 @@ impl Indicator for Gaps {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let finite = |b: &Bar| b.high.is_finite() && b.low.is_finite();
-        self.values = IndicatorValues::missing(data.len());
-        self.zones = if data.iter().all(finite) {
-            self.compute(data)
-        } else {
-            let kept: Vec<usize> = (0..data.len()).filter(|&i| finite(&data[i])).collect();
-            let bars: Vec<Bar> = kept.iter().map(|&i| data[i].clone()).collect();
-            let mut zones = self.compute(&bars);
-            for zone in &mut zones {
-                zone.bars = kept[zone.bars.start]..kept[zone.bars.end - 1] + 1;
-            }
-            zones
-        };
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let source = state.source;
+                state.source += 1;
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let i = state.usable;
+                state.usable += 1;
+                state.last_source = Some(source);
+                state.ranges.push_back(bar.high - bar.low);
+                if state.ranges.len() > RANGE_LENGTH {
+                    state.ranges.pop_front();
+                }
+                let average = if state.ranges.len() == RANGE_LENGTH
+                    && state.ranges.iter().all(|v| v.is_finite())
+                {
+                    state.ranges.iter().sum::<f64>() / RANGE_LENGTH as f64
+                } else {
+                    f64::NAN
+                };
+                state.open.retain_mut(|gap| {
+                    let (entered, covered) = if gap.up {
+                        (bar.low < gap.near, bar.low <= gap.far)
+                    } else {
+                        (bar.high > gap.near, bar.high >= gap.far)
+                    };
+                    if entered {
+                        state.closed.push(gap.zone(source));
+                        if covered || !self.close_partially {
+                            return false;
+                        }
+                        gap.near = if gap.up { bar.low } else { bar.high };
+                        gap.left = i;
+                        gap.source_left = source;
+                    } else if self.limit_trail && i - gap.left >= self.trail_length {
+                        state.closed.push(gap.zone(source));
+                        return false;
+                    }
+                    true
+                });
+                let Some((previous_source, previous)) =
+                    state.previous.replace((source, [bar.high, bar.low]))
+                else {
+                    return IndicatorValue::None;
+                };
+                let threshold = average * self.deviation / 100.0;
+                let (up, near, far) = if bar.low > previous[0] && bar.low - previous[0] >= threshold
+                {
+                    (true, bar.low, previous[0])
+                } else if bar.high < previous[1] && previous[1] - bar.high >= threshold {
+                    (false, bar.high, previous[1])
+                } else {
+                    return IndicatorValue::None;
+                };
+                let gap = Gap {
+                    index: state.found,
+                    up,
+                    near,
+                    far,
+                    left: i - 1,
+                    source_left: previous_source,
+                };
+                state.found += 1;
+                if self.limit_trail && self.trail_length == 1 {
+                    state.closed.push(gap.zone(source));
+                } else {
+                    state.open.push(gap);
+                }
+                let shown = state.found.saturating_sub(self.max_gaps);
+                state.open.retain(|gap| gap.index >= shown);
+                state.closed.retain(|(gap, _)| *gap >= shown);
+                IndicatorValue::None
+            });
+        let state = self.stepper.state();
+        self.zones = state.closed.iter().map(|(_, zone)| zone.clone()).collect();
+        if let Some(last) = state.last_source {
+            self.zones
+                .extend(state.open.iter().map(|gap| gap.zone(last).1));
+        }
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn zones(&self) -> &[StudyZone] {

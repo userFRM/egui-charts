@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use chrono::Duration;
 use egui::Color32;
@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 #[derive(Clone)]
 pub struct Week52HighLow {
     values: IndicatorValues,
+    stepper: Stepper<State>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -22,6 +23,7 @@ impl Week52HighLow {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![palette::PINK],
             visible: true,
         }
@@ -31,24 +33,6 @@ impl Week52HighLow {
 impl Default for Week52HighLow {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Week52HighLow {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        week52_ranges(data)
-            .into_iter()
-            .zip(data)
-            .map(|(range, bar)| match range {
-                None => IndicatorValue::None,
-                Some((high, low)) => IndicatorValue::Single(if (high - low).abs() < 1e-15 {
-                    50.0
-                } else {
-                    (bar.close - low) / (high - low) * 100.0
-                }),
-            })
-            .collect()
     }
 }
 
@@ -66,11 +50,28 @@ impl Indicator for Week52HighLow {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                match state.next(bar) {
+                    None => IndicatorValue::None,
+                    Some((high, low)) => IndicatorValue::Single(if (high - low).abs() < 1e-15 {
+                        50.0
+                    } else {
+                        (bar.close - low) / (high - low) * 100.0
+                    }),
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -113,6 +114,7 @@ impl Indicator for Week52HighLow {
 #[derive(Clone)]
 pub struct Week52HighLowLevels {
     values: IndicatorValues,
+    stepper: Stepper<State>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -122,6 +124,7 @@ impl Week52HighLowLevels {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![palette::BLUE, palette::PINK],
             visible: true,
         }
@@ -144,19 +147,22 @@ impl Indicator for Week52HighLowLevels {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite(),
-            |data| {
-                week52_ranges(data)
-                    .into_iter()
-                    .map(|range| match range {
-                        Some((high, low)) => IndicatorValue::Multiple(vec![high, low]),
-                        None => IndicatorValue::None,
-                    })
-                    .collect()
-            },
-        );
+        self.update(data, 0);
+    }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() {
+                    return IndicatorValue::None;
+                }
+                match state.next(bar) {
+                    Some((high, low)) => IndicatorValue::Multiple(vec![high, low]),
+                    None => IndicatorValue::None,
+                }
+            });
+    }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -194,35 +200,43 @@ impl Indicator for Week52HighLowLevels {
     }
 }
 
-/// Window extrema in linear time, including a bar exactly 52 weeks before the current one.
-fn week52_ranges(data: &[Bar]) -> Vec<Option<(f64, f64)>> {
-    let mut highs = VecDeque::<usize>::new();
-    let mut lows = VecDeque::<usize>::new();
-    data.iter()
-        .enumerate()
-        .map(|(i, bar)| {
-            while highs
-                .front()
-                .is_some_and(|&j| bar.time - data[j].time > Duration::weeks(52))
-            {
-                highs.pop_front();
-            }
-            while lows
-                .front()
-                .is_some_and(|&j| bar.time - data[j].time > Duration::weeks(52))
-            {
-                lows.pop_front();
-            }
-            while highs.back().is_some_and(|&j| data[j].high <= bar.high) {
-                highs.pop_back();
-            }
-            while lows.back().is_some_and(|&j| data[j].low >= bar.low) {
-                lows.pop_back();
-            }
-            highs.push_back(i);
-            lows.push_back(i);
-            (bar.time - data[0].time >= Duration::weeks(52))
-                .then(|| (data[highs[0]].high, data[lows[0]].low))
-        })
-        .collect()
+#[derive(Clone, Default)]
+struct State {
+    first: Option<chrono::DateTime<chrono::Utc>>,
+    highs: VecDeque<(chrono::DateTime<chrono::Utc>, f64)>,
+    lows: VecDeque<(chrono::DateTime<chrono::Utc>, f64)>,
+}
+
+impl State {
+    /// Include the bar exactly 52 weeks before this one, expiring only older candidates.
+    fn next(&mut self, bar: &Bar) -> Option<(f64, f64)> {
+        let first = *self.first.get_or_insert(bar.time);
+        while self
+            .highs
+            .front()
+            .is_some_and(|&(time, _)| bar.time - time > Duration::weeks(52))
+        {
+            self.highs.pop_front();
+        }
+        while self
+            .lows
+            .front()
+            .is_some_and(|&(time, _)| bar.time - time > Duration::weeks(52))
+        {
+            self.lows.pop_front();
+        }
+        while self
+            .highs
+            .back()
+            .is_some_and(|&(_, price)| price <= bar.high)
+        {
+            self.highs.pop_back();
+        }
+        while self.lows.back().is_some_and(|&(_, price)| price >= bar.low) {
+            self.lows.pop_back();
+        }
+        self.highs.push_back((bar.time, bar.high));
+        self.lows.push_back((bar.time, bar.low));
+        (bar.time - first >= Duration::weeks(52)).then(|| (self.highs[0].1, self.lows[0].1))
+    }
 }

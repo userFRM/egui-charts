@@ -1,9 +1,7 @@
 //! Market Profile letters of each session drawn beside the session's bars.
 
 use crate::model::{Bar, Instrument, TPOConfig, TPODisplayMode};
-use crate::studies::{
-    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyInput,
-};
+use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
 use egui::Color32;
 
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
@@ -144,8 +142,14 @@ impl Indicator for TimePriceOpportunity {
         Some(&self.config)
     }
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
-        self.values.resize(data.len(), IndicatorValue::None);
+        self.values = IndicatorValues::missing(data.len());
+    }
+
+    fn update(&mut self, data: &[Bar], _from: usize) {
+        self.calculate(data);
+    }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

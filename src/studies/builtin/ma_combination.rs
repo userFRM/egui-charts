@@ -2,6 +2,7 @@
 
 use super::{EMA, HMA, SMA, SmoothedMA, VWMA, WMA};
 use crate::model::{Bar, PriceSource};
+use crate::studies::stepper::Stepper;
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
     IndicatorValues,
@@ -99,6 +100,9 @@ pub struct MACombination {
     lines: Vec<AverageLine>,
     defaults: Vec<AverageLine>,
     values: IndicatorValues,
+    averages: Vec<Box<dyn Indicator>>,
+    sourced: Vec<Vec<Bar>>,
+    crossing: Stepper<(usize, Option<std::cmp::Ordering>)>,
     markers: Vec<IndicatorMarker>,
     pair: Option<(usize, usize)>,
     pub(super) wait_for_all: bool,
@@ -116,6 +120,9 @@ impl MACombination {
             defaults: lines.clone(),
             lines,
             values: IndicatorValues::new(),
+            averages: Vec::new(),
+            sourced: Vec::new(),
+            crossing: Stepper::default(),
             markers: Vec::new(),
             pair: Some((0, 1)),
             wait_for_all: false,
@@ -280,62 +287,84 @@ impl Indicator for MACombination {
         "Independently configured moving averages and crossing markers"
     }
     fn calculate(&mut self, data: &[Bar]) {
-        let mut averages = Vec::with_capacity(self.lines.len());
-        for line in &self.lines {
-            let mut average = line.kind.build(line.period);
-            if line.source == PriceSource::Close {
-                average.calculate(data);
-            } else {
-                let sourced: Vec<_> = data
-                    .iter()
-                    .map(|bar| {
-                        let mut sourced = bar.clone();
-                        sourced.close = line.source.compute(bar.open, bar.high, bar.low, bar.close);
-                        sourced
-                    })
-                    .collect();
-                average.calculate(&sourced);
-            }
-            averages.push(average);
-        }
-        self.values.clear();
-        self.markers.clear();
-        let mut previous = None;
-        for i in 0..data.len() {
-            let lines: Vec<_> = averages
+        self.update(data, 0);
+    }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        let start = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            0
+        };
+        if start == 0 {
+            self.averages = self
+                .lines
                 .iter()
-                .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
+                .map(|line| line.kind.build(line.period))
                 .collect();
-            if lines.iter().all(|v| !v.is_finite())
-                || (self.wait_for_all && lines.iter().any(|v| !v.is_finite()))
-            {
-                self.values.push(IndicatorValue::None);
-                previous = None;
-                continue;
-            }
-            if let Some((first, second)) = self.pair {
-                if lines[first].is_finite() && lines[second].is_finite() {
-                    let direction = lines[first].partial_cmp(&lines[second]).unwrap();
-                    if direction != std::cmp::Ordering::Equal {
-                        if previous.is_some_and(|p| p != direction) {
-                            self.markers.push(IndicatorMarker {
-                                bar: i,
-                                value: lines[first],
-                                direction: if direction == std::cmp::Ordering::Greater {
-                                    CrossDirection::Up
-                                } else {
-                                    CrossDirection::Down
-                                },
-                            });
-                        }
-                        previous = Some(direction);
-                    }
-                } else {
-                    previous = None;
-                }
-            }
-            self.values.push(IndicatorValue::Multiple(lines));
+            self.sourced = vec![Vec::new(); self.lines.len()];
         }
+        for ((line, average), sourced) in self
+            .lines
+            .iter()
+            .zip(&mut self.averages)
+            .zip(&mut self.sourced)
+        {
+            if line.source == PriceSource::Close {
+                average.update(data, start);
+            } else {
+                sourced.truncate(start);
+                sourced.extend(data[start..].iter().map(|bar| {
+                    let mut bar = bar.clone();
+                    bar.close = line.source.compute(bar.open, bar.high, bar.low, bar.close);
+                    bar
+                }));
+                average.update(sourced, start);
+            }
+        }
+        self.markers
+            .truncate(self.markers.partition_point(|marker| marker.bar < start));
+        self.crossing
+            .run(data, start, &mut self.values, |state, _bar| {
+                let i = state.0;
+                state.0 += 1;
+                let lines: Vec<_> = self
+                    .averages
+                    .iter()
+                    .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
+                    .collect();
+                if lines.iter().all(|v| !v.is_finite())
+                    || (self.wait_for_all && lines.iter().any(|v| !v.is_finite()))
+                {
+                    state.1 = None;
+                    return IndicatorValue::None;
+                }
+                if let Some((first, second)) = self.pair {
+                    if lines[first].is_finite() && lines[second].is_finite() {
+                        let direction = lines[first].partial_cmp(&lines[second]).unwrap();
+                        if direction != std::cmp::Ordering::Equal {
+                            if state.1.is_some_and(|p| p != direction) {
+                                self.markers.push(IndicatorMarker {
+                                    bar: i,
+                                    value: lines[first],
+                                    direction: if direction == std::cmp::Ordering::Greater {
+                                        CrossDirection::Up
+                                    } else {
+                                        CrossDirection::Down
+                                    },
+                                });
+                            }
+                            state.1 = Some(direction);
+                        }
+                    } else {
+                        state.1 = None;
+                    }
+                }
+                IndicatorValue::Multiple(lines)
+            });
+    }
+    fn is_incremental(&self) -> bool {
+        true
     }
     fn values(&self) -> &IndicatorValues {
         &self.values
@@ -414,6 +443,12 @@ macro_rules! impl_ma_preset {
             }
             fn calculate(&mut self, data: &[crate::model::Bar]) {
                 self.inner.calculate(data);
+            }
+            fn update(&mut self, data: &[crate::model::Bar], from: usize) {
+                self.inner.update(data, from);
+            }
+            fn is_incremental(&self) -> bool {
+                self.inner.is_incremental()
             }
             fn values(&self) -> &crate::studies::IndicatorValues {
                 self.inner.values()
