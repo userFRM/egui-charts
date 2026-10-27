@@ -29,9 +29,9 @@
 //! vw.calculate(&bars);
 //! ```
 
-use super::{VWMA, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -46,6 +46,7 @@ pub struct VolumeWeightedMACD {
     slow_period: usize,
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(std::collections::VecDeque<[f64; 2]>, Option<f64>)>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -64,6 +65,7 @@ impl VolumeWeightedMACD {
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // MACD line
                 palette::ORANGE, // Signal line
@@ -71,30 +73,6 @@ impl VolumeWeightedMACD {
             ],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut fast = VWMA::new(self.fast_period);
-        let mut slow = VWMA::new(self.slow_period);
-        fast.calculate(data);
-        slow.calculate(data);
-
-        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
-        let mut signal: Option<f64> = None;
-        (0..data.len())
-            .map(
-                |i| match (fast.values().value(0, i), slow.values().value(0, i)) {
-                    (Some(fast), Some(slow)) => {
-                        let line = fast - slow;
-                        let sig = signal.map_or(line, |prev| (line - prev) * signal_mult + prev);
-                        signal = Some(sig);
-                        IndicatorValue::Multiple(vec![line, sig, line - sig])
-                    }
-                    _ => IndicatorValue::None,
-                },
-            )
-            .collect()
     }
 }
 
@@ -124,11 +102,48 @@ impl Indicator for VolumeWeightedMACD {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.0.push_back([bar.close, bar.volume]);
+                let length = self.fast_period.max(self.slow_period);
+                if state.0.len() > length {
+                    state.0.pop_front();
+                }
+                if state.0.len() < length {
+                    return IndicatorValue::None;
+                }
+                let average = |period| {
+                    let start = state.0.len() - period;
+                    let price_volume: f64 = state.0.iter().skip(start).map(|v| v[0] * v[1]).sum();
+                    let volume: f64 = state.0.iter().skip(start).map(|v| v[1]).sum();
+                    if volume > 0.0 {
+                        price_volume / volume
+                    } else {
+                        state.0.iter().skip(start).map(|v| v[0]).sum::<f64>() / period as f64
+                    }
+                };
+                let (fast, slow) = (average(self.fast_period), average(self.slow_period));
+                if !fast.is_finite() || !slow.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let line = fast - slow;
+                let signal = state.1.map_or(line, |previous| {
+                    (line - previous) * (2.0 / (self.signal_period as f64 + 1.0)) + previous
+                });
+                state.1 = Some(signal);
+                IndicatorValue::Multiple(vec![line, signal, line - signal])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

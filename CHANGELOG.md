@@ -313,6 +313,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Built-in studies, including KST, Ichimoku and Parabolic SAR, update changed bars and appends without recalculating unaffected history. Retrospective studies refresh affected pivots, legs and calendar periods. Migration: direct callers of `Indicator::update_data` must pass `from = 0` when a requested history changes; nonzero `from` reuses requested histories. The chart supplies this invalidation. ([#946](https://github.com/userFRM/egui-charts/issues/946))
 - Point and Figure columns retain their price endpoints and saturate inclusive box counts at `usize::MAX` rather than overflowing, including on 32-bit targets. `PnfColumn::boxes` rejects invalid geometry or expansion above two million boxes and reports allocation failures. Migration: `boxes()` now returns `Result<Vec<f64>, String>`; handle the error before using the prices, or use the column endpoints without expanding. ([#943](https://github.com/userFRM/egui-charts/issues/943))
 
 - Cached Renko and range chart updates apply the same two-million-size work bound as fresh builds, reseeding after an excessive price move and resuming from that price on later bars. Whitespace does not bypass the bound. ([#941](https://github.com/userFRM/egui-charts/issues/941))

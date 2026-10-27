@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -9,6 +9,7 @@ use egui::Color32;
 pub struct SmoothedMA {
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(usize, f64)>,
     color: Color32,
     visible: bool,
 }
@@ -19,6 +20,7 @@ impl SmoothedMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::ORANGE,
             visible: true,
         }
@@ -28,36 +30,6 @@ impl SmoothedMA {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // First value is SMA
-        let first_sma: f64 =
-            data[..self.period].iter().map(|b| b.close).sum::<f64>() / self.period as f64;
-
-        for _i in 0..self.period - 1 {
-            values.push(IndicatorValue::None);
-        }
-        values.push(IndicatorValue::Single(first_sma));
-
-        let mut prev = first_sma;
-        for i in self.period..data.len() {
-            let smoothed = (prev * (self.period as f64 - 1.0) + data[i].close) / self.period as f64;
-            values.push(IndicatorValue::Single(smoothed));
-            prev = smoothed;
-        }
-
-        values
     }
 }
 
@@ -87,7 +59,35 @@ impl Indicator for SmoothedMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if state.0 == 0 {
+                    state.1 = -0.0;
+                }
+                if state.0 < self.period {
+                    state.0 += 1;
+                    state.1 += bar.close;
+                    if state.0 < self.period {
+                        return IndicatorValue::None;
+                    }
+                    state.1 /= self.period as f64;
+                } else {
+                    state.1 =
+                        (state.1 * (self.period as f64 - 1.0) + bar.close) / self.period as f64;
+                }
+                IndicatorValue::Single(state.1)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

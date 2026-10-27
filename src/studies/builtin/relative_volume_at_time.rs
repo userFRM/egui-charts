@@ -43,7 +43,8 @@
 
 use crate::model::{Bar, BarClock, ExchangeSessionProvider, Instrument, Session, TimezoneId};
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use chrono::{Datelike, NaiveDate};
 use egui::Color32;
 
@@ -101,8 +102,27 @@ pub struct RelativeVolumeAtTime {
     /// Whether the chart interval is a day or longer.
     daily: bool,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    periods: std::collections::VecDeque<Vec<(i64, f64)>>,
+    undo: Undo,
     colors: [Color32; 2],
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    source: usize,
+    key: Option<(i32, u32)>,
+    cumulative: f64,
+    calendar_date: Option<NaiveDate>,
+    opens: Vec<(chrono::DateTime<chrono::Utc>, NaiveDate)>,
+}
+
+#[derive(Clone, Default)]
+struct Undo {
+    appended: bool,
+    new_period: bool,
+    expired: Option<Vec<(i64, f64)>>,
 }
 
 impl RelativeVolumeAtTime {
@@ -115,6 +135,9 @@ impl RelativeVolumeAtTime {
             instrument: None,
             daily: false,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            periods: std::collections::VecDeque::new(),
+            undo: Undo::default(),
             colors: [palette::UP, palette::DOWN],
             visible: true,
         }
@@ -130,62 +153,6 @@ impl RelativeVolumeAtTime {
     pub fn with_mode(mut self, mode: RelativeVolumeMode) -> Self {
         self.mode = mode;
         self
-    }
-
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::missing(data.len());
-        let usable: Vec<usize> = (0..data.len())
-            .filter(|&i| data[i].volume.is_finite())
-            .collect();
-        let opens = if self.daily {
-            Vec::new()
-        } else {
-            let (zone, session) = self
-                .instrument
-                .clone()
-                .unwrap_or_else(|| (TimezoneId::utc(), None));
-            ExchangeSessionProvider::new(zone, session).opens(usable.iter().map(|&i| data[i].time))
-        };
-        // Per period, the offset of each bar and the volume compared at it.
-        let mut periods: Vec<Vec<(i64, f64)>> = Vec::new();
-        let (mut key, mut cumulative) = (None, 0.0);
-        for i in usable {
-            let bar = &data[i];
-            let (open, day) = match opens.partition_point(|(open, _)| *open <= bar.time) {
-                // A daily bar, or a schedule that never opens: the bar starts its own day.
-                0 => (bar.time, bar.time.date_naive()),
-                n => opens[n - 1],
-            };
-            let (period, days) = self.anchor.locate(day);
-            let offset = i64::from(days) * DAY_MS + (bar.time - open).num_milliseconds();
-            if key != Some(period) {
-                key = Some(period);
-                cumulative = 0.0;
-                periods.push(Vec::new());
-            }
-            cumulative += bar.volume;
-            let current = match self.mode {
-                RelativeVolumeMode::Cumulative => cumulative,
-                RelativeVolumeMode::Regular => bar.volume,
-            };
-            let at = periods.len() - 1;
-            periods[at].push((offset, current));
-            if at < self.length {
-                continue;
-            }
-            let total: f64 = periods[at - self.length..at]
-                .iter()
-                .map(|past| match past.partition_point(|&(o, _)| o <= offset) {
-                    0 => 0.0,
-                    n => past[n - 1].1,
-                })
-                .sum();
-            let average = total / self.length as f64;
-            if average != 0.0 {
-                values.set_value(0, i, current / average);
-            }
-        }
-        values
     }
 }
 
@@ -233,7 +200,108 @@ impl Indicator for RelativeVolumeAtTime {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = self.compute(data);
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let len = self.values.len();
+        if len > 0 && from == len && data.len() == len {
+            return;
+        }
+        let start = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            0
+        };
+        if start == 0 {
+            self.periods.clear();
+        } else if start < len {
+            if self.undo.appended {
+                self.periods.back_mut().unwrap().pop();
+            }
+            if self.undo.new_period {
+                self.periods.pop_back();
+            }
+            if let Some(expired) = self.undo.expired.take() {
+                self.periods.push_front(expired);
+            }
+        }
+        self.undo = Undo::default();
+        let provider = (!self.daily).then(|| {
+            let (zone, session) = self
+                .instrument
+                .clone()
+                .unwrap_or_else(|| (TimezoneId::utc(), None));
+            ExchangeSessionProvider::new(zone, session)
+        });
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let source = state.source;
+                state.source += 1;
+                if !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if !self.daily && state.calendar_date != Some(bar.time.date_naive()) {
+                    state.opens = provider.as_ref().unwrap().opens([bar.time]);
+                    state.calendar_date = Some(bar.time.date_naive());
+                }
+                let (open, day) = if self.daily {
+                    (bar.time, bar.time.date_naive())
+                } else {
+                    match state.opens.partition_point(|(open, _)| *open <= bar.time) {
+                        0 => (bar.time, bar.time.date_naive()),
+                        n => state.opens[n - 1],
+                    }
+                };
+                let (period, days) = self.anchor.locate(day);
+                let offset = i64::from(days) * DAY_MS + (bar.time - open).num_milliseconds();
+                let last = source + 1 == data.len();
+                if state.key != Some(period) {
+                    state.key = Some(period);
+                    state.cumulative = 0.0;
+                    self.periods.push_back(Vec::new());
+                    let expired = if self.periods.len() > self.length.saturating_add(1) {
+                        self.periods.pop_front()
+                    } else {
+                        None
+                    };
+                    if last {
+                        self.undo.new_period = true;
+                        self.undo.expired = expired;
+                    }
+                }
+                state.cumulative += bar.volume;
+                let current = match self.mode {
+                    RelativeVolumeMode::Cumulative => state.cumulative,
+                    RelativeVolumeMode::Regular => bar.volume,
+                };
+                self.periods.back_mut().unwrap().push((offset, current));
+                if last {
+                    self.undo.appended = true;
+                }
+                if self.periods.len() <= self.length {
+                    return IndicatorValue::None;
+                }
+                let total: f64 = self
+                    .periods
+                    .iter()
+                    .take(self.length)
+                    .map(|past| match past.partition_point(|&(o, _)| o <= offset) {
+                        0 => 0.0,
+                        n => past[n - 1].1,
+                    })
+                    .sum();
+                let average = total / self.length as f64;
+                if average != 0.0 {
+                    IndicatorValue::Single(current / average)
+                } else {
+                    IndicatorValue::None
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {

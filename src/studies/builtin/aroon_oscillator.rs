@@ -25,6 +25,7 @@
 use super::Aroon;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -55,6 +56,20 @@ impl Default for AroonOscillator {
     }
 }
 
+impl AroonOscillator {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut aroon = Aroon::new(self.period);
+        aroon.calculate(data);
+        let lines = aroon.values();
+        (0..data.len())
+            .map(|bar| match (lines.value(0, bar), lines.value(1, bar)) {
+                (Some(up), Some(down)) => IndicatorValue::Single(up - down),
+                _ => IndicatorValue::None,
+            })
+            .collect()
+    }
+}
+
 impl Indicator for AroonOscillator {
     crate::studies::inputs::study_inputs!(self;
         period: length("Length", 1, usize::MAX)
@@ -69,15 +84,25 @@ impl Indicator for AroonOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        let mut aroon = Aroon::new(self.period);
-        aroon.calculate(data);
-        let lines = aroon.values();
-        self.values = (0..data.len())
-            .map(|bar| match (lines.value(0, bar), lines.value(1, bar)) {
-                (Some(up), Some(down)) => IndicatorValue::Single(up - down),
-                _ => IndicatorValue::None,
-            })
-            .collect();
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(self.period, |bar| {
+                bar.high.is_finite() && bar.low.is_finite()
+            }),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

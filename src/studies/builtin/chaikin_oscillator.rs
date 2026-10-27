@@ -23,9 +23,9 @@
 //! assert_eq!(oscillator.values().value(0, 0), Some(0.0));
 //! ```
 
-use super::{AccumulationDistribution, over_finite_bars};
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -35,6 +35,7 @@ pub struct ChaikinOscillator {
     fast_length: usize,
     slow_length: usize,
     values: IndicatorValues,
+    stepper: Stepper<(f64, Option<[f64; 2]>)>,
     color: Color32,
     visible: bool,
 }
@@ -46,29 +47,10 @@ impl ChaikinOscillator {
             fast_length: fast_length.max(1),
             slow_length: slow_length.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::RED,
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite high, low, close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut adl = AccumulationDistribution::new();
-        adl.calculate(data);
-        let adl = adl.values().line(0);
-        let alpha = |length: usize| 2.0 / (length as f64 + 1.0);
-        let (fast_alpha, slow_alpha) = (alpha(self.fast_length), alpha(self.slow_length));
-        let Some(&first) = adl.first() else {
-            return IndicatorValues::missing(data.len());
-        };
-        let (mut fast, mut slow) = (first, first);
-        adl.iter()
-            .map(|&value| {
-                fast += (value - fast) * fast_alpha;
-                slow += (value - slow) * slow_alpha;
-                IndicatorValue::Single(fast - slow)
-            })
-            .collect()
     }
 }
 
@@ -97,16 +79,37 @@ impl Indicator for ChaikinOscillator {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| {
-                b.high.is_finite()
-                    && b.low.is_finite()
-                    && b.close.is_finite()
-                    && b.volume.is_finite()
-            },
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close, bar.volume]
+                    .iter()
+                    .all(|x| x.is_finite())
+                {
+                    return IndicatorValue::None;
+                }
+                let range = bar.high - bar.low;
+                if range > 0.0 {
+                    let multiplier = (2.0 * bar.close - bar.high - bar.low) / range;
+                    state.0 += multiplier * bar.volume;
+                }
+                let adl = if state.0.is_finite() {
+                    state.0
+                } else {
+                    f64::NAN
+                };
+                let ema = state.1.get_or_insert([adl; 2]);
+                ema[0] += (adl - ema[0]) * (2.0 / (self.fast_length as f64 + 1.0));
+                ema[1] += (adl - ema[1]) * (2.0 / (self.slow_length as f64 + 1.0));
+                IndicatorValue::Single(ema[0] - ema[1])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

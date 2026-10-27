@@ -1,6 +1,7 @@
 use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -43,6 +44,49 @@ impl Default for PercentB {
     }
 }
 
+impl PercentB {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let window = &data[i + 1 - self.period..=i];
+
+                // Calculate SMA
+                let sma: f64 = window.iter().map(|b| b.close).sum::<f64>() / self.period as f64;
+
+                // Calculate standard deviation
+                let variance: f64 = window.iter().map(|b| (b.close - sma).powi(2)).sum::<f64>()
+                    / self.period as f64;
+                let std_dev = variance.sqrt();
+
+                // Calculate bands
+                let upper = sma + self.multiplier * std_dev;
+                let lower = sma - self.multiplier * std_dev;
+
+                // Calculate %B
+                let band_width = upper - lower;
+                if band_width == 0.0 {
+                    values.push(IndicatorValue::Single(0.5));
+                } else {
+                    let percent_b = (data[i].close - lower) / band_width;
+                    values.push(IndicatorValue::Single(percent_b));
+                }
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for PercentB {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -64,43 +108,23 @@ impl Indicator for PercentB {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-
-                // Calculate SMA
-                let sma: f64 = window.iter().map(|b| b.close).sum::<f64>() / self.period as f64;
-
-                // Calculate standard deviation
-                let variance: f64 = window.iter().map(|b| (b.close - sma).powi(2)).sum::<f64>()
-                    / self.period as f64;
-                let std_dev = variance.sqrt();
-
-                // Calculate bands
-                let upper = sma + self.multiplier * std_dev;
-                let lower = sma - self.multiplier * std_dev;
-
-                // Calculate %B
-                let band_width = upper - lower;
-                if band_width == 0.0 {
-                    self.values.push(IndicatorValue::Single(0.5));
-                } else {
-                    let percent_b = (data[i].close - lower) / band_width;
-                    self.values.push(IndicatorValue::Single(percent_b));
-                }
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -22,7 +22,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::rolling_mean;
+use crate::studies::stepper::{rolling_mean, update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -44,6 +44,16 @@ impl AverageDailyRange {
             color: palette::BLUE,
             visible: true,
         }
+    }
+}
+
+impl AverageDailyRange {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let ranges: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
+        rolling_mean(&ranges, self.period)
+            .into_iter()
+            .map(IndicatorValue::Single)
+            .collect()
     }
 }
 
@@ -71,17 +81,29 @@ impl Indicator for AverageDailyRange {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.high.is_finite() && b.low.is_finite(),
+            from,
+            usable_behind(self.period - 1, |b| b.high.is_finite() && b.low.is_finite()),
             |data| {
-                let ranges: Vec<f64> = data.iter().map(|b| b.high - b.low).collect();
-                rolling_mean(&ranges, self.period)
-                    .into_iter()
-                    .map(IndicatorValue::Single)
-                    .collect()
+                over_finite_bars(
+                    data,
+                    |b| b.high.is_finite() && b.low.is_finite(),
+                    |data| self.compute(data),
+                )
             },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

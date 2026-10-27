@@ -22,6 +22,7 @@
 
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -110,6 +111,27 @@ impl Default for LSMA {
     }
 }
 
+impl LSMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let prices: Vec<f64> = data[i + 1 - self.period..=i]
+                    .iter()
+                    .map(|bar| bar.close)
+                    .collect();
+
+                let lsma = Self::linear_regression(&prices, self.offset);
+                values.push(IndicatorValue::Single(lsma));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for LSMA {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -131,21 +153,23 @@ impl Indicator for LSMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let prices: Vec<f64> = data[i + 1 - self.period..=i]
-                    .iter()
-                    .map(|bar| bar.close)
-                    .collect();
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-                let lsma = Self::linear_regression(&prices, self.offset);
-                self.values.push(IndicatorValue::Single(lsma));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

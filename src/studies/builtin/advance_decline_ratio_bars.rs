@@ -25,6 +25,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValues};
 use egui::Color32;
 
@@ -91,11 +92,31 @@ impl Indicator for AdvanceDeclineRatioBars {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
             data,
-            |b| b.open.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
+            from,
+            usable_behind(self.period - 1, |b| {
+                b.open.is_finite() && b.close.is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| b.open.is_finite() && b.close.is_finite(),
+                    |data| self.compute(data),
+                )
+            },
         );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

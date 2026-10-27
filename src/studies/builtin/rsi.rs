@@ -61,7 +61,7 @@ pub struct RSI {
 }
 
 #[derive(Clone)]
-struct State {
+pub(super) struct State {
     previous: Option<f64>,
     usable: usize,
     gain: f64,
@@ -76,6 +76,37 @@ impl Default for State {
             gain: -0.0,
             loss: -0.0,
         }
+    }
+}
+
+impl State {
+    pub(super) fn next(&mut self, bar: &Bar, period: usize) -> IndicatorValue {
+        if !bar.close.is_finite() {
+            return IndicatorValue::None;
+        }
+        let previous = self.previous.replace(bar.close);
+        let i = self.usable;
+        self.usable += 1;
+        let Some(previous) = previous else {
+            return IndicatorValue::None;
+        };
+        let change = bar.close - previous;
+        let gain = if change > 0.0 { change } else { 0.0 };
+        let loss = if change < 0.0 { -change } else { 0.0 };
+        if i <= period {
+            self.gain += gain;
+            self.loss += loss;
+            if i < period {
+                return IndicatorValue::None;
+            }
+            self.gain /= period as f64;
+            self.loss /= period as f64;
+        } else {
+            self.gain = (self.gain * (period - 1) as f64 + gain) / period as f64;
+            self.loss = (self.loss * (period - 1) as f64 + loss) / period as f64;
+        }
+        let rs = self.gain / self.loss.max(1e-10);
+        IndicatorValue::Single(100.0 - (100.0 / (1.0 + rs)))
     }
 }
 
@@ -146,32 +177,7 @@ impl Indicator for RSI {
         let period = self.period;
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                if !bar.close.is_finite() {
-                    return IndicatorValue::None;
-                }
-                let previous = state.previous.replace(bar.close);
-                let i = state.usable;
-                state.usable += 1;
-                let Some(previous) = previous else {
-                    return IndicatorValue::None;
-                };
-                let change = bar.close - previous;
-                let gain = if change > 0.0 { change } else { 0.0 };
-                let loss = if change < 0.0 { -change } else { 0.0 };
-                if i <= period {
-                    state.gain += gain;
-                    state.loss += loss;
-                    if i < period {
-                        return IndicatorValue::None;
-                    }
-                    state.gain /= period as f64;
-                    state.loss /= period as f64;
-                } else {
-                    state.gain = (state.gain * (period - 1) as f64 + gain) / period as f64;
-                    state.loss = (state.loss * (period - 1) as f64 + loss) / period as f64;
-                }
-                let rs = state.gain / state.loss.max(1e-10);
-                IndicatorValue::Single(100.0 - (100.0 / (1.0 + rs)))
+                state.next(bar, period)
             });
     }
 

@@ -1,6 +1,7 @@
 use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::{update_window, usable_behind};
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -108,7 +109,29 @@ impl Indicator for TrendIntensityIndex {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(
+                self.period
+                    .saturating_mul(2)
+                    .saturating_add(self.period)
+                    .saturating_sub(2),
+                |b| b.close.is_finite(),
+            ),
+            |data| over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data)),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -181,6 +204,34 @@ impl Default for Qstick {
     }
 }
 
+impl Qstick {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        for i in 0..data.len() {
+            if i < self.period - 1 {
+                values.push(IndicatorValue::None);
+            } else {
+                let window = &data[i + 1 - self.period..=i];
+
+                // Calculate avg of (close - open)
+                let avg: f64 =
+                    window.iter().map(|b| b.close - b.open).sum::<f64>() / self.period as f64;
+
+                values.push(IndicatorValue::Single(avg));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for Qstick {
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Price
@@ -199,28 +250,23 @@ impl Indicator for Qstick {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let window = &data[i + 1 - self.period..=i];
-
-                // Calculate avg of (close - open)
-                let avg: f64 =
-                    window.iter().map(|b| b.close - b.open).sum::<f64>() / self.period as f64;
-
-                self.values.push(IndicatorValue::Single(avg));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

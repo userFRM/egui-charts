@@ -26,9 +26,10 @@
 //! psar.calculate(&bars);
 //! ```
 
-use super::{clamp_param, over_finite_bars};
+use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -39,6 +40,7 @@ pub struct ParabolicSAR {
     af_step: f64,
     max_af: f64,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     bullish_color: Color32,
     bearish_color: Color32,
     visible: bool,
@@ -61,6 +63,7 @@ impl ParabolicSAR {
             af_step: clamp_param(af_step, 0.001, 1.0),
             max_af: clamp_param(max_af, initial_af, 1.0),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             bullish_color: palette::UP,
             bearish_color: palette::DOWN,
             visible: true,
@@ -87,110 +90,14 @@ impl Default for ParabolicSAR {
     }
 }
 
-impl ParabolicSAR {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        if data.len() < 2 {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let mut sar = vec![0.0; data.len()];
-        let mut trend = vec![1i32; data.len()]; // 1 = uptrend, -1 = downtrend
-        let mut ep = vec![0.0; data.len()]; // Extreme point
-        let mut af = vec![self.initial_af; data.len()];
-
-        // Initialize - determine initial trend from first two bars
-        if data[1].close >= data[0].close {
-            // Start in uptrend
-            trend[0] = 1;
-            trend[1] = 1;
-            sar[0] = data[0].low;
-            sar[1] = data[0].low;
-            ep[0] = data[0].high;
-            ep[1] = data[1].high.max(ep[0]);
-        } else {
-            // Start in downtrend
-            trend[0] = -1;
-            trend[1] = -1;
-            sar[0] = data[0].high;
-            sar[1] = data[0].high;
-            ep[0] = data[0].low;
-            ep[1] = data[1].low.min(ep[0]);
-        }
-
-        for i in 2..data.len() {
-            let prev_trend = trend[i - 1];
-            let prev_sar = sar[i - 1];
-            let prev_ep = ep[i - 1];
-            let prev_af = af[i - 1];
-
-            // Calculate potential next SAR
-            let mut next_sar = prev_sar + prev_af * (prev_ep - prev_sar);
-
-            // Check for reversal
-            let reversal = if prev_trend == 1 {
-                // In uptrend, reversal if price falls below SAR
-                // Also ensure SAR doesn't go above prior two lows
-                next_sar = next_sar.min(data[i - 1].low).min(data[i - 2].low);
-                data[i].low < next_sar
-            } else {
-                // In downtrend, reversal if price rises above SAR
-                // Also ensure SAR doesn't go below prior two highs
-                next_sar = next_sar.max(data[i - 1].high).max(data[i - 2].high);
-                data[i].high > next_sar
-            };
-
-            if reversal {
-                // Trend reversal
-                trend[i] = -prev_trend;
-                sar[i] = prev_ep;
-                ep[i] = if trend[i] == 1 {
-                    data[i].high
-                } else {
-                    data[i].low
-                };
-                af[i] = self.initial_af;
-            } else {
-                // Continue trend
-                trend[i] = prev_trend;
-                sar[i] = next_sar;
-
-                // Update EP and AF
-                if trend[i] == 1 {
-                    if data[i].high > prev_ep {
-                        ep[i] = data[i].high;
-                        af[i] = (prev_af + self.af_step).min(self.max_af);
-                    } else {
-                        ep[i] = prev_ep;
-                        af[i] = prev_af;
-                    }
-                } else if data[i].low < prev_ep {
-                    ep[i] = data[i].low;
-                    af[i] = (prev_af + self.af_step).min(self.max_af);
-                } else {
-                    ep[i] = prev_ep;
-                    af[i] = prev_af;
-                }
-            }
-        }
-
-        // Build output: [uptrend SAR, downtrend SAR]
-        for i in 0..data.len() {
-            if i == 0 {
-                values.push(IndicatorValue::None);
-            } else if trend[i] == 1 {
-                values.push_lines(&[sar[i], f64::NAN]);
-            } else {
-                values.push_lines(&[f64::NAN, sar[i]]);
-            }
-        }
-
-        values
-    }
+#[derive(Clone, Default)]
+struct State {
+    previous: Option<[f64; 3]>,
+    before_previous: Option<[f64; 2]>,
+    sar: f64,
+    ep: f64,
+    af: f64,
+    up: bool,
 }
 
 impl Indicator for ParabolicSAR {
@@ -219,11 +126,61 @@ impl Indicator for ParabolicSAR {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let current = [bar.high, bar.low, bar.close];
+                let Some(previous) = state.previous.replace(current) else {
+                    return IndicatorValue::None;
+                };
+                if let Some(before) = state.before_previous {
+                    let mut next = state.sar + state.af * (state.ep - state.sar);
+                    let reversal = if state.up {
+                        next = next.min(previous[1]).min(before[1]);
+                        bar.low < next
+                    } else {
+                        next = next.max(previous[0]).max(before[0]);
+                        bar.high > next
+                    };
+                    if reversal {
+                        state.up = !state.up;
+                        state.sar = state.ep;
+                        state.ep = if state.up { bar.high } else { bar.low };
+                        state.af = self.initial_af;
+                    } else {
+                        state.sar = next;
+                        if (state.up && bar.high > state.ep) || (!state.up && bar.low < state.ep) {
+                            state.ep = if state.up { bar.high } else { bar.low };
+                            state.af = (state.af + self.af_step).min(self.max_af);
+                        }
+                    }
+                } else {
+                    state.up = bar.close >= previous[2];
+                    state.sar = if state.up { previous[1] } else { previous[0] };
+                    state.ep = if state.up {
+                        bar.high.max(previous[0])
+                    } else {
+                        bar.low.min(previous[1])
+                    };
+                    state.af = self.initial_af;
+                }
+                state.before_previous = Some([previous[0], previous[1]]);
+                IndicatorValue::Multiple(if state.up {
+                    vec![state.sar, f64::NAN]
+                } else {
+                    vec![f64::NAN, state.sar]
+                })
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -10,7 +10,10 @@ use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument};
 use crate::scales::StudyFormat;
 use crate::studies::palette;
-use crate::studies::{Indicator, IndicatorValues, PlotStyle, StudyCell, StudyTable};
+use crate::studies::stepper::Stepper;
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, PlotStyle, StudyCell, StudyTable,
+};
 use chrono::{Datelike, Days, Months, NaiveDate};
 use egui::Color32;
 
@@ -21,9 +24,21 @@ const PERIODS: [&str; 6] = ["1W", "1M", "3M", "6M", "YTD", "1Y"];
 pub struct Performance {
     days: ExchangeDays,
     values: IndicatorValues,
+    stepper: Stepper<State>,
+    history: Vec<(NaiveDate, f64)>,
+    before_last_history: usize,
+    intraday: bool,
     table: StudyTable,
     colors: [Color32; 6],
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    source: usize,
+    previous_date: Option<NaiveDate>,
+    intraday: bool,
+    latest: [Option<f64>; 6],
 }
 
 impl Performance {
@@ -32,6 +47,10 @@ impl Performance {
         Self {
             days: ExchangeDays::default(),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
+            history: Vec::new(),
+            before_last_history: 0,
+            intraday: false,
             table: StudyTable {
                 title: "Performance".into(),
                 columns: vec!["Period".into(), "Change".into()],
@@ -61,41 +80,76 @@ impl Indicator for Performance {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = IndicatorValues::missing(data.len());
-        let dates = self.days.of(data);
-        let mut history = Vec::new();
-        let mut latest = [None; 6];
-        for (i, (bar, date)) in data.iter().zip(dates).enumerate() {
-            if !bar.close.is_finite() {
-                continue;
-            }
-            let targets = [
-                date.checked_sub_days(Days::new(7)),
-                date.checked_sub_months(Months::new(1)),
-                date.checked_sub_months(Months::new(3)),
-                date.checked_sub_months(Months::new(6)),
-                NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt()),
-                date.checked_sub_months(Months::new(12)),
-            ];
-            for (line, target) in targets.into_iter().enumerate() {
-                latest[line] = target.and_then(|target| {
-                    let at = history
-                        .partition_point(|(day, _): &(NaiveDate, f64)| *day <= target)
-                        .checked_sub(1)?;
-                    let reference = history[at].1;
-                    let change = 100.0 * (bar.close - reference) / reference;
-                    (reference != 0.0 && change.is_finite()).then_some(change)
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], mut from: usize) {
+        let len = self.values.len();
+        let start = if len > 0 && from >= len - 1 && data.len() >= len {
+            from.min(len)
+        } else {
+            0
+        };
+        if start == 0 {
+            self.history.clear();
+        } else if start < len {
+            self.history.truncate(self.before_last_history);
+        }
+        loop {
+            self.stepper
+                .run(data, from, &mut self.values, |state, bar| {
+                    let source = state.source;
+                    state.source += 1;
+                    if source + 1 == data.len() {
+                        self.before_last_history = self.history.len();
+                    }
+                    let date = bar.time.date_naive();
+                    state.intraday |= state.previous_date == Some(date);
+                    state.previous_date = Some(date);
+                    if !bar.close.is_finite() {
+                        return IndicatorValue::None;
+                    }
+                    let date = self.days.day(bar, !self.intraday);
+                    let targets = [
+                        date.checked_sub_days(Days::new(7)),
+                        date.checked_sub_months(Months::new(1)),
+                        date.checked_sub_months(Months::new(3)),
+                        date.checked_sub_months(Months::new(6)),
+                        NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt()),
+                        date.checked_sub_months(Months::new(12)),
+                    ];
+                    for (line, target) in targets.into_iter().enumerate() {
+                        state.latest[line] = target.and_then(|target| {
+                            let at = self
+                                .history
+                                .partition_point(|(day, _)| *day <= target)
+                                .checked_sub(1)?;
+                            let reference = self.history[at].1;
+                            let change = 100.0 * (bar.close - reference) / reference;
+                            (reference != 0.0 && change.is_finite()).then_some(change)
+                        });
+                    }
+                    self.history.push((date, bar.close));
+                    IndicatorValue::Multiple(
+                        state.latest.map(|value| value.unwrap_or(f64::NAN)).to_vec(),
+                    )
                 });
-                self.values
-                    .set_value(line, i, latest[line].unwrap_or(f64::NAN));
+            if self.intraday == self.stepper.state().intraday {
+                break;
             }
-            history.push((date, bar.close));
+            self.intraday = self.stepper.state().intraday;
+            self.history.clear();
+            from = 0;
         }
         self.table.rows = PERIODS
             .into_iter()
-            .zip(latest)
+            .zip(self.stepper.state().latest)
             .map(|(period, value)| vec![StudyCell::Text(period.into()), StudyCell::Percent(value)])
             .collect();
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn table(&self) -> Option<&StudyTable> {

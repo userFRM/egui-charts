@@ -31,6 +31,7 @@ pub struct MarketBreadth<const RATIO: bool, const VOLUME: bool> {
     clock: Option<crate::model::BarClock>,
     wait_for_close: bool,
     values: IndicatorValues,
+    source_values: Vec<Option<f64>>,
     color: Color32,
     visible: bool,
 }
@@ -54,6 +55,7 @@ impl<const RATIO: bool, const VOLUME: bool> Default for MarketBreadth<RATIO, VOL
             clock: None,
             wait_for_close: true,
             values: IndicatorValues::new(),
+            source_values: Vec::new(),
             color: palette::ORANGE,
             visible: true,
         }
@@ -142,44 +144,52 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
     }
     fn calculate(&mut self, data: &[Bar]) {
         self.values = IndicatorValues::missing(data.len());
+        self.source_values.clear();
     }
-    fn update_data(&mut self, data: &[Bar], _from: usize, sources: &[StudyData<'_>]) {
-        self.calculate(data);
+    fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+        let mut from = from.min(self.values.len()).min(data.len());
         let requests = self.data_requests();
         let Some(advancing) = sources.iter().find(|source| source.request == requests[0]) else {
+            self.calculate(data);
             return;
         };
         let Some(declining) = sources.iter().find(|source| source.request == requests[1]) else {
+            self.calculate(data);
             return;
         };
-        let mut total = 0.0;
-        let values: Vec<_> = advancing
-            .bars
-            .iter()
-            .map(|bar| {
-                let other = declining
-                    .bar_at(bar.time)
-                    .map(|at| declining.bars[at].close)?;
-                if !bar.close.is_finite() || !other.is_finite() || (RATIO && other == 0.0) {
-                    return None;
-                }
-                let value = if RATIO {
-                    bar.close / other
-                } else {
-                    total + bar.close - other
-                };
-                if !value.is_finite() {
-                    return None;
-                }
-                if !RATIO {
-                    total = value;
-                }
-                Some(value)
-            })
-            .collect();
-        self.values.clear();
+        if from == 0 || self.source_values.len() != advancing.bars.len() {
+            from = 0;
+            let mut total = 0.0;
+            self.source_values = advancing
+                .bars
+                .iter()
+                .map(|bar| {
+                    let other = declining
+                        .bar_at(bar.time)
+                        .map(|at| declining.bars[at].close)?;
+                    if !bar.close.is_finite() || !other.is_finite() || (RATIO && other == 0.0) {
+                        return None;
+                    }
+                    let value = if RATIO {
+                        bar.close / other
+                    } else {
+                        total + bar.close - other
+                    };
+                    if !value.is_finite() {
+                        return None;
+                    }
+                    if !RATIO {
+                        total = value;
+                    }
+                    Some(value)
+                })
+                .collect();
+        }
+        // The former last chart bar becomes historical when another bar is appended.
+        let from = from.saturating_sub(1);
+        self.values.truncate(from);
         let clock = self.clock.as_ref().unwrap_or(&advancing.clock);
-        for (at, bar) in data.iter().enumerate() {
+        for (at, bar) in data.iter().enumerate().skip(from) {
             let value = advancing
                 .bar_at(bar.time)
                 .and_then(|_| {
@@ -197,10 +207,13 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
                     };
                     advancing.output_at(close, !self.wait_for_close && at + 1 == data.len())
                 })
-                .and_then(|at| values[at])
+                .and_then(|at| self.source_values[at])
                 .unwrap_or(f64::NAN);
             self.values.push_lines(&[value]);
         }
+    }
+    fn is_incremental(&self) -> bool {
+        true
     }
     fn values(&self) -> &IndicatorValues {
         &self.values

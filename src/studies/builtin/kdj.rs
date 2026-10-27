@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -22,9 +22,16 @@ pub struct KDJ {
     /// Smoothing period for %D (typically 3)
     d_smooth: usize,
     values: IndicatorValues,
+    stepper: Stepper<State>,
     /// Colors: [K, D, J]
     colors: Vec<Color32>,
     visible: bool,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    range: std::collections::VecDeque<[f64; 2]>,
+    smoothed: Option<(f64, f64)>,
 }
 
 impl KDJ {
@@ -35,6 +42,7 @@ impl KDJ {
             k_smooth: k_smooth.max(1),
             d_smooth: d_smooth.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 palette::BLUE,   // Blue - K
                 palette::ORANGE, // Orange - D
@@ -57,46 +65,6 @@ impl Default for KDJ {
     }
 }
 
-impl KDJ {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        let k_len = self.k_smooth as f64;
-        let d_len = self.d_smooth as f64;
-        let (mut k, mut d) = (50.0, 50.0);
-
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                values.push(IndicatorValue::None);
-                continue;
-            }
-            let window = &data[i + 1 - self.period..=i];
-            let highest = window
-                .iter()
-                .map(|b| b.high)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
-            let range = highest - lowest;
-            if !(range.is_finite() && data[i].close.is_finite()) {
-                // The range of finite prices overflowed; K and D carry over the bar unchanged.
-                values.push(IndicatorValue::None);
-                continue;
-            }
-            let rsv = if range == 0.0 {
-                50.0
-            } else {
-                (data[i].close - lowest) / range * 100.0
-            };
-
-            k = ((k_len - 1.0) * k + rsv) / k_len;
-            d = ((d_len - 1.0) * d + k) / d_len;
-            values.push_lines(&[k, d, 3.0 * k - 2.0 * d]);
-        }
-
-        values
-    }
-}
-
 impl Indicator for KDJ {
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
@@ -113,11 +81,51 @@ impl Indicator for KDJ {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.range.push_back([bar.high, bar.low]);
+                if state.range.len() > self.period {
+                    state.range.pop_front();
+                }
+                if state.range.len() < self.period {
+                    return IndicatorValue::None;
+                }
+                let high = state
+                    .range
+                    .iter()
+                    .map(|v| v[0])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let low = state
+                    .range
+                    .iter()
+                    .map(|v| v[1])
+                    .fold(f64::INFINITY, f64::min);
+                let range = high - low;
+                if !range.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let rsv = if range == 0.0 {
+                    50.0
+                } else {
+                    (bar.close - low) / range * 100.0
+                };
+                let (k, d) = state.smoothed.get_or_insert((50.0, 50.0));
+                let (k_len, d_len) = (self.k_smooth as f64, self.d_smooth as f64);
+                *k = ((k_len - 1.0) * *k + rsv) / k_len;
+                *d = ((d_len - 1.0) * *d + *k) / d_len;
+                IndicatorValue::Multiple(vec![*k, *d, 3.0 * *k - 2.0 * *d])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

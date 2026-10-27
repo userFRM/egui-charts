@@ -1,6 +1,7 @@
 use crate::model::Bar;
 use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -48,31 +49,12 @@ impl Default for RainbowOscillator {
     }
 }
 
-impl Indicator for RainbowOscillator {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        levels: length("Levels", 1, usize::MAX),
-        base_period: length("Base period", 1, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "Rainbow"
-    }
-
-    fn desc(&self) -> &str {
-        "Rainbow Oscillator - Multi-MA distance"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl RainbowOscillator {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         // Get closes
@@ -98,7 +80,7 @@ impl Indicator for RainbowOscillator {
         // 100 * (close - mean of the averages) / (highest - lowest close over the last `levels` bars)
         for i in 0..data.len() {
             if missing[i] || i + 1 < self.levels {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
                 continue;
             }
             let window = &closes[i + 1 - self.levels..=i];
@@ -107,11 +89,59 @@ impl Indicator for RainbowOscillator {
             let range = highest - lowest;
             if range > 0.0 {
                 let osc = 100.0 * (closes[i] - sums[i] / level_cnt as f64) / range;
-                self.values.push(IndicatorValue::Single(osc));
+                values.push(IndicatorValue::Single(osc));
             } else {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
         }
+        values
+    }
+}
+
+impl Indicator for RainbowOscillator {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        levels: length("Levels", 1, usize::MAX),
+        base_period: length("Base period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Rainbow"
+    }
+
+    fn desc(&self) -> &str {
+        "Rainbow Oscillator - Multi-MA distance"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| {
+                from.saturating_sub(
+                    (self.base_period - 1)
+                        .saturating_mul(self.levels)
+                        .max(self.levels - 1),
+                )
+            },
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -1,6 +1,7 @@
 use crate::model::Bar;
 use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -70,29 +71,9 @@ impl Default for CoppockCurve {
     }
 }
 
-impl Indicator for CoppockCurve {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        long_roc: length("Long roc", 1, usize::MAX),
-        short_roc: length("Short roc", 1, usize::MAX),
-        wma_period: length("Wma period", 1, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "Coppock"
-    }
-
-    fn desc(&self) -> &str {
-        "Coppock Curve - Long-term momentum indicator"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl CoppockCurve {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         let required = self
             .long_roc
@@ -100,9 +81,9 @@ impl Indicator for CoppockCurve {
             .saturating_add(self.wma_period);
         if data.len() < required {
             for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             }
-            return;
+            return values;
         }
 
         // Get close prices
@@ -131,11 +112,60 @@ impl Indicator for CoppockCurve {
         // Store results
         for value in coppock {
             if value.is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Single(value));
+                values.push(IndicatorValue::Single(value));
             }
         }
+        values
+    }
+}
+
+impl Indicator for CoppockCurve {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        long_roc: length("Long roc", 1, usize::MAX),
+        short_roc: length("Short roc", 1, usize::MAX),
+        wma_period: length("Wma period", 1, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "Coppock"
+    }
+
+    fn desc(&self) -> &str {
+        "Coppock Curve - Long-term momentum indicator"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| {
+                from.saturating_sub(
+                    self.long_roc
+                        .max(self.short_roc)
+                        .saturating_add(self.wma_period - 1),
+                )
+            },
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
