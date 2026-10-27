@@ -243,7 +243,12 @@ fn column_chart(ui: &mut Ui, page: &FinancialPage, row: &FinancialRow) {
     );
     for (i, period) in page.periods.iter().enumerate() {
         let center = plot.left() + slot * (i as f32 + 0.5);
-        painter.text(
+        let cell = Rect::from_min_max(
+            pos2(center - slot * 0.5, rect.top()),
+            pos2(center + slot * 0.5, rect.bottom()),
+        );
+        let column_painter = painter.with_clip_rect(cell);
+        column_painter.text(
             pos2(center, plot.bottom() + 4.0),
             Align2::CENTER_TOP,
             l10n::text(ui.ctx(), period),
@@ -269,7 +274,7 @@ fn column_chart(ui: &mut Ui, page: &FinancialPage, row: &FinancialRow) {
             theme.ui.accent
         };
         painter.rect_filled(column, 2.0, color);
-        painter.text(
+        column_painter.text(
             pos2(center, column.top() - 2.0),
             Align2::CENTER_BOTTOM,
             figure(Some(value)),
@@ -294,7 +299,11 @@ fn table(
     let font = FontId::proportional(theme.text.body);
     if let Some(currency) = currency {
         let label = format!("{}: {currency}", l10n::text(ui.ctx(), "Currency"));
-        ui.painter().text(
+        ui.painter_at(Rect::from_min_size(
+            header.min,
+            vec2(NAME_WIDTH, ROW_HEIGHT),
+        ))
+        .text(
             pos2(header.left(), header.center().y),
             Align2::LEFT_CENTER,
             label,
@@ -303,11 +312,12 @@ fn table(
         );
     }
     for (i, period) in page.periods.iter().enumerate() {
-        ui.painter().text(
-            pos2(
-                header.left() + NAME_WIDTH + PERIOD_WIDTH * (i as f32 + 1.0) - 8.0,
-                header.center().y,
-            ),
+        let cell = Rect::from_min_size(
+            header.min + vec2(NAME_WIDTH + PERIOD_WIDTH * i as f32, 0.0),
+            vec2(PERIOD_WIDTH, ROW_HEIGHT),
+        );
+        ui.painter_at(cell).text(
+            pos2(cell.right() - 8.0, cell.center().y),
             Align2::RIGHT_CENTER,
             l10n::text(ui.ctx(), period),
             font.clone(),
@@ -342,11 +352,12 @@ fn table(
             theme.ui.text,
         );
         for i in 0..page.periods.len() {
-            ui.painter().text(
-                pos2(
-                    rect.left() + NAME_WIDTH + PERIOD_WIDTH * (i as f32 + 1.0) - 8.0,
-                    rect.center().y,
-                ),
+            let cell = Rect::from_min_size(
+                rect.min + vec2(NAME_WIDTH + PERIOD_WIDTH * i as f32, 0.0),
+                vec2(PERIOD_WIDTH, ROW_HEIGHT),
+            );
+            ui.painter_at(cell).text(
+                pos2(cell.right() - 8.0, cell.center().y),
                 Align2::RIGHT_CENTER,
                 figure(row.values.get(i).copied().flatten()),
                 font.clone(),
@@ -415,11 +426,11 @@ mod tests {
                     vec![
                         FinancialPage::new(
                             "Income statement",
-                            vec!["FY 2024".into(), "FY 2025".into()],
+                            vec!["Fiscal year ending September 2024".into(), "FY 2025".into()],
                         )
                         .with_row(
                             "A financial row name much wider than the name column",
-                            vec![Some(2.0), Some(3.0)],
+                            vec![Some(f64::MAX), Some(3.0)],
                         ),
                         FinancialPage::new("Balance sheet", vec!["FY 2025".into()])
                             .with_row("Assets", vec![Some(3.0)]),
@@ -452,6 +463,25 @@ mod tests {
                     name.clip_rect.width() <= NAME_WIDTH,
                     "row names stay in their column"
                 );
+                for label in [
+                    "Fiscal year ending September 2024".to_owned(),
+                    figure(Some(f64::MAX)),
+                ] {
+                    let cell = harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .rev()
+                        .find(|shape| {
+                            matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == label)
+                        })
+                        .unwrap();
+                    assert!(
+                        cell.clip_rect.width() <= PERIOD_WIDTH,
+                        "period text stays in its column"
+                    );
+                }
                 drop(harness);
                 assert!(
                     used.right() <= width,
