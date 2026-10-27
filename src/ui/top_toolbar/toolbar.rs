@@ -1124,6 +1124,7 @@ mod tests {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.enable_accesskit();
             for (slot, label, expected) in [
                 (
                     S::QuickSearch,
@@ -1231,6 +1232,24 @@ mod tests {
                             )),
                             _ => None,
                         })
+                        // Icon-only choices, such as the layout diagrams, by their accessible names.
+                        .chain(
+                            output
+                                .platform_output
+                                .accesskit_update
+                                .iter()
+                                .flat_map(|update| &update.nodes)
+                                .filter_map(|(_, node)| {
+                                    let bounds = node.bounds()?;
+                                    Some((
+                                        node.label()?.to_owned(),
+                                        pos2(
+                                            ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                                            ((bounds.y0 + bounds.y1) / 2.0) as f32,
+                                        ),
+                                    ))
+                                }),
+                        )
                         .collect();
                     output.drop_without_applying_deltas();
                     (action, rect, labels)
