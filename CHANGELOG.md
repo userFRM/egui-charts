@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- The documentation status page shows feature completion by area, grouped feature maps, host responsibilities and progress history from the maintained feature list. The same build produces overall and per-area status badges and self-contained feature map and history images for embedding. ([#1129](https://github.com/userFRM/egui-charts/issues/1129))
+- The documentation status page shows feature completion by area from the maintained feature list, as a feature map coloured by status and one table per area. The same build produces per-area status badges and the feature map image for embedding. ([#1129](https://github.com/userFRM/egui-charts/issues/1129))
 
 - Trading settings persist line extension, left, centre or right label placement, and whether `Trading::export_image` and `export_png` include visible trading overlays. Migration: `TradingSettings` literals add `extend_lines: true`, `label_alignment: TradingLabelAlignment::Right` and `include_in_image: false`, or use defaults; `TradingLineOptions` literals add `extend_lines` and `label_alignment`. ([#994](https://github.com/userFRM/egui-charts/issues/994))
 

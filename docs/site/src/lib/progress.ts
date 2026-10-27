@@ -62,16 +62,6 @@ export const percentage = (features: Feature[]) =>
   (features.length ? counts(features).done / features.length * 100 : 0).toFixed(1);
 export const features = parseFeatures(readFileSync(`${root}/${path}`, 'utf8'));
 
-export function history() {
-  const commits = execFileSync('git', ['log', '--format=%H%x09%cI', '--', path], { cwd: root, encoding: 'utf8' }).trim();
-  if (!commits) return [];
-  return commits.split('\n').map((entry) => {
-    const [commit, date] = entry.split('\t');
-    const csv = execFileSync('git', ['show', `${commit}:${path}`], { cwd: root, encoding: 'utf8' });
-    return { commit, date, ...counts(parseFeatures(csv)) };
-  }).sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-}
-
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Lay out positive weights in rows chosen to minimise the worst cell aspect ratio. */
