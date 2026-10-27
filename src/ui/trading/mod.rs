@@ -686,7 +686,7 @@ impl Trading {
         }
     }
 
-    /// Exports the chart with its visible broker overlays when
+    /// Exports the chart with its visible trading overlays when
     /// [`TradingSettings::include_in_image`] is enabled. Account data and display settings
     /// stay unchanged; the host delivers the returned frame.
     pub fn export_image(
@@ -709,7 +709,7 @@ impl Trading {
     }
 
     fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
-        if self.service.is_some() && self.display.include_in_image {
+        if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;
             let lines = self.draw_overlays(ui, chart);
             chart.trading_tags = lines.tags;
@@ -1698,6 +1698,25 @@ mod tests {
             );
             assert_eq!(chart.get_time_scale_state(), before);
             assert!(broker.placed.lock().unwrap().is_empty());
+            trading.disconnect();
+            trading.display.bid_ask_labels = true;
+            chart.set_quote(Some(crate::model::Level1Quote {
+                symbol: "SYM".into(),
+                ts: chart.bars(SeriesId::MAIN)[99].time,
+                bid: 99.0,
+                ask: 101.0,
+                bid_size: 1.0,
+                ask_size: 1.0,
+            }));
+            let plain = chart.export_png(&ctx, &options).unwrap();
+            for include in [false, true] {
+                trading.display.include_in_image = include;
+                assert_eq!(
+                    trading.export_png(&chart, &ctx, &options).unwrap() != plain,
+                    include,
+                    "bid and ask labels do not require a broker connection"
+                );
+            }
         }
     }
 
