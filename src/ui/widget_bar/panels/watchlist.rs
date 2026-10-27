@@ -14,16 +14,21 @@ use egui::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::object_tree::{format_price, price_decimals};
+use super::object_tree::price_decimals;
 use crate::data::inbox::Inbox;
 use crate::icons::icons;
 use crate::model::Quote;
+use crate::scales::{CurrencyFormatter, PriceFormatter};
 use crate::services::{Listener, Quotes};
 use crate::theme::ThemeExt;
 use crate::ui_kit::{EmptyState, IconButton};
 
 /// Height shared by market data rows.
 pub(super) const ROW_HEIGHT: f32 = 26.0;
+/// Height of a watchlist row, which fits its symbol mark.
+const LIST_ROW_HEIGHT: f32 = 30.0;
+/// Diameter of a symbol's mark.
+const MARK_SIZE: f32 = 18.0;
 /// Height of a panel header row, which fits its title and action buttons.
 pub(super) const HEADER_HEIGHT: f32 = 40.0;
 
@@ -229,6 +234,8 @@ pub struct WatchlistPanel {
     quotes: HashMap<String, Quote>,
     /// Decimals of the price columns per symbol, where the host knows them.
     decimals: HashMap<String, u8>,
+    /// Marks of the symbols, where the host supplies them.
+    marks: HashMap<String, egui::ImageSource<'static>>,
     sort: Option<(WatchlistColumn, bool)>,
     selected: Option<String>,
     service: Option<Arc<dyn Quotes>>,
@@ -257,6 +264,7 @@ impl WatchlistPanel {
             active: 0,
             quotes: HashMap::new(),
             decimals: HashMap::new(),
+            marks: HashMap::new(),
             sort: None,
             selected: None,
             service: None,
@@ -308,6 +316,12 @@ impl WatchlistPanel {
     /// them, the decimals follow the size of the last price.
     pub fn set_price_decimals(&mut self, symbol: &str, decimals: u8) {
         self.decimals.insert(symbol.to_owned(), decimals);
+    }
+
+    /// Shows `mark`, such as the issuer's logo, in a circle before `symbol`. Without one, the
+    /// row shows the symbol's first letter on a neutral disc.
+    pub fn set_mark(&mut self, symbol: &str, mark: egui::ImageSource<'static>) {
+        self.marks.insert(symbol.to_owned(), mark);
     }
 
     /// Takes quotes from `service` from the next [`poll`](Self::poll) on.
@@ -373,6 +387,7 @@ impl WatchlistPanel {
             active,
             quotes,
             decimals,
+            marks,
             sort,
             selected,
             ..
@@ -520,9 +535,11 @@ impl WatchlistPanel {
 
         let font = TextStyle::Body.resolve(ui.style());
         let small = TextStyle::Small.resolve(ui.style());
+        // Each number column takes 23.5% of the row, which leaves the symbol column room for a
+        // six-letter name after its mark; the last column's own gap completes the right margin.
         let columns = |rect: egui::Rect| {
-            let right = rect.right() - 8.0;
-            let number = ((rect.width() - 18.0).max(0.0) * 0.24).min(96.0);
+            let right = rect.right() - 4.0;
+            let number = ((rect.width() - 18.0).max(0.0) * 0.235).min(96.0);
             let edges = [
                 rect.left() + 10.0,
                 right - 3.0 * number,
@@ -646,7 +663,7 @@ impl WatchlistPanel {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for &index in &order {
                     let (rect, _) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), ROW_HEIGHT),
+                        vec2(ui.available_width(), LIST_ROW_HEIGHT),
                         Sense::hover(),
                     );
                     let sense = if sort.is_none() {
@@ -763,9 +780,32 @@ impl WatchlistPanel {
                                     egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
                                 painter.rect_filled(bar, 0.0, flag.color());
                             }
+                            let mark = egui::Rect::from_min_size(
+                                pos2(cells[0].left(), rect.center().y - MARK_SIZE / 2.0),
+                                vec2(MARK_SIZE, MARK_SIZE),
+                            );
+                            match marks.get(symbol.as_str()) {
+                                Some(source) => egui::Image::new(source.clone())
+                                    .corner_radius(MARK_SIZE / 2.0)
+                                    .paint_at(ui, mark),
+                                None => {
+                                    painter.circle_filled(
+                                        mark.center(),
+                                        MARK_SIZE / 2.0,
+                                        theme.ui.text_disabled,
+                                    );
+                                    painter.text(
+                                        mark.center(),
+                                        Align2::CENTER_CENTER,
+                                        symbol.chars().next().unwrap_or(' ').to_uppercase(),
+                                        FontId::proportional(MARK_SIZE / 2.0),
+                                        Color32::WHITE,
+                                    );
+                                }
+                            }
                             ui.new_child(
                                 egui::UiBuilder::new()
-                                    .max_rect(cells[0])
+                                    .max_rect(cells[0].with_min_x(mark.right() + 6.0))
                                     .layout(Layout::left_to_right(Align::Center)),
                             )
                             .add(
@@ -789,7 +829,7 @@ impl WatchlistPanel {
                                     theme.ui.text
                                 };
                                 for (column, text, color) in [
-                                    (1, format_price(quote.last, Some(decimals)), theme.ui.text),
+                                    (1, grouped(quote.last, usize::from(decimals)), theme.ui.text),
                                     (2, signed(change, usize::from(decimals)), color),
                                     (3, format!("{}%", signed(quote.change_percent(), 2)), color),
                                 ] {
@@ -883,15 +923,22 @@ pub(super) fn weighted(size: f32, weight: f32, color: Color32) -> TextFormat {
     format
 }
 
-/// `value` with an explicit sign, unsigned when zero, or a dash when not finite.
+/// `value` with an explicit sign, unsigned when it rounds to zero, or a dash when not finite.
 pub(super) fn signed(value: f64, decimals: usize) -> String {
-    if !value.is_finite() {
-        "-".to_owned()
-    } else if value == 0.0 {
-        format!("{:.*}", decimals, 0.0)
+    let text = grouped(value, decimals);
+    if value > 0.0 && text.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+        format!("+{text}")
     } else {
-        format!("{value:+.decimals$}")
+        text
     }
+}
+
+/// A price with thousands separators and `decimals` decimals, or a dash when not finite.
+pub(super) fn grouped(value: f64, decimals: usize) -> String {
+    if !value.is_finite() {
+        return "-".to_owned();
+    }
+    CurrencyFormatter::new("", decimals).format(value)
 }
 
 /// Item indices in display order: list order, or with `sort`, each run of symbols between
@@ -959,6 +1006,25 @@ mod tests {
         WatchlistItem::Symbol {
             symbol: symbol.into(),
             flag: None,
+        }
+    }
+
+    #[test]
+    fn panel_numbers_group_digits_and_omit_signs_at_rounded_zero() {
+        for (value, decimals, price, change) in [
+            (43237.45, 2, "43,237.45", "+43,237.45"),
+            (-1234567.0, 0, "-1,234,567", "-1,234,567"),
+            (863.83, 2, "863.83", "+863.83"),
+            (100000.5, 1, "100,000.5", "+100,000.5"),
+            (0.000123, 6, "0.000123", "+0.000123"),
+            (-0.0, 2, "0.00", "0.00"),
+            (-0.001, 2, "0.00", "0.00"),
+            (0.001, 2, "0.00", "0.00"),
+            (f64::INFINITY, 2, "-", "-"),
+            (f64::NAN, 2, "-", "-"),
+        ] {
+            assert_eq!(grouped(value, decimals), price);
+            assert_eq!(signed(value, decimals), change);
         }
     }
 
