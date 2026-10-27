@@ -986,9 +986,6 @@ mod tests {
                 "price_only_restored",
                 "price_only_excluded",
             ] {
-                if case.starts_with("price_only") && !cfg!(feature = "ui") {
-                    continue;
-                }
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
                 chart.config_mut().right_axis_scale_mode = mode;
@@ -1082,15 +1079,20 @@ mod tests {
                     !matches!(case, "excluded" | "price_only_excluded")
                 ));
                 chart.set_main_series_visible(case != "main_hidden");
-                #[cfg(feature = "ui")]
                 if case.starts_with("price_only") {
-                    let mut menu = crate::ui::top_toolbar::SettingsMenu::new();
-                    menu.settings.scale_price_chart_only = true;
-                    chart.update_config(menu.apply_to_config(chart.config().clone()));
+                    #[cfg(feature = "ui")]
+                    {
+                        let mut menu = crate::ui::top_toolbar::SettingsMenu::new();
+                        menu.settings.scale_price_chart_only = true;
+                        chart.update_config(menu.apply_to_config(chart.config().clone()));
+                    }
+                    #[cfg(not(feature = "ui"))]
+                    {
+                        chart.config_mut().scale_price_chart_only = true;
+                    }
                     if matches!(case, "price_only_restored" | "price_only_excluded") {
                         frame(&ctx, &mut chart, 0.03, Vec::new());
-                        menu.settings.scale_price_chart_only = false;
-                        chart.update_config(menu.apply_to_config(chart.config().clone()));
+                        chart.config_mut().scale_price_chart_only = false;
                     }
                     assert!(
                         chart
