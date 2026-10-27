@@ -524,11 +524,15 @@ fn comparison(ui: &mut Ui, tiles: &[BrokerTile], compared: &mut Vec<String>) -> 
                         removed = Some(tile.id.clone());
                     }
                     ui.add_space(4.0);
-                    ui.label(semibold(
-                        &l10n::text(ui.ctx(), &tile.name),
-                        theme.text.body + 2.0,
-                        theme.ui.text,
-                    ));
+                    ui.add(
+                        egui::Label::new(semibold(
+                            &l10n::text(ui.ctx(), &tile.name),
+                            theme.text.body + 2.0,
+                            theme.ui.text,
+                        ))
+                        .truncate(),
+                    )
+                    .on_hover_text(&tile.name);
                     if let Some(rating) = tile.rating {
                         ui.label(
                             RichText::new(format!("{rating:.1} / 5"))
@@ -536,10 +540,7 @@ fn comparison(ui: &mut Ui, tiles: &[BrokerTile], compared: &mut Vec<String>) -> 
                         );
                     } else {
                         // Keeps the Connect buttons of rated and unrated brokers in line.
-                        ui.add_space(
-                            ui.text_style_height(&egui::TextStyle::Body)
-                                + ui.spacing().item_spacing.y,
-                        );
+                        ui.label(" ");
                     }
                     ui.add_space(4.0);
                     if ui.button(l10n::text(ui.ctx(), "Connect")).clicked() {
@@ -621,13 +622,14 @@ fn fact_ui(ui: &mut Ui, fact: Option<&BrokerFact>) {
             .as_image_tinted(vec2(20.0, 20.0), color)
             .paint_at(ui, Rect::from_center_size(rect.center(), vec2(20.0, 20.0))),
         (Some(_), None) => {
-            ui.painter().text(
+            ui.painter_at(rect).text(
                 rect.center(),
                 Align2::CENTER_CENTER,
                 &name,
                 font,
                 theme.ui.text,
             );
+            response.on_hover_text(name);
         }
         (None, None) => {
             ui.painter().text(
@@ -685,10 +687,16 @@ mod tests {
     /// broker without a fact shows it as not available, unlike a feature it does not support.
     #[test]
     fn comparison_aligns_facts_and_tells_unavailable_from_unsupported() {
-        let mut a = BrokerTile::new("a", "A");
+        let mut a = BrokerTile::new("a", "A broker with a name wider than its comparison column");
+        a.rating = Some(4.8);
+        let pricing = "A host-supplied commission description wider than one comparison column";
         a.facts = vec![
             ("Leverage".to_owned(), BrokerFact::Value("30:1".to_owned())),
             ("Crypto".to_owned(), BrokerFact::Supported(false)),
+            (
+                "Commission".to_owned(),
+                BrokerFact::Value(pricing.to_owned()),
+            ),
         ];
         let mut b = BrokerTile::new("b", "B");
         b.facts = vec![("Crypto".to_owned(), BrokerFact::Supported(true))];
@@ -702,8 +710,28 @@ mod tests {
             });
         harness.run();
         let y = |label: &str| harness.get_by_label(label).rect().center().y;
-        assert_eq!(y("30:1"), y("Not available"), "leverage row");
+        let missing: Vec<_> = harness.query_all_by_label("Not available").collect();
+        assert_eq!(y("30:1"), missing[0].rect().center().y, "leverage row");
         assert_eq!(y("Not supported"), y("Supported"), "crypto row");
         assert!(y("Leverage") < y("Crypto"));
+        let connects: Vec<_> = harness
+            .query_all_by_label("Connect")
+            .map(|node| node.rect().center().y)
+            .collect();
+        assert_eq!(connects.len(), 2);
+        assert_eq!(
+            connects[0], connects[1],
+            "broker headers keep buttons aligned"
+        );
+        let cell = harness
+            .output()
+            .shapes
+            .iter()
+            .find(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == pricing))
+            .expect("the host's commission is painted");
+        assert!(
+            cell.clip_rect.width() <= COLUMN,
+            "values stay in their column"
+        );
     }
 }
