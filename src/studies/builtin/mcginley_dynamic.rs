@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -12,6 +12,7 @@ pub struct McGinleyDynamic {
     /// Period (typically 10 or 14)
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<Option<f64>>,
     color: Color32,
     visible: bool,
 }
@@ -22,6 +23,7 @@ impl McGinleyDynamic {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::PINK, // Pink
             visible: true,
         }
@@ -31,40 +33,6 @@ impl McGinleyDynamic {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // Start with first close
-        let mut md = data[0].close;
-        values.push(IndicatorValue::Single(md));
-
-        let k = 0.6; // Constant factor
-        let n = self.period as f64;
-
-        for i in 1..data.len() {
-            let close = data[i].close;
-
-            // McGinley Dynamic formula:
-            // MD = MD_prev + (Close - MD_prev) / (k * N * (Close / MD_prev)^4)
-            if md != 0.0 {
-                let ratio = close / md;
-                let divisor = k * n * ratio.powi(4);
-                if divisor != 0.0 {
-                    md = md + (close - md) / divisor;
-                }
-            }
-
-            values.push(IndicatorValue::Single(md));
-        }
-
-        values
     }
 }
 
@@ -94,7 +62,29 @@ impl Indicator for McGinleyDynamic {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let md = state.get_or_insert(bar.close);
+                if *md != 0.0 {
+                    let ratio = bar.close / *md;
+                    let divisor = 0.6 * self.period as f64 * ratio.powi(4);
+                    if divisor != 0.0 {
+                        *md += (bar.close - *md) / divisor;
+                    }
+                }
+                IndicatorValue::Single(*md)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

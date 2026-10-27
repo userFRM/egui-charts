@@ -1,7 +1,7 @@
 //! Timeframe (bar aggregation interval) for financial charts.
 //!
 //! A [`Timeframe`] specifies the time window or execution-based threshold represented by a bar.  The library
-//! ships with standard presets from 100 ms up to 1 month, and a [`Custom`](Timeframe::Custom)
+//! ships with standard presets from 100 ms up to 12 months, and a [`Custom`](Timeframe::Custom)
 //! variant for arbitrary intervals.
 //!
 //! # Parsing
@@ -22,12 +22,12 @@ use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
 /// Timeframe for bar aggregation.
 ///
-/// Time variants represent a fixed interval over which OHLCV data is aggregated
+/// Time variants represent a fixed or calendar interval over which OHLCV data is aggregated
 /// into a single [`Bar`](super::Bar). The default timeframe is [`Min1`](Timeframe::Min1).
 ///
 /// Timeframes are divided into tiers:
@@ -42,7 +42,7 @@ use std::str::FromStr;
 /// | Second      | `Sec1` .. `Sec30`                                      |
 /// | Minute      | `Min1`, `Min5`, `Min15`, `Min30`                       |
 /// | Hourly      | `Hour1`, `Hour4`                                       |
-/// | Daily+      | `Day1`, `Week1`, `Month1`                              |
+/// | Daily+      | `Day1`, `Week1`, `Month1`, `Weeks(count)`, `Months(count)` |
 /// | Custom      | `Custom(seconds)` -- any user-defined interval          |
 ///
 /// # Example
@@ -115,12 +115,20 @@ pub enum Timeframe {
     /// Absolute buy minus sell volume per bar, in whole units. Fills split at the threshold;
     /// unknown sides contribute volume but no delta.
     Delta(NonZeroU64),
+
+    /// Calendar weeks, aligned to Monday 1970-01-05 in the clock's timezone.
+    Weeks(NonZeroU32),
+    /// Calendar months, aligned to January 1970 in the clock's timezone.
+    /// Three, six and twelve months start on calendar quarters, half-years and years.
+    Months(NonZeroU32),
 }
 
 impl Timeframe {
     /// Returns the canonical string label for this timeframe (e.g. `"1min"`, `"4h"`, `"1D"`).
     pub fn as_str(&self) -> Cow<'static, str> {
         match self {
+            Timeframe::Weeks(count) => Cow::Owned(format!("{count}W")),
+            Timeframe::Months(count) => Cow::Owned(format!("{count}M")),
             Timeframe::Ticks(count) => Cow::Owned(format!("{count}t")),
             Timeframe::Volume(size) => Cow::Owned(format!("{size}v")),
             Timeframe::Range(ticks) => Cow::Owned(format!("{ticks}r")),
@@ -174,10 +182,14 @@ impl Timeframe {
             Timeframe::Day1,
             Timeframe::Week1,
             Timeframe::Month1,
+            Timeframe::Months(NonZeroU32::new(3).unwrap()),
+            Timeframe::Months(NonZeroU32::new(6).unwrap()),
+            Timeframe::Months(NonZeroU32::new(12).unwrap()),
         ]
     }
 
     /// Duration in milliseconds, saturating at `i64::MAX` for huge custom timeframes.
+    /// Calendar months use an approximate 30 days each; use [`super::BarClock`] for boundaries.
     /// Trade-based intervals have no time duration and return zero; do not use them to step time.
     pub fn duration_ms(&self) -> i64 {
         match self {
@@ -202,6 +214,8 @@ impl Timeframe {
             Timeframe::Day1 => 86_400_000,
             Timeframe::Week1 => 604_800_000,
             Timeframe::Month1 => 2_592_000_000, // Approximation: 30 days
+            Timeframe::Weeks(count) => i64::from(count.get()) * 604_800_000,
+            Timeframe::Months(count) => i64::from(count.get()).saturating_mul(2_592_000_000),
             Timeframe::Custom(seconds) => {
                 seconds.get().saturating_mul(1000).min(i64::MAX as u64) as i64
             }
@@ -215,13 +229,16 @@ impl Timeframe {
 
     /// Returns true if this is a user-defined custom timeframe
     pub fn is_custom(&self) -> bool {
-        matches!(self, Timeframe::Custom(_))
+        match self {
+            Timeframe::Months(count) => !matches!(count.get(), 3 | 6 | 12),
+            _ => matches!(self, Timeframe::Custom(_) | Timeframe::Weeks(_)),
+        }
     }
 
     /// Convert a resolution string to Timeframe
     pub fn from_resolution(resolution: &str) -> Option<Self> {
         if let Ok(timeframe) = resolution.parse::<Self>()
-            && timeframe.is_trade_based()
+            && (timeframe.is_trade_based() || matches!(timeframe, Self::Weeks(_) | Self::Months(_)))
         {
             return Some(timeframe);
         }
@@ -313,6 +330,21 @@ impl FromStr for Timeframe {
             _ => {}
         }
 
+        for (suffix, make) in [
+            ("month", Timeframe::Months as fn(NonZeroU32) -> Timeframe),
+            ("m", Timeframe::Months),
+            ("week", Timeframe::Weeks),
+            ("w", Timeframe::Weeks),
+        ] {
+            if let Some(value) = s.to_lowercase().strip_suffix(suffix) {
+                return value
+                    .trim()
+                    .parse::<NonZeroU32>()
+                    .map(make)
+                    .map_err(|_| "Calendar interval must be a positive 32-bit integer".into());
+            }
+        }
+
         // Try parsing as custom timeframe: "<number><unit>"
         let lower = s.to_lowercase();
         if let Some(seconds) = parse_custom_timeframe(&lower) {
@@ -334,7 +366,6 @@ impl FromStr for Timeframe {
 /// Use "min" for minutes (e.g. "3min", "45min").
 fn parse_custom_timeframe(s: &str) -> Option<u64> {
     let suffixes: &[(&str, u64)] = &[
-        ("month", 2_592_000),
         ("hour", 3600),
         ("min", 60),
         ("sec", 1),
@@ -342,7 +373,6 @@ fn parse_custom_timeframe(s: &str) -> Option<u64> {
         ("s", 1),
         ("h", 3600),
         ("d", 86400),
-        ("w", 604_800),
     ];
 
     for &(suffix, multiplier) in suffixes {
@@ -400,6 +430,9 @@ mod tests {
         assert!(!Timeframe::Day1.is_custom());
         assert!(custom(45).is_custom());
         assert!(custom(180).is_custom());
+        for (text, expected) in [("2w", true), ("2month", true), ("3month", false)] {
+            assert_eq!(text.parse::<Timeframe>().unwrap().is_custom(), expected);
+        }
     }
 
     #[test]
@@ -434,6 +467,23 @@ mod tests {
         assert_eq!("2hour".parse::<Timeframe>(), Ok(custom(7200)));
         assert_eq!("2d".parse::<Timeframe>(), Ok(custom(172800)));
         assert_eq!("2day".parse::<Timeframe>(), Ok(custom(172800)));
+        for (text, label, saved) in [
+            ("2w", "2W", r#"{"Weeks":2}"#),
+            ("3month", "3M", r#"{"Months":3}"#),
+        ] {
+            let timeframe: Timeframe = text.parse().unwrap();
+            assert_eq!(serde_json::to_string(&timeframe).unwrap(), saved);
+            assert_eq!(timeframe.to_string(), label);
+            assert_eq!(label.parse::<Timeframe>(), Ok(timeframe));
+            assert_eq!(Timeframe::from_resolution(label), Some(timeframe));
+            assert_eq!(serde_json::from_str::<Timeframe>(saved).unwrap(), timeframe);
+        }
+        for text in ["0w", "0month", "-1month", "4294967296month"] {
+            assert!(text.parse::<Timeframe>().is_err());
+        }
+        for text in [r#"{"Weeks":0}"#, r#"{"Months":0}"#] {
+            assert!(serde_json::from_str::<Timeframe>(text).is_err());
+        }
     }
 
     #[test]
@@ -468,5 +518,21 @@ mod tests {
         assert!(serde_json::from_str::<Timeframe>(r#"{"Custom":0}"#).is_err());
         let tf: Timeframe = serde_json::from_str(r#"{"Custom":45}"#).unwrap();
         assert_eq!(tf.duration_ms(), 45_000);
+        // Index-based formats must keep reading intervals saved before calendar counts existed.
+        for (index, expected) in [
+            (17_u32, custom(45)),
+            (18, Timeframe::Ticks(NonZeroU64::new(45).unwrap())),
+            (19, Timeframe::Volume(NonZeroU64::new(45).unwrap())),
+            (20, Timeframe::Range(NonZeroU64::new(45).unwrap())),
+            (21, Timeframe::Delta(NonZeroU64::new(45).unwrap())),
+        ] {
+            let map = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+                [(index, 45_u64)].into_iter(),
+            );
+            assert_eq!(
+                Timeframe::deserialize(serde::de::value::MapAccessDeserializer::new(map)).unwrap(),
+                expected,
+            );
+        }
     }
 }

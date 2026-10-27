@@ -300,6 +300,8 @@ pub trait Indicator: Send {
     }
 
     /// Update with requested histories. Studies using only chart bars keep the default.
+    /// Pass 0 when a requested history changes; nonzero `from` retains the same requested
+    /// histories and follows [`update`](Indicator::update)'s unchanged-prefix contract.
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
         let _ = sources;
         self.update(data, from);
@@ -380,8 +382,9 @@ pub trait Indicator: Send {
         self.calculate(data);
     }
 
-    /// Whether a last-bar update or an append through [`update`](Indicator::update) costs
-    /// time independent of the series length. An earlier change still recomputes in full.
+    /// Whether live updates avoid recomputing unaffected history. Causal studies do work
+    /// independent of the series length; studies that redraw earlier legs or periods also
+    /// revisit the bars whose output changes. Earlier corrections may recompute in full.
     /// Defaults to `false`.
     fn is_incremental(&self) -> bool {
         false

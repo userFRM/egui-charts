@@ -1,7 +1,7 @@
-use super::over_finite_bars;
+use super::smoothing::Smoothing;
 use crate::model::Bar;
-use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -13,6 +13,7 @@ pub struct VIDYA {
     /// Period for calculation
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(std::collections::VecDeque<f64>, Option<f64>)>,
     color: Color32,
     visible: bool,
 }
@@ -23,6 +24,7 @@ impl VIDYA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::DEEP_PURPLE, // Deep Purple
             visible: true,
         }
@@ -32,60 +34,6 @@ impl VIDYA {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.len() < self.period.saturating_add(1) {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        // Standard smoothing constant
-        let sc = 2.0 / (self.period as f64 + 1.0);
-
-        // Initialize VIDYA with first close
-        let mut vidya = data[0].close;
-
-        // Need to calculate CMO for each bar
-        for i in 0..data.len() {
-            if i < self.period {
-                // Need enough data for CMO calculation
-                values.push(IndicatorValue::None);
-            } else {
-                // Calculate CMO (Chande Momentum Oscillator) for volatility
-                let mut sum_up = 0.0;
-                let mut sum_down = 0.0;
-
-                for j in i + 1 - self.period..=i {
-                    if j > 0 {
-                        let change = data[j].close - data[j - 1].close;
-                        if change > 0.0 {
-                            sum_up += change;
-                        } else {
-                            sum_down += (-change).abs();
-                        }
-                    }
-                }
-
-                let vi = if sum_up + sum_down != 0.0 {
-                    (sum_up - sum_down).abs() / (sum_up + sum_down)
-                } else {
-                    0.0
-                };
-
-                // Calculate VIDYA
-                vidya = sc * vi * data[i].close + (1.0 - sc * vi) * vidya;
-
-                values.push(IndicatorValue::Single(vidya));
-            }
-        }
-
-        values
     }
 }
 
@@ -115,7 +63,45 @@ impl Indicator for VIDYA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let previous = state.1.get_or_insert(bar.close);
+                state.0.push_back(bar.close);
+                if state.0.len() <= self.period {
+                    return IndicatorValue::None;
+                }
+                while state.0.len() - 1 > self.period {
+                    state.0.pop_front();
+                }
+                let (mut up, mut down) = (0.0, 0.0);
+                for i in 1..state.0.len() {
+                    let change = state.0[i] - state.0[i - 1];
+                    if change > 0.0 {
+                        up += change;
+                    } else {
+                        down += (-change).abs();
+                    }
+                }
+                let vi = if up + down != 0.0 {
+                    (up - down).abs() / (up + down)
+                } else {
+                    0.0
+                };
+                let sc = 2.0 / (self.period as f64 + 1.0);
+                *previous = sc * vi * bar.close + (1.0 - sc * vi) * *previous;
+                IndicatorValue::Single(*previous)
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -159,6 +145,7 @@ impl Indicator for VIDYA {
 pub struct ZLEMA {
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(std::collections::VecDeque<f64>, usize, Smoothing)>,
     color: Color32,
     visible: bool,
 }
@@ -169,6 +156,7 @@ impl ZLEMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::CYAN, // Cyan
             visible: true,
         }
@@ -178,41 +166,6 @@ impl ZLEMA {
     pub fn with_color(mut self, color: Color32) -> Self {
         self.color = color;
         self
-    }
-
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        let lag = (self.period - 1) / 2;
-
-        // Create de-lagged data
-        let mut delagged: Vec<f64> = Vec::with_capacity(data.len());
-        for i in 0..data.len() {
-            if i >= lag {
-                let correction = data[i].close - data[i - lag].close;
-                delagged.push(data[i].close + correction);
-            } else {
-                delagged.push(data[i].close);
-            }
-        }
-
-        // Apply EMA to de-lagged data
-        let zlema = helpers::ema(&delagged, self.period);
-
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                values.push(IndicatorValue::Single(zlema[i]));
-            }
-        }
-
-        values
     }
 }
 
@@ -242,7 +195,37 @@ impl Indicator for ZLEMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data));
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let lag = (self.period - 1) / 2;
+                state.0.push_back(bar.close);
+                let delagged = if state.0.len() > lag {
+                    bar.close + (bar.close - state.0[state.0.len() - 1 - lag])
+                } else {
+                    bar.close
+                };
+                if state.0.len() > lag {
+                    state.0.pop_front();
+                }
+                let ema = state.2.next(delagged, 1, 2.0 / (self.period as f64 + 1.0));
+                state.1 += 1;
+                if state.1 < self.period {
+                    IndicatorValue::None
+                } else {
+                    IndicatorValue::Single(ema)
+                }
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

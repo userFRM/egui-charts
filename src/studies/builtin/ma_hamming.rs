@@ -1,5 +1,6 @@
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -44,6 +45,38 @@ impl Default for HammingMA {
     }
 }
 
+impl HammingMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
+
+        if data.len() < self.period || self.period < 2 {
+            for _ in 0..data.len() {
+                values.push(IndicatorValue::None);
+            }
+            return values;
+        }
+
+        let weights = Self::hamming_weights(self.period);
+        let weight_sum: f64 = weights.iter().sum();
+
+        for i in 0..data.len() {
+            if i + 1 < self.period {
+                values.push(IndicatorValue::None);
+            } else {
+                let start = i + 1 - self.period;
+                let weighted_sum: f64 = data[start..=i]
+                    .iter()
+                    .zip(weights.iter())
+                    .map(|(bar, w)| bar.close * w)
+                    .sum();
+                let hma = weighted_sum / weight_sum;
+                values.push(IndicatorValue::Single(hma));
+            }
+        }
+        values
+    }
+}
+
 impl Indicator for HammingMA {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -64,32 +97,23 @@ impl Indicator for HammingMA {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+        self.update(data, 0);
+    }
 
-        if data.len() < self.period || self.period < 2 {
-            for _ in 0..data.len() {
-                self.values.push(IndicatorValue::None);
-            }
-            return;
-        }
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| from.saturating_sub(self.period - 1),
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
 
-        let weights = Self::hamming_weights(self.period);
-        let weight_sum: f64 = weights.iter().sum();
-
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                self.values.push(IndicatorValue::None);
-            } else {
-                let start = i + 1 - self.period;
-                let weighted_sum: f64 = data[start..=i]
-                    .iter()
-                    .zip(weights.iter())
-                    .map(|(bar, w)| bar.close * w)
-                    .sum();
-                let hma = weighted_sum / weight_sum;
-                self.values.push(IndicatorValue::Single(hma));
-            }
-        }
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

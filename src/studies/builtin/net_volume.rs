@@ -1,5 +1,5 @@
-use super::over_finite_bars;
 use crate::model::Bar;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -8,6 +8,7 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct NetVolume {
     values: IndicatorValues,
+    stepper: Stepper<Option<f64>>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -17,6 +18,7 @@ impl NetVolume {
     pub fn new() -> Self {
         Self {
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![Color32::from_rgb(38, 166, 154)], // Teal
             visible: true,
         }
@@ -49,29 +51,32 @@ impl Indicator for NetVolume {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| {
-                let mut previous = None;
-                data.iter()
-                    .map(|bar| {
-                        let value = match previous {
-                            None => IndicatorValue::None,
-                            Some(close) => IndicatorValue::Single(if bar.close > close {
-                                bar.volume
-                            } else if bar.close < close {
-                                -bar.volume
-                            } else {
-                                0.0
-                            }),
-                        };
-                        previous = Some(bar.close);
-                        value
-                    })
-                    .collect()
-            },
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |previous, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                let value = match *previous {
+                    None => IndicatorValue::None,
+                    Some(close) => IndicatorValue::Single(if bar.close > close {
+                        bar.volume
+                    } else if bar.close < close {
+                        -bar.volume
+                    } else {
+                        0.0
+                    }),
+                };
+                *previous = Some(bar.close);
+                value
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

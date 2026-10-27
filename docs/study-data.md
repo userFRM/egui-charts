@@ -38,6 +38,8 @@ A response replaces the prior snapshot. The chart sorts, deduplicates and valida
 its shared study-data path; a connected `Datafeed` loads and subscribes automatically.
 Direct callers supply `StudyData` to `Indicator::update_data` with sorted, unique bars;
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
+Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
+and updates the changed chart bars; the chart supplies this invalidation automatically.
 An unavailable or stale interval leaves gaps. Include the earlier intrabar when its close is
 needed to classify a doji. Empty history clears the values; missing parent intervals remain
 unavailable, while supplied zero volume produces zero. Accounts, feed selection, retrieval,

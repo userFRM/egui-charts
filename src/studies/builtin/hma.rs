@@ -18,6 +18,7 @@
 use crate::model::Bar;
 use crate::studies::helpers;
 use crate::studies::palette;
+use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
@@ -58,30 +59,12 @@ impl Default for HMA {
     }
 }
 
-impl Indicator for HMA {
-    fn source(&self) -> Option<crate::studies::StudySource> {
-        Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
-        ))
-    }
-
-    crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 2, usize::MAX)
-    ; {});
-
-    fn name(&self) -> &str {
-        "HMA"
-    }
-
-    fn desc(&self) -> &str {
-        "Hull Moving Avg - Fast and smooth moving avg"
-    }
-
-    fn calculate(&mut self, data: &[Bar]) {
-        self.values.clear();
+impl HMA {
+    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+        let mut values = IndicatorValues::new();
 
         if data.is_empty() {
-            return;
+            return values;
         }
 
         let half_period = (self.period / 2).max(1);
@@ -112,11 +95,58 @@ impl Indicator for HMA {
         let min_period = self.period.saturating_add(sqrt_period) - 1;
         for i in 0..data.len() {
             if i < min_period - 1 || hma[i].is_nan() {
-                self.values.push(IndicatorValue::None);
+                values.push(IndicatorValue::None);
             } else {
-                self.values.push(IndicatorValue::Single(hma[i]));
+                values.push(IndicatorValue::Single(hma[i]));
             }
         }
+        values
+    }
+}
+
+impl Indicator for HMA {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    crate::studies::inputs::study_inputs!(self;
+        period: length("Period", 2, usize::MAX)
+    ; {});
+
+    fn name(&self) -> &str {
+        "HMA"
+    }
+
+    fn desc(&self) -> &str {
+        "Hull Moving Avg - Fast and smooth moving avg"
+    }
+
+    fn calculate(&mut self, data: &[Bar]) {
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            |_data, from| {
+                from.saturating_sub(
+                    self.period
+                        .saturating_add(((self.period as f64).sqrt() as usize).max(1) - 1)
+                        - 1,
+                )
+            },
+            |data| self.compute(data),
+        );
+        self.values = values;
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

@@ -1,6 +1,6 @@
-use super::over_finite_bars;
 use crate::model::Bar;
-use crate::studies::{Indicator, IndicatorValues};
+use crate::studies::stepper::Stepper;
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Price Volume Trend (Enhanced) with Signal Line
@@ -10,6 +10,7 @@ use egui::Color32;
 pub struct PriceVolumeTrendStudy {
     signal_period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(Option<f64>, f64, f64)>,
     colors: Vec<Color32>,
     visible: bool,
 }
@@ -20,52 +21,13 @@ impl PriceVolumeTrendStudy {
         Self {
             signal_period: signal_period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             colors: vec![
                 Color32::from_rgb(38, 166, 154), // PVT line (teal)
                 Color32::from_rgb(255, 152, 0),  // Signal line (orange)
             ],
             visible: true,
         }
-    }
-
-    /// The values over `data`, every bar of which has a finite close and volume.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-
-        if data.is_empty() {
-            return values;
-        }
-
-        // Calculate PVT series
-        let mut pvt_values = Vec::with_capacity(data.len());
-        let mut pvt = 0.0_f64;
-        pvt_values.push(pvt);
-
-        for i in 1..data.len() {
-            let prev_close = data[i - 1].close;
-            if prev_close != 0.0 {
-                pvt += data[i].volume * (data[i].close - prev_close) / prev_close;
-            }
-            pvt_values.push(pvt);
-        }
-
-        // Calculate signal line (EMA of PVT)
-        let mult = 2.0 / (self.signal_period as f64 + 1.0);
-        let mut signal = pvt_values[0];
-        let mut signal_values = Vec::with_capacity(data.len());
-        signal_values.push(signal);
-
-        for i in 1..pvt_values.len() {
-            signal = (pvt_values[i] - signal) * mult + signal;
-            signal_values.push(signal);
-        }
-
-        // Output both lines
-        for i in 0..data.len() {
-            values.push_lines(&[pvt_values[i], signal_values[i]]);
-        }
-
-        values
     }
 }
 
@@ -99,11 +61,29 @@ impl Indicator for PriceVolumeTrendStudy {
     }
 
     fn calculate(&mut self, data: &[Bar]) {
-        self.values = over_finite_bars(
-            data,
-            |b| b.close.is_finite() && b.volume.is_finite(),
-            |data| self.compute(data),
-        );
+        self.update(data, 0);
+    }
+
+    fn update(&mut self, data: &[Bar], from: usize) {
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() || !bar.volume.is_finite() {
+                    return IndicatorValue::None;
+                }
+                if let Some(previous) = state.0 {
+                    if previous != 0.0 {
+                        state.1 += bar.volume * (bar.close - previous) / previous;
+                    }
+                    state.2 =
+                        (state.1 - state.2) * (2.0 / (self.signal_period as f64 + 1.0)) + state.2;
+                }
+                state.0 = Some(bar.close);
+                IndicatorValue::Multiple(vec![state.1, state.2])
+            });
+    }
+
+    fn is_incremental(&self) -> bool {
+        true
     }
 
     fn values(&self) -> &IndicatorValues {

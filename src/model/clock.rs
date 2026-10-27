@@ -1,7 +1,9 @@
 //! Bar boundaries in time.
 
 use super::{Timeframe, TimezoneId};
-use chrono::{DateTime, Datelike, LocalResult, NaiveTime, Offset, TimeDelta, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, LocalResult, NaiveDate, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
+};
 
 const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
@@ -104,7 +106,20 @@ impl BarClock {
                 let first = local.date().with_day(1).unwrap().and_time(NaiveTime::MIN);
                 return self.local_boundary(first, t);
             }
+            Timeframe::Months(count) => {
+                let month = i64::from(local.year() - 1970) * 12 + i64::from(local.month0());
+                let month = month - month.rem_euclid(i64::from(count.get()));
+                let first = i32::try_from(1970 + month.div_euclid(12))
+                    .ok()
+                    .and_then(|year| {
+                        NaiveDate::from_ymd_opt(year, month.rem_euclid(12) as u32 + 1, 1)
+                    });
+                return first.map_or(t, |date| {
+                    self.local_boundary(date.and_time(NaiveTime::MIN), t)
+                });
+            }
             Timeframe::Week1 => (7 * DAY_MS, FIRST_MONDAY_MS),
+            Timeframe::Weeks(count) => (i64::from(count.get()) * 7 * DAY_MS, FIRST_MONDAY_MS),
             timeframe => {
                 let period = timeframe.duration_ms().max(1);
                 let midnight = ms - ms.rem_euclid(DAY_MS);
@@ -153,7 +168,8 @@ impl BarClock {
         match time {
             LocalResult::Single(time) => time,
             LocalResult::Ambiguous(first, second) => {
-                if second <= at {
+                // Calendar periods keep one open when midnight repeats.
+                if second <= at && self.timeframe.is_some_and(|tf| tf.duration_ms() < DAY_MS) {
                     second
                 } else {
                     first
@@ -182,6 +198,16 @@ impl BarClock {
                     .session_close(open, true)
                     .map_or(next, |close| next.min(close)),
             );
+        }
+        if let Timeframe::Months(count) = timeframe {
+            let local = open
+                .naive_utc()
+                .checked_add_signed(TimeDelta::seconds(i64::from(self.offset_at(open))))?;
+            let next = local
+                .date()
+                .checked_add_months(chrono::Months::new(count.get()))?
+                .and_time(NaiveTime::MIN);
+            return Some(self.local_boundary(next, open));
         }
         let mut at = open.checked_add_signed(timeframe.duration())?;
         loop {
@@ -277,68 +303,113 @@ mod tests {
             // A Sunday belongs to the week that opened on the Monday before.
             (Timeframe::Week1, "2024-03-17T12:00:00Z", "2024-03-11T00:00:00Z"),
             (Timeframe::Month1, "2024-02-29T13:00:00Z", "2024-02-01T00:00:00Z"),
+            ("3month".parse().unwrap(), "2024-04-15T12:00:00Z", "2024-04-01T00:00:00Z"),
+            ("3month".parse().unwrap(), "2024-02-29T12:00:00Z", "2024-01-01T00:00:00Z"),
+            ("3month".parse().unwrap(), "2024-07-15T12:00:00Z", "2024-07-01T00:00:00Z"),
+            ("3month".parse().unwrap(), "2024-12-31T23:59:59Z", "2024-10-01T00:00:00Z"),
+            ("6month".parse().unwrap(), "2024-12-31T23:59:59Z", "2024-07-01T00:00:00Z"),
+            ("12month".parse().unwrap(), "2024-12-31T23:59:59Z", "2024-01-01T00:00:00Z"),
+            ("3month".parse().unwrap(), "1969-12-31T23:59:59Z", "1969-10-01T00:00:00Z"),
+            ("2w".parse().unwrap(), "1970-01-04T12:00:00Z", "1969-12-22T00:00:00Z"),
         ];
         for (timeframe, at, open) in cases {
             let clock = BarClock::new(timeframe);
             assert_eq!(clock.bar_open(t(at)), t(open), "{timeframe} at {at}");
         }
-        for (timeframe, at, open, next) in [
+        for (timeframe, at, open, next, zone) in [
+            (
+                "3month".parse().unwrap(),
+                "2024-04-01T03:59:59Z",
+                "2024-01-01T05:00:00Z",
+                "2024-04-01T04:00:00Z",
+                "America/New_York",
+            ),
+            (
+                "3month".parse().unwrap(),
+                "2024-04-15T12:00:00Z",
+                "2024-04-01T04:00:00Z",
+                "2024-07-01T04:00:00Z",
+                "America/New_York",
+            ),
+            (
+                "2w".parse().unwrap(),
+                "2024-03-15T12:00:00Z",
+                "2024-03-04T05:00:00Z",
+                "2024-03-18T04:00:00Z",
+                "America/New_York",
+            ),
             (
                 "123s".parse().unwrap(),
                 "2024-03-10T07:00:01Z",
                 "2024-03-10T07:00:00Z",
                 "2024-03-10T07:00:24Z",
+                "America/New_York",
             ),
             (
                 "45min".parse().unwrap(),
                 "2024-11-03T06:01:00Z",
                 "2024-11-03T06:00:00Z",
                 "2024-11-03T06:30:00Z",
+                "America/New_York",
             ),
             (
                 "45min".parse().unwrap(),
                 "2024-11-03T05:45:00Z",
                 "2024-11-03T05:30:00Z",
                 "2024-11-03T06:00:00Z",
+                "America/New_York",
             ),
             (
                 "7min".parse().unwrap(),
                 "2024-03-10T06:59:30Z",
                 "2024-03-10T06:59:00Z",
                 "2024-03-10T07:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour4,
                 "2024-03-10T07:30:00Z",
                 "2024-03-10T05:00:00Z",
                 "2024-03-10T08:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour4,
                 "2024-11-03T08:30:00Z",
                 "2024-11-03T04:00:00Z",
                 "2024-11-03T09:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour1,
                 "2024-11-03T05:30:00Z",
                 "2024-11-03T05:00:00Z",
                 "2024-11-03T06:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Hour1,
                 "2024-11-03T06:30:00Z",
                 "2024-11-03T06:00:00Z",
                 "2024-11-03T07:00:00Z",
+                "America/New_York",
             ),
             (
                 Timeframe::Month1,
                 "2024-03-15T12:00:00Z",
                 "2024-03-01T05:00:00Z",
                 "2024-04-01T04:00:00Z",
+                "America/New_York",
+            ),
+            (
+                "2month".parse().unwrap(),
+                "2020-11-01T05:30:00Z",
+                "2020-11-01T04:00:00Z",
+                "2021-01-01T05:00:00Z",
+                "America/Havana",
             ),
         ] {
-            let Some(zone) = TimezoneId::named("America/New_York") else {
+            let Some(zone) = TimezoneId::named(zone) else {
                 continue;
             };
             let clock = BarClock::new(timeframe).with_timezone(zone);

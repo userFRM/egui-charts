@@ -53,7 +53,10 @@ impl HigherIntervalCandles {
         self.values.truncate(start);
         self.values
             .resize(data.len(), crate::studies::IndicatorValue::None);
-        self.candles.retain(|candle| candle.bars.end <= start);
+        self.candles.truncate(
+            self.candles
+                .partition_point(|candle| candle.bars.end <= start),
+        );
         if start == 0 && !data.is_empty() {
             self.values.set_value(1, 0, f64::NAN);
         }
