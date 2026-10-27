@@ -4,7 +4,7 @@ use crate::localization as l10n;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use egui::{Context, Ui};
 
 use super::{AlertDialogAction, AlertDialogConfig};
@@ -123,13 +123,23 @@ impl AlertDialog {
             .map_err(|_| "Enter the expiry date as YYYY-MM-DD")?;
         let time = NaiveTime::parse_from_str(self.expiry_time.trim(), "%H:%M")
             .map_err(|_| "Enter the expiry time as HH:MM")?;
-        // A time repeated when clocks go back expires at its first occurrence.
-        let expiry = self
-            .timezone
-            .from_local_datetime(&date.and_time(time))
-            .earliest()
-            .ok_or("The expiry time is skipped when clocks go forward")?
-            .with_timezone(&Utc);
+        // Unchanged fields retain the saved seconds and repeated-hour occurrence.
+        let saved = self.alert.expires.filter(|saved| {
+            let local = saved.with_timezone(&self.timezone);
+            local.date_naive() == date
+                && local.hour() == time.hour()
+                && local.minute() == time.minute()
+        });
+        let expiry = if let Some(saved) = saved {
+            saved
+        } else {
+            // A newly entered time repeated when clocks go back uses its first occurrence.
+            self.timezone
+                .from_local_datetime(&date.and_time(time))
+                .earliest()
+                .ok_or("The expiry time is skipped when clocks go forward")?
+                .with_timezone(&Utc)
+        };
         if expiry <= now {
             return Err("Choose an expiry after the current time");
         }
@@ -839,7 +849,32 @@ mod tests {
                 assert_eq!(shown, fields);
             }
         };
+        let check_saved = |zone: TimezoneId, saved, edited: &str, expected| {
+            let mut dialog = AlertDialog::new();
+            dialog.timezone = zone;
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            alert.expires = Some(saved);
+            dialog.edit(alert);
+            let now = at(2026, 1, 1, 0, 0);
+            assert_eq!(
+                dialog.expiry(now),
+                Ok(Some(saved)),
+                "unchanged fields retain the saved instant"
+            );
+            dialog.expiry_time = edited.into();
+            assert_eq!(
+                dialog.expiry(now),
+                Ok(Some(expected)),
+                "edited fields resolve in the entry zone"
+            );
+        };
         let utc = TimezoneId::utc;
+        check_saved(
+            utc(),
+            at(2026, 3, 8, 2, 30) + chrono::Duration::milliseconds(12_345),
+            "02:31",
+            at(2026, 3, 8, 2, 31),
+        );
         let east_of_utc = |hours: i32| TimezoneId::fixed_offset(hours * 3600).unwrap();
         for (zone, fields, expected) in [
             (utc(), None, Ok(None)),
@@ -879,6 +914,12 @@ mod tests {
         #[cfg(feature = "timezones")]
         {
             let new_york = || TimezoneId::named("America/New_York").unwrap();
+            check_saved(
+                new_york(),
+                at(2026, 11, 1, 6, 30) + chrono::Duration::seconds(17),
+                "01:31",
+                at(2026, 11, 1, 5, 31),
+            );
             // Clocks went from 02:00 to 03:00 on 8 March 2026, and on 1 November 2026 from
             // 02:00 daylight time (UTC-4) back to 01:00 standard time (UTC-5).
             for (fields, expected) in [
