@@ -234,10 +234,12 @@ impl SettingsDialog {
                 });
 
                 self.draw_setting_row_with_controls(ui, "Lines", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.scales_lines, "scales_lines")
-                            .show(ui)
-                            .inner
+                    if let Some(color) = ColorPicker::new(
+                        &mut dialog.color_picker_states.scales_lines,
+                        "scales_lines",
+                    )
+                    .show(ui)
+                    .inner
                     {
                         dialog.settings.scales_appearance.lines_color = color;
                     }

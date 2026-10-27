@@ -660,7 +660,10 @@ mod tests {
             settings.scales_appearance.lines_color = Color32::RED;
             settings.btns.pane = visibility;
             settings.apply_to_chart(&mut chart).unwrap();
-            assert_eq!(ChartSettingsState::from_chart(&chart).scales_appearance, settings.scales_appearance);
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).scales_appearance,
+                settings.scales_appearance
+            );
             assert_eq!(ChartSettingsState::from_chart(&chart).btns, settings.btns);
             frame(&ctx, &mut chart, 0.1, Vec::new());
             let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
@@ -673,27 +676,33 @@ mod tests {
             for rect in [plot, pane.chart_rect] {
                 let axis_text = painted.iter().filter_map(|shape| match shape {
                     Shape::Text(text)
-                        if text.pos.x >= rect.right()
-                            && rect.y_range().contains(text.pos.y) =>
+                        if text.pos.x >= rect.right() && rect.y_range().contains(text.pos.y) =>
                     {
                         Some(text.galley.job.sections[0].format.font_id.size)
                     }
                     _ => None,
                 });
                 let sizes: Vec<_> = axis_text.collect();
-                assert!(!sizes.is_empty() && sizes.iter().all(|size| *size == 18.0), "{sizes:?}");
-                let line = painted.iter().any(|shape| matches!(shape, Shape::LineSegment { points, stroke }
+                assert!(
+                    !sizes.is_empty() && sizes.iter().all(|size| *size == 18.0),
+                    "{sizes:?}"
+                );
+                let line = painted.iter().any(|shape| {
+                    matches!(shape, Shape::LineSegment { points, stroke }
                     if stroke.color == Color32::RED
                         && points[0].x == points[1].x
                         && points[0].x >= rect.right()
-                        && rect.y_range().contains(points[0].y.max(points[1].y) - 1.0)));
+                        && rect.y_range().contains(points[0].y.max(points[1].y) - 1.0))
+                });
                 assert!(line, "axis line beside {rect:?}");
             }
             let button = egui::Rect::from_min_size(
                 egui::Pos2::new(pane.chart_rect.right() - 22.0, pane.panel_rect.top() + 2.0),
                 Vec2::splat(20.0),
             );
-            let icon = painted.iter().any(|shape| matches!(shape, Shape::Rect(rect) if button.contains_rect(rect.rect)));
+            let icon = painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(rect) if button.contains_rect(rect.rect)));
             assert_eq!(
                 icon,
                 visibility == ButtonVisibility::AlwaysVisible

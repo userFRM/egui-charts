@@ -209,7 +209,8 @@ impl SettingsDialog {
         self.color_picker_states.crosshair.sel_color = self.settings.crosshair.color;
         self.color_picker_states.watermark.sel_color = self.settings.watermark.color;
         self.color_picker_states.scales_text.sel_color = self.settings.scales_appearance.text_color;
-        self.color_picker_states.scales_lines.sel_color = self.settings.scales_appearance.lines_color;
+        self.color_picker_states.scales_lines.sel_color =
+            self.settings.scales_appearance.lines_color;
 
         self.color_picker_states.alert.sel_color = self.settings.alerts.alert_color;
         self.color_picker_states.symbol_value.sel_color = self
