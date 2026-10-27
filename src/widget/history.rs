@@ -8,7 +8,7 @@ use crate::drawings::DrawingManager;
 use crate::drawings::services::HistoryService;
 use crate::model::{ChartType, ChartTypeParams, Timeframe};
 use crate::scales::PriceScale;
-use crate::studies::Indicator;
+use crate::studies::{Indicator, StudySettingsSnapshot};
 
 #[derive(Default)]
 pub(super) struct ChartHistory {
@@ -54,7 +54,8 @@ struct StudyChange {
 
 struct Study {
     index: usize,
-    indicator: Box<dyn Indicator>,
+    settings: StudySettingsSnapshot,
+    indicator: Option<Box<dyn Indicator>>,
     inputs: String,
     autoscale: bool,
 }
@@ -135,29 +136,18 @@ impl Study {
             .position(|candidate| *candidate == id)?;
         Some(Self {
             index,
-            indicator: chart.studies.indicators()[index].clone_box(),
+            settings: chart.studies.indicators()[index].snapshot_settings(),
+            indicator: None,
             inputs: chart.study_inputs[index].clone(),
             autoscale: chart.study_autoscale[index],
         })
     }
 
     fn same(&self, other: &Self) -> bool {
-        let inputs = |study: &dyn Indicator| {
-            study
-                .inputs()
-                .into_iter()
-                .map(|input| (input.id, input.value))
-                .collect::<Vec<_>>()
-        };
         self.index == other.index
             && self.inputs == other.inputs
             && self.autoscale == other.autoscale
-            && self.indicator.is_visible() == other.indicator.is_visible()
-            && self.indicator.is_overlay() == other.indicator.is_overlay()
-            && self.indicator.scale() == other.indicator.scale()
-            && self.indicator.settings() == other.indicator.settings()
-            && self.indicator.colors() == other.indicator.colors()
-            && inputs(self.indicator.as_ref()) == inputs(other.indicator.as_ref())
+            && self.settings == other.settings
     }
 }
 
@@ -357,6 +347,28 @@ impl Chart {
         }
     }
 
+    pub(super) fn retain_removed_study(&mut self, id: SeriesId, indicator: Box<dyn Indicator>) {
+        let change = if let Some(pending) = &mut self.history.pending {
+            pending
+                .before
+                .studies
+                .iter_mut()
+                .find(|change| change.id == id)
+        } else {
+            // Host removal does not record an action, but existing edits must remain replayable.
+            self.history
+                .undo
+                .iter_mut()
+                .rev()
+                .chain(self.history.redo.iter_mut().rev())
+                .flat_map(|action| &mut action.studies)
+                .find(|change| change.id == id && change.before.is_some())
+        };
+        if let Some(study) = change.and_then(|change| change.before.as_mut()) {
+            study.indicator = Some(indicator);
+        }
+    }
+
     /// Whether a chart user action can be undone (also drives toolbar availability).
     pub fn can_undo(&self) -> bool {
         !self.history.undo.is_empty()
@@ -402,6 +414,47 @@ impl Chart {
             &mut self.history.undo
         };
         let Some(mut action) = stack.pop() else {
+            return false;
+        };
+        // Validate on temporary calculations before changing chart state. A host study may
+        // reject a previously accepted input; failed replay leaves both history stacks intact.
+        let restore: Option<Vec<_>> = action
+            .studies
+            .iter()
+            .filter_map(|change| change.before.as_ref().map(|study| (change.id, study)))
+            .map(|(id, study)| {
+                let original = self
+                    .study_ids
+                    .iter()
+                    .position(|candidate| *candidate == id)
+                    .map(|at| self.studies.indicators()[at].as_ref())
+                    .or(study.indicator.as_deref())
+                    .or_else(|| {
+                        self.history
+                            .undo
+                            .iter()
+                            .chain(&self.history.redo)
+                            .flat_map(|action| &action.studies)
+                            .filter(|change| change.id == id)
+                            .find_map(|change| change.before.as_ref()?.indicator.as_deref())
+                    })?;
+                let mut indicator = original.clone_box();
+                indicator.restore_settings(&study.settings).ok()?;
+                Some((
+                    id,
+                    study.index,
+                    study.inputs.clone(),
+                    study.autoscale,
+                    indicator,
+                ))
+            })
+            .collect();
+        let Some(mut restore) = restore else {
+            if redo {
+                self.history.redo.push(action);
+            } else {
+                self.history.undo.push(action);
+            }
             return false;
         };
         let current_view = self.get_time_scale_state();
@@ -464,34 +517,34 @@ impl Chart {
         self.element_studies.dirty |= !action.studies.is_empty();
         // Restore by original index after removing every touched study, so bulk removal and
         // templates retain order and stable ids while unrelated host studies stay present.
-        let current: Vec<_> = action
+        let mut current: Vec<_> = action
             .studies
             .iter()
             .map(|change| Study::capture(self, change.id))
             .collect();
         let show_volume = self.config.show_volume;
-        for change in &action.studies {
-            self.remove_series(change.id);
-        }
-        let mut restore: Vec<_> = action
-            .studies
-            .iter_mut()
-            .filter_map(|change| change.before.take().map(|study| (change.id, study)))
-            .collect();
-        restore.sort_by_key(|(_, study)| study.index);
-        for (id, mut study) in restore {
-            if let Some(timeframe) = self.timeframe {
-                study.indicator.set_timeframe(timeframe);
+        for (change, current) in action.studies.iter().zip(&mut current) {
+            let indicator = self.take_study(change.id);
+            if change.before.is_none()
+                && let Some(current) = current
+            {
+                current.indicator = indicator;
             }
-            study.indicator.set_instrument(self.instrument());
-            study.indicator.calculate(&self.state.data().bars);
-            let at = study.index.min(self.study_ids.len());
+        }
+        restore.sort_by_key(|(_, index, ..)| *index);
+        for (id, index, inputs, autoscale, mut indicator) in restore {
+            if let Some(timeframe) = self.timeframe {
+                indicator.set_timeframe(timeframe);
+            }
+            indicator.set_instrument(self.instrument());
+            indicator.set_bar_clock(&self.bar_clock());
+            let at = index.min(self.study_ids.len());
             // The registry exposes a slice; append then rotate to insert at the saved position.
-            self.studies.add(study.indicator);
+            self.studies.add(indicator);
             self.studies.indicators_mut()[at..].rotate_right(1);
             self.study_ids.insert(at, id);
-            self.study_inputs.insert(at, study.inputs);
-            self.study_autoscale.insert(at, study.autoscale);
+            self.study_inputs.insert(at, inputs);
+            self.study_autoscale.insert(at, autoscale);
             self.pending_from.insert(at, None);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
@@ -550,8 +603,129 @@ mod tests {
     use egui::{Context, Event, Key, Modifiers, RawInput};
 
     #[test]
+    fn study_history_records_settings_without_cloning_calculations() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        #[derive(Clone)]
+        struct Counted(SMA, Arc<AtomicUsize>);
+        impl Indicator for Counted {
+            fn name(&self) -> &str {
+                self.0.name()
+            }
+            fn calculate(&mut self, bars: &[crate::model::Bar]) {
+                self.0.calculate(bars);
+            }
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn inputs(&self) -> Vec<crate::studies::StudyInput> {
+                self.0.inputs()
+            }
+            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+                self.0.set_input(id, value)
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                Box::new(self.clone())
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut chart = chart(&[10.0; 30], &[20.0; 30]);
+        let id = chart.add_indicator(Box::new(Counted(SMA::new(2), clones.clone())));
+        let original = chart.indicators().next().unwrap().1.colors();
+        for red in 1..=30 {
+            chart.user_action(|chart| {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_colors(vec![Color32::from_rgb(red, 0, 0)])
+            });
+        }
+        assert_eq!(
+            clones.load(Ordering::Relaxed),
+            0,
+            "recording settings must not copy calculated histories"
+        );
+        // History must recalculate from today's closes, not restore the old output column.
+        let mut bars = chart.bars(SeriesId::MAIN)[..4].to_vec();
+        for (bar, close) in bars.iter_mut().zip([10.0, 14.0, 18.0, 22.0]) {
+            bar.close = close;
+            bar.high = close + 1.0;
+            bar.low = close - 1.0;
+            bar.open = close;
+        }
+        chart.set_data(SeriesId::MAIN, bars);
+        for _ in 0..30 {
+            assert!(chart.undo());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 3),
+                Some(20.0)
+            );
+        }
+        assert_eq!(chart.indicators().next().unwrap().1.colors(), original);
+        for red in 1..=30 {
+            assert!(chart.redo());
+            assert_eq!(
+                chart.indicators().next().unwrap().1.colors(),
+                [Color32::from_rgb(red, 0, 0)]
+            );
+            assert_eq!(
+                chart.indicators().next().unwrap().1.values().value(0, 3),
+                Some(20.0)
+            );
+        }
+        let before_removal = clones.load(Ordering::Relaxed);
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input("period", InputValue::Length(3))
+                .unwrap();
+            chart.remove_series(id);
+        });
+        assert_eq!(
+            clones.load(Ordering::Relaxed),
+            before_removal,
+            "removal moves the original implementation into history"
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.study_ids, [id]);
+        assert_eq!(
+            chart.indicators().next().unwrap().1.values().value(0, 3),
+            Some(20.0)
+        );
+        assert!(chart.redo());
+        assert!(chart.indicators().next().is_none());
+        assert!(chart.undo());
+        // An ordinary host removal must not make earlier appearance edits unreplayable.
+        assert!(chart.remove_series(id));
+        assert!(chart.undo());
+        assert_eq!(chart.study_ids, [id]);
+        assert_eq!(
+            chart.indicators().next().unwrap().1.colors(),
+            [Color32::from_rgb(29, 0, 0)]
+        );
+        assert!(chart.redo());
+        assert!(chart.indicators().next().is_none());
+    }
+
+    #[test]
     fn study_edits_and_bulk_removal_restore_ids_order_and_settings() {
         let mut chart = chart(&[10.0; 30], &[20.0; 30]);
+        chart.set_timeframe(Timeframe::Min1);
         let rsi = chart.user_action(|chart| {
             let id = chart.add_indicator(Box::new(RSI::new(14)));
             chart.set_indicator_inputs(id, "14");
@@ -563,6 +737,7 @@ mod tests {
             let mut settings = study.settings();
             settings.plots[0].color = Color32::RED;
             settings.plots[0].width = 4.0;
+            settings.hidden_intervals = vec![Timeframe::Min1];
             study
                 .apply_settings(&[("period".into(), InputValue::Length(5))], settings)
                 .unwrap();
@@ -576,6 +751,7 @@ mod tests {
             InputValue::Length(14)
         );
         assert!(chart.study_autoscale[0]);
+        assert!(chart.indicators().next().unwrap().1.is_visible());
         assert!(chart.redo());
         assert_eq!(chart.indicator_inputs(rsi), Some("5"));
         assert_eq!(
@@ -583,6 +759,12 @@ mod tests {
             Color32::RED
         );
         assert!(!chart.study_autoscale[0]);
+        assert!(!chart.indicators().next().unwrap().1.is_visible());
+        chart.set_timeframe(Timeframe::Min15);
+        assert!(
+            chart.indicators().next().unwrap().1.is_visible(),
+            "interval filtering must not overwrite the global visibility toggle"
+        );
         chart.user_action(|chart| assert!(chart.move_indicator_to_pane(sma, rsi)));
         assert_eq!(chart.pane_layout.panes[1].members, [rsi, sma]);
         assert!(chart.undo());
@@ -777,7 +959,14 @@ mod tests {
                 "an open action cannot consume completed history"
             );
             chart.set_timeframe(Timeframe::Min1);
-            chart.indicator_mut(host).unwrap();
+            chart.indicator_mut(host).unwrap().set_overlay(true);
+            chart.set_indicator_scale(host, crate::studies::StudyScale::Main);
+            chart
+                .set_indicator_source(
+                    host,
+                    crate::studies::StudySource::Price(crate::model::PriceSource::Close),
+                )
+                .unwrap();
         });
         chart.set_data(SeriesId::MAIN, vec![]);
         chart.set_chart_type(ChartType::Area);

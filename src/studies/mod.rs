@@ -52,7 +52,9 @@ mod settings;
 pub(crate) mod table;
 pub use plots::{FillBoundary, StudyCandle, StudyFill, StudyZone};
 pub use projection::StudyProjection;
-pub use settings::{ConfiguredStudy, PlotStyle, PlotType, StudyIntervalRange, StudySettings};
+pub use settings::{
+    ConfiguredStudy, PlotStyle, PlotType, StudyIntervalRange, StudySettings, StudySettingsSnapshot,
+};
 pub use table::{StudyCell, StudyTable};
 mod values;
 pub use values::IndicatorValues;
