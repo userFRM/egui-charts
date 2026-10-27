@@ -675,9 +675,11 @@ mod tests {
         let ctx = Context::default();
         let mut settings = ChartSettingsState::default();
         settings.trading.play_execution_sound = true;
+        settings.trading.execution_sound = "Bell".into();
+        settings.trading.execution_sound_volume = 0.4;
         let mut dialog = SettingsDialog::new();
         dialog.execution_sounds = vec!["Chime".into(), "Bell".into()];
-        dialog.open(settings);
+        dialog.open(settings.clone());
         dialog.active_tab = SettingsTab::Trading;
         let mut preview = None;
         let mut action = SettingsAction::None;
@@ -716,11 +718,12 @@ mod tests {
                 );
             }
         }
-        assert!(!matches!(
+        assert!(matches!(
             action,
-            SettingsAction::None | SettingsAction::Apply(_) | SettingsAction::Cancel
+            SettingsAction::PreviewSound { name, volume } if name == "Bell" && volume == 0.4
         ));
         assert!(dialog.is_open);
+        assert_eq!(dialog.settings(), &settings);
     }
 
     #[test]
