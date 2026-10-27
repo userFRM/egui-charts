@@ -1,7 +1,7 @@
 //! Live alert sources retain their interval and inputs independently of chart navigation and replay.
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
-use egui_charts::model::{AlertStatus, Timeframe};
+use egui_charts::model::{Alert, AlertCondition, AlertSource, AlertStatus, Timeframe};
 use egui_charts::widget::{Chart, SeriesId};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,10 +11,11 @@ pub(super) struct AlertMonitor {
     live: Arc<LiveFeed>,
     studies: HashMap<String, SeriesId>,
     sources: HashMap<String, Arc<LiveFeed>>,
+    alert_sources: Vec<AlertSource>,
 }
 
 impl AlertMonitor {
-    fn new(source: &Chart, feed: &LiveFeed, symbol: &str) -> Self {
+    fn new(source: &Chart, feed: &LiveFeed, symbol: &str, alert: &Alert) -> Self {
         let live = Arc::new(feed.fork());
         live.set_symbol(symbol);
         let timeframe = source.timeframe().unwrap_or(Timeframe::Min1);
@@ -86,14 +87,15 @@ impl AlertMonitor {
             live,
             studies,
             sources,
+            alert_sources: alert_sources(alert).cloned().collect(),
         }
     }
 
-    fn for_symbol(source: &Self, live: &LiveFeed, symbol: &str) -> Self {
+    fn for_symbol(source: &Self, live: &LiveFeed, symbol: &str, alert: &Alert) -> Self {
         let live = live.fork();
         let (session, adjusted) = source.live.view(source.chart.extended_hours());
         live.set_view(session, adjusted);
-        let mut next = Self::new(&source.chart, &live, symbol);
+        let mut next = Self::new(&source.chart, &live, symbol, alert);
         next.studies = source
             .studies
             .iter()
@@ -229,6 +231,22 @@ impl AlertMonitor {
     }
 }
 
+fn alert_sources(alert: &Alert) -> impl Iterator<Item = &AlertSource> {
+    std::iter::once((&alert.source, &alert.condition))
+        .chain(
+            alert
+                .additional_conditions
+                .iter()
+                .map(|rule| (&rule.source, &rule.condition)),
+        )
+        .flat_map(|(source, condition)| {
+            std::iter::once(source).chain(match condition {
+                AlertCondition::Compare { other, .. } => Some(other),
+                _ => None,
+            })
+        })
+}
+
 impl DemoApp {
     pub(super) fn monitor_alerts(&mut self, ctx: &egui::Context) {
         let now = chrono::Utc::now();
@@ -240,6 +258,11 @@ impl DemoApp {
             .filter(|alert| alert.status == AlertStatus::Active)
         {
             let Some(id) = &alert.id else { continue };
+            if self.alert_monitors.iter().any(|((current, _), monitor)| {
+                current == id && monitor.alert_sources.iter().ne(alert_sources(alert))
+            }) {
+                self.alert_monitors.retain(|(current, _), _| current != id);
+            }
             let symbols: Vec<_> = alert.watchlist.as_ref().map_or_else(
                 || vec![alert.symbol.clone()],
                 |name| {
@@ -265,8 +288,10 @@ impl DemoApp {
                         .iter()
                         .find(|((current, _), _)| current == id)
                         .map_or_else(
-                            || AlertMonitor::new(&self.chart, &self.live, &symbol),
-                            |(_, source)| AlertMonitor::for_symbol(source, &self.live, &symbol),
+                            || AlertMonitor::new(&self.chart, &self.live, &symbol, alert),
+                            |(_, source)| {
+                                AlertMonitor::for_symbol(source, &self.live, &symbol, alert)
+                            },
                         );
                     self.alert_monitors.insert(key.clone(), monitor);
                 }

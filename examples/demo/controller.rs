@@ -6433,6 +6433,26 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
+                let replacement = app
+                    .chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                let mut edited = app.alerts.alerts().last().unwrap().clone();
+                edited.source = egui_charts::model::AlertSource::Study {
+                    id: replacement.0.to_string(),
+                    output: 0,
+                };
+                app.alerts.save(edited);
+                for _ in 0..2 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        app.ui(ui, &mut eframe::Frame::_new_kittest())
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    app.alerts.log().len(),
+                    if watchlist { 4 } else { 2 },
+                    "an edited alert must use its newly selected study"
+                );
             }
         }
     }
