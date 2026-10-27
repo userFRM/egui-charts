@@ -226,7 +226,7 @@ impl IndicatorDialog {
     }
 
     /// Open the dialog on `tab` with the search field focused. Profiles and patterns open
-    /// among the built-ins; a page without studies opens on the indicators.
+    /// among the built-ins; an unavailable page opens on the first populated page.
     pub fn open_tab(&mut self, tab: IndicatorTab) {
         if tab != IndicatorTab::Indicators {
             self.sel_category = IndicatorCategory::BuiltIns;
@@ -328,7 +328,11 @@ impl IndicatorDialog {
             .filter(|category| self.offers(*category))
             .collect();
         if !offered.contains(&self.sel_category) {
-            self.sel_category = IndicatorCategory::BuiltIns;
+            self.sel_category = offered
+                .iter()
+                .copied()
+                .find(|category| *category != IndicatorCategory::Favorites)
+                .unwrap_or(IndicatorCategory::Favorites);
         }
         let mut action = IndicatorDialogAction::None;
         if ui.available_width() < 600.0 {
@@ -401,16 +405,13 @@ impl IndicatorDialog {
         }
     }
 
-    /// Whether the sidebar offers `category`: favourites and built-ins always, the user's
-    /// scripts and community studies while the factory registers some.
+    /// Favourites remain available when empty; other categories need registered studies.
     fn offers(&self, category: IndicatorCategory) -> bool {
-        matches!(
-            category,
-            IndicatorCategory::Favorites | IndicatorCategory::BuiltIns
-        ) || self
-            .indicators
-            .iter()
-            .any(|ind| Self::destination(ind).0 == category)
+        category == IndicatorCategory::Favorites
+            || self
+                .indicators
+                .iter()
+                .any(|ind| Self::destination(ind).0 == category)
     }
 
     /// The built-in pages that have studies, above the built-in results. A search covers
@@ -426,7 +427,7 @@ impl IndicatorDialog {
             })
             .collect();
         if !tabs.contains(&self.active_tab) {
-            self.active_tab = IndicatorTab::Indicators;
+            self.active_tab = tabs.first().copied().unwrap_or(IndicatorTab::Indicators);
         }
         if self.sel_category == IndicatorCategory::BuiltIns
             && tabs.len() > 1
@@ -1046,6 +1047,30 @@ mod tests {
             for id in unlisted {
                 assert!(!lists(id), "{tab:?} / {category:?} / {query:?} omits {id}");
             }
+        }
+
+        // A host may replace the catalogue with just one destination.
+        for (category, selected, tab) in [
+            (IndicatorFactory::PROFILES, BuiltIns, Profiles),
+            (IndicatorFactory::PATTERNS, BuiltIns, Patterns),
+            (IndicatorFactory::PERSONAL, MyScripts, Indicators),
+            (IndicatorFactory::COMMUNITY, Community, Indicators),
+        ] {
+            let mut factory = IndicatorFactory::new();
+            for name in factory.list() {
+                factory.unregister(&name);
+            }
+            factory.register_in(category, "Host study", || Box::new(SMA::new(42)));
+            let mut dialog = IndicatorDialog::new().with_factory(factory);
+            dialog.open();
+            ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_content(ui, &dialog.config.clone(), &Theme::dark());
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(dialog.sel_category, selected, "{category}");
+            assert_eq!(dialog.active_tab, tab, "{category}");
+            assert_eq!(dialog.offers(BuiltIns), selected == BuiltIns, "{category}");
+            assert!(dialog.matches(&ctx, &dialog.indicators[0]), "{category}");
         }
 
         // A study the host registers, under a new name or a built-in's, is added through the

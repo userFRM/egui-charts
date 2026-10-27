@@ -40,9 +40,8 @@ impl crate::ui_kit::tab_bar::TabLabel for IndicatorTab {
     }
 }
 
-/// Indicator categories for filtering the indicator list. The sidebar offers favourites and
-/// built-ins always, and the user's scripts and community studies while the factory registers
-/// some.
+/// Indicator categories for filtering the indicator list. The sidebar always offers
+/// favourites; other categories appear while the factory registers studies for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorCategory {
     /// User-favorited indicators
