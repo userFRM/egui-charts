@@ -339,6 +339,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Maximized indicator panes keep plot dragging, wheel and pinch zoom, axis scaling and reset, clicks and drawing placement. Crosshair positions reach host readouts in either pane order. Restoring the layout retains the shared time position and zoom without moving the hidden price pane's manual range. ([#1030](https://github.com/userFRM/egui-charts/issues/1030))
 - The demo follows the system light or dark appearance at startup and live until a theme is explicitly selected. Explicit choices remain saved between sessions, and the web loading screen uses the same saved choice or system appearance before the app starts. ([#1032](https://github.com/userFRM/egui-charts/issues/1032))
 
 - Drawing sync notifications coalesce repeated saves and updates per drawing, and automatic storage disables them, so the queue no longer grows with every edit. Migration: hosts consuming both paths call `chart.drawings_mut().set_sync_enabled(true)` after `Chart::set_storage`. ([#948](https://github.com/userFRM/egui-charts/issues/948))
