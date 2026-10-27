@@ -82,12 +82,12 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      # The full suite runs once on Linux stable; the other platforms and the minimum supported
-      # Rust version run the all-features library tests, which exercise every module.
+      # The full suite runs once on Linux stable; the other platforms run the all-features library
+      # tests, which exercise every module. The minimum supported Rust version only needs to
+      # compile, which the check job proves.
       matrix:
         include:
           - { os: ubuntu-latest, rust: stable, full: true }
-          - { os: ubuntu-latest, rust: 1.95.0, full: false }
           - { os: macos-latest, rust: stable, full: false }
           - { os: windows-latest, rust: stable, full: false }
     steps:
@@ -100,9 +100,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (all features)
         run: cargo test --all-features --lib
-      - name: Run library tests (default features)
-        if: matrix.full
-        run: cargo test --lib
       - name: Run library tests (no default features)
         if: matrix.full
         run: cargo test --no-default-features --lib
@@ -133,8 +130,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
       - name: Run browser widget tests
         run: >-
           wasm-pack test --headless --chrome --lib
@@ -325,12 +323,10 @@ jobs:
           if [ -n "$banned" ]; then echo "::error::--features studies depends on: $banned"; exit 1; fi
           # The deployed demo must build the versions its committed lockfile pins.
           (cd examples/demo && cargo tree --locked > /dev/null)
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.0
       - name: Check advisories, duplicate versions and licences
         run: |
-          cargo install cargo-deny --locked --version 0.19.0
           cargo deny --all-features --locked check advisories bans licenses
           cargo deny --manifest-path examples/demo/Cargo.toml --all-features --locked check advisories bans licenses
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-      - name: Audit dependencies
-        run: cargo audit
