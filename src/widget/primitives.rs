@@ -276,6 +276,7 @@ impl Chart {
                     && study.is_overlay()
                     && study.scale() == crate::studies::StudyScale::Main
             }) && self.study_autoscale[idx]
+                && !self.config.scale_price_chart_only
             {
                 prices.extend(self.primitive_prices(*id));
             }
@@ -439,7 +440,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
         let study = Color32::from_rgb(10, 11, 12);
-        chart.add_indicator(Box::new(
+        let _study_id = chart.add_indicator(Box::new(
             CustomIndicator::new("Mid", |bars| {
                 bars.iter()
                     .map(|bar| IndicatorValue::Single((bar.high + bar.low) / 2.0))
@@ -447,7 +448,7 @@ mod tests {
             })
             .with_color(study),
         ));
-        chart.attach_primitive(SeriesId::MAIN, Layers);
+        let _primitive = chart.attach_primitive(SeriesId::MAIN, Layers).unwrap();
         frame(&ctx, &mut chart, 0.0, vec![]);
         let shapes = shapes(&ctx, &mut chart, 0.1, vec![]);
         let first = |found: &dyn Fn(&Shape) -> bool| shapes.iter().position(found).unwrap();
@@ -479,6 +480,28 @@ mod tests {
             "{}",
             chart.measured_axis_width
         );
+        #[cfg(feature = "ui")]
+        {
+            chart.detach_primitive(_primitive);
+            for (owner, price_only, expected) in [
+                (SeriesId::MAIN, true, (-62.5, 562.5)),
+                (_study_id, true, (8.75, 21.25)),
+                (_study_id, false, (-62.5, 562.5)),
+            ] {
+                let primitive = chart.attach_primitive(owner, Layers).unwrap();
+                let mut menu = crate::ui::top_toolbar::SettingsMenu::new();
+                menu.settings.scale_price_chart_only = price_only;
+                chart.update_config(menu.apply_to_config(chart.config().clone()));
+                let painted = super::super::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+                let range = chart.state().price_scale().range();
+                assert_eq!((range.min, range.max), expected);
+                assert!(
+                    painted.iter().any(fill(ABOVE)),
+                    "the primitive still paints"
+                );
+                chart.detach_primitive(primitive);
+            }
+        }
     }
 
     #[test]

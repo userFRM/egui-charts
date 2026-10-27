@@ -304,6 +304,10 @@ pub struct ChartConfig {
     pub show_indicator_last_val: bool,
     /// Preserve price units per bar when the time scale zooms or the pane resizes.
     pub lock_price_to_bar_ratio: bool,
+    /// Exclude overlay studies and their primitives from the main price scale's autoscale
+    /// range, without hiding them or changing their individual autoscale settings.
+    #[serde(default)]
+    pub scale_price_chart_only: bool,
     /// Draw the latest valid bid and ask lines and axis values supplied by the host.
     pub show_bid_ask: bool,
     /// Draw the highest high and lowest low of the visible bars on the price scale.
@@ -447,6 +451,7 @@ impl Default for ChartConfig {
             show_indicator_labels: true,
             show_indicator_last_val: true,
             lock_price_to_bar_ratio: false,
+            scale_price_chart_only: false,
             show_bid_ask: false,
             show_high_low: false,
             show_countdown: true,

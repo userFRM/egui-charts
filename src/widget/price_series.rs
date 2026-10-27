@@ -752,7 +752,8 @@ impl Chart {
             };
             if !study.is_visible()
                 || self.in_pane(id)
-                || (key == self.main_series_scale && !autoscale)
+                || (key == self.main_series_scale
+                    && (!autoscale || self.config.scale_price_chart_only))
             {
                 continue;
             }
