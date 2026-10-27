@@ -4,13 +4,13 @@ use crate::localization as l10n;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Months, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use egui::{Context, Ui};
 
 use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource,
+    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource, TimezoneId,
 };
 use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
@@ -30,7 +30,15 @@ pub struct AlertDialog {
     pub sources: Vec<(AlertSource, String)>,
     /// Host-provided watchlist identifiers and display names.
     pub watchlists: Vec<(String, String)>,
-    expires: String,
+    /// The zone the expiry date and time are entered in, UTC by default. Set it before
+    /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
+    pub timezone: TimezoneId,
+    /// Whether the staged alert expires; without an expiry it stays active until removed.
+    expires: bool,
+    /// The expiry date as `YYYY-MM-DD` in [`timezone`](Self::timezone).
+    expiry_date: String,
+    /// The expiry time as `HH:MM` in [`timezone`](Self::timezone).
+    expiry_time: String,
     preset_name: String,
     presets: BTreeMap<String, Alert>,
     storage: Option<Arc<dyn Storage>>,
@@ -55,7 +63,10 @@ impl AlertDialog {
             alert: Alert::new("", AlertCondition::Crossing(0.0)),
             sources: Vec::new(),
             watchlists: Vec::new(),
-            expires: String::new(),
+            timezone: TimezoneId::utc(),
+            expires: false,
+            expiry_date: String::new(),
+            expiry_time: String::new(),
             preset_name: String::new(),
             presets: BTreeMap::new(),
             storage: None,
@@ -84,9 +95,55 @@ impl AlertDialog {
 
     /// Stage an existing alert, retaining its host identifier and status when saved.
     pub fn edit(&mut self, alert: Alert) {
-        self.expires = alert.expires.map(|t| t.to_rfc3339()).unwrap_or_default();
+        self.expires = alert.expires.is_some();
+        self.set_expiry_fields(alert.expires);
         self.alert = alert;
         self.is_open = true;
+    }
+
+    /// Fill the expiry date and time fields with `expiry` in the entry zone, or clear them.
+    fn set_expiry_fields(&mut self, expiry: Option<DateTime<Utc>>) {
+        let local = expiry.map(|t| t.with_timezone(&self.timezone));
+        let format = |pattern| {
+            local
+                .as_ref()
+                .map_or_else(String::new, |t| t.format(pattern).to_string())
+        };
+        self.expiry_date = format("%Y-%m-%d");
+        self.expiry_time = format("%H:%M");
+    }
+
+    /// The staged expiry: none without one, otherwise the entered date and time in the entry
+    /// zone, which must exist there and lie after `now`.
+    fn expiry(&self, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, &'static str> {
+        if !self.expires {
+            return Ok(None);
+        }
+        let date = NaiveDate::parse_from_str(self.expiry_date.trim(), "%Y-%m-%d")
+            .map_err(|_| "Enter the expiry date as YYYY-MM-DD")?;
+        let time = NaiveTime::parse_from_str(self.expiry_time.trim(), "%H:%M")
+            .map_err(|_| "Enter the expiry time as HH:MM")?;
+        // Unchanged fields retain the saved seconds and repeated-hour occurrence.
+        let saved = self.alert.expires.filter(|saved| {
+            let local = saved.with_timezone(&self.timezone);
+            local.date_naive() == date
+                && local.hour() == time.hour()
+                && local.minute() == time.minute()
+        });
+        let expiry = if let Some(saved) = saved {
+            saved
+        } else {
+            // A newly entered time repeated when clocks go back uses its first occurrence.
+            self.timezone
+                .from_local_datetime(&date.and_time(time))
+                .earliest()
+                .ok_or("The expiry time is skipped when clocks go forward")?
+                .with_timezone(&Utc)
+        };
+        if expiry <= now {
+            return Err("Choose an expiry after the current time");
+        }
+        Ok(Some(expiry))
     }
 
     /// Dismiss without saving.
@@ -197,19 +254,17 @@ impl AlertDialog {
                     )
                     .show(ui, |ui| {
                         self.form(ui);
-                        expiry = if self.expires.trim().is_empty() {
-                            Ok(None)
-                        } else {
-                            DateTime::parse_from_rfc3339(self.expires.trim())
-                                .map(|t| Some(t.with_timezone(&Utc)))
-                        };
+                        expiry = self.expiry(Utc::now());
                         valid = self.alert.is_valid() && expiry.is_ok();
-                        if !valid {
+                        if !self.alert.is_valid() {
                             status_message(
                                 ui,
                                 MessageKind::Error,
-                                "Check the subject, levels, lookback and expiry (RFC 3339)",
+                                "Check the subject, levels and lookback",
                             );
+                        }
+                        if let Err(error) = expiry {
+                            status_message(ui, MessageKind::Error, error);
                         }
                         if let Some(error) = &self.error {
                             status_message(ui, MessageKind::Error, error);
@@ -237,15 +292,24 @@ impl AlertDialog {
     }
 
     fn form(&mut self, ui: &mut Ui) {
-        let label_width = ui
-            .painter()
-            .layout_no_wrap(
-                l10n::text(ui.ctx(), "Expiry (optional)"),
-                egui::TextStyle::Body.resolve(ui.style()),
-                ui.visuals().text_color(),
-            )
-            .size()
-            .x;
+        let time_label = l10n::format_text(
+            ui.ctx(),
+            "Expiry time ({0})",
+            &[("0", self.timezone.name().to_owned())],
+        );
+        let label_width = [l10n::text(ui.ctx(), "Expiry date"), time_label.clone()]
+            .into_iter()
+            .map(|label| {
+                ui.painter()
+                    .layout_no_wrap(
+                        label,
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        ui.visuals().text_color(),
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
         ui.spacing_mut().text_edit_width =
             (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
         FormGrid::new("alert_details").show(ui, |ui| {
@@ -311,10 +375,40 @@ impl AlertDialog {
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Frequency"));
             ui.end_row();
-            ui.label(l10n::text(ui.ctx(), "Expiry (optional)"));
-            ui.text_edit_singleline(&mut self.expires)
-                .accessible_name(l10n::text(ui.ctx(), "Expiry (optional)"));
+            // The widest expiry label's width keeps the fields in place when No expiry toggles.
+            ui.scope(|ui| {
+                ui.set_min_width(label_width);
+                ui.label(l10n::text(ui.ctx(), "Expiry"));
+            });
+            let mut no_expiry = !self.expires;
+            if ui
+                .checkbox(&mut no_expiry, l10n::text(ui.ctx(), "No expiry"))
+                .changed()
+            {
+                self.expires = !no_expiry;
+                if self.expires && self.expiry_date.is_empty() {
+                    // Start a month ahead, to the minute, so an expiry needs no typing.
+                    let now = Utc::now();
+                    self.set_expiry_fields(now.checked_add_months(Months::new(1)).or(Some(now)));
+                }
+            }
             ui.end_row();
+            if self.expires {
+                ui.label(l10n::text(ui.ctx(), "Expiry date"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.expiry_date)
+                        .hint_text(l10n::text(ui.ctx(), "YYYY-MM-DD")),
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Expiry date"));
+                ui.end_row();
+                ui.label(&time_label);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.expiry_time)
+                        .hint_text(l10n::text(ui.ctx(), "HH:MM")),
+                )
+                .accessible_name(time_label);
+                ui.end_row();
+            }
             ui.label(l10n::text(ui.ctx(), "Message"));
             ui.text_edit_multiline(&mut self.alert.message)
                 .accessible_name(l10n::text(ui.ctx(), "Message"));
@@ -370,14 +464,10 @@ impl AlertDialog {
                         egui::Button::new(l10n::text(ui.ctx(), "Save preset")),
                     )
                     .clicked()
+                    && let Ok(expiry) = self.expiry(Utc::now())
                 {
-                    if self.expires.trim().is_empty() {
-                        self.alert.expires = None;
-                        self.save_preset();
-                    } else if let Ok(t) = DateTime::parse_from_rfc3339(self.expires.trim()) {
-                        self.alert.expires = Some(t.with_timezone(&Utc));
-                        self.save_preset();
-                    }
+                    self.alert.expires = expiry;
+                    self.save_preset();
                 }
             });
             let mut apply = None;
@@ -683,7 +773,8 @@ mod tests {
                 egui::vec2(320.0, 450.0),
             ] {
                 for invalid in [false, true] {
-                    dialog.expires = if invalid { "invalid" } else { "" }.into();
+                    dialog.expires = invalid;
+                    dialog.expiry_date = if invalid { "invalid" } else { "" }.into();
                     for frame in 0..3 {
                         let output = ctx.run_ui(
                             egui::RawInput {
@@ -733,6 +824,113 @@ mod tests {
                         "dark={dark}, invalid={invalid}, size={size:?}: {rect:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn expiry_fields_resolve_in_the_entry_zone() {
+        let at = |y, mo, d, h, mi| Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap();
+        let check = |zone: TimezoneId, fields: Option<(&str, &str)>, expected| {
+            let mut dialog = AlertDialog::new();
+            dialog.timezone = zone.clone();
+            dialog.expires = fields.is_some();
+            (dialog.expiry_date, dialog.expiry_time) = fields
+                .map(|(date, time)| (date.into(), time.into()))
+                .unwrap_or_default();
+            let expiry = dialog.expiry(at(2026, 1, 1, 0, 0));
+            assert_eq!(expiry, expected, "{} {fields:?}", zone.name());
+            // Editing a saved alert shows its expiry in the same fields.
+            if let (Ok(Some(saved)), Some(fields)) = (expiry, fields) {
+                let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+                alert.expires = Some(saved);
+                dialog.edit(alert);
+                let shown = (dialog.expiry_date.as_str(), dialog.expiry_time.as_str());
+                assert_eq!(shown, fields);
+            }
+        };
+        let check_saved = |zone: TimezoneId, saved, edited: &str, expected| {
+            let mut dialog = AlertDialog::new();
+            dialog.timezone = zone;
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            alert.expires = Some(saved);
+            dialog.edit(alert);
+            let now = at(2026, 1, 1, 0, 0);
+            assert_eq!(
+                dialog.expiry(now),
+                Ok(Some(saved)),
+                "unchanged fields retain the saved instant"
+            );
+            dialog.expiry_time = edited.into();
+            assert_eq!(
+                dialog.expiry(now),
+                Ok(Some(expected)),
+                "edited fields resolve in the entry zone"
+            );
+        };
+        let utc = TimezoneId::utc;
+        check_saved(
+            utc(),
+            at(2026, 3, 8, 2, 30) + chrono::Duration::milliseconds(12_345),
+            "02:31",
+            at(2026, 3, 8, 2, 31),
+        );
+        let east_of_utc = |hours: i32| TimezoneId::fixed_offset(hours * 3600).unwrap();
+        for (zone, fields, expected) in [
+            (utc(), None, Ok(None)),
+            (
+                utc(),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 8, 2, 30))),
+            ),
+            (
+                east_of_utc(-5),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 8, 7, 30))),
+            ),
+            (
+                east_of_utc(9),
+                Some(("2026-03-08", "02:30")),
+                Ok(Some(at(2026, 3, 7, 17, 30))),
+            ),
+            (
+                utc(),
+                Some(("08/03/2026", "02:30")),
+                Err("Enter the expiry date as YYYY-MM-DD"),
+            ),
+            (
+                utc(),
+                Some(("2026-03-08", "2:30 pm")),
+                Err("Enter the expiry time as HH:MM"),
+            ),
+            (
+                utc(),
+                Some(("2025-12-31", "23:59")),
+                Err("Choose an expiry after the current time"),
+            ),
+        ] {
+            check(zone, fields, expected);
+        }
+        #[cfg(feature = "timezones")]
+        {
+            let new_york = || TimezoneId::named("America/New_York").unwrap();
+            check_saved(
+                new_york(),
+                at(2026, 11, 1, 6, 30) + chrono::Duration::seconds(17),
+                "01:31",
+                at(2026, 11, 1, 5, 31),
+            );
+            // Clocks went from 02:00 to 03:00 on 8 March 2026, and on 1 November 2026 from
+            // 02:00 daylight time (UTC-4) back to 01:00 standard time (UTC-5).
+            for (fields, expected) in [
+                (
+                    ("2026-03-08", "02:30"),
+                    Err("The expiry time is skipped when clocks go forward"),
+                ),
+                (("2026-11-01", "01:30"), Ok(Some(at(2026, 11, 1, 5, 30)))),
+                (("2026-07-04", "11:45"), Ok(Some(at(2026, 7, 4, 15, 45)))),
+            ] {
+                check(new_york(), Some(fields), expected);
             }
         }
     }

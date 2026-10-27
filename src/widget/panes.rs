@@ -555,6 +555,12 @@ impl Chart {
                 config.height = height;
                 config.show_grid &= paint_row == 0;
                 let mut panel = IndicatorPane::with_config(config);
+                panel.legend_backdrop = self.config.indicator_backdrop_opacity;
+                panel.axis_options = crate::config::PriceAxisOptions {
+                    show_study_values: self.config.show_indicator_last_val
+                        && self.config.price_axis.show_study_values,
+                    ..self.config.price_axis
+                };
                 panel.price_map = Some(
                     if matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)) {
                         crate::chart::renderers::study_mapping(indicator, &pane_mapping).price
@@ -1005,6 +1011,7 @@ impl Chart {
                             ),
                             colors,
                             &axis_tags,
+                            self.config.price_axis.allow_label_overlap,
                         );
                         axis_tags.push(tag);
                     }

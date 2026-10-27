@@ -104,13 +104,15 @@ pub fn render_chart_type(
 
     match chart_type {
         // === Standard OHLC Types ===
-        ChartType::Candles => {
+        // Execution-based types draw candles for the bars without executions.
+        ChartType::Candles | ChartType::VolumeFootprint | ChartType::SessionVolumeProfile => {
             candlestick::render_candles(
                 ctx.price_ctx,
                 ctx.volume_ctx,
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
@@ -118,6 +120,7 @@ pub fn render_chart_type(
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
+                &params.type_params.styles.candles,
             );
         }
         ChartType::Heikin => {

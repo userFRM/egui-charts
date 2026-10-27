@@ -93,6 +93,11 @@ pub struct Legend<'a> {
     pub show_indicator_inputs: bool,
     /// Display study outputs.
     pub show_indicator_values: bool,
+    /// The previous session's close and the last price, shown after the bar change as the
+    /// change between them.
+    pub day_change: Option<(f64, f64)>,
+    /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
+    pub study_backdrop: f32,
     /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
     /// to change it.
     pub(crate) quantity: Option<f64>,
@@ -123,6 +128,8 @@ impl<'a> Legend<'a> {
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,
+            day_change: None,
+            study_backdrop: 1.0,
             quantity: None,
         }
     }
@@ -254,10 +261,10 @@ impl<'a> Legend<'a> {
                 layout.ohlc(self.bar, precision, self.formatters.price);
             }
         }
-        if self.show_change || self.show_change_percent {
-            let reference = self.previous_close.unwrap_or(self.bar.open);
-            let change = self.bar.close - reference;
-            let pct = percent_change(reference, self.bar.close);
+        // The change from `reference` to `value`, absolute and as a percentage.
+        let change_text = |reference: f64, value: f64| {
+            let change = value - reference;
+            let pct = percent_change(reference, value);
             let absolute = self.formatters.price.map_or_else(
                 || format!("{change:+.precision$}"),
                 |formatter| formatter.format(change),
@@ -266,6 +273,11 @@ impl<'a> Legend<'a> {
                 .formatters
                 .percentage
                 .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
+            (change, absolute, percent)
+        };
+        if self.show_change || self.show_change_percent {
+            let reference = self.previous_close.unwrap_or(self.bar.open);
+            let (change, absolute, percent) = change_text(reference, self.bar.close);
             let text = match (self.show_change, self.show_change_percent) {
                 (true, true) => format!("{absolute} ({percent})"),
                 (true, false) => absolute,
@@ -273,6 +285,15 @@ impl<'a> Legend<'a> {
             };
             layout.text(
                 text,
+                theme.text.ohlc,
+                colors.bar_color(change >= 0.0),
+                bounds.width(),
+            );
+        }
+        if let Some((reference, last)) = self.day_change {
+            let (change, absolute, percent) = change_text(reference, last);
+            layout.text(
+                format!("{absolute} ({percent})"),
                 theme.text.ohlc,
                 colors.bar_color(change >= 0.0),
                 bounds.width(),
@@ -360,7 +381,12 @@ impl<'a> Legend<'a> {
                 });
             }
         }
-        if self.show_title || self.show_ohlc || self.show_change || self.show_change_percent {
+        if self.show_title
+            || self.show_ohlc
+            || self.show_change
+            || self.show_change_percent
+            || self.day_change.is_some()
+        {
             layout.new_row();
         }
 
@@ -376,6 +402,10 @@ impl<'a> Legend<'a> {
             action
         });
 
+        layout.backdrop = theme
+            .chart
+            .bg
+            .gamma_multiply(self.study_backdrop.clamp(0.0, 1.0));
         let mut study_settings = None;
         let collapsed = ui
             .ctx()
@@ -749,6 +779,8 @@ struct Layout<'a> {
     pos: Pos2,
     height: f32,
     background: egui::layers::ShapeIdx,
+    /// Fill of the current row's background.
+    backdrop: Color32,
     colors: &'a StyleColors,
 }
 
@@ -760,6 +792,7 @@ impl<'a> Layout<'a> {
             pos: bounds.min,
             height: 24.0,
             background: painter.add(egui::Shape::Noop),
+            backdrop: painter.ctx().active_theme().chart.bg,
             colors,
         }
     }
@@ -788,7 +821,7 @@ impl<'a> Layout<'a> {
                 )
                 .intersect(self.bounds),
                 0.0,
-                self.painter.ctx().active_theme().chart.bg,
+                self.backdrop,
             ),
         );
         self.pos.x += size.x + 8.0;

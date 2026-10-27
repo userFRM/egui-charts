@@ -297,6 +297,23 @@ impl PriceScale {
         }
     }
 
+    /// Locked scale units per bar, or `None` when unlocked.
+    pub fn bar_ratio(&self) -> Option<f64> {
+        self.bar_ratio
+    }
+
+    /// Set scale units per bar; `None` unlocks. Invalid ratios leave the scale unchanged.
+    /// The next `update_bar_ratio` applies it about the range centre.
+    pub fn set_bar_ratio(&mut self, ratio: Option<f64>) {
+        if ratio.is_some_and(|r| !r.is_finite() || r <= 0.0) {
+            return;
+        }
+        self.bar_ratio = ratio;
+        if ratio.is_some() {
+            self.manual = true;
+        }
+    }
+
     /// Whether horizontal zoom and pane resizing preserve scale units per bar.
     pub fn bar_ratio_locked(&self) -> bool {
         self.bar_ratio.is_some()
