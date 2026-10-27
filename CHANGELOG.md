@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- A star on each chart type menu row adds the type to the favourites or removes it. The toolbar then shows a button for each favourite in menu order, the last selected non-favourite and a menu chevron, and chooses a type in one click, with the same rules as the interval buttons. A new selector has no favourites. `ChartTypeSelector::preferences` and `set_preferences` exchange serializable `ChartTypePreferences` for host user settings, and `ChartTypeAction::ToggleFavorite` reports a toggle; the demo saves and restores them through application storage. ([#1042](https://github.com/userFRM/egui-charts/issues/1042))
+- A star on each chart type menu row adds the type to the favourites or removes it. The toolbar then shows a button for each favourite in menu order, the last selected non-favourite and a menu chevron, with the same rules as the interval buttons. A new selector has no favourites. `ChartTypeSelector::preferences` and `set_preferences` exchange serializable `ChartTypePreferences` for host user settings, and `ChartTypeAction::ToggleFavorite` reports a toggle; the demo saves and restores them through application storage. ([#1042](https://github.com/userFRM/egui-charts/issues/1042))
 
 - The documentation status page shows feature completion by area from the maintained feature list, as a feature map coloured by status and one table per area. The same build produces per-area status badges and the feature map image for embedding. ([#1129](https://github.com/userFRM/egui-charts/issues/1129))
 

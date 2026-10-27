@@ -11,7 +11,8 @@ use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::top_toolbar::buttons::Trigger;
 use crate::ui::top_toolbar::components::timeframe_selector::{
-    favorite_star, favorite_strip, menu_list_height, menu_row_focus, retain_non_favorite,
+    STAR_SLOT_W, favorite_star, favorite_strip, menu_list_height, menu_row_focus,
+    retain_non_favorite,
 };
 use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
 use egui::{Color32, Rect, Role, Ui, WidgetInfo, pos2, vec2};
@@ -334,7 +335,7 @@ impl ListItemContent for ChartTypeRow<'_> {
             // Left of the star's slot.
             let check = Rect::from_min_size(
                 pos2(
-                    rect.max.x - 28.0 - icon_sizes::SM,
+                    rect.max.x - STAR_SLOT_W - icon_sizes::SM,
                     rect.center().y - icon_sizes::SM / 2.0,
                 ),
                 vec2(icon_sizes::SM, icon_sizes::SM),
@@ -390,7 +391,8 @@ mod tests {
 
         harness.get_by_label("Candles").click();
         harness.run();
-        // Stars sit on every row in menu order; starring turns one into "Remove from favorites".
+        // Stars sit on every row in menu order and starring turns one into "Remove from favorites", so
+        // star from the last row up to keep the earlier indices.
         for index in [7, 4, 0] {
             harness
                 .query_all_by_label("Add to favorites")

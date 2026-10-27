@@ -819,6 +819,9 @@ pub(super) fn favorite_strip<T: Copy + PartialEq>(
     (menu, clicked)
 }
 
+/// Width of the star's slot at the end of a menu row.
+pub(super) const STAR_SLOT_W: f32 = 28.0;
+
 /// The star at the end of a menu row, which adds the row's choice to the favourites or removes
 /// it. With `on_hover` it is drawn only on a favourite, a hovered row, or while a key has focus
 /// in the row. Returns whether it was clicked.
@@ -832,7 +835,7 @@ pub(super) fn favorite_star(
     let rect = context.rect;
     let star_rect = Rect::from_center_size(
         pos2(rect.right() - icon_sizes::SM / 2.0, rect.center().y),
-        vec2(28.0, rect.height()),
+        vec2(STAR_SLOT_W, rect.height()),
     );
     let star = ui.interact(
         star_rect,
